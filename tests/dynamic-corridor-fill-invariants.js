@@ -1,0 +1,20 @@
+'use strict';
+const assert=require('assert');
+const fs=require('fs');
+const path=require('path');
+const root=path.resolve(__dirname,'..');
+const read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const kernel=read('js/geometry/kernel.js');
+const fillPlan=read('js/render/fill-plan.js');
+const pipeline=read('js/render/main-pipeline.js');
+const appA=read('js/legacy/app-a.js');
+
+assert.ok(kernel.includes('const dynamicCorridorNative=fillRequested&&dynamic&&corridor'), 'Dynamic Corridor Fill must be a native-GPU geometry contract');
+assert.ok(fillPlan.includes('function prepareDynamicCommands(frameCtx, commands)')&&fillPlan.includes('dynamicScreenSpace:true'), 'Dynamic Fill must reuse frame-resident command geometry instead of a Canvas mask');
+assert.ok(pipeline.includes('if(contract.dynamicCorridorNative===true)return{mask:null'), 'Dynamic Corridor Fill must never rasterize a Canvas2D mask');
+assert.ok(pipeline.includes('function getDynamicCorridorFillMesh(frameCtx)')&&pipeline.includes('getDynamicTunnelMorphMasterStrokeCommands?.(frameCtx)'), 'Dynamic Fill must share the Corridor Morph master rail');
+assert.ok(pipeline.includes("queueLayerSceneEffectCommand(frameCtx,4,rec.commandBuffer,'corridor-native-fill')"), 'Dynamic Fill must join the resident GPU Layer Scene at Fill ordering phase');
+assert.ok(appA.includes("label:'Somata dynamic Corridor Fill stencil fan'")&&appA.includes('dynamicMeshUploads')&&appA.includes('dynamicMeshReuses'), 'Dynamic Fill must use a persistent grow-only GPU vertex buffer');
+assert.ok(appA.includes('if(mesh?.dynamicScreenSpace===true)')&&appA.includes('ox-(a*ox+c*oy)'), 'Dynamic screen-space Fill must apply tunnel copy transforms around the same origin as Corridor Base');
+assert.ok(pipeline.includes('corridorGpuBridgeEffectsCanStayResident:true')&&pipeline.includes('dynamicCorridorFillNoCanvasMask:true'), 'Runtime audit must expose the 7.2.8 mixed-path removal contract');
+console.log('Dynamic Corridor Fill invariants OK');

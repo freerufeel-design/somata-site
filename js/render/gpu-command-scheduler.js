@@ -36,10 +36,10 @@ function spiroGpuScheduleLayerSceneCommand(frameCtx,phase,commandBuffer,label='e
 }
 function spiroGpuScheduledTokenMatches(token,frameId,t){return Boolean(token&&token.frameId===frameId&&token.t===t);}
 
-// Schedule a resident Morph prerequisite before all effect passes. The prerequisite is a separate
-// command buffer, but is submitted in the SAME ordered queue as its consumers. This is intentional:
-// WebGPU queue ordering makes the output visible without CPU wait/readback or a separate submit.
-function spiroGpuEnsureMorphPrerequisite(frameCtx,morphRec,t,phase=4){
+// Schedule resident prerequisites before every visual LayerScene phase. Somata 7.3.7 reserves
+// phases 1/2 for Morph/Arc, then Glow=3, Fill=4, Web-under-Base=4.5, Base=5.
+// Command buffers stay in the SAME ordered queue as consumers; no CPU wait/readback is needed.
+function spiroGpuEnsureMorphPrerequisite(frameCtx,morphRec,t,phase=1){
     if(!frameCtx?.frame?.gpuLayerSceneDeferred||!morphRec?.ready)return false;
     const s=spiroGpuSchedulerFrame(frameCtx),fid=s?.frameId||Number(frameCtx.frameId)||0,u=typeof morphRec?.resolveMorphT==='function'?morphRec.resolveMorphT(t):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(t):Math.max(0,Math.min(1,Number(t)||0)));if(!s)return false;
     const custom=typeof morphRec.encodeCurrentCubics==='function';
@@ -59,7 +59,7 @@ function spiroGpuEnsureMorphPrerequisite(frameCtx,morphRec,t,phase=4){
     s.morph.set(morphRec,{frameId:fid,t:u});spiroGpuCommandSchedulerRuntime.morphPrerequisites++;return true;
 }
 
-function spiroGpuEnsureArcPrerequisite(frameCtx,table,phase=5){
+function spiroGpuEnsureArcPrerequisite(frameCtx,table,phase=2){
     const rec=table?._gpuMorphArcResource;if(!frameCtx?.frame?.gpuLayerSceneDeferred||!rec?.ready)return false;
     const s=spiroGpuSchedulerFrame(frameCtx),fid=s?.frameId||Number(frameCtx.frameId)||0,t=typeof rec.morphRec?.resolveMorphT==='function'?rec.morphRec.resolveMorphT(table.gpuMorphT):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));if(!s)return false;
     if(rec.hasCommittedData&&rec.lastCommittedT===t){spiroGpuCommandSchedulerRuntime.committedReuses++;return true;}

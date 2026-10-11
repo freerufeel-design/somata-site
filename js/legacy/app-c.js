@@ -530,10 +530,14 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             return true;
         }
 
-        function setTunnelMode(enabled) {
+        function setTunnelMode(enabled, options = {}) {
             const tunnel = state.tunnel;
             const next = Boolean(enabled);
-            if (tunnel.active === next) return;
+            const wasActive = tunnel.active === true;
+            const silent = options?.silent === true;
+            // 7.3.7 — active is runtime-only. Project activation may silently quiesce the
+            // previous Corridor before committing a new project, then start the target Corridor
+            // BEFORE Blue Morph prepares its strict-Spiral GPU phase resources.
             tunnel.active = next;
             const btn = document.getElementById('btnTunnel');
             btn?.classList.toggle('active', next);
@@ -541,12 +545,15 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             btn?.setAttribute('aria-label', next ? 'Выключить режим туннеля' : 'Включить режим туннеля');
 
             if (next) {
-                tunnel.phase = 0;
-                tunnel.travelPhase = 0;
-                tunnel.lastTime = 0;
-                tunnel.raf = 0;
-                clearTunnelFadeRuntime();
+                if (!wasActive) {
+                    tunnel.phase = 0;
+                    tunnel.travelPhase = 0;
+                    tunnel.lastTime = 0;
+                    tunnel.raf = 0;
+                    clearTunnelFadeRuntime();
+                }
                 animationScheduler.add('tunnel', tunnelAnimationFrame);
+                if (!silent) requestMainCanvasRender();
             } else {
                 animationScheduler.remove('tunnel');
                 tunnel.raf = 0;
@@ -554,7 +561,10 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 tunnel.phase = 0;
                 tunnel.travelPhase = 0;
                 clearTunnelFadeRuntime();
-                renderMainCanvas();
+                if (!silent) {
+                    if (wasActive) renderMainCanvas();
+                    else requestMainCanvasRender();
+                }
             }
         }
 
@@ -1334,11 +1344,12 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             tangentRow?.classList.toggle('spiral-setting-disabled', spiralModeActive && !spiralClosed);
             seamRow?.classList.toggle('spiral-setting-disabled', spiralModeActive && !spiralClosed);
 
-            const spiralLineType=layer.spiralLineType==='segmented'?'segmented':'uniform';
-            layer.spiralLineType=spiralLineType;
-            const spiralLineTypeControl=document.getElementById('spiralLineTypeControl');
-            spiralLineTypeControl?.classList.toggle('hidden',!spiralModeActive);
-            document.querySelectorAll('[data-spiral-line-type]').forEach(btn=>{const active=btn.dataset.spiralLineType===spiralLineType;btn.classList.toggle('active',active);btn.setAttribute('aria-pressed',active?'true':'false');});
+            // 7.3.7 — Uniform / Segmented is a generic line overlap policy, not a Spiral
+            // geometry type. Keep the historical spiralLineType field only as an import/export
+            // alias so older projects retain the same appearance.
+            const lineLayerMode=(layer.lineLayerMode??layer.spiralLineType)==='segmented'?'segmented':'uniform';
+            layer.lineLayerMode=lineLayerMode;layer.spiralLineType=lineLayerMode;
+            document.querySelectorAll('[data-line-layer-mode]').forEach(btn=>{const active=btn.dataset.lineLayerMode===lineLayerMode;btn.classList.toggle('active',active);btn.setAttribute('aria-pressed',active?'true':'false');});
             const lineOpacity=Math.max(0,Math.min(100,Number.isFinite(Number(layer.lineOpacity))?Number(layer.lineOpacity):100));
             layer.lineOpacity=lineOpacity;
             const lineOpacityInput=document.getElementById('paramLineOpacity');if(lineOpacityInput&&document.activeElement!==lineOpacityInput)lineOpacityInput.value=String(lineOpacity);
@@ -1727,6 +1738,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             const spiralEnabledBefore = isSpiralLayer(layer);
             const spiralOrderBefore = getEffectiveSpiralOrder(layer);
             layer.profileMode = preset.mode;
+            if(preset.mode==='spline')layer.splineRenderMode='smooth';
             layer.profileNodes = JSON.parse(JSON.stringify(preset.nodes));
             if (!keepSpiralMode && typeof meta.closed === 'boolean') layer.closedLoop = meta.closed;
             if (keepSpiralMode) {
@@ -1756,7 +1768,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
         // closure, and both closed/open static rails must remain finite after a profile edit.
         window.__spiroSpiralProfileModeProbe=()=>{
             const finitePaths=(paths)=>Array.isArray(paths)&&paths.length>0&&paths.every(path=>Array.isArray(path?.points)&&path.points.length>=2&&path.points.every(p=>Number.isFinite(Number(p?.x))&&Number.isFinite(Number(p?.y))));
-            const cubicCount=(layer,paths)=>(paths||[]).reduce((n,path)=>{try{return n+(__spiroBuildSpiralBezierSegments(path.points,path.spiralProfileRoundingBaked===true?0:getRoundingStrength(layer.rounding),path.cornerFlags||[],layer.profileMode==='spline'&&normalizeSplineRenderMode(layer.splineRenderMode)==='smooth'&&path.spiralProfileSplineBaked!==true)?.length||0);}catch(_){return n;}},0);
+            const cubicCount=(layer,paths)=>(paths||[]).reduce((n,path)=>{try{return n+(__spiroBuildSpiralBezierSegments(path.points,path.spiralProfileRoundingBaked===true?0:getRoundingStrength(layer.rounding),path.cornerFlags||[],layer.profileMode==='spline'&&path.spiralProfileSplineBaked!==true)?.length||0);}catch(_){return n;}},0);
             const closed=createLayer('iter32-closed-probe');setContourMode(closed,'spiral-closed');applyProfilePresetGeometryToLayer(closed,'op_lineflare');const closedPaths=buildOrbitPolylines(closed)||[];
             const open=createLayer('iter32-open-probe');setContourMode(open,'spiral-open');applyProfilePresetGeometryToLayer(open,'cl_fan');const openPaths=buildOrbitPolylines(open)||[];
             const result={
@@ -1805,7 +1817,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 }
                 const allPathsRetained=paths.length>0&&retainedCarrierPaths===paths.length&&details.every(d=>d.retained&&d.finite);
                 const actualSpiral=paths.length>0&&details.every(d=>d.actualSpiral);
-                const smoothSpline=l.profileMode==='spline'&&normalizeSplineRenderMode(l.splineRenderMode)==='smooth';
+                const smoothSpline=l.profileMode==='spline';
                 const polygonProfileSplineCarrier=!smoothSpline||(paths.length>0&&details.every(d=>d.polygonProfileSpline&&d.profileSourceCubics>0&&d.profileSpaceSplineBaked));
                 const mappedProfileCarrier=!smoothSpline||mappedControlSpans>0;
                 const pass=finite&&cubicCount>0&&allPathsRetained&&actualSpiral&&polygonProfileSplineCarrier&&mappedProfileCarrier;
@@ -4193,11 +4205,11 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 }
             });
 
-            document.querySelectorAll('[data-spiral-line-type]').forEach(btn=>btn.addEventListener('click',()=>{
+            document.querySelectorAll('[data-line-layer-mode]').forEach(btn=>btn.addEventListener('click',()=>{
                 const active=getActiveLayer();if(!active)return;
-                const mode=btn.dataset.spiralLineType==='segmented'?'segmented':'uniform';
-                for(const layer of getLayerEditTargets())layer.spiralLineType=mode;
-                document.querySelectorAll('[data-spiral-line-type]').forEach(x=>{const on=x.dataset.spiralLineType===mode;x.classList.toggle('active',on);x.setAttribute('aria-pressed',on?'true':'false');});
+                const mode=btn.dataset.lineLayerMode==='segmented'?'segmented':'uniform';
+                for(const layer of getLayerEditTargets()){layer.lineLayerMode=mode;layer.spiralLineType=mode;}
+                document.querySelectorAll('[data-line-layer-mode]').forEach(x=>{const on=x.dataset.lineLayerMode===mode;x.classList.toggle('active',on);x.setAttribute('aria-pressed',on?'true':'false');});
                 requestMainCanvasRender();
             }));
             document.getElementById('paramLineOpacity')?.addEventListener('input',(e)=>{
@@ -4377,6 +4389,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                     const reduced = ramerDouglasPeucker(source, epsilon);
                     layer.profileNodes = reduced.map(p => ({ ...p }));
                     layer.profileMode = 'spline';
+                    layer.splineRenderMode='smooth';
                     setPreSampledSplineLayer(layer, false);
                     invalidateLayerGeometry(layer,'freehand-quality');
                     freehandRawPoints = layer.profileNodes.map(p => ({ ...p }));
@@ -4394,6 +4407,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                         const nextMode=btn.dataset.mode;
                         if(layer.profileMode===nextMode)return;
                         layer.profileMode = nextMode;
+                        if(nextMode==='spline')layer.splineRenderMode='smooth';
                         setPreSampledSplineLayer(layer, false);
                         invalidateLayerGeometry(layer,'profile-mode');
                         if (layer.profileMode === 'freehand_raw' && layer.profileNodes?.length) {
@@ -4411,7 +4425,8 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 btn.addEventListener('click', () => {
                     const layer = getActiveLayer();
                     if (!layer) return;
-                    const next = normalizeSplineRenderMode(btn.dataset.splineRenderMode);
+                    const requested = normalizeSplineRenderMode(btn.dataset.splineRenderMode);
+                    const next = layer.profileMode==='spline' ? 'smooth' : requested;
                     if (normalizeSplineRenderMode(layer.splineRenderMode) === next) return;
                     layer.splineRenderMode = next;
                     invalidateLayerGeometry(layer,'legacy-geometry-control');
@@ -6336,11 +6351,18 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 const spiralBezierEndpointMode=runtimeState.morph.renderSourceLayers.some((layer,idx)=>layer?.spiralEnabled===true||runtimeState.morph.renderTargetLayers?.[idx]?.spiralEnabled===true);
                 const spiralBezierExtraGeometry=spiralBezierEndpointMode&&Boolean(state.morph.options.byRounding||state.morph.options.bySize||state.morph.options.byRotation||state.morph.options.bySpiralOrder||state.morph.options.bySpiralLayers);
                 const spiralBezierGeometryRequested=spiralBezierEndpointMode&&Boolean(state.morph.options.byVertices||state.morph.options.bySteps||state.morph.options.byShape||state.morph.monoOrbitTransforms||spiralBezierExtraGeometry);
-                // phaseCircle/minimalTurn keep the existing all-layer angular phase branch.
-                // Continuous/Phase/Torn in topology/calm are handled per Spiral layer below: the
-                // normal topology endpoint data remains available for non-Spiral siblings, while
-                // Spiral layers receive their own retained-cubic resource.
-                const circleAngularMode = (state.morph.mode === 'circleSlide' || spiralMorphUsesCircleRebuild()) && !chaosGeometryMode &&
+                // Somata 7.2.8 — every Circle Slide already owns a dedicated direct path
+                // evaluator (ordinary circle or Chaos-circle). Dense 720/960-sample generic
+                // endpoint snapshots are never consumed by that mode. In particular an Orange
+                // instant switch can introduce a Chaos layer while Blue Morph is active; the old
+                // !chaosGeometryMode gate then synchronously built two dense topology snapshots
+                // during rebase, producing the measured 100+ ms main-thread task.
+                const circleDirectPathMode = state.morph.mode === 'circleSlide' || spiralMorphUsesCircleRebuild();
+                // Circle Slide is now a mixed-backend direct-path phase: a Chaos sibling must
+                // not suppress retained Spiral GPU preparation for the other layers. Chaos uses
+                // its direct evaluator, while every Spiral endpoint can still build its retained
+                // cubic resource before the phase clock moves.
+                const circleAngularMode = circleDirectPathMode &&
                     (state.morph.options.byVertices || state.morph.options.bySteps || state.morph.options.byShape || state.morph.monoOrbitTransforms || spiralBezierExtraGeometry);
                 const mixedBackendSpiralBezierMode = !circleAngularMode && !chaosGeometryMode && spiralBezierGeometryRequested && spiralMorphUsesRetainedBezierRail();
                 // Somata 7.0: a retained-Bézier Spiral layer must not also build the dense
@@ -6352,11 +6374,11 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                     (runtimeState.morph.renderSourceLayers?.[idx]?.spiralEnabled===true ||
                      runtimeState.morph.renderTargetLayers?.[idx]?.spiralEnabled===true)
                 );
-                if (lightMode || circleAngularMode) {
-                    // Light morph and angular circle morph never consume the dense
-                    // 720-sample topology snapshots. Phase-circle Spiral has its own retained
-                    // cubic Bézier WebGPU resource: build/upload it ONCE before the phase clock
-                    // moves, instead of rebuilding the angular/profile rail on CPU every rAF.
+                if (lightMode || circleDirectPathMode) {
+                    // Light Morph and every Circle Slide variant skip the dense generic topology
+                    // snapshots. Ordinary/Spiral Circle Slide uses the retained angular GPU rail;
+                    // Chaos Circle Slide uses its dedicated frame-local direct path evaluator.
+                    // Neither consumes sourceGeometry/targetGeometry from the generic builder.
                     runtimeState.morph.sourceGeometry = [];
                     runtimeState.morph.targetGeometry = [];
                     if (circleAngularMode && typeof prepareGpuSpiralBezierMorphResources==='function' && Boolean(globalThis.navigator?.gpu)) {
@@ -6465,7 +6487,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                             runtimeState.morph.gpuPhasePreparePromise=null;
                             runtimeState.morph.gpuPhasePreparing=true; // fail closed; never advance on stale/partial phase resources.
                             const detail={error:String(err?.stack||err),phaseSerial:prepSerial,lamp:window.__spiroLampGPUStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,spiral:window.__somataSpiralBezierMorphStatus?.()||null};
-                            try{somataGpuContractError?.('PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.2.4 FullGPU] PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',detail);}
+                            try{somataGpuContractError?.('PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.3.7 FullGPU] PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',detail);}
                         });
                         // animateMorph() holds the exact stable source while gpuPhasePreparing.
                         runtimeState.morph.cycleStart=performance.now();
@@ -6630,7 +6652,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                                 return true;
                             }).catch(err=>{
                                 const detail={error:String(err?.stack||err),phaseSerial:prepSerial,web:WebGPUWebMorphRenderer?.status?.()||null,corner:window.__spiroGpuWebCornerStatus?.()||null};
-                                try{somataGpuContractError?.('MORPH_WEB_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.2.4 FullGPU] MORPH_WEB_FULL_GPU_PREWARM_FAILED',detail);}
+                                try{somataGpuContractError?.('MORPH_WEB_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.3.7 FullGPU] MORPH_WEB_FULL_GPU_PREWARM_FAILED',detail);}
                                 // Crucial: Web failure does not mutate gpuPhasePreparing.
                                 // Geometry continues at the authoritative current Morph time.
                             });
@@ -6650,7 +6672,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                         runtimeState.morph.gpuPhasePreparePromise=null;
                         runtimeState.morph.gpuPhasePreparing=true; // fail closed: no fallback clock.
                         const detail={error:String(err?.stack||err),phaseSerial:prepSerial};
-                        try{somataGpuContractError?.('MORPH_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.2.4 FullGPU] MORPH_FULL_GPU_PREWARM_FAILED',detail);}
+                        try{somataGpuContractError?.('MORPH_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.3.7 FullGPU] MORPH_FULL_GPU_PREWARM_FAILED',detail);}
                     });
                     runtimeState.morph.cycleStart=performance.now();
                 }else{
@@ -9775,7 +9797,6 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                         colorShiftCumulative: state.tunnel.colorShiftCumulative === true,
                         paletteLagEnabled: state.tunnel.paletteLagEnabled === true,
                         direction: state.tunnel.direction,
-                        active: state.tunnel.active,
                         fadeOversize: state.tunnel.fadeOversize,
                         fadeOffsetSteps: state.tunnel.fadeOffsetSteps,
                         vignetteAmount: state.tunnel.vignetteAmount,
@@ -10968,24 +10989,32 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             return projectData?.settings?.tunnel?.defaultActive === true;
         }
 
-        function syncPlaylistProjectDefaultModes(projectData) {
-            const wantsOrange = projectWantsOrangeMorph(projectData);
-            const wantsBlue = projectWantsBlueMorph(projectData);
-            const wantsTunnel = projectWantsTunnel(projectData);
+        function projectDefaultModeIntent(projectData=null) {
+            const hasProjectSettings=projectData?.settings&&typeof projectData.settings==='object';
+            return {
+                orange:hasProjectSettings?projectWantsOrangeMorph(projectData):state.minimalMorph?.defaultActive===true,
+                blue:hasProjectSettings?projectWantsBlueMorph(projectData):state.morph?.defaultActive===true,
+                tunnel:hasProjectSettings?projectWantsTunnel(projectData):state.tunnel?.defaultActive===true
+            };
+        }
+        function applyProjectDefaultModeIntent(intent, reason='project-activate') {
+            const wantsOrange=intent?.orange===true,wantsBlue=intent?.blue===true,wantsTunnel=intent?.tunnel===true;
 
-            // v524: playlist project defaults are authoritative, including manual project
-            // changes. A mode that is not checked in the target project must not leak in
-            // from the previous project merely because the user happened to start it there.
+            // 7.3.7: Corridor is part of the geometry contract, so it MUST reach its target
+            // state before activeStartMorphing() calls prepareMorphCycle(). Otherwise a project
+            // with both defaults enabled can prepare a non-Corridor Spiral phase and then flip
+            // Corridor on underneath the resident resources, leaving Blue held in GPU prepare
+            // and strict-Spiral Base without the matching scene ownership.
+            if (typeof setTunnelMode === 'function') setTunnelMode(wantsTunnel);
+
+            // Project defaults are commands executed at activation time, never snapshots of
+            // whatever happened to be running when the project was saved.
             if (wantsOrange) {
                 if (wantsBlue) {
                     if (!runtimeState.morph.active) activeStartMorphing();
-                    // Both defaults stay live. Orange pauses blue only for its actual
-                    // transition window; between orange switches blue continues normally.
                     activeResumeFullMorphFromProjectOrange();
                     runtimeState.morph.autoStartedByProject = true;
                 } else {
-                    // Exact playlist semantics: orange does not imply a hidden blue morph.
-                    // If “морфить по умолчанию” is unchecked, blue is genuinely off.
                     if (runtimeState.morph.active) activeStopMorphing(false);
                     runtimeState.morph.pausedByOrangeProject = false;
                     runtimeState.morph.autoStartedByProject = false;
@@ -11004,14 +11033,33 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                     runtimeState.morph.autoStartedByProject = false;
                 }
             }
-            if (typeof setTunnelMode === 'function' && state.tunnel.active !== wantsTunnel) setTunnelMode(wantsTunnel);
             if (typeof syncRandomSettingsUI === 'function') syncRandomSettingsUI();
             if (typeof syncMorphSettingsUI === 'function') syncMorphSettingsUI();
             if (typeof syncTunnelSettingsUI === 'function') syncTunnelSettingsUI();
+            return {reason,wantsOrange,wantsBlue,wantsTunnel,blueActive:runtimeState.morph?.active===true,tunnelActive:state.tunnel?.active===true};
         }
 
-        function ensureGreenProjectDefaultModes(projectData) { syncPlaylistProjectDefaultModes(projectData); }
-        function syncOrangeAndBlueForProject(projectData) { syncPlaylistProjectDefaultModes(projectData); }
+        let projectDefaultActivationSerial=0;
+        function activateProjectDefaultModes(projectData=null, reason='project-activate') {
+            const intent=projectDefaultModeIntent(projectData);
+            const serial=(++projectDefaultActivationSerial)>>>0;
+            const first=applyProjectDefaultModeIntent(intent,reason);
+            requestMainCanvasRender();
+            // Do not replay the whole activation after paint: Blue may already be inside its
+            // exact-start / GPU-prewarm handoff. Replaying Corridor at that boundary used to
+            // change the geometry contract under an armed Morph. Only verify scheduler ownership.
+            animationScheduler.afterNextPaint('project-default-modes-verify',()=>{
+                if(serial!==projectDefaultActivationSerial)return;
+                if(intent.tunnel===true&&!animationScheduler.has('tunnel'))setTunnelMode(true);
+                if(intent.tunnel!==true&&animationScheduler.has('tunnel'))setTunnelMode(false);
+                if(intent.blue===true&&!runtimeState.morph.active)activeStartMorphing();
+                if(intent.blue!==true&&runtimeState.morph.active&&runtimeState.morph.autoStartedByProject===true)activeStopMorphing(false);
+            });
+            return first;
+        }
+        function syncPlaylistProjectDefaultModes(projectData) { return activateProjectDefaultModes(projectData,'playlist-project'); }
+        function ensureGreenProjectDefaultModes(projectData) { return applyProjectDefaultModeIntent(projectDefaultModeIntent(projectData),'green-project'); }
+        function syncOrangeAndBlueForProject(projectData) { return activateProjectDefaultModes(projectData,'playlist-project'); }
         window.__spiroReportProjectDefaultMorphStatus=()=>({
             projectId:state.playlistCurrentProjectId||null,
             savedBlueDefault:state.morph?.defaultActive===true,
@@ -11020,6 +11068,11 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             bluePausedByOrange:runtimeState.morph?.pausedByOrangeProject===true,
             orangeActive:runtimeState.minimalMorph?.active===true,
             greenActive:runtimeState.projectMorph?.active===true,
+            tunnelActive:state.tunnel?.active===true,
+            tunnelTask:animationScheduler.has('tunnel'),
+            blueTask:animationScheduler.has('morph'),
+            blueExactStartPending:runtimeState.morph?.exactStartPending===true,
+            blueGpuPreparing:runtimeState.morph?.gpuPhasePreparing===true,
             blueSpeedType:state.morph?.speedType||'linear'
         });
 
@@ -11406,6 +11459,16 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             }
         }
 
+        function quiesceProjectRuntimeForCommit() {
+            // A project boundary is atomic. Never let the previous project's Corridor remain
+            // resident while new layer/canonical geometry is being installed. Blue/Orange are
+            // already stopped by callers; Corridor needs the same treatment without painting an
+            // intermediate half-loaded frame.
+            try { if (runtimeState.minimalMorph?.active) activeStopMinimalMorphing(false); } catch (_) {}
+            try { if (runtimeState.morph?.active) activeStopMorphing(false); } catch (_) {}
+            try { if (state.tunnel?.active===true || animationScheduler.has('tunnel')) setTunnelMode(false,{silent:true}); } catch (_) {}
+        }
+
         async function loadPlaylistProjectByIndex(index, fromProjectMorph=false) {
             if(!fromProjectMorph) stopProjectMorphing(false);
             const entries=state.playlistProjects||[];
@@ -11416,8 +11479,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 // v524: a playlist selection is an exact project activation. Do not carry
                 // blue/orange/corridor playback across the boundary unless the target has
                 // the corresponding “...по умолчанию” checkbox set.
-                activeStopMinimalMorphing(false);
-                if (runtimeState.morph?.active) activeStopMorphing(false);
+                quiesceProjectRuntimeForCommit();
                 state.playlistOverridesActive = true;
                 state.suppressPlaylistOverrideCapture = true;
                 try { applyLoadedProject(cloneProjectDataFast(entry.project), { preserveFullMorph: false, preserveMinimalMorph: false, suppressMinimalAutoStart: true, applyProjectDefaultModes: false }); } finally { state.suppressPlaylistOverrideCapture = false; }
@@ -11730,6 +11792,8 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 glowMultiplier: Number.isFinite(Number(l.glowMultiplier))?Math.max(0,Number(l.glowMultiplier)):1,
                 glowIntensity: Number.isFinite(Number(l.glowIntensity))?Math.max(0,Math.min(200,Number(l.glowIntensity))):40,
                 glowIntensityMultiplier: Number.isFinite(Number(l.glowIntensityMultiplier))?Math.max(0,Number(l.glowIntensityMultiplier)):1,
+                lineLayerMode:(l.lineLayerMode??l.spiralLineType)==='segmented'?'segmented':'uniform',
+                spiralLineType:(l.lineLayerMode??l.spiralLineType)==='segmented'?'segmented':'uniform',
                 motionRotation: l.motionRotation&&typeof l.motionRotation==='object' ? {...defaults.motionRotation,...l.motionRotation} : null,
                 N: Math.max(2, Math.min(120, Math.round(Number(l.N) || Number(defaults.N) || 4))),
                 chaosStar: l.chaosStar === true,
@@ -12043,7 +12107,6 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             // Legacy project flag is intentionally ignored from v136 onward.
             state.tunnel.optimizedCalculation = true;
             if (typeof syncTunnelSettingsUI === 'function') syncTunnelSettingsUI();
-            if (loadOptions.applyProjectDefaultModes !== false && typeof setTunnelMode === 'function') setTunnelMode(state.tunnel.defaultActive);
 
             if (settings.profileView && typeof settings.profileView === 'object') {
                 Object.assign(PROFILE_CONFIG, settings.profileView);
@@ -12250,30 +12313,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 activeRebaseMorphing();
                 if (typeof syncMorphSettingsUI === 'function') syncMorphSettingsUI();
             } else if (loadOptions.applyProjectDefaultModes !== false) {
-                // Blue Morphing has its own project-local default flag. Auto-started blue
-                // playback is tracked separately so a later project can turn off only what
-                // the default mode itself started, never a morph the user started manually.
-                if (state.morph.defaultActive === true) {
-                    if (!runtimeState.morph.active) { activeStartMorphing(); runtimeState.morph.autoStartedByProject = true; }
-                } else if (runtimeState.morph.active && runtimeState.morph.autoStartedByProject === true) {
-                    activeStopMorphing(false);
-                    runtimeState.morph.autoStartedByProject = false;
-                } else {
-                    runtimeState.morph.autoStartedByProject = false;
-                }
-
-                // Orange remains higher priority only during each actual switch. Blue may
-                // stay enabled at the same time and is rebased from every committed orange figure.
-                if (loadOptions.suppressMinimalAutoStart !== true && state.minimalMorph.defaultActive === true) {
-                    if (typeof syncRandomSettingsUI === 'function') syncRandomSettingsUI();
-                    activeResumeFullMorphFromProjectOrange();
-                    activeStartMinimalMorphing(true);
-                    runtimeState.minimalMorph.autoStartedByProject = true;
-                } else if (state.minimalMorph.defaultActive !== true) {
-                    runtimeState.minimalMorph.autoStartedByProject = false;
-                    activeResumeFullMorphFromProjectOrange();
-                }
-                if (typeof syncMorphSettingsUI === 'function') syncMorphSettingsUI();
+                activateProjectDefaultModes(null,'project-load');
             }
             if (preserveMinimalMorph && runtimeState.minimalMorph.active) {
                 activeRebaseMinimalMorphing();
@@ -12298,7 +12338,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                     document.getElementById('fileInputJSON').click();
                     return;
                 }
-                activeStopMorphing();
+                quiesceProjectRuntimeForCommit();
                 state.playlistOverridesActive = false;
                 state.playlistCurrentProjectId = null;
                 applyLoadedProject(JSON.parse(await file.text()));
@@ -12959,7 +12999,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             if (!file) return;
             file.text().then(text => {
                 try {
-                    activeStopMorphing();
+                    quiesceProjectRuntimeForCommit();
                     state.playlistOverridesActive = false;
                     state.playlistCurrentProjectId = null;
                     applyLoadedProject(JSON.parse(text));

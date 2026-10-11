@@ -4,12 +4,14 @@
 // One plan covers the whole layer, so overlapping contours are composited exactly once.
 var FillMeshPreparer = (() => {
     let cache = new WeakMap();
+    let dynamicCache = new WeakMap();
     let evictedMeshes = [];
     const MAX_VARIANTS_PER_DRAW_DATA = 16;
     const EPS = 1e-8;
     let builds = 0, hits = 0, contoursSeen = 0, degenerateContours = 0;
     let variantEvictions = 0, preparedFrames = 0, skippedFrames = 0;
     let sourcePoints = 0, emittedEdges = 0, fanBytes = 0, linearPlans = 0;
+    let dynamicBuilds = 0, dynamicReuses = 0, dynamicSourcePoints = 0, dynamicEdges = 0, dynamicFanBytes = 0;
 
     function samePoint(a, b) {
         return Math.abs(Number(a?.x) - Number(b?.x)) <= EPS && Math.abs(Number(a?.y) - Number(b?.y)) <= EPS;
@@ -151,19 +153,93 @@ var FillMeshPreparer = (() => {
             !isSpiralLayer(frameCtx?.layer) && !state.fourierMode && !state.showRoundingGuides);
     }
 
+
+    // Somata 7.2.6 — dynamic Corridor Morph reuses the exact frame-resident stroke command
+    // rail as the authoritative Fill contour source.  No Canvas2D mask is constructed and no
+    // second geometry evaluator runs.  One grow-only Float32Array / mesh object is retained per
+    // logical layer; WebGPUFillMeshRenderer uploads only the active prefix when revision changes.
+    function prepareDynamicCommands(frameCtx, commands) {
+        const layer = frameCtx?.layer;
+        if (!layer || frameCtx?.geometryPlan?.dynamic !== true || !Array.isArray(commands) || !commands.length) return null;
+        let entry = dynamicCache.get(layer);
+        if (!entry) {
+            entry = { frameId:-1, commands:null, capacityFloats:0, storage:null, mesh:{
+                dynamic:true, dynamicScreenSpace:true, revision:0, frameId:-1, fanData:null, fanFloatCount:0,
+                fanTriangleCount:0, complete:false, nativeComplete:false, records:[], preparationComplexity:'O(N)',
+                semantic:'dynamic Corridor Fill: frame-resident stroke commands -> one GPU stencil fan; no Canvas mask'
+            }};
+            dynamicCache.set(layer, entry);
+        } else if (entry.frameId === Number(frameCtx.frameId) && entry.commands === commands && entry.mesh.nativeComplete) {
+            dynamicReuses++;
+            frameCtx._fillMeshShadow = entry.mesh;
+            return entry.mesh;
+        }
+
+        let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,totalEdges=0,totalPoints=0;
+        for (const cmd of commands) {
+            for (const sp of cmd?.subpaths || []) {
+                const pts=sp?.points||[];
+                if (sp?.closed !== true || pts.length < 3) continue;
+                totalPoints += pts.length;
+                for (let i=0;i<pts.length;i++) {
+                    const a=pts[i],b=pts[(i+1)%pts.length];
+                    const ax=Number(a?.x),ay=Number(a?.y),bx=Number(b?.x),by=Number(b?.y);
+                    if(!Number.isFinite(ax)||!Number.isFinite(ay)||!Number.isFinite(bx)||!Number.isFinite(by))continue;
+                    if(ax<minX)minX=ax;if(ax>maxX)maxX=ax;if(ay<minY)minY=ay;if(ay>maxY)maxY=ay;
+                    if(Math.abs(ax-bx)>EPS||Math.abs(ay-by)>EPS)totalEdges++;
+                }
+            }
+        }
+        const mesh=entry.mesh;
+        if(!totalEdges||!Number.isFinite(minX)||!Number.isFinite(minY)||!Number.isFinite(maxX)||!Number.isFinite(maxY)){
+            mesh.fanFloatCount=0;mesh.fanTriangleCount=0;mesh.complete=false;mesh.nativeComplete=false;
+            mesh.frameId=Number(frameCtx.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;
+            entry.frameId=mesh.frameId;entry.commands=commands;frameCtx._fillMeshShadow=mesh;return mesh;
+        }
+        const need=totalEdges*6;
+        if(!entry.storage||entry.capacityFloats<need){
+            let cap=Math.max(96,entry.capacityFloats||0);
+            while(cap<need)cap=Math.ceil(cap*1.6);
+            entry.capacityFloats=cap;entry.storage=new Float32Array(cap);
+        }
+        const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1;
+        const out=entry.storage;let o=0;
+        for (const cmd of commands) {
+            for (const sp of cmd?.subpaths || []) {
+                const pts=sp?.points||[];
+                if (sp?.closed !== true || pts.length < 3) continue;
+                for (let i=0;i<pts.length;i++) {
+                    const a=pts[i],b=pts[(i+1)%pts.length];
+                    const ax=Number(a?.x),ay=Number(a?.y),bx=Number(b?.x),by=Number(b?.y);
+                    if(!Number.isFinite(ax)||!Number.isFinite(ay)||!Number.isFinite(bx)||!Number.isFinite(by))continue;
+                    if(Math.abs(ax-bx)<=EPS&&Math.abs(ay-by)<=EPS)continue;
+                    out[o++]=anchorX;out[o++]=anchorY;out[o++]=ax;out[o++]=ay;out[o++]=bx;out[o++]=by;
+                }
+            }
+        }
+        mesh.fanData=entry.storage;mesh.fanFloatCount=o;mesh.fanTriangleCount=Math.floor(o/6);
+        mesh.complete=mesh.fanTriangleCount>0;mesh.nativeComplete=mesh.complete;
+        mesh.frameId=Number(frameCtx.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;
+        mesh.anchor={x:anchorX,y:anchorY};mesh.totalVertices=totalPoints;mesh.totalTriangles=mesh.fanTriangleCount;
+        entry.frameId=mesh.frameId;entry.commands=commands;frameCtx._fillMeshShadow=mesh;
+        dynamicBuilds++;dynamicSourcePoints+=totalPoints;dynamicEdges+=mesh.fanTriangleCount;dynamicFanBytes+=o*4;
+        return mesh;
+    }
+
     function takeEvicted() { const out = evictedMeshes; evictedMeshes = []; return out; }
-    function reset() { cache = new WeakMap(); evictedMeshes = []; }
+    function reset() { cache = new WeakMap(); dynamicCache = new WeakMap(); evictedMeshes = []; }
     function status() {
         return {
             builds, hits, contoursSeen, degenerateContours, variantEvictions,
             maxVariantsPerDrawData: MAX_VARIANTS_PER_DRAW_DATA,
             preparedFrames, skippedFrames, sourcePoints, emittedEdges, fanBytes, linearPlans,
+            dynamicBuilds,dynamicReuses,dynamicSourcePoints,dynamicEdges,dynamicFanBytes,
             classificationPasses: 0, earClippingPasses: 0,
             mode: 'linear-stencil-all', complexity: 'O(N)',
             semantic: 'all static closed contours -> one GPU stencil field -> one layer color composite'
         };
     }
-    return { prepareStatic, prepareFrame, canUseNative, takeEvicted, status, reset };
+    return { prepareStatic, prepareFrame, prepareDynamicCommands, canUseNative, takeEvicted, status, reset };
 })();
 
 window.__spiroFillMeshPreparationStatus = () => FillMeshPreparer.status();

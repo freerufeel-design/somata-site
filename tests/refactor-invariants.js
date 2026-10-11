@@ -123,7 +123,7 @@ testScriptManifest();
   assert.ok(appA.includes('function canUseFrameScene(frameId=0)')&&appA.includes('ensureLayerBatchSize(mainCanvas.width,mainCanvas.height)'), 'Direct Frame Scene must bootstrap its textures even when Spiral bypasses the ordinary layer batch');
   assert.ok(pipe.includes('function canUseGpuSpiralBezierFrameScene(frameCtx)'),'Direct Spiral Frame Scene eligibility missing');
   assert.ok(pipe.includes('const spiralBezierGpuNative=')&&pipe.includes('topologyGpuLazy||greenProjectGpuNative||spiralBezierGpuNative'),'GPU-native Spiral Morph must skip per-frame Canvas vector-master recording');
-  assert.ok(pipe.includes('deferFrameScene:directFrame'),'Spiral renderer must request direct global Frame Scene residency');
+  assert.ok(pipe.includes('function resolveGpuSpiralBezierSceneRoute(frameCtx')&&pipe.includes('deferFrameScene:route.deferFrameScene'),'Spiral renderer must preserve direct Frame Scene residency through the unified scene-route contract');
   assert.ok(spiral.includes("const SUBDIV=12"),'Spiral GPU cubic subdivision budget must keep the rev3 high-curvature quality floor');
   assert.ok(spiral.includes('equalizeCubicRailsByArc')&&spiral.includes('splitRailAtFractions')&&spiral.includes('cubicSubsegment'),'Spiral 6.8 endpoint normalization must use a common arc partition with exact De Casteljau cubic subdivision');
   assert.ok(spiral.includes("deferExternalFrameScene?.(cmd,frameCtx.frameId,'spiral-bezier-morph')"),'Spiral command buffers must be able to target the global Frame Scene directly');
@@ -255,7 +255,7 @@ console.log('SpiroStar refactor invariants: PASS');
 {
   const app=read('js/legacy/app-a.js');
   const html=read('index.html');
-  assert.ok(html.includes('<title>Somata 7.2.4</title>'),'Somata 7.2.4 title missing');
+  assert.ok(html.includes('<title>Somata 7.3.7</title>'),'Somata 7.2.8 title missing');
   assert.ok(app.includes('function buildSmoothSpiralBezierSegments('),'Smooth Spiral cubic source builder missing');
   assert.ok(app.includes("ctx.__spiroNativeBezierSpiral === true"),'Smooth Spiral must gate the native Bézier recording path');
   assert.ok(app.includes('__recordVariableWidthBezierSpiral(segments,baseWidth)'),'Recorder-side compact Bézier command path missing');
@@ -311,7 +311,7 @@ console.log('SpiroStar refactor invariants: PASS');
   const spiral=read('js/gpu/spiral-bezier-morph-renderer.js');
   assert.ok(appA.includes('function getExternalLayerSceneTarget(frameId=0)'),'Shared GPU Layer Scene target API missing');
   assert.ok(pipe.includes('function canUseGpuSpiralBezierLayerScene(frameCtx,allowHiddenGraffitiCarrier=false)'),'Spiral Morph Layer Scene eligibility missing');
-  assert.ok(pipe.includes('deferLayerScene:!directFrame&&canUseGpuSpiralBezierLayerScene(frameCtx)')||pipe.includes('directLayer=!directFrame&&canUseGpuSpiralBezierLayerScene(frameCtx,graffitiCarrierGlow)'),'Spiral Morph must retain shared Layer Scene routing after direct Frame Scene eligibility');
+  assert.ok(pipe.includes('function resolveGpuSpiralBezierSceneRoute(frameCtx,allowHiddenGraffitiCarrier=false)')&&pipe.includes('resident&&canUseGpuSpiralBezierLayerScene(frameCtx,allowHiddenGraffitiCarrier)')&&pipe.includes('return{deferLayerScene:true,deferFrameScene:false,resident:true}'),'Spiral Morph must join an already-resident shared Layer Scene before considering a new external root or direct Frame Scene');
   assert.ok(spiral.includes("deferExternalLayerScene?.(cmd,frameCtx.frameId,'spiral-bezier-morph')"),'Spiral Morph must defer its command buffer into the shared GPU scene');
   assert.ok(spiral.includes('rec.copyBuffer'),'Spiral Morph Corridor/copy data must be per-layer resident for deferred submission');
   assert.ok(spiral.includes('rec.uniformBase')&&spiral.includes('rec.uniformGlow'),'Deferred Spiral Morph uniforms must be per-layer resident');
@@ -369,7 +369,7 @@ console.log('SpiroStar refactor invariants: PASS');
   assert.ok(commitStart>=0&&commitEnd>commitStart&&!app.slice(commitStart,commitEnd).includes("'glow'"),
     'Blue Morph boundary commit must not own Glow');
   const ribbon=read('js/gpu/graffiti-ribbon-renderer.js');
-  assert.ok(ribbon.includes('const WebGPUGraffitiContourGlow=(()=>{')&&ribbon.includes('exact Graffiti ribbon -> GPU mask -> separable WebGPU blur'),
+  assert.ok(ribbon.includes('const WebGPUGraffitiContourGlow=(()=>{')&&ribbon.includes('exact Graffiti ribbon / contour -> GPU mask -> separable WebGPU blur'),
     'Graffiti Glow must be a GPU blur of the exact ribbon mask');
   assert.ok(ribbon.includes('function encodeGlowToLayerScene(')&&ribbon.includes('function encodeCorridorGlowToLayerScene('),
     'Static/Corridor Graffiti contour Glow encoders missing');

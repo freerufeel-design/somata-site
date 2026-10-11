@@ -179,11 +179,15 @@ function buildGpuMorphArcResource(morphRec){
             flags>>>=0;expandedMeta[o]=mi;expandedMeta[o+1]=mi+1;expandedMeta[o+2]=pi;expandedMeta[o+3]=flags;expandedPathIndex[mi]=flags;
         }
     }
-    const logicalPathDefs=morphRec.cpuPathRanges||null;
+    const logicalPathDefs=morphRec.cpuPathRanges||null,logicalPeriodic=morphRec.cpuPathPeriodic||null;
     for(let pi=0;pi<pathCount;pi++){const o=pi*4;expandedPathRanges[o]=(logicalPathRanges[o]>>>0)*subdiv;expandedPathRanges[o+1]=(logicalPathRanges[o+1]>>>0)*subdiv;
         // Arc consumers need only first/count in xy. z is reserved here as the exact closed flag
         // so open Spiral rails never wrap their first corner to the last segment.
-        expandedPathRanges[o+2]=logicalPathDefs?((logicalPathDefs[o+2]>>>0)?1:0):(morphRec.allClosed===true?1:0);expandedPathRanges[o+3]=0;}
+        expandedPathRanges[o+2]=logicalPathDefs?((logicalPathDefs[o+2]>>>0)?1:0):(morphRec.allClosed===true?1:0);
+        // w is sampling topology: 0=open, 1=ordinary closed, 2=self-similar Spiral period.
+        // z stays the historical closed boolean for consumers that must not reinterpret
+        // a periodic Spiral as a conventional last->first loop.
+        expandedPathRanges[o+3]=logicalPeriodic&&logicalPeriodic[pi]?2:(expandedPathRanges[o+2]?1:0);}
     const segmentMetaBuffer=own(`SpiroStar Morph Arc bezier segment metadata L${morphRec.layerIndex}`,expandedMeta.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
     const pathIndexBuffer=own(`SpiroStar Morph Arc bezier path indices L${morphRec.layerIndex}`,expandedPathIndex.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
     const pathSegmentRangeBuffer=own(`SpiroStar Morph Arc bezier path ranges L${morphRec.layerIndex}`,expandedPathRanges.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
@@ -233,21 +237,24 @@ function getStaticSpiralBezierResource(layerIndex,sharedDevice=null,sharedGenera
     for(const path of source){
         const pts=path?.points||[];if(pts.length<2)continue;
         const round=path?.spiralProfileRoundingBaked===true?0:roundBase;
-        const smooth=layer?.profileMode==='spline'&&typeof normalizeSplineRenderMode==='function'&&normalizeSplineRenderMode(layer?.splineRenderMode)==='smooth'&&path?.spiralProfileSplineBaked!==true;
+        const smooth=layer?.profileMode==='spline'&&path?.spiralProfileSplineBaked!==true;
         let cubics=[];try{
             if(Array.isArray(path?._bezierSegments)&&path._bezierSegments.length)cubics=path._bezierSegments;
             else if(Array.isArray(pts?._spiroRetainedCubics)&&pts._spiroRetainedCubics.length)cubics=pts._spiroRetainedCubics;
             else if(typeof __spiroBuildSpiralBezierSegments==='function')cubics=__spiroBuildSpiralBezierSegments(pts,round,path?.cornerFlags||[],smooth)||[];
         }catch(_){cubics=[];}
-        if(!cubics.length)continue;paths.push({path,cubics,closed:path?.closed===true});cubicCount+=cubics.length;
+        if(!cubics.length)continue;paths.push({path,cubics,closed:path?.closed===true,periodic:Boolean(layer?.spiralClosed!==false&&path?.spiralContinuityProtected===true)});cubicCount+=cubics.length;
     }
     if(!cubicCount)return null;
-    const cubicData=new Float32Array(cubicCount*8),cpuCubicWidthScales=new Float32Array(cubicCount*2),cpuSegmentMeta=new Uint32Array(cubicCount*4),cpuPathSegmentRanges=new Uint32Array(paths.length*4),cpuPathRanges=new Uint32Array(paths.length*4),cpuEndpointPathLengths=new Float32Array(paths.length*2),cpuPathKnotFractions=new Array(paths.length);let ci=0,pointBase=0;
-    for(let pi=0;pi<paths.length;pi++){const rec=paths[pi],first=ci,lengths=[],total=rec.cubics.reduce((sum,q)=>{const l=staticSpiralCubicLength(q);lengths.push(l);return sum+l;},0)||1,fr=[0];let acc=0;for(const q of rec.cubics){const o=ci*8;cubicData[o]=Number(q.p0.x)||0;cubicData[o+1]=Number(q.p0.y)||0;cubicData[o+2]=Number(q.c1.x)||0;cubicData[o+3]=Number(q.c1.y)||0;cubicData[o+4]=Number(q.c2.x)||0;cubicData[o+5]=Number(q.c2.y)||0;cubicData[o+6]=Number(q.p3.x)||0;cubicData[o+7]=Number(q.p3.y)||0;cpuCubicWidthScales[ci*2]=Math.max(.02,Number(q.widthScale0)||1);cpuCubicWidthScales[ci*2+1]=Math.max(.02,Number(q.widthScale1)||1);const mo=ci*4;let flags=0;if(q?.__profileCorner0===true)flags|=0x40000000;if(q?.__profileCorner1===true)flags|=0x80000000;cpuSegmentMeta[mo]=pointBase+(ci-first);cpuSegmentMeta[mo+1]=pointBase+(ci-first)+1;cpuSegmentMeta[mo+2]=pi;cpuSegmentMeta[mo+3]=flags>>>0;acc+=lengths[ci-first];fr.push(Math.min(1,acc/total));ci++;}fr[fr.length-1]=1;const po=pi*4,n=rec.cubics.length;cpuPathSegmentRanges[po]=first;cpuPathSegmentRanges[po+1]=n;cpuPathSegmentRanges[po+2]=pointBase;cpuPathSegmentRanges[po+3]=n+1;cpuPathRanges[po]=pointBase;cpuPathRanges[po+1]=n+1;cpuPathRanges[po+2]=rec.closed?1:0;cpuPathRanges[po+3]=pi;cpuEndpointPathLengths[pi*2]=total;cpuEndpointPathLengths[pi*2+1]=total;cpuPathKnotFractions[pi]={source:fr,target:fr,common:fr};pointBase+=n+1;}
+    const cubicData=new Float32Array(cubicCount*8),cpuCubicWidthScales=new Float32Array(cubicCount*2),cpuSegmentMeta=new Uint32Array(cubicCount*4),cpuPathSegmentRanges=new Uint32Array(paths.length*4),cpuPathRanges=new Uint32Array(paths.length*4),cpuPathPeriodic=new Uint32Array(paths.length),cpuEndpointPathLengths=new Float32Array(paths.length*2),cpuPathKnotFractions=new Array(paths.length),cpuPathLampKeyFractions=new Array(paths.length),cpuPathCornerFractions=new Array(paths.length);let ci=0,pointBase=0;
+    for(let pi=0;pi<paths.length;pi++){const rec=paths[pi],first=ci,lengths=[],total=rec.cubics.reduce((sum,q)=>{const l=staticSpiralCubicLength(q);lengths.push(l);return sum+l;},0)||1,fr=[0];let acc=0;for(const q of rec.cubics){const o=ci*8;cubicData[o]=Number(q.p0.x)||0;cubicData[o+1]=Number(q.p0.y)||0;cubicData[o+2]=Number(q.c1.x)||0;cubicData[o+3]=Number(q.c1.y)||0;cubicData[o+4]=Number(q.c2.x)||0;cubicData[o+5]=Number(q.c2.y)||0;cubicData[o+6]=Number(q.p3.x)||0;cubicData[o+7]=Number(q.p3.y)||0;cpuCubicWidthScales[ci*2]=Math.max(.02,Number(q.widthScale0)||1);cpuCubicWidthScales[ci*2+1]=Math.max(.02,Number(q.widthScale1)||1);const mo=ci*4;let flags=0;if(q?.__profileCorner0===true)flags|=0x40000000;if(q?.__profileCorner1===true)flags|=0x80000000;cpuSegmentMeta[mo]=pointBase+(ci-first);cpuSegmentMeta[mo+1]=pointBase+(ci-first)+1;cpuSegmentMeta[mo+2]=pi;cpuSegmentMeta[mo+3]=flags>>>0;acc+=lengths[ci-first];fr.push(Math.min(1,acc/total));ci++;}fr[fr.length-1]=1;const po=pi*4,n=rec.cubics.length;cpuPathSegmentRanges[po]=first;cpuPathSegmentRanges[po+1]=n;cpuPathSegmentRanges[po+2]=pointBase;cpuPathSegmentRanges[po+3]=n+1;cpuPathRanges[po]=pointBase;cpuPathRanges[po+1]=n+1;cpuPathRanges[po+2]=rec.closed?1:0;cpuPathRanges[po+3]=pi;cpuPathPeriodic[pi]=rec.periodic?1:0;cpuEndpointPathLengths[pi*2]=total;cpuEndpointPathLengths[pi*2+1]=total;cpuPathKnotFractions[pi]={source:fr,target:fr,common:fr};
+        const keyFlags=rec.path?.lampCornerFlags||[],cornerFlags=rec.path?.cornerFlags||[],keys=[0],corners=[];
+        for(let j=1;j<fr.length-1;j++){if(keyFlags[j]===true)keys.push(fr[j]);if(cornerFlags[j]===true)corners.push(fr[j]);}
+        if(fr.length>1)keys.push(1);cpuPathLampKeyFractions[pi]={source:keys,target:keys};cpuPathCornerFractions[pi]={source:corners,target:corners};pointBase+=n+1;}
     const buffer=gpuMorphArcBuffer(gpuMorphArcRuntime.device,`Somata static Spiral current cubics L${layerIndex}`,cubicData.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);gpuMorphArcRuntime.device.queue.writeBuffer(buffer,0,cubicData);
     const segmentMetaBuffer=gpuMorphArcBuffer(gpuMorphArcRuntime.device,`Somata static Spiral segment metadata L${layerIndex}`,cpuSegmentMeta.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST),pathRangeBuffer=gpuMorphArcBuffer(gpuMorphArcRuntime.device,`Somata static Spiral path ranges L${layerIndex}`,cpuPathRanges.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST),pathSegmentRangeBuffer=gpuMorphArcBuffer(gpuMorphArcRuntime.device,`Somata static Spiral path segment ranges L${layerIndex}`,cpuPathSegmentRanges.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
     gpuMorphArcRuntime.device.queue.writeBuffer(segmentMetaBuffer,0,cpuSegmentMeta);gpuMorphArcRuntime.device.queue.writeBuffer(pathRangeBuffer,0,cpuPathRanges);gpuMorphArcRuntime.device.queue.writeBuffer(pathSegmentRangeBuffer,0,cpuPathSegmentRanges);
-    const rec={layerIndex:Number(layerIndex)||0,layer,generation:gpuMorphArcRuntime.generation,geometryVersion,profileSignature,ready:true,cubicBuffer:buffer,cubicCount,segmentCount:cubicCount,pathCount:paths.length,pointCount:pointBase,bezierSubdiv:12,arcSubdiv:8,bezierVisualRail:true,cpuCubicWidthScales,staticSpiralBezierRail:true,specialSpiralBezierRail:true,gpuOnlySpiralEffects:true,cpuSegmentMeta,cpuPathSegmentRanges,cpuPathRanges,pathRanges:cpuPathRanges,cpuEndpointPathLengths,cpuPathKnotFractions,segmentMetaBuffer,pathRangeBuffer,pathSegmentRangeBuffer,allClosed:paths.every(p=>p.closed),resolveMorphT:()=>0,encodeCurrentCubics:()=>true};
+    const rec={layerIndex:Number(layerIndex)||0,layer,generation:gpuMorphArcRuntime.generation,geometryVersion,profileSignature,ready:true,cubicBuffer:buffer,cubicCount,segmentCount:cubicCount,pathCount:paths.length,pointCount:pointBase,bezierSubdiv:12,arcSubdiv:8,bezierVisualRail:true,cpuCubicWidthScales,staticSpiralBezierRail:true,specialSpiralBezierRail:true,gpuOnlySpiralEffects:true,cpuSegmentMeta,cpuPathSegmentRanges,cpuPathRanges,cpuPathPeriodic,pathRanges:cpuPathRanges,cpuEndpointPathLengths,cpuPathKnotFractions,cpuPathLampKeyFractions,cpuPathCornerFractions,segmentMetaBuffer,pathRangeBuffer,pathSegmentRangeBuffer,allClosed:paths.every(p=>p.closed),resolveMorphT:()=>0,encodeCurrentCubics:()=>true};
     staticSpiralBezierResources.set(layer,rec);staticSpiralBezierResourceSet.add(rec);return rec;
 }
 // Iter32 — inspect the already-built static retained rail without forcing a rebuild.
@@ -341,8 +348,15 @@ function noteGpuMorphArcDecision(frameCtx,eligible,reason,segmentCount=0){
 }
 function getGpuMorphArcTableForFrame(frameCtx){
     if(!frameCtx)return null;gpuMorphArcRuntime.stats.tableRequests++;
-    const fid=Number(frameCtx.frameId)||Number(frameGeometryRuntime?.frameId)||0;
-    if(frameCtx._gpuMorphArcDecisionFrameId===fid){gpuMorphArcRuntime.stats.frameCacheHits++;return frameCtx._gpuMorphArcTable||null;}
+    const fid=Number(frameCtx.frameId)||Number(frameGeometryRuntime?.frameId)||0,currentAuthority=typeof currentGpuBezierResourceForFrame==='function'?currentGpuBezierResourceForFrame(frameCtx):null;
+    // 7.3.7 — an atomic retained-rail swap may happen after an earlier consumer touched this
+    // frame. A same-frame null/table from the previous authority must not poison every later
+    // consumer (Lamps were the visible victim). Reuse only a table that belongs to the CURRENT
+    // authoritative retained cubic resource; otherwise rebuild/rebind in the same frame.
+    if(frameCtx._gpuMorphArcDecisionFrameId===fid){
+        const cached=frameCtx._gpuMorphArcTable||null,cachedAuthority=cached?._gpuMorphArcResource?.morphRec||null;
+        if(cached&&cachedAuthority===currentAuthority&&cached?._gpuMorphArcResource?.ready){gpuMorphArcRuntime.stats.frameCacheHits++;return cached;}
+    }
     frameCtx._gpuMorphArcDecisionFrameId=fid;frameCtx._gpuMorphArcTable=null;
     const reason=gpuMorphArcIneligibleReason(frameCtx);noteGpuMorphArcDecision(frameCtx,!reason,reason||'gpu-morph-arc');
     if(reason){gpuMorphArcRuntime.stats.unsupportedFrames++;return null;}gpuMorphArcRuntime.stats.eligibleRequests++;

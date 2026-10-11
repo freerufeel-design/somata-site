@@ -4,7 +4,7 @@
 window.__spiroRegisterModule?.('js/render/main-pipeline');
 
 
-// Somata 7.2.4 — strict Full-WebGPU diagnostic mode; recoverable frame diagnostics are warnings.
+// Somata 7.2.8 — strict Full-WebGPU diagnostic mode; recoverable frame diagnostics are warnings.
 // Spiral/Morph/Corridor must never hide a missing Full GPU path behind Canvas, WebGL,
 // a reduced "Fast GPU" renderer, or pixels from the previous frame.  Contract failures
 // are fail-visible and reported in DevTools so every missing path can be fixed explicitly.
@@ -35,7 +35,7 @@ function somataGpuContractError(code,ctx=null,details=null){
     }
     const key=`${payload.code}:${payload.layerIndex}`;const now=performance.now(),prev=somataFullGpuDiag.lastLogAt.get(key)||-1e9;
     const minLogGapMs=recoverable?5000:500;
-    if(now-prev>minLogGapMs){somataFullGpuDiag.lastLogAt.set(key,now);(recoverable?console.warn:console.error)(`[Somata 7.2.4 FullGPU] ${payload.code}`,payload);}
+    if(now-prev>minLogGapMs){somataFullGpuDiag.lastLogAt.set(key,now);(recoverable?console.warn:console.error)(`[Somata 7.3.7 FullGPU] ${payload.code}`,payload);}
     return false;
 }
 window.__somataFullGpuDiagnostics=()=>({strict:true,canvasFallbackAllowed:false,fastGpuAllowed:false,errors:somataFullGpuDiag.errors,warnings:somataFullGpuDiag.warnings,last:somataFullGpuDiag.last,lastAt:somataFullGpuDiag.lastAt,byCode:{...somataFullGpuDiag.byCode}});
@@ -404,21 +404,25 @@ function renderLayerGlowPass(frameCtx) {
     // Active Spiral Morph already has the authoritative retained current-cubic rail. Do not
     // ask the generic dynamic Corridor master recorder to reconstruct a hidden Graffiti carrier.
     // Static Corridor still uses the retained-cubic master path below.
-    if(!(graffitiCarrierGlow&&frameCtx.morphFrameActive===true)&&canUseGpuOnlyCorridorLayerScene(frameCtx,graffitiCarrierGlow)){
-        const rec=encodeGpuOnlyCorridorLayerRole(frameCtx,'glow',{effectMode:'glow',radiusPx:Math.max(.5,effect.amount*.55*frameCtx.frame.dpr),alphaScale:effect.compositeAlpha,composite:'source-over'},true,graffitiCarrierGlow);
-        if(rec?.handled&&rec.commandBuffer&&WebGPUStrokeRenderer.deferExternalLayerScene?.(rec.commandBuffer,frameCtx.frameId,'corridor-glow')){frameCtx.frame.gpuLayerSceneDeferred=true;frameCtx.frame.gpuMainSceneEmpty=false;frameCtx._corridorLayerSceneActive=true;renderBackendTelemetry.mark('glow','gpu','GPU Corridor Layer Scene');return;}
+    if(!strictSpiralGlow&&!(graffitiCarrierGlow&&frameCtx.morphFrameActive===true)&&canUseGpuOnlyCorridorLayerScene(frameCtx,graffitiCarrierGlow)){
+        const residentBeforeGlow=getResidentGpuLayerScene(frameCtx),sceneAlreadyActive=Boolean(residentBeforeGlow?.texture);
+        const rec=encodeGpuOnlyCorridorLayerRole(frameCtx,'glow',{effectMode:'glow',radiusPx:Math.max(.5,effect.amount*.55*frameCtx.frame.dpr),alphaScale:effect.compositeAlpha,composite:'source-over'},!sceneAlreadyActive,graffitiCarrierGlow);
+        if(rec?.handled&&rec.commandBuffer){
+            const accepted=sceneAlreadyActive?queueLayerSceneEffectCommand(frameCtx,3,rec.commandBuffer,'corridor-glow'):WebGPUStrokeRenderer.deferExternalLayerScene?.(rec.commandBuffer,frameCtx.frameId,'corridor-glow')===true;
+            if(accepted){frameCtx.frame.gpuLayerSceneDeferred=true;frameCtx.frame.gpuMainSceneEmpty=false;frameCtx._corridorLayerSceneActive=true;renderBackendTelemetry.mark('glow','gpu',sceneAlreadyActive?'GPU Corridor joined resident Layer Scene':'GPU Corridor Layer Scene');return;}
+        }
     }
     // v531 — common dynamic Morph scenes do not need two GPU submissions just because Glow
     // and Base are separate logical passes. If no Fill/Web underlay must be inserted between
     // them, fuse both analytic strokes on the Morph renderer and mark Base as already committed.
-    const fuseContract=getLayerGeometryContract(frameCtx),canFuseMorphGlowBase=frameCtx.lineDisplayEnabled===true&&frameCtx.lineProfileStrokeOnly!==true&&fuseContract?.fillRequested!==true&&(strictSpiralGlow||frameCtx.effectsPlan?.web?.enabled!==true)&&!(typeof isPathFxBaseReplacementActive==='function'&&isPathFxBaseReplacementActive(frameCtx))&&!(typeof spiroIsCompatibilityForced==='function'&&spiroIsCompatibilityForced('geometry'))&&!shouldForceCanvasBaseStroke(frameCtx);
+    const fuseContract=getLayerGeometryContract(frameCtx),canFuseMorphGlowBase=frameCtx.lineDisplayEnabled===true&&frameCtx.lineProfileStrokeOnly!==true&&fuseContract?.fillRequested!==true&&frameCtx.effectsPlan?.web?.enabled!==true&&!(typeof isPathFxBaseReplacementActive==='function'&&isPathFxBaseReplacementActive(frameCtx))&&!(typeof spiroIsCompatibilityForced==='function'&&spiroIsCompatibilityForced('geometry'))&&!shouldForceCanvasBaseStroke(frameCtx);
     // Iter36 — static Spiral Glow/Base is already encoded into the internal retained-cubic
     // LayerScene batch. Do not bypass that proven static scene through the Morph renderer.
     // Base will publish the combined scene at its normal pass position.
     if(!frameCtx.morphFrameActive&&strictSpiralGlow&&frameCtx._webgpuStrokeBatch?.sceneCombined&&frameCtx._webgpuStrokeBatch?.roles?.has?.('glow')){renderBackendTelemetry.mark('glow','gpu','static Spiral retained-Bézier Layer Scene');return;}
-    if(frameCtx.morphFrameActive===true&&canFuseMorphGlowBase&&typeof WebGPUSpiralBezierMorphRenderer!=='undefined'&&WebGPUSpiralBezierMorphRenderer.isEligible?.(frameCtx,'glow')&&WebGPUSpiralBezierMorphRenderer.isEligible?.(frameCtx,'base')){
-        const ok=(()=>{const directFrame=canUseGpuSpiralBezierFrameScene(frameCtx);return WebGPUSpiralBezierMorphRenderer.renderGlowAndBase?.(frameCtx,mainCtx,{radiusPx:Math.max(.5,effect.amount*.55*frameCtx.frame.dpr),glowAlphaScale:effect.compositeAlpha,baseAlphaScale:Math.max(0,Math.min(1,Number(frameCtx.lineOpacityFactor??1))),deferFrameScene:directFrame,deferLayerScene:!directFrame&&canUseGpuSpiralBezierLayerScene(frameCtx)})===true;})();
-        if(ok){frameCtx._baseStrokeCommitted=true;frameCtx._fusedMorphBackend='spiral-bezier';renderBackendTelemetry.mark('glow','gpu','fused Spiral Bézier Morph Glow+Base');return;}
+    if(strictSpiralGlow&&canFuseMorphGlowBase&&typeof WebGPUSpiralBezierMorphRenderer!=='undefined'&&WebGPUSpiralBezierMorphRenderer.isEligible?.(frameCtx,'glow')&&WebGPUSpiralBezierMorphRenderer.isEligible?.(frameCtx,'base')){
+        const ok=(()=>{const route=resolveGpuSpiralBezierSceneRoute(frameCtx);return (route.deferLayerScene||route.deferFrameScene)&&WebGPUSpiralBezierMorphRenderer.renderGlowAndBase?.(frameCtx,mainCtx,{mode:'glow-base',radiusPx:Math.max(.5,effect.amount*.55*frameCtx.frame.dpr),glowAlphaScale:effect.compositeAlpha,baseAlphaScale:Math.max(0,Math.min(1,Number(frameCtx.lineOpacityFactor??1))),deferFrameScene:route.deferFrameScene,deferLayerScene:route.deferLayerScene,layerScenePhase:3,layerSceneLabel:'spiral-glow-base'})===true;})();
+        if(ok){frameCtx._baseStrokeCommitted=true;frameCtx._fusedMorphBackend='spiral-bezier';renderBackendTelemetry.mark('glow','gpu','fused retained-Spiral Glow+Base');return;}
     }
     if(!strictSpiralGlow&&canFuseMorphGlowBase&&typeof WebGPUGreenProjectMorphRenderer!=='undefined'&&WebGPUGreenProjectMorphRenderer.isEligible?.(frameCtx)&&frameCtx.geometryPlan?.kind!=='green-fade'){
         const ok=WebGPUGreenProjectMorphRenderer.renderGlowAndBase?.(frameCtx,mainCtx,{radiusPx:Math.max(.5,effect.amount*.55*frameCtx.frame.dpr),glowAlphaScale:effect.compositeAlpha,baseAlphaScale:Math.max(0,Math.min(1,Number(frameCtx.lineOpacityFactor??1)))})===true;
@@ -428,9 +432,9 @@ function renderLayerGlowPass(frameCtx) {
         const ok=WebGPUTopologyMorphBaseRenderer.renderGlowAndBase?.(frameCtx,mainCtx,{radiusPx:Math.max(.5,effect.amount*.55*frameCtx.frame.dpr),glowAlphaScale:effect.compositeAlpha,baseAlphaScale:Math.max(0,Math.min(1,Number(frameCtx.lineOpacityFactor??1)))})===true;
         if(ok){frameCtx._baseStrokeCommitted=true;frameCtx._fusedMorphBackend='topology';renderBackendTelemetry.mark('glow','gpu','fused Topology Morph Glow+Base');return;}
     }
-    if(frameCtx.morphFrameActive===true&&typeof WebGPUSpiralBezierMorphRenderer!=='undefined'&&WebGPUSpiralBezierMorphRenderer.isEligible?.(frameCtx,'glow')){
-        const directFrame=!graffitiCarrierGlow&&canUseGpuSpiralBezierFrameScene(frameCtx),directLayer=!directFrame&&canUseGpuSpiralBezierLayerScene(frameCtx,graffitiCarrierGlow);const ok=(directFrame||directLayer)&&WebGPUSpiralBezierMorphRenderer.render(frameCtx,mainCtx,{mode:'glow',radiusPx:Math.max(.5,effect.amount*.55*frameCtx.frame.dpr),alphaScale:effect.compositeAlpha,deferFrameScene:directFrame,deferLayerScene:directLayer});
-        if(ok){renderBackendTelemetry.mark('glow','gpu','GPU-native Spiral Bézier Morph glow');return;}
+    if(strictSpiralGlow&&typeof WebGPUSpiralBezierMorphRenderer!=='undefined'&&WebGPUSpiralBezierMorphRenderer.isEligible?.(frameCtx,'glow')){
+        const route=resolveGpuSpiralBezierSceneRoute(frameCtx,graffitiCarrierGlow),ok=(route.deferFrameScene||route.deferLayerScene)&&WebGPUSpiralBezierMorphRenderer.render(frameCtx,mainCtx,{mode:'glow',radiusPx:Math.max(.5,effect.amount*.55*frameCtx.frame.dpr),alphaScale:effect.compositeAlpha,deferFrameScene:route.deferFrameScene,deferLayerScene:route.deferLayerScene,layerScenePhase:3,layerSceneLabel:'spiral-glow'});
+        if(ok){renderBackendTelemetry.mark('glow','gpu','GPU-native retained-Spiral glow');return;}
     }
     // v524 — green playlist Morph has its own GPU-resident source/target segment pairs.
     // In Spiral transitions this avoids the legacy variable-width Canvas stroke loop.
@@ -629,6 +633,9 @@ function prepareLayerFillMaskGPU(frameCtx){
     const layer=frameCtx?.layer,contract=getLayerGeometryContract(frameCtx);
     if(!layer||!contract)return null;
     if(!contract.fillRequested)return{mask:null,fillStyle:contract.fillStyle,empty:true,authoritative:true};
+    // Somata 7.2.8 — dynamic Corridor Fill is GPU-native from the same frame-resident
+    // morph command rail as Base. Never rasterize a transient Canvas2D mask for it.
+    if(contract.dynamicCorridorNative===true)return{mask:null,fillStyle:contract.fillStyle,empty:false,authoritative:false,policyFallback:true,dynamicGpuOnly:true};
     if(!contract.gpuMaskEligible)return{mask:null,fillStyle:contract.fillStyle,empty:false,authoritative:false,policyFallback:true};
     const fillStyle=contract.fillStyle,w=mainCanvas.width,h=mainCanvas.height;
     const drawData=frameCtx.geometryPlan?.sourceData||frameCtx.staticDrawData,cacheKey=getStaticFillMaskCacheKey(frameCtx,contract);
@@ -886,11 +893,22 @@ function canDeferLayerSceneForFrame(frameCtx,batch){
 }
 function ensureStrictSpiralEffectLayerSceneRoot(frameCtx){
     if(!isStrictSpiralWebGPUFrame(frameCtx)||!frameCtx?.frame)return false;
-    if(frameCtx.frame.gpuLayerSceneDeferred===true||WebGPUStrokeRenderer.getFrameSceneTexture?.(frameCtx.frameId))return true;
+    // Somata 7.3.7 — gpuLayerSceneDeferred is frame-wide history, not resident ownership.
+    // After one layer is sealed into Frame Scene that boolean may remain true while the shared
+    // per-layer scratch has already been released. Only the renderer's resident record proves
+    // that THIS layer has a writable Layer Scene. A global Frame Scene may coexist with it.
+    const residentRoot=WebGPUStrokeRenderer.getDeferredLayerSceneTexture?.(frameCtx.frameId);
+    if(residentRoot?.texture)return true;
     // Normal visible Base must remain the root producer, otherwise a pre-clear command would
     // occupy the one deferred LayerScene slot before the retained-Bézier Base can publish it.
     const baseWillOwnScene=frameCtx.lineDisplayEnabled===true&&frameCtx.lineProfileStrokeOnly!==true&&!isPathFxBaseReplacementActive(frameCtx);
-    if(baseWillOwnScene||frameCtx._webgpuStrokeBatch?.sceneCombined)return false;
+    // Somata 7.3.7 — Web is an underlay. If strict Spiral Web is enabled, open a transparent
+    // LayerScene root before Base so Web can be queued at phase 4.5 and Base at phase 5 even
+    // though the logical Web pass runs later. This also gives every exact effect one stable
+    // canonical scene owner instead of racing for the external LayerScene slot.
+    const rootContract=getLayerGeometryContract(frameCtx),orderedWebUnderBase=frameCtx.effectsPlan?.web?.enabled===true;
+    const orderedSceneRoot=orderedWebUnderBase||rootContract?.fillRequested===true||state.tunnel?.active===true;
+    if((baseWillOwnScene&&!orderedSceneRoot)||frameCtx._webgpuStrokeBatch?.sceneCombined)return false;
     // Graffiti hides Base and now defers its contour Glow until the exact ribbon Profile pass.
     // Therefore Graffiti cannot rely on the historical hidden-carrier Glow to open LayerScene;
     // create the transparent GPU root here like any other effects-only FullGPU layer.
@@ -942,16 +960,29 @@ function spiralGpuEffectsRequested(frameCtx){
 function canUseGpuSpiralBezierLayerScene(frameCtx,allowHiddenGraffitiCarrier=false){
     const hiddenGraffitiCarrier=allowHiddenGraffitiCarrier===true&&frameCtx?.lineProfileStrokeOnly===true&&frameCtx?.lineProfileApplication==='graffiti';
     if(!frameCtx?.prepared||state.showRoundingGuides||(frameCtx.lineProfileStrokeOnly&&!hiddenGraffitiCarrier)||!frameCtx.lineDisplayEnabled)return false;
-    const staticSpiral=Boolean(!frameCtx.morphFrameActive&&frameCtx.geometryPlan?.dynamic!==true&&state.tunnel?.active!==true&&typeof isSpiralLayer==='function'&&isSpiralLayer(frameCtx.layer));
+    const staticSpiral=Boolean(!frameCtx.morphFrameActive&&frameCtx.geometryPlan?.dynamic!==true&&typeof isSpiralLayer==='function'&&isSpiralLayer(frameCtx.layer));
     if(frameCtx.geometryPlan?.kind!=='blue-circle-slide'&&!staticSpiral)return false;
     const eligibilityMode=hiddenGraffitiCarrier?'glow':'base';
     if(typeof WebGPUSpiralBezierMorphRenderer==='undefined'||WebGPUSpiralBezierMorphRenderer.isEligible?.(frameCtx,eligibilityMode)!==true)return false;
-    if(typeof WebGPUStrokeRenderer==='undefined'||WebGPUStrokeRenderer.canUseExternalLayerScene?.(frameCtx.frameId)!==true||typeof WebGPUStrokeRenderer.getExternalLayerSceneTarget!=='function')return false;
+    if(typeof WebGPUStrokeRenderer==='undefined')return false;
+    const resident=WebGPUStrokeRenderer.getDeferredLayerSceneTexture?.(frameCtx.frameId);
+    if(!resident?.texture&&(WebGPUStrokeRenderer.canUseExternalLayerScene?.(frameCtx.frameId)!==true||typeof WebGPUStrokeRenderer.getExternalLayerSceneTarget!=='function'))return false;
     if(typeof spiroIsCompatibilityForced==='function'&&spiroIsCompatibilityForced('geometry')&&!isStrictSpiralWebGPUFrame(frameCtx))return false;
     if(shouldForceCanvasBaseStroke(frameCtx)&&!isStrictSpiralWebGPUFrame(frameCtx))return false;
-    const contract=getLayerGeometryContract(frameCtx);if(contract?.fillRequested===true)return false;
+    const contract=getLayerGeometryContract(frameCtx);if(contract?.fillRequested===true&&!resident?.texture)return false;
     const pseudo={sceneCombined:true,sceneTexture:{},roles:new Set([hiddenGraffitiCarrier?'glow':'base']),outlineInScene:false};
-    return (isStrictSpiralWebGPUFrame(frameCtx)?canDeferStrictSpiralLayerSceneRoot(frameCtx,pseudo,true):canDeferLayerSceneDirect(frameCtx,pseudo))===true;
+    // A resident LayerScene is already the accepted root. Requiring canUseExternalLayerScene()
+    // again would reject the exact scene we are trying to join, because that API intentionally
+    // becomes false once the root is occupied. External eligibility is required only before root.
+    const requiresExternal=!resident?.texture;
+    return (isStrictSpiralWebGPUFrame(frameCtx)?canDeferStrictSpiralLayerSceneRoot(frameCtx,pseudo,requiresExternal):canDeferLayerSceneDirect(frameCtx,pseudo))===true;
+}
+function resolveGpuSpiralBezierSceneRoute(frameCtx,allowHiddenGraffitiCarrier=false){
+    const resident=Boolean(getResidentGpuLayerScene(frameCtx)?.texture);
+    if(resident&&canUseGpuSpiralBezierLayerScene(frameCtx,allowHiddenGraffitiCarrier))return{deferLayerScene:true,deferFrameScene:false,resident:true};
+    if(!allowHiddenGraffitiCarrier&&canUseGpuSpiralBezierFrameScene(frameCtx))return{deferLayerScene:false,deferFrameScene:true,resident:false};
+    if(canUseGpuSpiralBezierLayerScene(frameCtx,allowHiddenGraffitiCarrier))return{deferLayerScene:true,deferFrameScene:false,resident:false};
+    return{deferLayerScene:false,deferFrameScene:false,resident:false};
 }
 
 // Somata 6.7 — the hot path for several plain Spiral layers.  A dedicated Spiral renderer
@@ -981,6 +1012,49 @@ function canUseGpuSpiralBezierFrameScene(frameCtx){
     return true;
 }
 
+function getResidentGpuLayerScene(frameCtx){
+    if(typeof WebGPUStrokeRenderer==='undefined')return null;
+    const rec=WebGPUStrokeRenderer.getDeferredLayerSceneTexture?.(frameCtx?.frameId);
+    return rec?.texture?rec:null;
+}
+
+function getDynamicCorridorFillMesh(frameCtx){
+    if(frameCtx?.geometryPlan?.dynamic!==true||state.tunnel?.active!==true)return null;
+    if(frameCtx._corridorNativeFillPreflight?.dynamic===true&&Number(frameCtx._corridorNativeFillPreflight.frameId)===Number(frameCtx.frameId))return frameCtx._corridorNativeFillPreflight;
+    const commands=getDynamicTunnelMorphMasterStrokeCommands?.(frameCtx);
+    if(!commands?.length)return null;
+    const mesh=FillMeshPreparer.prepareDynamicCommands?.(frameCtx,commands)||null;
+    if(mesh?.nativeComplete){
+        frameCtx._corridorNativeFillPreflight=mesh;
+        frameCtx._nativeFillMeshCandidate=mesh;
+        return mesh;
+    }
+    return null;
+}
+
+// Somata 7.2.8 — a Corridor Fill layer is allowed to open the resident GPU Layer Scene
+// through Glow, but only after Fill has proved that it can join that same scene later in
+// the frame.  The old blanket `fillRequested => false` rule made Glow fall through to the
+// Canvas2D blur path; Base then tried to create a *second* Layer Scene for Fill and reported
+// corridor-gpu-wait even though the native WebGPU Fill renderer itself was healthy.
+// Preflight keeps the ordering deterministic (Glow -> Fill -> Base) without adding a
+// fallback, readback, extra texture, or extra WGSL binding.
+function canAttachNativeCorridorFillToLayerScene(frameCtx,contract=null){
+    const c=contract||getLayerGeometryContract(frameCtx);
+    if(c?.fillRequested!==true)return true;
+    if(c.nativeGpuFillEligible!==true)return false;
+    const mesh=frameCtx?.geometryPlan?.dynamic===true
+        ? getDynamicCorridorFillMesh(frameCtx)
+        : (frameCtx?._fillMeshShadow||FillMeshPreparer.prepareFrame?.(frameCtx));
+    if(!mesh?.nativeComplete||!(Number(mesh.fanTriangleCount)>0))return false;
+    if(typeof FillGPURenderer==='undefined')return false;
+    try{FillGPURenderer.isAvailable?.();}catch(_){}
+    if(FillGPURenderer.canEncodeMeshToTexture?.(frameCtx,mesh)!==true)return false;
+    frameCtx._corridorNativeFillPreflight=mesh;
+    frameCtx._nativeFillMeshCandidate=mesh;
+    return true;
+}
+
 function canUseGpuOnlyCorridorLayerScene(frameCtx,allowHiddenGraffitiCarrier=false){
     const hiddenGraffitiCarrier=allowHiddenGraffitiCarrier===true&&frameCtx?.lineProfileStrokeOnly===true&&frameCtx?.lineProfileApplication==='graffiti';
     if(!frameCtx?.prepared||state.tunnel?.active!==true||state.showRoundingGuides||(frameCtx.lineProfileStrokeOnly&&!hiddenGraffitiCarrier)||!frameCtx.lineDisplayEnabled)return false;
@@ -997,12 +1071,22 @@ function canUseGpuOnlyCorridorLayerScene(frameCtx,allowHiddenGraffitiCarrier=fal
     // optional pass. Such a flag means "use legacy fallback", which is forbidden here.
     if(typeof spiroIsCompatibilityForced==='function'&&spiroIsCompatibilityForced('geometry')&&!strictSpiralCorridor)return false;
     if(shouldForceCanvasBaseStroke(frameCtx)&&!strictSpiralCorridor)return false;
-    // A native GPU Corridor Fill may already own the resident Layer Scene. In that case Base,
-    // Graffiti and later GPU effects are allowed to attach to it even though Fill is enabled.
-    if(frameCtx._corridorLayerSceneActive===true)return frameCtx.frame?.gpuLayerSceneDeferred===true;
-    const contract=getLayerGeometryContract(frameCtx);if(contract?.fillRequested===true)return false;
+    // Any same-frame deferred GPU producer may already own the resident Layer Scene. Corridor
+    // must JOIN that texture rather than ask for a second external scene.  `_corridorLayerSceneActive`
+    // is only telemetry/ownership history; the renderer's resident record is the source of truth.
+    // This is especially important for strict Spiral: its generic stroke batch is intentionally
+    // absent while Corridor owns Base, so rejecting an already-resident scene would drop Base.
+    const residentScene=getResidentGpuLayerScene(frameCtx);
+    if(residentScene?.texture)return true;
+    const contract=getLayerGeometryContract(frameCtx);
+    if(contract?.fillRequested===true&&!canAttachNativeCorridorFillToLayerScene(frameCtx,contract))return false;
     const e=frameCtx.effectsPlan||{};
-    if(!strictSpiralCorridor&&(e.web?.enabled===true||e.motion?.enabled===true||e.sprite?.enabled===true||e.particles?.enabled===true))return false;
+    // 7.2.8 — do not reject the resident Corridor scene merely because Web / Motion /
+    // Sprite are enabled. canDeferLayerSceneDirect() below already verifies that those
+    // effects have a GPU bridge. The old blanket rejection forced Glow through an immediate
+    // WebGPU-canvas -> Canvas2D composite even when every enabled pass was GPU-capable.
+    // Particles still keep the conservative gate until their ordering is represented here.
+    if(!strictSpiralCorridor&&e.particles?.enabled===true)return false;
     if(!WebGPUStrokeRenderer.canUseExternalLayerScene?.(frameCtx.frameId))return false;
     const pseudo={sceneCombined:true,sceneTexture:{},roles:new Set(['base']),outlineInScene:false};
     // Optional Spiral effects attach after the carrier. Their warm-up must not prevent
@@ -1065,9 +1149,13 @@ function reserveStrictSpiralLateCanvasOverlay(frameCtx,reason='last-layer compat
 
 function tryOpenGpuCorridorFillLayerScene(frameCtx){
     const contract=getLayerGeometryContract(frameCtx);
-    if(!contract?.fillRequested||state.tunnel?.active!==true||frameCtx?.geometryPlan?.dynamic===true)return{handled:false,required:false,reason:'not a static Corridor Fill'};
-    if(contract.nativeGpuFillEligible!==true)return{handled:false,required:true,reason:'Corridor Fill requires GPU-native static topology without per-copy colour shift'};
-    const mesh=frameCtx?._fillMeshShadow||FillMeshPreparer.prepareFrame?.(frameCtx);
+    if(!contract?.fillRequested||state.tunnel?.active!==true)return{handled:false,required:false,reason:'not a Corridor Fill'};
+    if(contract.nativeGpuFillEligible!==true)return{handled:false,required:true,reason:'Corridor Fill has no native GPU topology for this frame'};
+    // Somata 7.2.8: static Fill reuses its canonical plan; dynamic Morph Fill reuses the
+    // exact frame-resident Corridor command rail. Both paths feed the same WebGPU stencil
+    // renderer and join the same resident Layer Scene.
+    const mesh=frameCtx?._corridorNativeFillPreflight||frameCtx?._fillMeshShadow||
+        (frameCtx?.geometryPlan?.dynamic===true?getDynamicCorridorFillMesh(frameCtx):FillMeshPreparer.prepareFrame?.(frameCtx));
     if(!mesh?.nativeComplete||!mesh?.fanTriangleCount)return{handled:false,required:true,reason:'canonical native Fill mesh unavailable'};
     try{FillGPURenderer.isAvailable?.();}catch(_){}
     if(!FillGPURenderer.canEncodeMeshToTexture?.(frameCtx,mesh))return{handled:false,required:true,reason:'native WebGPU Fill pipeline warming/unavailable'};
@@ -1250,8 +1338,9 @@ function renderLayerBaseGeometryPass(frameCtx) {
 
     // v539 — same-colour Tunnel Base joins the deferred GPU Layer Scene. If Glow already
     // opened the scene, queue Base after it; otherwise Base becomes the root command.
-    if((!fillHandled||frameCtx._corridorLayerSceneActive===true)&&!webNeedsUnderBase&&frameCtx.lineProfileStrokeOnly!==true&&canUseGpuOnlyCorridorLayerScene(frameCtx,false)){
-        const sceneAlreadyActive=frameCtx._corridorLayerSceneActive===true;
+    const residentBeforeCorridorBase=getResidentGpuLayerScene(frameCtx);
+    if(!strictSpiralGpu&&(!fillHandled||Boolean(residentBeforeCorridorBase?.texture))&&!webNeedsUnderBase&&frameCtx.lineProfileStrokeOnly!==true&&canUseGpuOnlyCorridorLayerScene(frameCtx,false)){
+        const sceneAlreadyActive=Boolean(residentBeforeCorridorBase?.texture);
         const rec=encodeGpuOnlyCorridorLayerRole(frameCtx,'base',{effectMode:'base',alphaScale:Math.max(0,Math.min(1,Number(frameCtx.lineOpacityFactor??1))),composite:'source-over'},!sceneAlreadyActive);
         if(rec?.handled&&rec.commandBuffer){
             let accepted=false;
@@ -1292,9 +1381,9 @@ function renderLayerBaseGeometryPass(frameCtx) {
     else if(frameCtx._baseStrokeCommitted===true&&frameCtx._fusedMorphBackend){renderBackendTelemetry.mark('geometry','gpu',frameCtx._fusedMorphBackend==='green'?'fused Green Morph Glow+Base':(frameCtx._fusedMorphBackend==='spiral-bezier'?'fused Spiral Bézier Morph Glow+Base':'fused Topology Morph Glow+Base'));}
     else if(frameCtx._baseStrokeCommitted!==true){
         let spiralBezierBase=false,greenProjectBase=false,topologyBase=false;
-        if(frameCtx.morphFrameActive===true&&!forceCanvasBase&&!forceCompatibility&&typeof WebGPUSpiralBezierMorphRenderer!=='undefined'&&WebGPUSpiralBezierMorphRenderer.isEligible?.(frameCtx,'base')){
-            const directFrame=canUseGpuSpiralBezierFrameScene(frameCtx),directLayer=!directFrame&&canUseGpuSpiralBezierLayerScene(frameCtx);
-            spiralBezierBase=WebGPUSpiralBezierMorphRenderer.render(frameCtx,mainCtx,{mode:'base',alphaScale:Math.max(0,Math.min(1,Number(frameCtx.lineOpacityFactor??1))),deferFrameScene:directFrame,deferLayerScene:directLayer})===true;
+        if(!forceCanvasBase&&!forceCompatibility&&typeof WebGPUSpiralBezierMorphRenderer!=='undefined'&&WebGPUSpiralBezierMorphRenderer.isEligible?.(frameCtx,'base')){
+            const route=resolveGpuSpiralBezierSceneRoute(frameCtx);
+            spiralBezierBase=(route.deferLayerScene||route.deferFrameScene)&&WebGPUSpiralBezierMorphRenderer.render(frameCtx,mainCtx,{mode:'base',alphaScale:Math.max(0,Math.min(1,Number(frameCtx.lineOpacityFactor??1))),deferFrameScene:route.deferFrameScene,deferLayerScene:route.deferLayerScene,layerScenePhase:5,layerSceneLabel:'spiral-base'})===true;
         }
         if(!strictSpiralGpu&&!spiralBezierBase&&!forceCanvasBase&&!forceCompatibility&&typeof WebGPUGreenProjectMorphRenderer!=='undefined'&&WebGPUGreenProjectMorphRenderer.isEligible?.(frameCtx)){
             greenProjectBase=WebGPUGreenProjectMorphRenderer.render(frameCtx,mainCtx,{mode:'base',alphaScale:Math.max(0,Math.min(1,Number(frameCtx.lineOpacityFactor??1)))})===true;
@@ -1875,12 +1964,16 @@ function resolveBlueMorphLayerProvider(frameCtx,renderFrame) {
     // stay on their normal topology/calm provider.
     const retainedSpiralMode=Boolean(specialSpiralGeometryRequested&&typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail());
     const effectiveCircleMode=snap.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild())||retainedSpiralMode;
+    // 7.2.8 — Chaos Circle Slide deliberately has no dense sourceGeometry snapshots. Its
+    // dedicated direct circle evaluator is the geometry authority, so keep the provider dynamic
+    // even when sourceGeometry/targetGeometry are null after phase preparation.
+    const directChaosCircleMode=Boolean(!provider.lightMorphEnabled&&snap.active&&effectiveCircleMode&&(sourceChaos||targetChaos));
     provider.circleAngular=Boolean(!provider.lightMorphEnabled && !sourceChaos && !targetChaos && snap.active && effectiveCircleMode &&
         (snap.options.byVertices || snap.options.bySteps || snap.options.byShape || snap.monoOrbitTransforms || specialSpiralExtraGeometry));
-    provider.topology=Boolean(!provider.lightMorphEnabled && snap.active && provider.sourceGeometry &&
+    provider.topology=Boolean(!provider.lightMorphEnabled && snap.active && (directChaosCircleMode || (provider.sourceGeometry &&
         (sourceChaos || targetChaos || snap.options.byShape || snap.options.byVertices || snap.options.bySteps || snap.monoOrbitTransforms ||
          snap.options.byRounding || snap.options.bySize ||
-         (snap.options.byRotation && !renderFrame.audioRotationOverride) || snap.mode==='fade' || snap.mode==='lightning'));
+         (snap.options.byRotation && !renderFrame.audioRotationOverride) || snap.mode==='fade' || snap.mode==='lightning'))));
     provider.geometryActive=provider.circleAngular || provider.topology;
     provider.progress=snap.geometryT;
     provider.byTopology=Boolean(snap.options.byVertices || snap.options.bySteps || snap.monoOrbitTransforms);
@@ -2051,7 +2144,8 @@ function prepareMainLayerTransformAndStyle(frameCtx, renderFrame) {
     frameCtx.baseAlpha=baseAlpha;
     frameCtx.lineOpacityFactor=lineOpacityFactor;
     frameCtx.lineAlpha=baseAlpha*lineOpacityFactor;
-    frameCtx.spiralLineType=layer?.spiralLineType==='segmented'?'segmented':'uniform';
+    frameCtx.lineLayerMode=(layer?.lineLayerMode??layer?.spiralLineType)==='segmented'?'segmented':'uniform';
+    frameCtx.spiralLineType=frameCtx.lineLayerMode; // legacy renderer/project alias
     frameCtx.combinedScale=audioScale*lightMorphScale;
     frameCtx.combinedRotationOffset=audioRotationOffset+lightMorphRotation+linearMotionRotation;
     frameCtx.combinedRotationRad=frameCtx.combinedRotationOffset*Math.PI/180;
@@ -2739,7 +2833,7 @@ window.__somataSpiral68Audit = (layerIndex=0) => {
     const backend=typeof __spiroRenderBackendStatus==='function'?__spiroRenderBackendStatus():null,cpuMorph=typeof __spiroMorphCpuFallbackStatus==='function'?__spiroMorphCpuFallbackStatus():null;
     const mixedBackendObserved=Boolean(strict&&(backend?.mixedMaterialization===true||backend?.sceneCanvasTouched===true||Object.values(backend?.features||{}).some(v=>v?.backend==='canvas'||v?.backend==='mixed')));
     const strictViolation=Boolean(strict&&(!rec?.ready||!rec?.bezierVisualRail||!rec?.gpuOnlySpiralEffects||Object.values(contracts).some(c=>c.canvasFallback||!c.gpu||!c.bezier)||mixedBackendObserved));
-    return{version:'7.2.4',iteration:14,layerIndex:li,strictSpiralGpu:strict,endpointSpiral,retainedBezier:Boolean(rec?.ready&&rec?.bezierVisualRail),specialMorphBezier:Boolean(rec?.specialSpiralBezierRail),gpuOnlyEffects:Boolean(rec?.gpuOnlySpiralEffects),cubicCount:Number(rec?.cubicCount)||0,arcBezierDerived:Boolean(arc?.table?.gpuBezierDerived),arcMetric:'gauss3-cubic',arcLocalInverse:'endpoint-speed-analytic',arcSegments:Number(arc?.segmentCount)||0,arcSubdiv:Number(arc?.subdiv||rec?.arcSubdiv||rec?.bezierSubdiv)||0,minimalTurnEndpointExact:true,minimalTurnPathContinuousFallback:true,authoredCornerFlags:true,orderedGpuPrerequisites:true,sharedCurrentCubicProducer:true,arcReusesOrderedBaseCubics:true,strictExceptionFallbackBlocked:true,strictNoGpuCanvasRoundTrip:true,strictGraphNoCpuWarmup:true,strictNativeFillNoCpuShadow:true,perFrameStrictPresentationLatch:true,baseMorphClockIndependentOfOptionalEffectWarmup:true,retainedSpiralSkipsDenseCpuTopology:true,optionalArcWebWarmupDoesNotGateMorphClock:true,fullGpuPrewarmGatesMorphClock:true,webNeverGatesMorphClock:true,webStaleCornerStateRebuild:true,webRendererAwaitableWarmup:true,lampArcFrameAuthoritativeRail:true,freezeLightSharesLampFrameAuthority:true,phaseCircleLampArcPreclockGate:true,fullGpuFaultRingBounded:true,effectBenchmarkConsoleProfiler:true,corridorDepthAlphaNeutralized:false,corridorVisibilityFadeOnly:false,corridorCenterShadeAdjustable:true,corridorCenterShadeGpuCull:true,canvasFallbackForbidden:true,fastGpuForbidden:true,visualBezierSubdiv:12,arcEffectSubdiv:8,webCornerCandidateCompaction:true,morphFrameLayerVersionedSync:true,orderedGlowBaseCurrentCubicReuse:true,minimalTurnArcMetricCache:true,bezierSweepUniformPooling:true,graffitiCorridorHiddenCarrierGlow:true,graffitiBaseCarrierStillSuppressed:true,graffitiHiddenCarrierOwnsGpuRoot:true,graffitiHiddenCarrierStaticCorridorMaster:true,graffitiMorphGlowUsesRetainedBezier:true,graffitiContourGlowGpuMask:true,graffitiThinCarrierGlowRemoved:true,gpuFallbackConsoleDiagnostics:true,spiralMorphSharedExplicitRenderLayout:true,v701FreezeLightFeedback:true,v701LampArcBindGroupComplete:true,staticDirectCubicResource:true,staticBaseRetainedBezierWebGPU:true,unifiedSpiralGpuSubdiv:12,exactMorphLampBoundaries:true,strictFinalCanvasPresentationBlocked:true,strictMorphCpuPathFirewall:true,minimalTurnRetainedBezierPairing:true,minimalTurnCoherentOuterTurnGuard:true,strictBaseIndependentOfEffectReadiness:true,strictEffectsOnlyGpuSceneRoot:true,strictPresentationKeepsLastGpuFrame:false,strictCentralMaterializationFirewall:true,strictLateCanvasOverlayComposite:true,strictLastLayerAvoidsGpuReadback:true,strictLateCanvasVignetteBlocked:true,strictTopologylessFillCannotBlockBase:true,strictEntryPreservesPreviousFrame:false,strictEntryPrewarmsGpu:true,iter21RollbackBaseline:true,iter22OffscreenViewportFix:true,iter23InternalBatchDecoupledFromExternalScene:true,iter23SchedulerWatchdog:true,iter23ConsoleReport:true,iter25GpuInitRetry:true,iter25InternalSceneIndependentOfFinalInit:true,iter25SpiralTrace:true,iter26StaticBaseDedicatedBezier:true,iter28CorridorOuterScopeStats:true,iter28DeterministicMorphStop:true,iter28IdleBezierPipelineWarmup:true,iter29BezierCapacityComparisonFixed:true,iter29PersistentCorridorBezierRail:true,iter29BezierReleaseAndMutableReuse:true,iter30GpuReadinessRepaint:true,iter30SpiralGestureArcPrewarm:true,iter31WgslReservedIdentifiersPurged:true,iter32ProfilePresetPreservesSpiralMode:true,iter32OpenSpiralIntegrityGuard:true,iter33ProfileSpaceSplineBeforeSpiralMap:true,iter33ExplicitGpuCompositeLayouts:true,iter33MorphArcMutableFinalize:true,iter34MappedProfileControls:true,iter34ExternalImageTextureUsage:true,iter35FrozenProfileCarrier:true,iter35WgslValidationFixes:true,iter36StaticSpiralInternalBezierBatch:true,iter36DedicatedBezierReservedForMorph:true,iter37PolygonProfileBezierGeneralization:true,iter38StorageBufferLimitNegotiation:true,iter39NullOverrideSpiralTransform:true,iter39PolygonProfileBezierGeneralization:true,v69MorphMaxCoverageUnion:true,v69PeriodicBezierClosure:true,v69MorphLayerSceneIsolation:true,v69StaticCornerZeroInertia:true,v69ViewportWorkspaceGestures:true,v69SweepCoreGlowBlendModes:true,v69LightningPreflashCoreOnTop:true,v69WebLogicalBoundaryCorners:true,v69SmoothFilletCollisionHandoff:true,v69StrictCarrierIntegrityGuard:true,v69UnboundedMicroStrikes:true,v69StaticSpiralLampContract:true,corridorStrictCarrierIndependent:true,blueSpiralExtraGeometryUsesBezier:true,strictOutlineRequiresCommittedBase:true,noFrameWideMissingBaseAbort:true,minimalTurnCoherentGuardDegrees:22.5,strictProfileMarkersGpuArc:true,strictProfileNoCpuShadow:true,mixedBackendObserved,cpuMorphPathBlocks:Number(cpuMorph?.strictSpiralBlocks)||0,mixedCanvasFallbackAllowed:!strict,strictViolation,contracts,statuses,backend};
+    return{version:'7.3.7',iteration:16,layerIndex:li,strictSpiralGpu:strict,endpointSpiral,retainedBezier:Boolean(rec?.ready&&rec?.bezierVisualRail),specialMorphBezier:Boolean(rec?.specialSpiralBezierRail),gpuOnlyEffects:Boolean(rec?.gpuOnlySpiralEffects),cubicCount:Number(rec?.cubicCount)||0,arcBezierDerived:Boolean(arc?.table?.gpuBezierDerived),arcMetric:'gauss3-cubic',arcLocalInverse:'endpoint-speed-analytic',arcSegments:Number(arc?.segmentCount)||0,arcSubdiv:Number(arc?.subdiv||rec?.arcSubdiv||rec?.bezierSubdiv)||0,minimalTurnEndpointExact:true,minimalTurnPathContinuousFallback:true,authoredCornerFlags:true,orderedGpuPrerequisites:true,sharedCurrentCubicProducer:true,arcReusesOrderedBaseCubics:true,strictExceptionFallbackBlocked:true,strictNoGpuCanvasRoundTrip:true,strictGraphNoCpuWarmup:true,strictNativeFillNoCpuShadow:true,perFrameStrictPresentationLatch:true,baseMorphClockIndependentOfOptionalEffectWarmup:true,retainedSpiralSkipsDenseCpuTopology:true,optionalArcWebWarmupDoesNotGateMorphClock:true,fullGpuPrewarmGatesMorphClock:true,webNeverGatesMorphClock:true,webStaleCornerStateRebuild:true,webRendererAwaitableWarmup:true,lampArcFrameAuthoritativeRail:true,freezeLightSharesLampFrameAuthority:true,phaseCircleLampArcPreclockGate:true,fullGpuFaultRingBounded:true,effectBenchmarkConsoleProfiler:true,corridorDepthAlphaNeutralized:false,corridorVisibilityFadeOnly:false,corridorCenterShadeAdjustable:true,corridorCenterShadeGpuCull:true,canvasFallbackForbidden:true,fastGpuForbidden:true,visualBezierSubdiv:12,arcEffectSubdiv:8,webCornerCandidateCompaction:true,morphFrameLayerVersionedSync:true,orderedGlowBaseCurrentCubicReuse:true,minimalTurnArcMetricCache:true,bezierSweepUniformPooling:true,graffitiCorridorHiddenCarrierGlow:true,graffitiBaseCarrierStillSuppressed:true,graffitiHiddenCarrierOwnsGpuRoot:true,graffitiHiddenCarrierStaticCorridorMaster:true,graffitiMorphGlowUsesRetainedBezier:true,graffitiContourGlowGpuMask:true,graffitiThinCarrierGlowRemoved:true,gpuFallbackConsoleDiagnostics:true,spiralMorphSharedExplicitRenderLayout:true,v701FreezeLightFeedback:true,v701LampArcBindGroupComplete:true,staticDirectCubicResource:true,staticBaseRetainedBezierWebGPU:true,unifiedSpiralGpuSubdiv:12,exactMorphLampBoundaries:true,strictFinalCanvasPresentationBlocked:true,strictMorphCpuPathFirewall:true,minimalTurnRetainedBezierPairing:true,minimalTurnCoherentOuterTurnGuard:true,strictBaseIndependentOfEffectReadiness:true,strictEffectsOnlyGpuSceneRoot:true,strictPresentationKeepsLastGpuFrame:false,strictCentralMaterializationFirewall:true,strictLateCanvasOverlayComposite:true,strictLastLayerAvoidsGpuReadback:true,strictLateCanvasVignetteBlocked:true,strictTopologylessFillCannotBlockBase:true,strictEntryPreservesPreviousFrame:false,strictEntryPrewarmsGpu:true,iter21RollbackBaseline:true,iter22OffscreenViewportFix:true,iter23InternalBatchDecoupledFromExternalScene:true,iter23SchedulerWatchdog:true,iter23ConsoleReport:true,iter25GpuInitRetry:true,iter25InternalSceneIndependentOfFinalInit:true,iter25SpiralTrace:true,iter26StaticBaseDedicatedBezier:true,iter28CorridorOuterScopeStats:true,iter28DeterministicMorphStop:true,iter28IdleBezierPipelineWarmup:true,iter29BezierCapacityComparisonFixed:true,iter29PersistentCorridorBezierRail:true,iter29BezierReleaseAndMutableReuse:true,iter30GpuReadinessRepaint:true,iter30SpiralGestureArcPrewarm:true,iter31WgslReservedIdentifiersPurged:true,iter32ProfilePresetPreservesSpiralMode:true,iter32OpenSpiralIntegrityGuard:true,iter33ProfileSpaceSplineBeforeSpiralMap:true,iter33ExplicitGpuCompositeLayouts:true,iter33MorphArcMutableFinalize:true,iter34MappedProfileControls:true,iter34ExternalImageTextureUsage:true,iter35FrozenProfileCarrier:true,iter35WgslValidationFixes:true,iter36StaticSpiralInternalBezierBatch:true,iter36DedicatedBezierReservedForMorph:false,strictStaticCorridorDedicatedBezier:true,spiralLampKeyAuthoredOnly:true,spiralLampCornerExactBoundary:true,spiralLampArcAuthorityAwareCache:true,genericLineLayerMode:true,crossFamilySpiralPathCartesianTransport:true,strictSpiralResidentSceneJoin:true,strictSpiralWebUnderBaseOrdered:true,webIndirectActiveCornerGuard:true,webCornersAuthoredAngularFallback:true,web67NeighbourCornerDepth:true,webCorridorCrosslinksNative:true,webCorridorCrosslinksDepthStencilCompatible:true,splineProfileModeAuthoritative:true,spiralSplineIntermediateTangentRepair:true,projectDefaultModes67Parity:true,projectDefaultModesPostCommitActivation:true,projectDefaultCorridorBeforeMorph:true,projectCommitQuiescesRuntime:true,projectDefaultPostPaintVerifyOnly:true,tunnelActiveRuntimeOnly:true,tunnelActiveNotSerialized:true,strictSpiralResidentRootRecordAuthority:true,lightningGlowGpuMaskBlur:true,lightningGlowStencilBlur:true,iter37PolygonProfileBezierGeneralization:true,iter38StorageBufferLimitNegotiation:true,iter39NullOverrideSpiralTransform:true,iter39PolygonProfileBezierGeneralization:true,v69MorphMaxCoverageUnion:true,v69PeriodicBezierClosure:true,v69MorphLayerSceneIsolation:true,v69StaticCornerZeroInertia:true,v69ViewportWorkspaceGestures:true,v69SweepCoreGlowBlendModes:true,v69LightningPreflashCoreOnTop:true,v69WebLogicalBoundaryCorners:true,v69SmoothFilletCollisionHandoff:true,v69StrictCarrierIntegrityGuard:true,v69UnboundedMicroStrikes:true,v69StaticSpiralLampContract:true,corridorStrictCarrierIndependent:true,corridorNativeFillPreflightSceneRoot:true,corridorResidentGlowFillBase:true,dynamicCorridorFillSharesMorphRail:true,dynamicCorridorFillNoCanvasMask:true,dynamicFillGpuBufferResident:true,corridorGpuBridgeEffectsCanStayResident:true,circleSlideSkipsDenseGenericTopology:true,chaosCircleDirectWithoutDenseEndpoints:true,webHaloCoreFusedMrt:true,webAnalyticCoverageNoMsaa:true,webSingleCompositePerLayerScene:true,webLegacyAndMorphGpuPathsFused:true,spiralCanonicalFastVisualRail:true,spiralFastRailDerivedAfterPeriodicClosure:true,webMasterThreadGeometryCompute:true,webPerVertexArcSamplingRemoved:true,webCorridorReusesMasterGeometry:true,blueSpiralExtraGeometryUsesBezier:true,strictOutlineRequiresCommittedBase:true,noFrameWideMissingBaseAbort:true,minimalTurnCoherentGuardDegrees:22.5,strictProfileMarkersGpuArc:true,strictProfileNoCpuShadow:true,mixedBackendObserved,cpuMorphPathBlocks:Number(cpuMorph?.strictSpiralBlocks)||0,mixedCanvasFallbackAllowed:!strict,strictViolation,contracts,statuses,backend};
 };
 window.__somataSpiral69Audit = (...args)=>window.__somataSpiral68Audit?.(...args);
 window.__somataSpiral70Audit = (...args)=>window.__somataSpiral68Audit?.(...args);
@@ -2808,6 +2902,10 @@ function renderPreparedMainLayer(frameCtx) {
 
         try{preflightLayerPathFxReplacement(frameCtx);}catch(err){frameCtx._pathFxReplacementCommitted=false;frameCtx._pathFxPrequeuedSprite=false;frameCtx._pathFxPrequeuedMotion=false;try{spiroPassIsolationNoteFailure?.('pathFxPreflight',err,frameCtx);}catch(_){}}
         try{prepareLayerStrokeWebGPUBatch(frameCtx);}catch(err){frameCtx._webgpuStrokeBatch=null;frameCtx._webgpuFillPrepared=null;try{spiroPassIsolationNoteFailure?.('strokeBatch',err,frameCtx);}catch(_){}}
+        // Somata 7.3.7 — establish the strict retained-Spiral scratch root BEFORE the
+        // multi-layer ordering gate. Fill/Web/Corridor are consumers of that root and must not
+        // make canJoin=false merely because the scratch has not been opened yet.
+        try{ensureStrictSpiralEffectLayerSceneRoot(frameCtx);}catch(err){try{spiroPassIsolationNoteFailure?.('strictSpiralRootPreflight',err,frameCtx);}catch(_){}}
         // v393 ordering guard: if previous layers are already in the frame-global GPU scene
         // but this layer cannot join that path, materialize the prefix before *any* pass of
         // this layer (Glow included). This preserves exact source-over ordering on fallback.
@@ -3151,7 +3249,7 @@ window.__somataReport=()=>{
     const frame=renderRuntime?.frame||null;
     const spiral=Boolean(layer&&typeof isSpiralLayer==='function'&&isSpiralLayer(layer));
     const report={
-        version:'7.2.4',boot:window.__spiroAppBootComplete===true,now:Number(performance.now().toFixed(1)),
+        version:'7.3.7',boot:window.__spiroAppBootComplete===true,now:Number(performance.now().toFixed(1)),
         scheduler,
         layer:layer?{id:layer.id||null,visible:layer.visible!==false,spiral,lineVisible:typeof getLayerLineVisible==='function'?getLayerLineVisible(layer):null,opacity:Number(layer.opacity),fill:layer.fill===true,profileMode:layer.profileMode||null,splineRenderMode:layer.splineRenderMode||null}:null,
         frame:frame?{id:Number(frame.id)||0,strictSpiralGpuPresentRequired:frame.strictSpiralGpuPresentRequired===true,gpuLayerSceneDeferred:frame.gpuLayerSceneDeferred===true,gpuMainSceneEmpty:frame.gpuMainSceneEmpty===true,gpuMainCanvasHasContent:frame.gpuMainCanvasHasContent===true,gpuFrameSceneLayers:Number(frame.gpuFrameSceneLayers)||0,renderLayerCount:Number(frame.renderLayerCount)||0}:null,
@@ -3186,7 +3284,7 @@ window.__somataSpiralTrace=()=>{
     try{canonical=layer&&typeof getCanonicalLayerGeometry==='function'?getCanonicalLayerGeometry(layer):null;}catch(err){canonical={error:String(err?.message||err)};}
     const paths=Array.isArray(canonical?.paths)?canonical.paths:[];
     const pointCount=paths.reduce((n,p)=>n+(Array.isArray(p?.points)?p.points.length:0),0);
-    const out={version:'7.2.4',uiMode,mode,layer:authored,morph,canonical:canonical?{geometryKey:canonical.geometryKey||canonical.key||null,pathCount:paths.length,pointCount,closedPathCount:paths.filter(p=>p?.closed===true).length,openPathCount:paths.filter(p=>p?.closed!==true).length,spiralMetaClosedPoints:paths.reduce((n,p)=>n+(p?.points||[]).filter(q=>q?.__spiralClosed===true).length,0),error:canonical.error||null}:null,scene:{internal:{...somataSpiralSceneDiag.internal},base:{...somataSpiralSceneDiag.base}},webgpu:{hub:window.__spiroWebGPUHubStatus?.()||null,stroke:window.__spiroWebGPUStatus?.()||null,staticBezier:window.__spiroStaticSpiralBezierStatus?.()||null,bezier:window.__somataSpiralBezierMorphStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,profileArc:window.__spiroProfileArcMarkerStatus?.()||null,final:window.__spiroFinalGPUStatus?.()||null}};
+    const out={version:'7.3.7',uiMode,mode,layer:authored,morph,canonical:canonical?{geometryKey:canonical.geometryKey||canonical.key||null,pathCount:paths.length,pointCount,closedPathCount:paths.filter(p=>p?.closed===true).length,openPathCount:paths.filter(p=>p?.closed!==true).length,spiralMetaClosedPoints:paths.reduce((n,p)=>n+(p?.points||[]).filter(q=>q?.__spiralClosed===true).length,0),error:canonical.error||null}:null,scene:{internal:{...somataSpiralSceneDiag.internal},base:{...somataSpiralSceneDiag.base}},webgpu:{hub:window.__spiroWebGPUHubStatus?.()||null,stroke:window.__spiroWebGPUStatus?.()||null,staticBezier:window.__spiroStaticSpiralBezierStatus?.()||null,bezier:window.__somataSpiralBezierMorphStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,profileArc:window.__spiroProfileArcMarkerStatus?.()||null,final:window.__spiroFinalGPUStatus?.()||null}};
     console.log('[Somata Spiral trace]',out);return out;
 };
 

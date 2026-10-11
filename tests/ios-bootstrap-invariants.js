@@ -11,4 +11,4 @@ assert(srcs[1]&&srcs[1].startsWith('js/bootstrap/error-overlay.js?'),'Error over
 assert(srcs[srcs.length-1]&&srcs[srcs.length-1].startsWith('js/legacy/app-c.js?'),'Application script order must remain intact through app-c.js');
 assert(!/<script\b[^>]*\bsrc=/i.test(body),'Application scripts must not remain at the bottom of body');
 assert((body.match(/id="/g)||[]).length>100,'Original application DOM must remain embedded in index.html');
-console.log('Somata 7.2.4 iOS bootstrap invariants: PASS');
+console.log('Somata 7.2.8 iOS bootstrap invariants: PASS');

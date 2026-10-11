@@ -1,6 +1,23 @@
 // SpiroStar v500 Modular Base
 // Single-rAF scheduler, performance governor, profiler and invalidation
 window.__spiroRegisterModule?.('js/core/scheduler');
+        // Somata 7.3.7 — user-configurable render cap. The default is deliberately 60 FPS so
+        // high-refresh displays (120/144 Hz) do not automatically double the heavy scene work.
+        const FPS_LIMIT_DEFAULT = 60;
+        const FPS_LIMIT_MIN = 15;
+        const FPS_LIMIT_MAX = 240;
+        const FPS_LIMIT_STORAGE_KEY = 'spirostar.fpsLimit';
+        const fpsLimitSettingEl = document.getElementById('fpsLimitSetting');
+        const normalizeFpsLimit = (value) => {
+            const n = Math.round(Number(value));
+            return Number.isFinite(n) ? Math.max(FPS_LIMIT_MIN, Math.min(FPS_LIMIT_MAX, n)) : FPS_LIMIT_DEFAULT;
+        };
+        let configuredFpsLimit = FPS_LIMIT_DEFAULT;
+        try {
+            const saved = localStorage.getItem(FPS_LIMIT_STORAGE_KEY);
+            if (saved !== null && saved !== '') configuredFpsLimit = normalizeFpsLimit(saved);
+        } catch (_) {}
+        if (fpsLimitSettingEl) fpsLimitSettingEl.value = String(configuredFpsLimit);
         // One browser rAF owns all continuous animation sources and the heavy canvas paint.
         // Individual subsystems register lightweight state-update tasks here instead of
         // starting independent requestAnimationFrame loops. Event-driven invalidations use
@@ -22,6 +39,9 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             let watchdogLastRecoveryAt = 0;
             let lastScheduledPaintAt = 0;
             let invalidateCount = 0;
+            let fpsLimit = configuredFpsLimit;
+            let nextFrameDueAt = 0;
+            let fpsGateSkips = 0;
             // v191: reuse the task-name snapshot instead of allocating Array.from(tasks.entries())
             // on every animation frame. Tasks may mutate the map while callbacks run.
             const taskSnapshot = [];
@@ -169,6 +189,21 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 const tickGapMs=previousTickAt>0?Math.max(0,tickNow-previousTickAt):0;
                 raf = 0;
                 if (watchdogTimer) { clearTimeout(watchdogTimer); watchdogTimer = 0; }
+                // FPS cap is applied at the single scheduler owner, before animation tasks and paint.
+                // Keep requesting browser rAF so the cap stays phase-locked to any display refresh
+                // rate, but skip heavy work until the next target slot. The rolling due-time avoids
+                // a 144 Hz display degenerating into a fixed 48 FPS every-third-refresh cadence.
+                const frameIntervalMs = 1000 / Math.max(FPS_LIMIT_MIN, fpsLimit);
+                if (nextFrameDueAt <= 0) nextFrameDueAt = tickNow;
+                if (tickNow + 0.5 < nextFrameDueAt) {
+                    fpsGateSkips++;
+                    if (tasks.size || renderPending || afterPaint.size) schedule();
+                    return;
+                }
+                if (tickNow - nextFrameDueAt > frameIntervalMs * 4) nextFrameDueAt = tickNow + frameIntervalMs;
+                else {
+                    do { nextFrameDueAt += frameIntervalMs; } while (nextFrameDueAt <= tickNow + 0.25);
+                }
                 lastTickAt = tickNow;
                 if(tickGapMs>=MORPH_FREEZE_GAP_MS&&hasMorphActivity())reportMorphFreeze('MORPH_RAF_GAP',{durationMs:tickGapMs});
                 inFrame = true;
@@ -274,13 +309,36 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 },
                 consumeRenderRequest() { renderPending = false; },
                 dropRenderRequest() { renderPending = false; },
+                setFpsLimit(value) {
+                    fpsLimit = normalizeFpsLimit(value);
+                    nextFrameDueAt = 0;
+                    if (tasks.size || renderPending || afterPaint.size) schedule();
+                    return fpsLimit;
+                },
+                getFpsLimit() { return fpsLimit; },
                 has(name) { return tasks.has(name); },
                 isMorphActive() { return hasMorphActivity(); },
                 reportMorphFreeze(code,detail={}) { return reportMorphFreeze(code,detail); },
                 freezeStats() { return {count:morphFreezeCount,thresholds:{gapMs:MORPH_FREEZE_GAP_MS,workMs:MORPH_FREEZE_WORK_MS,longTaskMs:MORPH_FREEZE_LONG_TASK_MS},last:morphFreezeHistory.at(-1)||null,history:morphFreezeHistory.slice()}; },
-                stats() { return { activeTasks: tasks.size, frameCount, paintCount, paintErrors, lastPaintError, inFrame, rafPending: Boolean(raf), renderPending, lastTickAt, lastInvalidateAt, lastScheduledPaintAt, invalidateCount, watchdogArmed:Boolean(watchdogTimer), watchdogRecoveries, watchdogLastRecoveryAt, lastTickDurationMs:roundFreezeMs(lastTickDurationMs), morphFreezeCount }; }
+                stats() { return { activeTasks: tasks.size, frameCount, paintCount, paintErrors, lastPaintError, inFrame, rafPending: Boolean(raf), renderPending, lastTickAt, lastInvalidateAt, lastScheduledPaintAt, invalidateCount, watchdogArmed:Boolean(watchdogTimer), watchdogRecoveries, watchdogLastRecoveryAt, lastTickDurationMs:roundFreezeMs(lastTickDurationMs), morphFreezeCount, fpsLimit, fpsFrameIntervalMs:roundFreezeMs(1000/Math.max(FPS_LIMIT_MIN,fpsLimit)), fpsGateSkips }; }
             };
         })();
+        function applyFpsLimit(value, persist = true) {
+            configuredFpsLimit = animationScheduler.setFpsLimit(normalizeFpsLimit(value));
+            if (fpsLimitSettingEl) fpsLimitSettingEl.value = String(configuredFpsLimit);
+            if (persist) {
+                try { localStorage.setItem(FPS_LIMIT_STORAGE_KEY, String(configuredFpsLimit)); } catch (_) {}
+            }
+            return configuredFpsLimit;
+        }
+        applyFpsLimit(configuredFpsLimit, false);
+        fpsLimitSettingEl?.addEventListener('change', (e) => {
+            e.stopPropagation();
+            applyFpsLimit(e.target.value, true);
+            try { capturePlaylistOverridesFromCurrent?.(); } catch (_) {}
+        });
+        window.__somataSetFpsLimit=(value)=>applyFpsLimit(value,true);
+        window.__somataGetFpsLimit=()=>animationScheduler.getFpsLimit();
         window.__somataMorphFreezeDiagnostics=()=>animationScheduler.freezeStats();
         window.__somataReportMorphFreeze=(code,detail={})=>animationScheduler.reportMorphFreeze(code,detail);
         // Chromium's Long Task observer catches blocking work outside Somata's own scheduler

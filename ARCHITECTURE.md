@@ -1,16 +1,24 @@
-## Corridor center shading
+# Somata 7.3.7 — exact Spiral authority with 6.7 Web semantics
 
-Corridor center shading is not a post-process. `state.tunnel.centerShadePercent` blends the retained depth curve into each copy's instance alpha (`0% => 1.0` exactly). Visibility preparation reuses the same strength to cull contributions below a small perceptual threshold before GPU submission. This keeps the effect backend-native and provides headroom for increasing Corridor figure complexity/count later without introducing a Canvas fallback.
+The retained Bézier rail is still the only strict-Spiral contour authority. 7.3.7 changes how consumers reuse that authority, not what the contour is.
 
-# Somata 7.0.10 FullGPU Lamp Arc / FreezeLight stabilization
+## Web
 
-## 7.0.10 frame-authoritative Lamp Arc
+`Самопересечения` follows the 6.7 depth rule: accepted sharp corners are anchors and thread endpoints walk up to one quarter of the complete visible contour in each direction, scaled by depth/multiplier. Distance lookup uses the modern exact retained-cubic Arc, so periodic Spiral wrapping applies the canonical rotate+scale period transform instead of ordinary polygon modulo.
 
-Strict Spiral effects now resolve their retained Bézier authority from the current `frameCtx`. A globally active, paused, or preparing Blue Morph no longer makes static Spiral lamps request an unrelated Morph rail. The Base frame, Exact Arc, Lamp GPU sampler, Corridor lamp instances, and FreezeLight current source therefore share the same retained cubic resource. No Canvas, WebGL, or Fast-GPU substitution is introduced for the strict Spiral path.
+`В углах` also follows the 6.7 contract. After compacting the accepted authored/angular corners, a tiny GPU pass computes the distance to the previous/next **accepted corner** on the same path. This replaces the 7.3.3 microsegment clamp. Closed contours and topology-2 periodic Spiral wrap one canonical period; single-corner/open-edge cases fall back to the adjacent logical-cubic span.
 
-# Somata 7.0.9 FullGPU Web/Morph stabilization
+`Самопересечения + коридор` stays native WebGPU. Cross-copy links are emitted from the same compacted canonical corner list with the 64-corner cap. Their render pipeline declares `Depth24PlusStencil8` because it executes in the shared Web pass, but uses `stencilCompare=always` with no stencil writes so the links remain unclipped as in 6.7.
 
-Web is an optional FullGPU consumer of the authoritative retained Bézier Morph rail. It may never own or stop the Morph clock. Pipeline/corner preparation is asynchronous; failure is diagnostic-only for the Web pass and never enables CPU/Canvas/WebGL/Fast-GPU fallback. Topology changes replace stale GPU corner-growth buffers during resource build.
+## Spiral Morph continuity
+
+Endpoint cubics remain exact and rail equalisation still uses De Casteljau only. After current-cubic interpolation and periodic closure, spline-involved Morphs run one canonical G1 tangent-repair compute pass over internal joins of each retained path. The repair preserves knot positions and individual handle lengths while aligning adjacent handle directions. Its strength interpolates from the source profile mode to the target profile mode, so Segment geometry may stay angular while Spline geometry becomes/remaining smooth. Fast Visual Rail and Exact Arc effects both consume the repaired current-cubic buffer.
+
+## Project default modes
+
+`settings.morph.defaultActive`, `settings.minimalMorph.defaultActive`, and `settings.tunnel.defaultActive` are activation commands owned by the target project. Direct project files, manual playlist selection, and the first project of a newly opened playlist all converge on one post-commit activator. The intent is applied immediately and verified once after the first committed paint, so early scheduler/bootstrap ordering cannot silently drop Morph or Corridor.
+
+Corridor `active` is runtime-only in 7.3.7. Legacy saved `tunnel.active` values are ignored by project merge/serialization; only `defaultActive` controls whether a project starts Corridor. `setTunnelMode(true)` is idempotent and always ensures the single `tunnel` scheduler task exists without resetting an already-running phase. Green project transitions use the same intent semantics but apply them directly at the atomic target commit, before the next Green transition begins.
 
 ## Somata 6.9 — Morph stroke union and periodic Bézier closure
 
@@ -334,3 +342,8 @@ Corridor depth is geometric, not an implicit opacity control. `getTunnelCopies()
 
 Visibility attenuation is applied only by explicit mechanisms in `prepareTunnelVisibleInstances()` / `prepareTunnelLampInstances()`: temporal oversize exit/entry fade, sub-pixel size fade, and (for strokes only) central density weighting that prevents micro-copy overdraw. This keeps the center stable without causing medium/large Corridor figures to breathe in brightness while they travel.
 
+
+
+## 7.2.9 frame-rate cap
+
+File → Settings now exposes a persistent `FPS limit` field with a default of **60**. The single-rAF scheduler phase-locks heavy animation tasks and scene paints to that cap, so 120/144 Hz displays do not automatically multiply the rendering workload. The limiter does not change geometry quality, DPR, effect counts, Morph timing semantics, or GPU/CPU backend selection.

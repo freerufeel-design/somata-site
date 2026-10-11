@@ -1,3 +1,155 @@
+# Somata 7.3.7
+
+## Spiral shader startup repair
+
+- Fixed the strict-Spiral tangent-repair WGSL startup failure introduced in 7.3.4: the shader used `do`, which is a reserved WGSL keyword. The output tangent is now named `dout`, so the retained-cubic Spiral renderer can initialize and create Base/Glow resources again.
+- This also restores default Blue Morph startup for Spiral projects such as `Святой`: `prepareMorphCycle()` no longer stalls behind a permanently failed Spiral renderer.
+- Added a regression invariant that rejects reserved `do` declarations in the embedded tangent-repair WGSL and checks the factory `Святой` Morph+Corridor defaults remain enabled.
+- Runtime/build/cache identifiers are 7.3.7 / `20261012-v737`.
+
+# Somata 7.3.6
+
+## Atomic project defaults / Spiral startup repair
+
+- Project activation now quiesces the previous runtime Corridor before committing new project geometry, then applies the target Corridor default before Blue Morph starts preparing any strict-Spiral GPU phase resources. This fixes projects such as `Святой` where both Morph and Corridor are enabled by default.
+- The post-paint verification no longer replays the complete default-mode transition while Blue is inside its exact-start/GPU-prewarm handoff; it only repairs missing scheduler ownership.
+- `tunnel.active` is now truly runtime-only: project serialization no longer writes the transient active flag. `tunnel.defaultActive` remains the sole persisted startup command.
+- Manual playlist selection, first-project playlist activation, direct project loading and Green target commits all use the same Corridor-before-Morph ordering.
+- Project-boundary Corridor teardown can be silent, preventing a half-loaded intermediate frame from being rendered while layers/canonical Spiral resources are being replaced.
+- Added a factory regression contract for `Святой` (Spiral + Morph default + Corridor default) in addition to the existing `Мозголом` coverage.
+- Default FPS cap remains 60. No Canvas/CPU strict-Spiral fallback was added.
+- Runtime/build/cache identifiers are 7.3.6 / `20261012-v736`.
+
+# Somata 7.3.5
+
+## Project / playlist default-mode activation
+
+- `Коридорить по умолчанию` and `Морфить по умолчанию` are now activation commands applied after the target project has been fully committed, rather than mixed into the settings loader at different points. The same owner is used for direct project files, manual playlist project switches, and the first project activated when a playlist opens.
+- Corridor `active` is runtime-only. Legacy project snapshots containing `tunnel.active` can no longer make `setTunnelMode(true)` believe the Corridor scheduler is already running; only `tunnel.defaultActive` controls project startup.
+- `setTunnelMode(true)` is idempotent and always repairs/registers the single scheduler task without resetting an already-running Corridor phase.
+- Default-mode activation is verified once after the committed project's first paint. This covers startup ordering without creating a second transition or a fallback path.
+- Green project transitions apply their target defaults directly at the atomic target commit, avoiding a stale deferred activation during the next Green transition.
+- The default FPS cap remains 60. No Canvas/CPU strict-Spiral fallback was added.
+- Runtime/build/cache identifiers are 7.3.5 / `20261012-v735`.
+
+# Somata 7.3.4
+
+## Web 6.7 semantics / Corridor validation / spline-Morph continuity
+
+- Fixed the native `Самопересечения + коридор` WebGPU validation failure. The cross-copy Web pipeline now declares the same `Depth24PlusStencil8` attachment state as its render pass; its stencil compare is `always`/read-only so cross-copy links keep the unclipped 6.7 behaviour instead of being cut by one copy's contour mask.
+- Restored the 6.7 `В углах` depth rule on the canonical retained-cubic Arc. A GPU span pass measures each accepted corner to the neighbouring **detected** corners along the complete path; closed contours and self-similar periodic Spiral wrap by one canonical period.
+- Removed the 7.3.3 post-compaction clamp that reduced corner threads back to one Arc microsegment. `Глубина в угол` can therefore extend across the intended contour distance again.
+- `Самопересечения` keeps the historical quarter-perimeter depth rule (`25% of path length × depth × multiplier`), but point lookup remains on the modern exact retained cubic Arc. Periodic Spiral wrapping applies its rotate+scale period transform rather than pretending the Spiral is an ordinary closed polygon.
+- Added a canonical spline tangent-repair compute pass after current-cubic interpolation/periodic closure and before Fast Rail / Exact Arc consumers. Technical De Casteljau equalisation cuts can no longer become visible G1 saws at intermediate Morph frames. Segment profile endpoints remain intentionally angular; spline strength follows the source/target profile modes across the transition.
+- Re-audited project-local `Морфить по умолчанию`, `Коридорить по умолчанию`, and Orange/default-mode activation against 6.7. Their authoritative project/playlist application logic is preserved and is now covered by a dedicated regression invariant; the 7.3.3 invalid Web command buffer could previously make those modes appear to have failed visually.
+- No Canvas/CPU strict-Spiral fallback was added. The default FPS cap remains 60.
+- Runtime/build/cache identifiers are 7.3.4 / `20261012-v734`.
+
+# Somata 7.3.3
+
+## Web placement / Corridor cross-links / Spline authority repair
+
+- Fixed GPU Web indirect-compaction overflow: the last 256-thread workgroup can contain surplus lanes, and those lanes now stop against the compacted active-corner count before reading a corner index. This removes stale-index fan/triangle artefacts such as those visible in `Мозголом`.
+- `В углах` restores the historical semantics on the canonical retained-cubic Arc: authored structural corners are preferred; rails without authored markers fall back to angular logical-boundary classification; accepted corners get a full placement target; thread depth is bounded by the exact incoming/outgoing logical-cubic Arc span.
+- Technical Bézier microsegment ends are no longer added as independent Web corner candidates. Web classification stays on logical retained-cubic boundaries.
+- `Самопересечения + коридор` no longer leaves the native Web bridge. Cross-links between adjacent Corridor copies are emitted by the same fused WebGPU renderer from the compacted canonical corner list, preserving the historical 64-corner cap and avoiding Canvas/WebGL compatibility ownership conflicts.
+- Static Spiral Web is routed through `currentGpuBezierResourceForFrame()` as well as Morph Spiral, so the same canonical retained resource drives both states.
+- Strict Spiral Layer Scene ownership now trusts only the resident scratch record, not the frame-wide `gpuLayerSceneDeferred` history flag. The strict GPU root is opened before multi-layer ordering checks when ordered Web/Fill/Corridor consumers require it.
+- `profileMode='spline'` is authoritative throughout static geometry, Spiral retained carriers, Morph endpoint preparation and Morph budgets. A stale `splineRenderMode='discrete'` can no longer downgrade a Spline profile to square/discrete polyline geometry; discrete rendering remains a Segment-profile behavior.
+- No strict-Spiral CPU/Canvas Web fallback was added. The default 60 FPS cap is unchanged.
+- Runtime/build/cache identifiers are 7.3.3 / `20261012-v733`.
+
+# Somata 7.3.2
+
+## Sex preset / indexed Corridor regression repair
+
+- Fixed a 7.3.1 `ReferenceError: segmented is not defined` in the indexed Morph Corridor renderer.
+- The indexed Corridor pass now derives Uniform/Segmented layering from the resident Morph record inside the helper that encodes the draw, so `circleSlide` cannot lose Base/Glow before joining the FullGPU Layer Scene.
+- This prevents the downstream strict-Spiral materialization cascade (`SPIRAL_BASE_GPU_UNAVAILABLE`, `SPIRAL_BASE_MISSING_AT_FRAME_END`, `STRICT_SPIRAL_MATERIALIZATION_ATTEMPT`, `FINAL_FULL_GPU_PRESENT_FAILED`) caused by that exception.
+- The factory project `Секс` is covered by a dedicated invariant because its 3-layer + Corridor + `circleSlide` combination reliably exercises this path.
+- Runtime/build identifiers are 7.3.2 / `20261012-v732`.
+
+# Somata 7.3.1
+
+## Spiral lamps, generic line layering, and cross-family Morph repair
+
+- Spiral Lamp **Key** and **Corners** are separate identity domains again. Key uses only authored profile key markers plus path endpoints; geometric corner flags and exact De Casteljau equalization cuts can no longer become Key lamps.
+- Spiral **Corners** lamps pin directly to the current retained-cubic corner boundary. A smooth Spiral with no authored corners is an authoritative empty result, not a FullGPU Arc-resource failure.
+- The Spiral profile builder no longer ORs `__profileCorner` into `lampCornerFlags`; this removes the regression where Key visually mirrored the bend/corner mode.
+- Exact Arc frame caching is authority-aware. After a retained Spiral atomic phase swap, a stale/null same-frame Arc decision is rejected and rebound to the current canonical cubic rail instead of leaving Lamps in `strict-spiral-arc-wait`.
+- **Равномерный / Сегментный** is now the generic **Тип наслоения** setting for line rendering, not “Тип линии спирали”. `lineLayerMode` applies to supported Base/Glow/Morph/Corridor GPU stroke passes; old `spiralLineType` project data is migrated as a compatibility alias.
+- Uniform mode keeps non-accumulating MAX coverage where supported. Segmented mode uses source-over segment accumulation, including Glow, so the setting describes overlap semantics rather than Spiral geometry.
+- Spiral↔non-Spiral `phase`, `phaseCircle`, and `minimalTurn` transitions keep exact endpoint cubics and exact De Casteljau normalization, but use one Cartesian transport decision for the whole retained path. This removes the saw/tooth discontinuities caused by independently polar-interpolating technical split cubics.
+- Existing Spiral Morph design contracts remain enforced: phase modes preserve the authored open Spiral seam/order, Minimal Turn selects one metric per retained path, and the retained cubic rail remains the single contour authority for Base and exact effects.
+- The 60 FPS default cap is preserved. No Canvas/CPU strict-Spiral fallback was added.
+- Runtime/build/cache identifiers are 7.3.1 / `20261012-v731`.
+
+# Somata 7.3.0
+
+## Strict Spiral scene ownership + Lightning Glow repair
+
+- Strict Spiral now has one retained-cubic Base/Glow owner in Corridor for both Morph and static frames. The generic Corridor stroke path no longer steals strict-Spiral Base/Glow ownership.
+- Static Spiral Fast Visual Rail resources are now valid while Corridor is active; the stale `tunnel.active -> null` gate that produced `staticVisualResources: 0` after Morph stop/rebase is removed.
+- Retained Spiral rendering can join an already-resident GPU Layer Scene without re-requesting the external-root slot. Resident commands are queued instead of being misclassified as new roots.
+- Ordered strict-Spiral scenes use GPU prerequisite phases Morph 1 / Exact Arc 2 / Glow 3 / Fill 4 / Web 4.5 / Base 5, preserving Web-under-Base while keeping one canonical contour authority.
+- Lightning keeps exact retained-Arc core placement, but Glow is now generated from the exact narrow-strike GPU mask by separable GPU blur. The old expanded per-microsegment halo path that produced radial wedges on curved Spirals is not used as a warming fallback.
+- Inside/Outside Lightning blur composites through the existing stencil mask, and the stencil is preserved across multiple halo passes before the core composite.
+- The 60 FPS default scheduler cap from 7.2.9 is preserved. No strict-Spiral Canvas/CPU geometry fallback is added.
+- Runtime/build/cache identifiers are 7.3.0 / `20261012-v730`.
+
+# Somata 7.2.9
+
+## Default 60 FPS scheduler cap
+
+- Added **File → Settings → FPS limit** with a default value of **60** and persistent local preference.
+- The single-rAF scheduler now phase-locks animation tasks and heavy scene paints to the selected cap before any render work begins.
+- A rolling due-time keeps the limiter close to the requested rate on 120/144 Hz displays instead of using a crude every-Nth-refresh divisor.
+- No geometry quality, DPR, effect count, canonical Spiral, Fast Rail, Exact Arc, or backend fallback policy was changed.
+- Added FPS-limit invariants and scheduler diagnostics (`fpsLimit`, `fpsFrameIntervalMs`, `fpsGateSkips`).
+
+# Somata 7.2.8
+
+## Canonical Spiral Fast Rail + compute-once Web geometry
+
+- The retained Bézier Spiral remains the single source of truth. Dynamic Morph cubics are generated first and periodic rotate+scale/C1 closure is patched before any derived visual data is produced.
+- Base/Glow/Corridor now rasterize a resident **Fast Visual Rail**. One GPU compute pass samples each canonical cubic at the existing 12 visual subdivisions; the raster shader reads those segment endpoints and widths instead of re-evaluating the cubic for every vertex and every Corridor copy.
+- Static Spiral reuses its existing canonical cubic buffer and builds the derived Fast Visual Rail once when the static visual resource is created. It does not run Morph cubic compute.
+- GPU Web now builds one resident `{A, Control, B}` record per active master thread during active-thread compaction. Exact retained-cubic Arc is sampled only twice per visible thread; all bevel/rounding vertices and Corridor copies reuse the result.
+- Web raster shaders no longer contain path binary search, periodic wrapping, Arc inversion or retained-cubic evaluation. Those correctness-sensitive operations remain in the one-time GPU thread-geometry compute stage.
+- Exact-Arc consumers are intentionally unchanged in this release. Fast Visual Rail is a derived raster view, never an independent contour authority. No Canvas/WebGL/CPU fallback was added.
+- Runtime audit/build/cache identifiers are 7.2.8 / `20261011-v728`.
+
+# Somata 7.2.7
+
+## Web GPU pressure / fused Halo + Core
+
+- The native topology-Morph Web renderer no longer rasterizes every thread twice (Halo then Core) through separate 4x-MSAA scratch passes. Halo and Core are emitted together by one fragment invocation into two single-sample MAX-union render targets.
+- The two Web scratch textures are composited into the resident Layer Scene once with the exact premultiplied `Core over Halo` equation. Existing analytic fragment coverage supplies edge antialiasing, so the redundant 4x-MSAA resolve path is removed without changing the 12-step rounded-thread geometry.
+- The compatibility/CPU-command WebGPU renderer now uses the same fused dual-attachment path, including Corridor copies. Outside/multi-path Web variants therefore do not fall back to the old double-pass 4x-MSAA workload.
+- No Canvas/WebGL/CPU presentation fallback was added. The optimization remains GPU-resident and preserves stencil clipping, MAX-union overlap semantics, Corridor copy transforms and existing thread counts.
+- Runtime audit exposes the fused Web contract and build/cache identifiers were bumped to 7.2.7 / `20261011-v727`.
+
+# Somata 7.2.6
+
+## Dynamic Corridor Morph stays GPU-resident
+
+- Dynamic Corridor Fill no longer enters the Canvas2D mask path during Morph. `prepareLayerFillMaskGPU()` explicitly rejects the dynamic-Corridor-native contract, so the old GPU → Canvas-mask → GPU/wait mixed path cannot occur for this case.
+- The native Fill path reuses the exact frame-resident dynamic Morph command rail already produced for Corridor Base. Closed dynamic subpaths are packed into the existing stencil-fan renderer without rerunning the geometry evaluator.
+- Dynamic Fill uses a persistent grow-only GPU vertex buffer per logical layer. Each frame updates only the active vertex prefix; no extra WGSL binding, readback, canvas upload, or per-frame GPU buffer recreation is introduced.
+- Dynamic command points are already in screen space, so Corridor Fill copy transforms now apply the same scale/lag similarity around the render origin as Corridor Base instead of applying the layer transform twice.
+- Web/Motion/Sprite effects are no longer blanket reasons to abandon the resident Corridor Layer Scene when their direct GPU bridge is available. Particles remain conservatively gated until their ordering contract is equivalent.
+- Runtime/build identifiers and cache epoch are bumped to 7.2.6 / `20261011-v726`.
+
+# Somata 7.2.5
+
+## Corridor resident Fill + Morph rebase
+
+- Corridor Fill + Glow now share one resident WebGPU Layer Scene by construction. Glow may become the scene root only after native Fill preflight proves that the exact static Fill mesh can join the same texture; Fill and Base then append in phases 4 and 5. This removes the healthy-WebGPU `corridor-gpu-wait` loop caused by the old blanket `fillRequested` rejection.
+- The preflight reuses the exact canonical native Fill mesh in the Base pass, so Glow/Fill cannot disagree about topology inside one frame. No Canvas bridge, GPU readback, extra texture, or extra WGSL binding is introduced.
+- All Circle Slide variants now skip the generic dense endpoint topology snapshots. Those snapshots were not consumed by Circle Slide; an Orange/Minimal instant switch that introduced a Chaos layer could nevertheless synchronously build both dense endpoints during Blue rebase and trigger a 100+ ms main-thread task.
+- Chaos Circle Slide remains dynamic without dense endpoint snapshots and uses its dedicated direct frame path evaluator; rasterization continues through the existing GPU geometry path where eligible.
+- Runtime/build identifiers and cache epoch are bumped to 7.2.5 / `20261011-v725`.
+
 # Somata 7.2.4
 
 - Все локальные JS/CSS получают единый cache-busting `?v=20261011-v724`, чтобы браузер не смешивал файлы разных сборок.

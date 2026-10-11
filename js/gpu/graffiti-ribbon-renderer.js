@@ -10,7 +10,7 @@ window.__spiroRegisterModule?.('js/gpu/graffiti-ribbon-renderer');
 const WebGPUGraffitiContourGlow=(()=>{
     const SLOT_COUNT=32,BLUR_TAPS=12;
     let device=null,format=null,generation=-1,ready=false,initializing=null,lastError='not-initialized';
-    let bindLayout=null,pipelineBlur=null,pipelineOver=null,pipelineBehind=null,sampler=null,slots=[],cursor=0;
+    let bindLayout=null,pipelineBlur=null,pipelineOver=null,pipelineBehind=null,pipelineOverStencil=null,pipelineBehindStencil=null,pipelineModes=Object.create(null),pipelineModesStencil=Object.create(null),sampler=null,slots=[],cursor=0;
     const stats={frames:0,blurPasses:0,composites:0,textureBuilds:0,failures:0};
     let lastLoggedFailure='';
     function fail(stage,reason,err=null,extra=null){
@@ -47,13 +47,16 @@ fn blurredAlpha(uv0:vec2<f32>)->f32{
             bindLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:'float'}},{binding:1,visibility:GPUShaderStage.FRAGMENT,sampler:{type:'filtering'}},{binding:2,visibility:GPUShaderStage.FRAGMENT,buffer:{type:'uniform'}}]});
             const layout=device.createPipelineLayout({bindGroupLayouts:[bindLayout]});
             pipelineBlur=device.createRenderPipeline({label:'Somata Graffiti Glow horizontal blur',layout,vertex:{module:mod,entryPoint:'vs'},fragment:{module:mod,entryPoint:'fsBlur',targets:[{format}]},primitive:{topology:'triangle-list'}});
-            const makeComposite=(kind)=>device.createRenderPipeline({label:`Somata Graffiti Glow composite ${kind}`,layout,vertex:{module:mod,entryPoint:'vs'},fragment:{module:mod,entryPoint:'fsComposite',targets:[{format,blend:blend(kind)}]},primitive:{topology:'triangle-list'}});
-            pipelineOver=makeComposite('over');pipelineBehind=makeComposite('behind');sampler=device.createSampler({magFilter:'linear',minFilter:'linear',addressModeU:'clamp-to-edge',addressModeV:'clamp-to-edge'});
+            const stencilFace={compare:'equal',failOp:'keep',depthFailOp:'keep',passOp:'keep'},stencilState={format:'depth24plus-stencil8',depthWriteEnabled:false,depthCompare:'always',stencilFront:stencilFace,stencilBack:stencilFace,stencilReadMask:1,stencilWriteMask:0};
+            const makeComposite=(kind,blendState=blend(kind),withStencil=false)=>device.createRenderPipeline({label:`Somata Graffiti Glow composite ${kind}${withStencil?' stencil':''}`,layout,vertex:{module:mod,entryPoint:'vs'},fragment:{module:mod,entryPoint:'fsComposite',targets:[{format,blend:blendState}]},primitive:{topology:'triangle-list'},...(withStencil?{depthStencil:stencilState}:{})});
+            pipelineOver=makeComposite('over');pipelineBehind=makeComposite('behind');pipelineOverStencil=makeComposite('over',blend('over'),true);pipelineBehindStencil=makeComposite('behind',blend('behind'),true);pipelineModes=Object.create(null);pipelineModesStencil=Object.create(null);
+            if(typeof sweepBlendGpuState==='function'){for(const mode of (typeof SWEEP_BLEND_MODES!=='undefined'?SWEEP_BLEND_MODES:['normal','screen','multiply','add','darken','lighten'])){const bs=sweepBlendGpuState(mode);pipelineModes[mode]=makeComposite(`mode-${mode}`,bs);pipelineModesStencil[mode]=makeComposite(`mode-${mode}`,bs,true);}}
+            sampler=device.createSampler({magFilter:'linear',minFilter:'linear',addressModeU:'clamp-to-edge',addressModeV:'clamp-to-edge'});
             slots=Array.from({length:SLOT_COUNT},()=>({w:0,h:0,mask:null,scratch:null,uniformH:null,uniformV:null}));cursor=0;ready=true;lastError='';return true;
         }catch(err){ready=false;fail('init/pipeline',err?.message||err,err);return false;}})();initializing=task;try{return await task;}finally{if(initializing===task)initializing=null;}
     }
     function destroySlot(slot){for(const t of [slot?.mask,slot?.scratch])try{t?.destroy?.();}catch(_){}for(const b of [slot?.uniformH,slot?.uniformV])try{b?.destroy?.();}catch(_){}if(slot){slot.mask=slot.scratch=slot.uniformH=slot.uniformV=null;slot.w=slot.h=0;}}
-    function warmup(){const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(ready&&gen!==generation){for(const s of slots)destroySlot(s);slots=[];device=null;ready=false;pipelineBlur=pipelineOver=pipelineBehind=null;bindLayout=null;sampler=null;}if(!ready&&!initializing)void initAsync();return ready;}
+    function warmup(){const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(ready&&gen!==generation){for(const s of slots)destroySlot(s);slots=[];device=null;ready=false;pipelineBlur=pipelineOver=pipelineBehind=pipelineOverStencil=pipelineBehindStencil=null;pipelineModes=Object.create(null);pipelineModesStencil=Object.create(null);bindLayout=null;sampler=null;}if(!ready&&!initializing)void initAsync();return ready;}
     function acquire(width,height){
         if(!warmup())return null;const w=Math.max(1,Math.round(Number(width)||1)),h=Math.max(1,Math.round(Number(height)||1)),slot=slots[cursor++%slots.length];
         if(!slot)return null;if(slot.w!==w||slot.h!==h||!slot.mask||!slot.scratch){destroySlot(slot);slot.w=w;slot.h=h;const usage=GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING;slot.mask=device.createTexture({label:'Somata Graffiti Glow contour mask',size:[w,h,1],format,usage});slot.scratch=device.createTexture({label:'Somata Graffiti Glow blur scratch',size:[w,h,1],format,usage});slot.uniformH=device.createBuffer({label:'Somata Graffiti Glow H uniforms',size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});slot.uniformV=device.createBuffer({label:'Somata Graffiti Glow V uniforms',size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});stats.textureBuilds++;}
@@ -68,11 +71,12 @@ fn blurredAlpha(uv0:vec2<f32>)->f32{
             const hbg=device.createBindGroup({layout:bindLayout,entries:[{binding:0,resource:slot.mask.createView()},{binding:1,resource:sampler},{binding:2,resource:{buffer:slot.uniformH}}]});
             const vbg=device.createBindGroup({layout:bindLayout,entries:[{binding:0,resource:slot.scratch.createView()},{binding:1,resource:sampler},{binding:2,resource:{buffer:slot.uniformV}}]});
             let pass=encoder.beginRenderPass({colorAttachments:[{view:slot.scratch.createView(),loadOp:'clear',storeOp:'store',clearValue:{r:0,g:0,b:0,a:0}}]});pass.setPipeline(pipelineBlur);pass.setBindGroup(0,hbg);pass.draw(3);pass.end();
-            pass=encoder.beginRenderPass({colorAttachments:[{view:targetTexture.createView(),loadOp:'load',storeOp:'store'}]});pass.setPipeline(opts.composite==='destination-over'?pipelineBehind:pipelineOver);pass.setBindGroup(0,vbg);pass.draw(3);pass.end();
+            const useStencil=Boolean(opts.stencilView),desc={colorAttachments:[{view:targetTexture.createView(),loadOp:'load',storeOp:'store'}]};if(useStencil)desc.depthStencilAttachment={view:opts.stencilView,depthLoadOp:'load',depthStoreOp:'discard',stencilLoadOp:'load',stencilStoreOp:'store'};
+            pass=encoder.beginRenderPass(desc);if(useStencil)pass.setStencilReference(Math.max(0,Number(opts.stencilReference)||0));const blendMode=typeof normalizeSweepBlendMode==='function'?normalizeSweepBlendMode(opts.blendMode):String(opts.blendMode||'normal');const compositePipe=useStencil?(opts.composite==='destination-over'?pipelineBehindStencil:(pipelineModesStencil[blendMode]||pipelineOverStencil)):(opts.composite==='destination-over'?pipelineBehind:(pipelineModes[blendMode]||pipelineOver));pass.setPipeline(compositePipe);pass.setBindGroup(0,vbg);pass.draw(3);pass.end();
             stats.frames++;stats.blurPasses+=2;stats.composites++;return true;
         }catch(err){fail('encode/blur-composite',err?.message||err,err,{radiusPx:opts.radiusPx});return false;}
     }
-    function status(){warmup();return{available:ready,gpuOnly:true,lastError,generation,...stats,policy:'exact Graffiti ribbon -> GPU mask -> separable WebGPU blur -> GPU Layer Scene; no thin-line carrier and no Canvas blur'};}
+    function status(){warmup();return{available:ready,gpuOnly:true,lastError,generation,...stats,policy:'exact Graffiti ribbon / contour -> GPU mask -> separable WebGPU blur -> GPU Layer Scene; optional stencil-clipped composite; no thin-line carrier and no Canvas blur'};}
     return{warmup,isReady:()=>warmup(),acquire,encodeBlurComposite,status,fail};
 })();
 window.__spiroGraffitiContourGlowGPUStatus=()=>WebGPUGraffitiContourGlow.status();

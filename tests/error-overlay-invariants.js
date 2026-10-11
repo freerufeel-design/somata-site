@@ -11,7 +11,7 @@ const css=read('styles/app.css');
 const scripts=[...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*>/gi)].map(m=>m[1].split('?')[0]);
 assert.ok(scripts.includes('js/bootstrap/error-overlay.js'),'In-app error console script must be loaded');
 assert.ok(scripts.indexOf('js/bootstrap/error-overlay.js')<scripts.indexOf('js/bootstrap/module-registry.js'),'Error capture must load before application modules');
-assert.ok(html.includes('js/bootstrap/error-overlay.js?v=20261011-v724-hotfix5'),'Error-console bootstrap must be cache-busted for 7.2.3 patch');
+assert.ok(html.includes('js/bootstrap/error-overlay.js?v=20261012-v737'),'Error-console bootstrap must be cache-busted for 7.2.3 patch');
 assert.ok(js.includes('console.error=function'),'console.error must be mirrored into the in-app console');
 assert.ok(js.includes('isExpectedGpuFallback')&&js.includes("startsWith('[Somata GPU fallback]')"),'Known-benign GPU fallback telemetry must be filtered out of the red error console');
 assert.ok(js.includes('isImportantGpuWarning')&&js.includes("startsWith('[Somata GPU diagnostic]')"),'Important GPU diagnostics must be mirrored into the in-app console');

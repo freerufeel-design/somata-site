@@ -66,18 +66,26 @@ function prepareGpuMorphArbitraryLampFrame(frameCtx,maxPoints=600){
     const prepared={gpuLampNative:true,gpuMorphArcTable:table,gpuMorphArcResource:arcRec,gpuMorphResource:morphRec,gpuMorphT:t,frameId:Number(frameCtx.frameId)||Number(frameGeometryRuntime?.frameId)||0,attachmentPoints:points,attachmentCount:points.length};
     gpuMorphLampBridgeStats.hits++;gpuMorphLampBridgeStats.attachmentsBuilt+=points.length;gpuMorphLampBridgeStats.cpuPathBuildsAvoided++;gpuMorphLampBridgeStats.cpuArcWalksAvoided+=Math.max(0,Number(morphRec.segmentCount)||0);gpuMorphLampBridgeStats.lastReason='arbitrary-contour-fractions-on-gpu-arc';return prepared;
 }
-function spiralMorphKnotFractionsAtT(morphRec,pathIndex,t){
-    const rec=morphRec?.cpuPathKnotFractions?.[pathIndex]||{},src=Array.isArray(rec.source)?rec.source:[],dst=Array.isArray(rec.target)?rec.target:[];
-    if(!src.length&&!dst.length)return[];if(!src.length)return dst.slice();if(!dst.length)return src.slice();
-    const count=Math.max(2,src.length,dst.length),sample=(arr,q)=>{if(arr.length===1)return Math.max(0,Math.min(1,Number(arr[0])||0));const x=q*(arr.length-1),i=Math.min(arr.length-2,Math.floor(x)),u=x-i;return Math.max(0,Math.min(1,(Number(arr[i])||0)+((Number(arr[i+1])||0)-(Number(arr[i])||0))*u));};
-    const tt=Math.max(0,Math.min(1,Number(t)||0)),out=[];
-    for(let i=0;i<count;i++){const q=i/Math.max(1,count-1),a=sample(src,q),b=sample(dst,q);out.push(a+(b-a)*tt);}
-    out[0]=0;out[out.length-1]=1;return out;
+function spiralMorphFractionIdentityAtT(records,pathIndex,t,{forceEndpoints=false}={}){
+    const rec=records?.[pathIndex]||{},src=Array.isArray(rec.source)?rec.source:[],dst=Array.isArray(rec.target)?rec.target:[];
+    if(!src.length&&!dst.length)return[];
+    // Key/Corner identity belongs to authored endpoint markers. Counts may change between
+    // endpoints, so interpolate an ordinal identity lattice while positions are still sampled
+    // from the CURRENT exact Arc. Technical De Casteljau cuts never become lamp identities.
+    const sample=(arr,q)=>{if(!arr.length)return NaN;if(arr.length===1)return Math.max(0,Math.min(1,Number(arr[0])||0));const x=q*(arr.length-1),i=Math.min(arr.length-2,Math.floor(x)),u=x-i;return Math.max(0,Math.min(1,(Number(arr[i])||0)+((Number(arr[i+1])||0)-(Number(arr[i])||0))*u));};
+    const count=Math.max(forceEndpoints?2:1,src.length,dst.length),tt=Math.max(0,Math.min(1,Number(t)||0)),out=[];
+    for(let i=0;i<count;i++){
+        const q=count===1?.5:i/Math.max(1,count-1),a=sample(src,q),b=sample(dst,q);
+        const v=Number.isFinite(a)&&Number.isFinite(b)?a+(b-a)*tt:(Number.isFinite(a)?a:b);
+        if(Number.isFinite(v))out.push(Math.max(0,Math.min(1,v)));
+    }
+    if(forceEndpoints&&out.length){out[0]=0;out[out.length-1]=1;}
+    return out;
 }
+function spiralMorphKnotFractionsAtT(morphRec,pathIndex,t){return spiralMorphFractionIdentityAtT(morphRec?.cpuPathKnotFractions,pathIndex,t,{forceEndpoints:true});}
 function gpuMorphSpecialSpiralLampFrame(frameCtx,maxPoints=600){
     const morphRec=typeof currentGpuBezierResourceForFrame==='function'?currentGpuBezierResourceForFrame(frameCtx):(typeof currentGpuBezierMorphResource==='function'?currentGpuBezierMorphResource(frameCtx?.layerIndex):null);
     if(!morphRec?.specialSpiralBezierRail||!morphRec?.ready)return null;
-    if(typeof warmupGpuMorphArcResource==='function'&&!warmupGpuMorphArcResource())return null;
     const table=typeof getGpuMorphArcTableForFrame==='function'?getGpuMorphArcTableForFrame(frameCtx):null,arcRec=table?._gpuMorphArcResource;
     if(!table?.gpuArcResident||!arcRec?.ready)return null;
     const mode=gpuMorphLampPositionMode(frameCtx),ranges=morphRec.cpuPathSegmentRanges,pathCount=Math.max(0,Number(morphRec.pathCount)||0),points=[];
@@ -93,31 +101,43 @@ function gpuMorphSpecialSpiralLampFrame(frameCtx,maxPoints=600){
             const desired=Math.max(2,Math.min(48,Math.round(((Number(morphRec.cpuEndpointPathLengths?.[pi*2])||0)+(Number(morphRec.cpuEndpointPathLengths?.[pi*2+1])||0))/48)||8));
             fractions=stableContourLampFractions(`spiral|${layerKey}|${pi}`,desired);
             for(let j=0;j<fractions.length&&points.length<maxPoints;j++){const f=Math.max(0,Math.min(1,Number(fractions[j])||0));points.push({x:0,y:0,pathIndex:pi,lampAttachFraction:f,lampColorPhase:f,lampId:`spiral:${mode}:${pi}:${j}`,lampSeed:lampHash32(`spiral:${layerKey}:${mode}:${pi}:${j}`)});}
+        }else if(mode==='key'){
+            // 7.3.7 — Key identity comes ONLY from authored key markers. Technical
+            // De Casteljau equalization cuts and geometric corner flags are deliberately excluded.
+            // The identity fraction can travel during Morph, while the final XY is sampled from
+            // the current exact retained-cubic Arc.
+            const records=morphRec?.cpuPathLampKeyFractions;
+            fractions=spiralMorphFractionIdentityAtT(records,pi,t,{forceEndpoints:true});
+            const periodic=Boolean(morphRec?.cpuPathPeriodic?.[pi]>>>0),omitSharedSeam=periodic&&state?.tunnel?.active===true;
+            for(let j=0;j<fractions.length&&points.length<maxPoints;j++){
+                if(omitSharedSeam&&j===fractions.length-1)continue;
+                const f=Math.max(0,Math.min(1,Number(fractions[j])||0));
+                points.push({x:0,y:0,pathIndex:pi,lampAttachFraction:f,lampColorPhase:f,lampId:`spiral:key:${pi}:${j}`,lampSeed:lampHash32(`spiral:${layerKey}:key:${pi}:${j}`)});
+            }
         }else{
-            // 6.8 iter12 — Key/Corners are retained-cubic BOUNDARIES, not interpolated
-            // endpoint arc fractions. Arc fractions change non-linearly while a cubic morphs;
-            // interpolating the two endpoint fractions made lamps drift away from visible knots.
-            // `common` is the exact De Casteljau partition shared by source/target, so a boundary
-            // boundary identity is exact for every t and LampGPURenderer evaluates the current cubic.
-            const knotRec=morphRec?.cpuPathKnotFractions?.[pi]||{},common=Array.isArray(knotRec.common)&&knotRec.common.length?knotRec.common:(morphRec?.staticSpiralBezierRail===true&&Array.isArray(knotRec.source)?knotRec.source:[]);
-            const logicalFirst=Math.max(0,Number(morphRec?.cpuPathSegmentRanges?.[pi*4])||0),logicalCount=Math.max(1,Number(morphRec?.cpuPathSegmentRanges?.[pi*4+1])||1),subdiv=Math.max(1,Number(arcRec?.subdiv)||1),closed=Boolean(morphRec?.pathRanges?.[pi*4+2]>>>0),meta=morphRec?.cpuSegmentMeta;
-            const boundaryIsCorner=(j)=>{
-                if(mode!=='corners')return true;let corner=false;
-                if(meta&&j<logicalCount)corner=corner||Boolean((meta[(logicalFirst+j)*4+3]>>>0)&0x40000000);
-                if(meta&&j>0)corner=corner||Boolean((meta[(logicalFirst+j-1)*4+3]>>>0)&0x80000000);
-                return corner;
-            };
+            // Corners are different: a lamp must sit on the CURRENT exact retained-knot bend,
+            // not on an interpolation of source/target arc fractions. The common De Casteljau
+            // partition is allowed only as a coordinate system; a boundary becomes a Corner
+            // identity only when authored corner metadata reaches that boundary.
+            const knotRec=morphRec?.cpuPathKnotFractions?.[pi]||{},common=Array.isArray(knotRec.common)?knotRec.common:[];
+            const logicalFirst=Math.max(0,Number(morphRec?.cpuPathSegmentRanges?.[pi*4])||0),logicalCount=Math.max(0,Number(morphRec?.cpuPathSegmentRanges?.[pi*4+1])||0),subdiv=Math.max(1,Number(arcRec?.subdiv)||1),meta=morphRec?.cpuSegmentMeta;
+            const boundaryIsCorner=(j)=>{let corner=false;if(meta&&j<logicalCount)corner=corner||Boolean((meta[(logicalFirst+j)*4+3]>>>0)&0x40000000);if(meta&&j>0)corner=corner||Boolean((meta[(logicalFirst+j-1)*4+3]>>>0)&0x80000000);return corner;};
             const boundaryCount=Math.min(common.length,logicalCount+1);
             for(let j=0;j<boundaryCount&&points.length<maxPoints;j++){
-                if(closed&&j===logicalCount)continue;if(!boundaryIsCorner(j))continue;
-                const f=Math.max(0,Math.min(1,Number(common[j])||0)),p={x:0,y:0,pathIndex:pi,lampAttachFraction:f,lampColorPhase:f,lampId:`spiral:${mode}:${pi}:${j}`,lampSeed:lampHash32(`spiral:${layerKey}:${mode}:${pi}:${j}`)};
-                if(j>=logicalCount){p.gpuLampArcSegmentIndex=logicalCount*subdiv-1;p.gpuLampArcSegmentT=1;}else{p.gpuLampArcSegmentIndex=j*subdiv;p.gpuLampArcSegmentT=0;}
+                if(!boundaryIsCorner(j))continue;const f=Math.max(0,Math.min(1,Number(common[j])||0));
+                const p={x:0,y:0,pathIndex:pi,lampAttachFraction:f,lampColorPhase:f,lampId:`spiral:corners:${pi}:${j}`,lampSeed:lampHash32(`spiral:${layerKey}:corners:${pi}:${j}`)};
+                // Lamp WGSL interprets segmentIndex as LOCAL to this path and adds the path's
+                // micro-rail offset itself. Pinning the boundary directly keeps lamps on bends.
+                if(logicalCount>0){if(j>=logicalCount){p.gpuLampArcSegmentIndex=logicalCount*subdiv-1;p.gpuLampArcSegmentT=1;}else{p.gpuLampArcSegmentIndex=j*subdiv;p.gpuLampArcSegmentT=0;}}
                 points.push(p);
             }
         }
         if(points.length>=maxPoints)break;
     }
-    if(!points.length)return null;
+    // A smooth Spiral may legitimately have no authored bend markers. In Corners mode that
+    // is an authoritative empty result, not an Arc warmup failure; returning the empty GPU
+    // frame prevents the strict FullGPU contract from reporting a false resource error.
+    if(!points.length&&mode!=='corners')return null;
     return{gpuLampNative:true,gpuLampNativeKind:'arc',gpuMorphArcTable:table,gpuMorphArcResource:arcRec,gpuMorphResource:morphRec,gpuMorphT:t,frameId:Number(frameCtx.frameId)||0,attachmentPoints:points,attachmentCount:points.length};
 }
 function prepareGpuMorphLampFrame(frameCtx){

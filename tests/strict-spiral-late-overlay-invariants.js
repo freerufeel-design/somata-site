@@ -14,8 +14,8 @@ assert(runtime.includes('strictSpiralLateCanvasOverlay:false')&&runtime.includes
 assert(appA.includes('let lateCanvasOverlay=u.d.w>1.5')&&appA.includes('if(lateCanvasOverlay){let ov=sceneSample'),'Final WGSL must composite the uploaded late Canvas layer above the resident GPU Layer Scene');
 assert(appA.includes('renderBackendTelemetry.hasMaterialization?.()===true))return false'),'Strict Final must still reject any real GPU-to-Canvas materialization');
 assert(appA.includes('layerSource?(lateCanvasOverlay?2:1):0'),'Final uniforms must distinguish ordinary under-scene Canvas from late-overlay Canvas ordering');
-assert(html.includes('<title>Somata 7.2.4</title>'),'Build title must be 7.2.3');
-assert(html.includes('js/legacy/app-a.js?v=20261011-v724-hotfix5')&&html.includes('js/core/render-runtime.js?v=20261011-v724-hotfix5')&&html.includes('js/render/main-pipeline.js?v=20261011-v724-hotfix5'),'Changed compositor/runtime files must be cache-busted for 7.2.3');
+assert(html.includes('<title>Somata 7.3.7</title>'),'Build title must be 7.2.3');
+assert(html.includes('js/legacy/app-a.js?v=20261012-v737')&&html.includes('js/core/render-runtime.js?v=20261012-v737')&&html.includes('js/render/main-pipeline.js?v=20261012-v737'),'Changed compositor/runtime files must be cache-busted for 7.2.3');
 assert(pipe.includes("reserveStrictSpiralLateCanvasOverlay(frameCtx,'Corridor Fill Layer Scene unavailable; exact late overlay')"),'A final non-Spiral Fill must escape GPU-target-unavailable deadlock through the safe late overlay path');
 assert(pipe.includes('frame.strictSpiralEntryIntent===true||frame.strictSpiralGpuPresentRequired===true'),'Late-overlay recovery must work even when Spiral intent is only visible through the already-raised strict presentation latch');
 console.log('Strict Spiral late-overlay invariants OK');

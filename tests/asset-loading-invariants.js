@@ -7,11 +7,11 @@ const guard=fs.readFileSync(path.join(root,'js/bootstrap/boot-guard.js'),'utf8')
 const scripts=[...html.matchAll(/<script\b([^>]*)\bsrc="([^"]+)"([^>]*)>/gi)].map(m=>({attrs:(m[1]||'')+' '+(m[3]||''),url:m[2]}));
 const css=[...html.matchAll(/<link\b[^>]*\bhref="([^"]+\.css[^"]*)"/gi)].map(m=>m[1]);
 assert(scripts.length>40,'Expected modular script manifest');
-for(const s of scripts) assert(s.url.endsWith('?v=20261011-v724-hotfix5'),`Unversioned script: ${s.url}`);
-for(const u of css) assert(u.endsWith('?v=20261011-v724-hotfix5'),`Unversioned stylesheet: ${u}`);
+for(const s of scripts) assert(s.url.endsWith('?v=20261012-v737'),`Unversioned script: ${s.url}`);
+for(const u of css) assert(u.endsWith('?v=20261012-v737'),`Unversioned stylesheet: ${u}`);
 assert(scripts.every(s=>/\bdefer\b/i.test(s.attrs)),'All app scripts must be deferred so iOS can discover them in <head> without early execution');
-assert(html.indexOf('styles/app.css?v=20261011-v724-hotfix5')<html.indexOf('js/bootstrap/boot-guard.js?v=20261011-v724-hotfix5'),'CSS must be discoverable before JavaScript');
-assert(html.indexOf('js/bootstrap/boot-guard.js?v=20261011-v724-hotfix5')<html.indexOf('js/bootstrap/error-overlay.js?v=20261011-v724-hotfix5'),'Boot guard must execute before app modules');
+assert(html.indexOf('styles/app.css?v=20261012-v737')<html.indexOf('js/bootstrap/boot-guard.js?v=20261012-v737'),'CSS must be discoverable before JavaScript');
+assert(html.indexOf('js/bootstrap/boot-guard.js?v=20261012-v737')<html.indexOf('js/bootstrap/error-overlay.js?v=20261012-v737'),'Boot guard must execute before app modules');
 assert(!/<head>[\s\S]*?<script>(?![\s\S]*?<\/head>)/i.test(html),'iOS-safe head must not contain parser-blocking inline JavaScript');
 assert(!html.includes('app-shell.html'),'Runtime DOM extraction must not be used; original DOM must remain in index.html');
 assert(!html.includes('ios-boot.js'),'Dynamic iOS loader must not be used');
@@ -21,4 +21,4 @@ assert(guard.includes('index.html загружен, но Somata не завер�
 assert(guard.includes('Копировать всё'),'Boot diagnostic copy-all control missing');
 assert(guard.includes("hostname.toLowerCase()==='www.somata.su'")&&guard.includes("location.replace('https://somata.su'"),'www host must canonicalize to working apex host');
 for(const id of ['fpsCounter','btnAudioReactive','projectNameButton','autoShowErrorConsoleSetting']) assert(html.includes(`id="${id}"`),`Original DOM anchor missing: ${id}`);
-console.log('Somata 7.2.4 iOS-safe asset loading invariants: PASS');
+console.log('Somata 7.3.7 iOS-safe asset loading invariants: PASS');

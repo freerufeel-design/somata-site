@@ -300,7 +300,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             const fid=Number(ctx.frameId)||Number(frameGeometryRuntime.frameId)||0;
             if(ctx._pathFxTableFrameId===fid&&ctx._pathFxTable){pathFxTypedTableStats.frameHits++;return ctx._pathFxTable;}
             const layer=ctx.layer,round=getRoundingStrength(layer?.rounding);
-            const needsSpline=layer?.profileMode==='spline'&&normalizeSplineRenderMode(layer?.splineRenderMode)==='smooth';
+            const needsSpline=layer?.profileMode==='spline';
             const paths=needsSpline?buildHighPrecisionGlintPaths(ctx):getLayerFrameRoundedPaths(ctx);
             const dynamic=isCurrentFrameDynamicPathList(paths)||ctx.geometryPlan?.dynamic===true||Boolean(runtimeState.morph?.active&&state.morph?.mode!=='light');
             const geomVersion=typeof getLayerVersions==='function'?Number(getLayerVersions(layer)?.geometry)||0:Number(layer?._geometryVersion)||0;
@@ -686,7 +686,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             // v534: smooth spline and ordinary rounded-segment morphs both get ONE final
             // visual rail per endpoint. Before this, segment rounding was reconstructed on
             // the CPU every display frame and forced several GPU effects onto fallback paths.
-            if(srcMode==='spline'&&dstMode==='spline')return normalizeSplineRenderMode(layer?.splineRenderMode)==='smooth';
+            if(srcMode==='spline'&&dstMode==='spline')return true;
             if(srcMode==='segments'&&dstMode==='segments'){
                 const sr=getRoundingStrength(sv.rounding ?? layer?.rounding);
                 const tr=getRoundingStrength(tv.rounding ?? layer?.rounding);
@@ -698,7 +698,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             const pts=path?.points||[];
             if(pts.length<2)return {points:copyMorphPointArray(pts),closed:Boolean(path?.closed),cornerFlags:[],bridgeRoundFlags:[],_stableRoundedSplineRail:true};
             const sampler=createStableSplineRailSampler(6),round=Math.max(0,Math.min(2,Number(roundingFrac)||0));
-            if(profileMode==='spline'&&normalizeSplineRenderMode(splineRenderMode)==='smooth')
+            if(profileMode==='spline')
                 splinePathForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[]);
             else
                 roundPolylineForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[]);

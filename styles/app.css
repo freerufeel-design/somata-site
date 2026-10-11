@@ -3726,6 +3726,7 @@
             width:16px; height:16px; flex:0 0 16px; margin:0; accent-color:#818cf8;
         }
         .file-setting-toggle > span { min-width:0; flex:1 1 auto; }
+        #fpsLimitSetting { width:64px !important; flex:0 0 64px; text-align:center !important; }
 
         @media (max-width:760px) {
             /* Every desktop module remains reachable; only layout changes. */

@@ -522,9 +522,10 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 motionRotation: { enabled:false, speed:30, multiplier:1, direction:'ccw', tunnelLag:0, tunnelLagMultiplier:1 },
                 opacity: 100,
                 lineOpacity: 100,
-                // 6.9 rev4: Spiral core can use a continuous ribbon (default) or the
-                // historical per-subsegment capsule rasterizer.
-                spiralLineType: 'uniform',
+                // 7.3.7: generic line overlap/layering policy. Uniform unions neighbouring
+                // stroke/glow coverage; Segmented keeps source-over accumulation per segment.
+                lineLayerMode: 'uniform',
+                spiralLineType: 'uniform', // legacy project/import alias; migrated to lineLayerMode
                 strokeColor: '#00ffcc',
                 strokeWidth: 2,
                 strokeWidthMultiplier: 1,

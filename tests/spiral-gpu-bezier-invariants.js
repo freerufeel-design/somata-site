@@ -23,9 +23,9 @@ const pathFx=read('js/render/path-fx-pass.js');
 const scheduler=read('js/render/gpu-command-scheduler.js');
 const profileArc=read('js/gpu/profile-arc-marker-renderer.js');
 const graph=read('js/render/render-graph.js');
-const isV69=pipe.includes("version:'6.9'")||pipe.includes("version:'7.0'")||pipe.includes("version:'7.0.3'")||(pipe.includes("version:'7.2'")||pipe.includes("version:'7.2.4'"));
+const isV69=pipe.includes("version:'6.9'")||pipe.includes("version:'7.0'")||pipe.includes("version:'7.0.3'")||(pipe.includes("version:'7.2'")||pipe.includes("version:'7.3.7'")||pipe.includes("version:'7.3.7'"));
 
-assert.ok(/Somata\s+7\.2/i.test(html),'UI must identify the 7.2 build');
+assert.ok(/Somata\s+7\.3\.7/i.test(html),'UI must identify the 7.3.7 build');
 assert.ok(appA.includes('function buildSpiralBezierSegments('),'Static Spiral needs one retained cubic builder');
 assert.ok(appA.includes('ctx.__spiroGLGeometryRecorder === true'),'Static Spiral recorder must retain cubic commands even during WebGPU warmup');
 assert.ok(appA.includes('__variableWidthBezierSpiral=true'),'Static Spiral base must emit retained cubic commands');
@@ -77,7 +77,7 @@ assert.ok(web.includes('Spiral Web stays WebGPU-only')&&web.includes('No Canvas/
 assert.ok(lamps.includes('currentGpuBezierMorphResource')&&lamps.includes('getGpuMorphArcTableForFrame'),'Spiral lamps must attach to the shared Bézier-derived GPU arc');
 assert.ok(lampGpu.includes('sampleMorphArcSegment')&&lampGpu.includes('gpuLampArcSegmentIndex'),'Lamp renderer keeps exact segment attachment support for non-Spiral native plans');
 assert.ok(spiral.includes('sourceRawKnotFractions')&&spiral.includes('targetRawKnotFractions'),'Spiral Morph resource must preserve authored endpoint knots separately from De Casteljau equalization splits');
-assert.ok(lamps.includes('Key/Corners are retained-cubic BOUNDARIES')&&lamps.includes('gpuLampArcSegmentIndex=j*subdiv'),'Spiral key/corner lamps must bind exact retained cubic boundaries during morph instead of interpolating endpoint arc fractions');
+assert.ok(lamps.includes('Key identity comes ONLY from authored key markers')&&lamps.includes('const records=morphRec?.cpuPathLampKeyFractions')&&lamps.includes('const boundaryIsCorner=(j)=>')&&lamps.includes('gpuLampArcSegmentIndex=j*subdiv'),'Spiral Key lamps must use authored key identities while Corner lamps pin exact current retained-cubic boundaries');
 assert.ok(graffiti.includes("lastReason='shared-retained-bezier-cubics'")&&graffiti.includes('spiral-gpu-only'),'Spiral Graffiti must prefer retained cubic GPU rendering and suppress CPU fallback');
 assert.ok(graffiti.includes('every variation mode is GPU-native')&&!graffiti.includes('variation-${mode}-needs-compat-plan'),'Spiral Graffiti variation modes must never request a compatibility/Canvas carrier');
 assert.ok(read('js/gpu/graffiti-morph-renderer.js').includes('5=across')&&read('js/gpu/graffiti-morph-renderer.js').includes('variationAux'),'GPU Graffiti must implement per-path/whole/per-segment/every-N/across variation over the Bézier-derived Arc');
@@ -90,7 +90,7 @@ assert.ok(pathFx.includes('Spiral Sprite waits for WebGPU; Canvas bridge disable
 
 assert.ok(particleGpu.includes('retainedCubics')&&particleGpu.includes('sampleRail(si,t)')&&particleGpu.includes('exactBezierArc:true'),'Spiral particles must use the retained cubic buffer for exact GPU positions after arc lookup, not interpolate micro-chords');
 assert.ok(lampGpu.includes('retainedArcCubics')&&lampGpu.includes('retainedCubicPoint')&&lampGpu.includes('binding:5,resource:{buffer:arcRec.morphRec.cubicBuffer}'),'Spiral lamps must evaluate the retained cubic directly on GPU after arc-distance lookup');
-assert.ok(read('js/gpu/web-morph-renderer.js').includes('retainedCubics')&&read('js/gpu/web-morph-renderer.js').includes('retainedCubicPoint(first+lo,t)'),'Spiral Web endpoints must be evaluated from the retained cubic GPU rail rather than interpolated chord endpoints');
+assert.ok(read('js/gpu/web-corner-resource.js').includes('retainedCubics')&&read('js/gpu/web-corner-resource.js').includes('retainedCubicPoint(first+lo,t)')&&read('js/gpu/web-morph-renderer.js').includes('threadGeometry[recIndex*2u]'),'Spiral Web endpoints must be evaluated once from the retained cubic GPU rail into resident master thread geometry, never from interpolated chord endpoints');
 assert.ok(read('js/gpu/canonical-sweep-renderer.js').includes('retainedCubics')&&read('js/gpu/canonical-sweep-renderer.js').includes('retainedPoint(si,t0)'),'Moving Spiral glint must resolve clipped GPU-arc windows back onto the retained cubic instead of clipping only the chord');
 assert.ok(read('js/gpu/graffiti-sample-resource.js').includes('retainedCubics')&&read('js/gpu/graffiti-sample-resource.js').includes('return retainedPoint(first+lo,u)'),'Variational Spiral Graffiti must resolve GPU arc distances back onto retained cubics instead of returning chord-interpolated points');
 assert.ok(read('js/gpu/lightning-arc-renderer.js').includes('retainedCubics')&&read('js/gpu/lightning-arc-renderer.js').includes('retainedPoint(si,0.0)')&&read('js/gpu/lightning-arc-renderer.js').includes('morph.cubicBuffer'),'Spiral/Topology Lightning must raster from the retained cubic carrier rather than a separate chord-only source');
@@ -105,7 +105,7 @@ assert.ok(spiral.includes('ONE integer 2π representative')&&spiral.includes('gl
 
 assert.ok(pipe.includes("if(isStrictSpiralWebGPUFrame(frameCtx)){renderBackendTelemetry.mark('lamps','gpu','Spiral lamps GPU-only warmup')")&&particleGpu.includes("typeof isStrictSpiralWebGPUFrame==='function'?isStrictSpiralWebGPUFrame(frameCtx)"),'Lamps and Particles must keep the endpoint-aware strict Spiral policy during polygon↔Spiral morph');
 assert.ok(arc.includes("if(strictSpiral)return shared?.bezierVisualRail?'':'bezier-rail-unavailable'"),'Spiral GPU Arc eligibility must trust the authoritative retained rail instead of temporary polygon frame metadata');
-assert.ok(lamps.includes('gpuLampArcSegmentIndex=logicalCount*subdiv-1')&&lamps.includes('boundary identity is exact'),'Spiral key/corner lamps should attach directly to exact retained-cubic boundaries when available, avoiding interpolated arc-fraction drift');
+assert.ok(lamps.includes('gpuLampArcSegmentIndex=logicalCount*subdiv-1')&&lamps.includes('CURRENT exact retained-knot bend'),'Spiral Corner lamps must attach directly to exact retained-cubic boundaries while Key uses its separate authored identity domain');
 assert.ok(!spiral.includes('endpointTravelSlack'),'Minimal Turn must not distort endpoint geometry with non-2pi angular clamps');
 
 assert.ok(arc.includes('cubicArcLength3')&&arc.includes('0.7745966692414834'),'Spiral GPU Arc distances must use cubic Gauss-3 integration rather than chord length');
@@ -119,8 +119,9 @@ assert.ok(read('js/gpu/bezier-sweep-renderer.js').includes('spiroGpuPrepareMorph
 assert.ok(pipe.includes("arcMetric:'gauss3-cubic'")&&pipe.includes('orderedGpuPrerequisites:true')&&pipe.includes('!c.bezier'),'Runtime Spiral audit must fail strict mode if any named effect stops being Bézier-derived');
 assert.ok(spiral.includes('out.__profileCorner0=a<=1e-8')&&spiral.includes('flags|=0x40000000')&&spiral.includes('flags|=0x80000000'),'Spiral Morph must preserve authored profile-corner flags through exact De Casteljau normalization and pack them for GPU Web classification');
 assert.ok(arc.includes('q?.__profileCorner0===true')&&arc.includes('0x40000000')&&arc.includes('q?.__profileCorner1===true'),'Static Spiral GPU Arc metadata must preserve authored profile corners');
-for(const rel of ['js/gpu/lamp-renderer.js','js/gpu/web-morph-renderer.js','js/gpu/particle-renderer.js','js/gpu/canonical-sweep-renderer.js','js/gpu/graffiti-sample-resource.js','js/gpu/lightning-arc-renderer.js'])assert.ok(read(rel).includes('arcCorrectMicroT')&&read(rel).includes('sqrt(disc)'),'Spiral distance consumer '+rel+' must invert local arc fraction back to retained Bézier t with the cheap closed-form speed model');
-assert.ok((spiral.includes('pathCartesianFallback=minimal&&(pathMaxPolarTurn>Math.PI')||spiral.includes('pathCartesianFallback=forceCartesian||(minimal&&(pathMaxPolarTurn>Math.PI'))&&spiral.includes('safeSpiralMix')&&spiral.includes('metaData.z>0.5'),'Minimal Turn must choose the >180° safety fallback once per retained path so adjacent Béziers cannot disagree at shared knots');
+for(const rel of ['js/gpu/lamp-renderer.js','js/gpu/particle-renderer.js','js/gpu/canonical-sweep-renderer.js','js/gpu/graffiti-sample-resource.js','js/gpu/lightning-arc-renderer.js'])assert.ok(read(rel).includes('arcCorrectMicroT')&&read(rel).includes('sqrt(disc)'),'Spiral distance consumer '+rel+' must invert local arc fraction back to retained Bézier t with the cheap closed-form speed model');
+assert.ok(read('js/gpu/web-corner-resource.js').includes('arcCorrectMicroT')&&read('js/gpu/web-corner-resource.js').includes('sqrt(disc)'),'Web exact-arc inversion must happen once in GPU master-thread geometry compute rather than inside raster vertices');
+assert.ok(spiral.includes('pathCartesianFallback=forceCartesian||forceCartesianPath||(minimal&&')&&spiral.includes('safeSpiralMix')&&spiral.includes('metaData.z>0.5'),'Minimal Turn/cross-family transport must choose one Cartesian fallback per retained path so adjacent Béziers cannot disagree at shared knots');
 assert.ok(pipe.includes("arcLocalInverse:'endpoint-speed-analytic'")&&pipe.includes('minimalTurnPathContinuousFallback:true')&&pipe.includes('authoredCornerFlags:true'),'Runtime audit must expose Iter10 arc inversion, minimal-turn safety and authored-corner contracts');
 assert.ok(appA.includes("getConfiguredSplinePointCount()"),'Static Spiral profile geometry signature must include spline construction density so profile edits cannot leave a stale retained rail');
 
@@ -133,7 +134,7 @@ assert.ok(pipe.includes('sharedCurrentCubicProducer:true'),'Runtime Spiral audit
 // Iter12: hard residency / direct static cubic / exact lamp-boundary contracts.
 assert(appA.includes('6.8 iter12 — compact mapped Hermite is a PER-SPAN property'), 'static Spiral must preserve mapped Hermite Bézier per span');
 assert(arc.includes('static strict Spiral goes source profile -> retained cubics -> GPU directly'), 'static Spiral GPU resource must bypass compatibility point sampling');
-assert(lamps.includes('Key/Corners are retained-cubic BOUNDARIES'), 'Spiral Morph lamps must bind exact retained cubic boundaries');
+assert(lamps.includes('Key identity comes ONLY from authored key markers')&&lamps.includes('Corners are different:'), 'Spiral Morph lamps must keep authored Key identity separate from exact Corner boundaries');
 assert(pipe.includes('strict Spiral Layer Scene unavailable; no fallback'), 'strict Spiral Base must forbid GPU->Canvas scene presentation');
 assert(pipe.includes('strict Spiral GPU-only warmup; Canvas presentation forbidden'), 'strict Spiral Glow must forbid Canvas presentation fallback');
 assert(pipe.includes('strict Spiral outline waits for resident GPU scene; Canvas composite forbidden'), 'strict Spiral Outline must forbid Canvas composite');
@@ -200,7 +201,7 @@ assert(pipe.includes('strictProfileMarkersGpuArc:true')&&pipe.includes('strictPr
 // Iter18: Base visibility no longer waits for optional-effect compilation; strict Final is a
 // texture-only GPU presentation and effects-only/profile Spiral owns a transparent GPU root.
 assert(pipe.includes('function canDeferStrictSpiralLayerSceneRoot')&&pipe.includes('Base establishes the authoritative retained-Bézier GPU LayerScene first'), 'strict Spiral Base must establish the GPU scene independently of optional effect readiness');
-assert(pipe.includes("canFuseMorphGlowBase=frameCtx.lineDisplayEnabled===true")&&pipe.includes('(strictSpiralGlow||frameCtx.effectsPlan?.web?.enabled!==true)'), 'strict Spiral Glow+Base must stay one root command even when Web is enabled');
+assert(pipe.includes('orderedWebUnderBase=frameCtx.effectsPlan?.web?.enabled===true')&&web.includes('const phase=strictSpiralGpu?4.5:40')&&pipe.includes("layerScenePhase:5,layerSceneLabel:'spiral-base'"), 'strict Spiral Web must use a transparent ordered LayerScene root so Web is queued under Base instead of forcing a fused Base root');
 assert(appA.includes('function beginExternalLayerScene(')&&pipe.includes("beginExternalLayerScene?.(frameCtx.frameId,'strict-spiral-effects')"), 'effects-only/Profile/Graffiti Spiral must get a transparent WebGPU LayerScene root instead of a Canvas carrier');
 assert(appA.includes('const lateCanvasOverlay=Boolean(strictSpiral&&frame?.strictSpiralLateCanvasOverlay===true')&&appA.includes('renderBackendTelemetry.hasMaterialization?.()===true))return false')&&appA.includes('layerSource?(lateCanvasOverlay?2:1):0'), 'strict Spiral Final must require a GPU layer source, forbid GPU->Canvas materialization, and allow only the explicit last-layer Canvas overlay');
 assert(appA.includes("catch(err){lastError=String(err?.message||err);updatePresentationCss(false);return false;}"), 'strict Spiral transient final errors must hide stale GPU presentation instead of preserving an old frame');
@@ -330,13 +331,14 @@ assert.ok(webThreads35.includes('struct CorridorVin{ @location(0) corner:vec2<f3
 assert.ok(appC.includes('retainedCarrierPaths')&&appC.includes('allPathsRetained'), 'Iter35 carrier probe must validate the actual frozen GPU carrier, not a reconstructed point path');
 assert.ok((pipe.includes("version:'6.8-Iter35'")||pipe.includes("version:'6.8-Iter36'")||pipe.includes("version:'6.8-Iter37'")||pipe.includes("version:'6.8-Iter38'")||pipe.includes("version:'6.8-Iter39'")||(pipe.includes("version:'6.8-Iter40'")||isV69))&&pipe.includes('iter35FrozenProfileCarrier:true')&&pipe.includes('iter35WgslValidationFixes:true'), 'Iter35 runtime audit/trace must expose the frozen-carrier/WGSL validation recovery');
 
-// Iter36: static Spiral uses the same retained-cubic internal WebGPU LayerScene batch as the
-// proven Corridor path. The dedicated Spiral renderer is reserved for active Morph frames.
+// Iter36 baseline plus Somata 7.3.7 ownership repair: ordinary static Spiral may still use
+// the internal retained-cubic batch, but static Corridor must be allowed to enter the dedicated
+// retained-cubic/Fast-Rail renderer when the generic batch deliberately does not own copies.
 assert.ok(pipe.includes("const spiralBezierNative=frameCtx.morphFrameActive===true&&typeof WebGPUSpiralBezierMorphRenderer"), 'Iter36 static Spiral batch preparation must not be bypassed by the dedicated Morph renderer');
-assert.ok(pipe.includes("if(frameCtx.morphFrameActive===true&&!forceCanvasBase&&!forceCompatibility&&typeof WebGPUSpiralBezierMorphRenderer"), 'Iter36 static Base fallback must not re-enter the dedicated Morph renderer');
+assert.ok(pipe.includes("if(!forceCanvasBase&&!forceCompatibility&&typeof WebGPUSpiralBezierMorphRenderer")&&spiral.includes("if(!frameCtx||frameCtx.morphFrameActive||typeof isSpiralLayer"), 'Somata 7.3.7 static Corridor must be allowed to use the dedicated retained-Spiral renderer');
 assert.ok(pipe.includes("static Spiral retained-Bézier Layer Scene"), 'Iter36 static Glow must stay inside the combined retained-cubic LayerScene batch');
 assert.ok(pipe.includes("const spiralBezierGpuNative=frameCtx.morphFrameActive===true&&typeof WebGPUSpiralBezierMorphRenderer"), 'Iter36 static vector preparation must not be suppressed merely because the Morph renderer is statically eligible');
-assert.ok(pipe.includes('iter36StaticSpiralInternalBezierBatch:true')&&pipe.includes('iter36DedicatedBezierReservedForMorph:true')&&(pipe.includes("version:'6.8-Iter36'")||pipe.includes("version:'6.8-Iter37'")||pipe.includes("version:'6.8-Iter38'")||pipe.includes("version:'6.8-Iter39'")||(pipe.includes("version:'6.8-Iter40'")||isV69)), 'Iter36 runtime audit must expose the unified static Spiral raster policy');
+assert.ok(pipe.includes('iter36StaticSpiralInternalBezierBatch:true')&&pipe.includes('iter36DedicatedBezierReservedForMorph:false')&&pipe.includes('strictStaticCorridorDedicatedBezier:true')&&(pipe.includes("version:'6.8-Iter36'")||pipe.includes("version:'6.8-Iter37'")||pipe.includes("version:'6.8-Iter38'")||pipe.includes("version:'6.8-Iter39'")||(pipe.includes("version:'6.8-Iter40'")||isV69)), 'runtime audit must expose the static internal-batch baseline and 7.3.7 dedicated Corridor ownership');
 
 // Iter39: fix the actual collapsed-Spiral regression and keep Polygon's authored spline
 // contract generalized through the nonlinear Spiral map.
@@ -349,8 +351,9 @@ assert.ok((isV69||(pipe.includes('iteration:39')&&(pipe.includes("version:'6.8-I
 
 
 // Iter26: visible static Spiral Base must use the retained-cubic dedicated GPU renderer, not legacy batch presentation.
-assert.ok(spiral.includes('function getStaticVisualResource(frameCtx)')&&spiral.includes("rec.staticVisual!==true&&!encodeEffectCubics"), 'Iter26 static Spiral must reuse its existing current-cubic GPU buffer without Morph compute');
-assert.ok(spiral.includes("return'static-corridor-owned'")&&spiral.includes("getStaticSpiralBezierResource(frameCtx.layerIndex,device,generation)"), 'Iter26 must preserve the proven Corridor path while routing ordinary static Spiral to the retained Bézier rasterizer');
+const staticVisualRegion=spiral.slice(spiral.indexOf('function getStaticVisualResource(frameCtx)'),spiral.indexOf('function getVisualResource(frameCtx)'));
+assert.ok(staticVisualRegion.includes('cubicBuffer:source.cubicBuffer')&&staticVisualRegion.includes('static Spiral Fast Rail')&&!staticVisualRegion.includes('encodeEffectCubics(rec'), 'Iter26/7.2.8 static Spiral must reuse its existing canonical cubic GPU buffer without Morph cubic compute, while allowing one derived Fast Rail build');
+assert.ok(!spiral.includes("return'static-corridor-owned'")&&spiral.includes("getStaticSpiralBezierResource(frameCtx.layerIndex,device,generation)"), 'Somata 7.3.7 static Corridor must keep the same canonical static Spiral cubic resource instead of delegating Base to generic stroke ownership');
 assert.ok(pipe.includes("frameCtx.geometryPlan?.kind!=='blue-circle-slide'&&!staticSpiral"), 'Iter26 Layer/Frame scene eligibility must accept ordinary static Spiral');
 
 assert.ok(arc.includes('function getStaticSpiralBezierResource(layerIndex,sharedDevice=null,sharedGeneration=-1)')&&arc.includes('if(!gpuMorphArcRuntime.device)return null;'), 'Iter26 static Base rail must depend on the shared WebGPU device, not Arc compute-pipeline readiness');
@@ -401,7 +404,7 @@ assert.ok((isV69||pipe.includes('iteration:34')||pipe.includes('iteration:35')||
 assert.ok(spiral.includes("pipelineMax=makePipeline('MAX union',blendMax)")&&spiral.includes("operation:'max'")&&spiral.includes('copyPackedMultiColor'), '6.9 Morph must union same-style Bézier micro-capsules with MAX coverage instead of source-over bead accumulation');
 assert.ok(pipe.includes('if(frameCtx?.morphFrameActive===true)return false;')&&pipe.includes('v69MorphLayerSceneIsolation:true'), '6.9 Morph MAX coverage must be isolated in the transparent Layer Scene before source-over frame composition');
 assert.ok(spiral.includes('const CLOSURE_WGSL=')&&spiral.includes('expectedP3=rotateScale')&&spiral.includes('expectedC2=2.0*expectedP3-expectedNextC1')&&spiral.includes('pathClosureBuffer'), '6.9 continuity-preserving Spiral Morph must enforce periodic endpoint and C1-tangent closure on GPU cubics');
-assert.ok(spiral.includes("morphType==='torn'||state?.morph?.mode==='fade'?0:1")&&spiral.includes('position + C1 tangent closure'), '6.9 Torn/Fade may remain discontinuous while continuity modes retain the periodic seam');
+assert.ok(spiral.includes("morphType==='torn'||state?.morph?.mode==='fade'?0:1")&&spiral.includes('cpuPathPeriodic[pi]=(sc0.periodic&&dc0.periodic&&cpuPathClosure[co+6]>.5)?1:0'), '6.9/7.2.8 Torn/Fade may remain discontinuous while continuity modes retain the periodic seam and export periodic topology only when closure is active');
 assert.ok(appC.includes('window.__spiro69MorphStrokeProbe=')&&pipe.includes('v69MorphMaxCoverageUnion:true')&&pipe.includes('v69PeriodicBezierClosure:true'), '6.9 must expose a compact Morph stroke/glow/closure diagnostic');
 
 
@@ -429,13 +432,13 @@ assert.ok(appC.includes('window.__spiro69MorphStrokeProbe=')&&pipe.includes('v69
     assert.ok(microInput.includes('type="number"')&&!/\smax=/.test(microInput), '6.9 microstrike count must be a number field without an upper bound');
     assert.ok(appB69.includes('function collectLightningMicroPulses')&&appB69.includes('if(n<=64)')&&appB69.includes('const k=t*(n+1)-1'), '6.9 arbitrary microstrike counts must avoid an unbounded O(N) per-frame loop');
     assert.ok(arc.includes('cpuPathKnotFractions[pi]={source:fr,target:fr,common:fr}')&&arc.includes('pathRanges:cpuPathRanges'), '6.9 static retained Spiral resource must expose the same common-knot/path-range Lamp contract as Morph');
-    assert.ok(lamps.includes("morphRec?.staticSpiralBezierRail===true&&Array.isArray(knotRec.source)")&&lamps.includes('window.__spiro69StaticSpiralLampProbe='), '6.9 Static Spiral + Lamps must use a guarded retained-rail bridge instead of crashing on a Morph-only field');
+    assert.ok(arc.includes('cpuPathLampKeyFractions')&&arc.includes('cpuPathCornerFractions')&&lamps.includes('window.__spiro69StaticSpiralLampProbe='), 'Static Spiral + Lamps must publish authored Key/Corner identity metadata on the retained rail instead of depending on Morph-only fields');
     const webCorner69=read('js/gpu/web-corner-resource.js');
-    assert.ok(arc.includes('if(sj===0)flags|=0x20000000')&&webCorner69.includes('logicalBoundary=(metaData.w&0x20000000u)!=0u')&&webCorner69.includes('candidate=select(logicalBoundary,marked,cornerMode)'), '6.9 rev3 Spiral Web must classify retained-cubic boundaries instead of tiny raster micro-turns');
+    assert.ok(arc.includes('if(sj===0)flags|=0x20000000')&&webCorner69.includes('logicalBoundary=(metaData.w&0x20000000u)!=0u')&&webCorner69.includes('hasAuthoredCorners')&&webCorner69.includes('cornerCandidate=select(logicalBoundary,marked,authoredOnly)')&&webCorner69.includes('candidate=select(logicalBoundary,cornerCandidate,cornerMode)'), '6.9 rev3 Spiral Web must classify retained-cubic boundaries instead of tiny raster micro-turns while preserving authored-corner fallback semantics');
     assert.ok(!webCorner69.includes('!arcRec.morphRec?.allClosed')&&webCorner69.includes('let closed=r.z!=0u'), '6.9 rev3 Spiral Web resource must support both open and closed retained rails');
     assert.ok(appA.includes('const maxCombined=total*(1-0.002)')&&appA.includes('spline supplies a C1 tangent handoff'), '6.9 rev3 adjacent strong fillets must retain a non-degenerate C1 spline handoff');
     assert.ok(pipe.includes("somataSpiralSceneDiag.base.stage='base-missing-full-gpu-error'")&&pipe.includes('SPIRAL_BASE_MISSING_AT_FRAME_END'), 'strict Spiral must reject effects-only transactions and report the missing Full-GPU carrier');
-    assert.ok((pipe.includes("version:'7.0'")||pipe.includes("version:'7.0.3'")||pipe.includes("version:'7.2.4'")||pipe.includes('iteration:4'))&&pipe.includes('v69StaticCornerZeroInertia:true')&&pipe.includes('v69StaticSpiralLampContract:true')&&pipe.includes('v69SweepCoreGlowBlendModes:true')&&pipe.includes('v69LightningPreflashCoreOnTop:true')&&pipe.includes('v69WebLogicalBoundaryCorners:true')&&pipe.includes('v69SmoothFilletCollisionHandoff:true')&&pipe.includes('v69StrictCarrierIntegrityGuard:true'), '6.9 rev3 runtime audit must advertise the restored and reliability contracts');
+    assert.ok((pipe.includes("version:'7.0'")||pipe.includes("version:'7.0.3'")||pipe.includes("version:'7.3.7'")||pipe.includes('iteration:4'))&&pipe.includes('v69StaticCornerZeroInertia:true')&&pipe.includes('v69StaticSpiralLampContract:true')&&pipe.includes('v69SweepCoreGlowBlendModes:true')&&pipe.includes('v69LightningPreflashCoreOnTop:true')&&pipe.includes('v69WebLogicalBoundaryCorners:true')&&pipe.includes('v69SmoothFilletCollisionHandoff:true')&&pipe.includes('v69StrictCarrierIntegrityGuard:true'), '6.9 rev3 runtime audit must advertise the restored and reliability contracts');
 }
 
 // Somata 7.0: performance contracts must remain structural and inspectable.
@@ -462,7 +465,7 @@ const pipe704=read('js/render/main-pipeline.js');
 const graffitiRibbon704=read('js/gpu/graffiti-ribbon-renderer.js');
 assert.ok(pipe704.includes('allowHiddenGraffitiCarrier=false')&&pipe704.includes("frameCtx?.lineProfileApplication==='graffiti'")&&pipe704.includes('graffitiCarrierGlow'), '7.0.4 Corridor Graffiti must be allowed to open the resident GPU LayerScene with a hidden Glow carrier');
 assert.ok(pipe704.includes('frameCtx.lineProfileStrokeOnly!==true&&canUseGpuOnlyCorridorLayerScene(frameCtx,false)'), '7.0.4 hidden Graffiti carrier must never authorize ordinary Corridor Base rendering');
-assert.ok((pipe704.includes("version:'7.0.4'")||pipe704.includes("version:'7.0.5'")||pipe704.includes("version:'7.0.6'")||pipe704.includes("version:'7.0.7'")||pipe704.includes("version:'7.0.8'")||pipe704.includes("version:'7.0.9'")||pipe704.includes("version:'7.0.10'")||pipe704.includes("version:'7.0.11'")||pipe704.includes("version:'7.0.12'")||pipe704.includes("version:'7.0.13'")||(pipe704.includes("version:'7.2'")||pipe704.includes("version:'7.2.4'")))&&pipe704.includes('graffitiCorridorHiddenCarrierGlow:true')&&pipe704.includes('graffitiBaseCarrierStillSuppressed:true'), '7.0.4+ runtime audit must expose the Graffiti carrier contract');
+assert.ok((pipe704.includes("version:'7.0.4'")||pipe704.includes("version:'7.0.5'")||pipe704.includes("version:'7.0.6'")||pipe704.includes("version:'7.0.7'")||pipe704.includes("version:'7.0.8'")||pipe704.includes("version:'7.0.9'")||pipe704.includes("version:'7.0.10'")||pipe704.includes("version:'7.0.11'")||pipe704.includes("version:'7.0.12'")||pipe704.includes("version:'7.0.13'")||(pipe704.includes("version:'7.2'")||pipe704.includes("version:'7.3.7'")))&&pipe704.includes('graffitiCorridorHiddenCarrierGlow:true')&&pipe704.includes('graffitiBaseCarrierStillSuppressed:true'), '7.0.4+ runtime audit must expose the Graffiti carrier contract');
 assert.ok(graffitiRibbon704.includes('queueMicrotask(()=>{try{WebGPUGraffitiContourGlow.warmup();WebGPUGraffitiRibbonRenderer.warmup()'), 'Graffiti ribbon and contour-Glow WebGPU pipelines must prewarm outside the first authored render frame');
 assert.ok(!pipe704.includes('Graffiti GPU] FALLBACK @'), '7.0.4 FullGPU diagnostics must not describe Graffiti GPU errors as fallbacks');
 
@@ -471,7 +474,7 @@ assert.ok(!pipe704.includes('Graffiti GPU] FALLBACK @'), '7.0.4 FullGPU diagnost
 assert.ok(spiral.includes("renderPipelineLayout=device.createPipelineLayout")&&spiral.includes("layout:renderPipelineLayout"),'7.0.5 Spiral Morph render variants must share one explicit pipeline layout');
 assert.ok(spiral.includes("layout:renderUniformLayout")&&spiral.includes("layout:renderCubicLayout")&&spiral.includes("layout:renderCopyLayout"),'7.0.5 Spiral Morph bind groups must be created from the shared explicit layouts, not a pipeline-private auto layout');
 assert.ok(!spiral.includes("layout:pipelineMax.getBindGroupLayout(0)")&&!spiral.includes("layout:pipelineMax.getBindGroupLayout(1)")&&!spiral.includes("layout:pipelineMax.getBindGroupLayout(2)"),'7.0.5 must not reuse pipelineMax auto-layout bind groups across Uniform/regular Morph pipelines');
-assert.ok((pipe.includes("version:'7.0.5'")||pipe.includes("version:'7.0.6'")||pipe.includes("version:'7.0.7'")||pipe.includes("version:'7.0.8'")||pipe.includes("version:'7.0.9'")||pipe.includes("version:'7.0.10'")||pipe.includes("version:'7.0.11'")||pipe.includes("version:'7.0.12'")||pipe.includes("version:'7.0.13'")||(pipe.includes("version:'7.2'")||pipe.includes("version:'7.2.4'")))&&pipe.includes('spiralMorphSharedExplicitRenderLayout:true'),'7.0.5+ runtime audit must expose the shared Spiral Morph render-layout repair');
+assert.ok((pipe.includes("version:'7.0.5'")||pipe.includes("version:'7.0.6'")||pipe.includes("version:'7.0.7'")||pipe.includes("version:'7.0.8'")||pipe.includes("version:'7.0.9'")||pipe.includes("version:'7.0.10'")||pipe.includes("version:'7.0.11'")||pipe.includes("version:'7.0.12'")||pipe.includes("version:'7.0.13'")||(pipe.includes("version:'7.2'")||pipe.includes("version:'7.3.7'")||pipe.includes("version:'7.3.7'")))&&pipe.includes('spiralMorphSharedExplicitRenderLayout:true'),'7.0.5+ runtime audit must expose the shared Spiral Morph render-layout repair');
 
 
 // 7.0.10 — Lamps/FreezeLight consume the retained Bézier rail that actually owns this frame.
@@ -480,14 +483,14 @@ const lampBridge710=fs.readFileSync(path.join(root,'js/render/lamp-morph-bridge.
 const pipe710=fs.readFileSync(path.join(root,'js/render/main-pipeline.js'),'utf8');
 assert.ok(arc710.includes('function currentGpuBezierResourceForFrame(frameCtx)')&&arc710.includes('blueOwnsFrame')&&arc710.includes('getGpuMorphArcResource(frameCtx.layerIndex,frameCtx)'), '7.0.10 Arc must select the retained Bézier authority from frameCtx instead of global Morph activity');
 assert.ok(lampBridge710.includes('currentGpuBezierResourceForFrame(frameCtx)')&&lampBridge710.includes('spiral-exact-gpu-arc'), '7.0.10 Spiral Lamps must bind to the frame-authoritative retained rail');
-assert.ok((pipe710.includes("version:'7.0.10'")||pipe710.includes("version:'7.0.11'")||pipe710.includes("version:'7.0.12'")||pipe710.includes("version:'7.0.13'")||(pipe710.includes("version:'7.2'")||pipe710.includes("version:'7.2.4'")))&&pipe710.includes('lampArcFrameAuthoritativeRail:true')&&pipe710.includes('freezeLightSharesLampFrameAuthority:true'), '7.0.10 runtime audit must expose the Lamp Arc / FreezeLight authority repair');
+assert.ok((pipe710.includes("version:'7.0.10'")||pipe710.includes("version:'7.0.11'")||pipe710.includes("version:'7.0.12'")||pipe710.includes("version:'7.0.13'")||(pipe710.includes("version:'7.2'")||pipe710.includes("version:'7.3.7'")))&&pipe710.includes('lampArcFrameAuthoritativeRail:true')&&pipe710.includes('freezeLightSharesLampFrameAuthority:true'), '7.0.10 runtime audit must expose the Lamp Arc / FreezeLight authority repair');
 
 
 // 7.0.11 — phase-circle lamps are atomic phase prerequisites and diagnostics are bounded.
 const runtime711=fs.readFileSync(path.join(root,'js/core/render-runtime.js'),'utf8');
 const lamp711=fs.readFileSync(path.join(root,'js/gpu/lamp-renderer.js'),'utf8');
 const app711=fs.readFileSync(path.join(root,'js/legacy/app-c.js'),'utf8');
-assert.ok(pipe710.includes("version:'7.0.11'")||pipe710.includes("version:'7.0.12'")||pipe710.includes("version:'7.0.13'")||(pipe710.includes("version:'7.2'")||pipe710.includes("version:'7.2.4'"))&&pipe710.includes('phaseCircleLampArcPreclockGate:true')&&pipe710.includes('fullGpuFaultRingBounded:true'),'7.0.11 runtime audit must expose phase-circle Lamp Arc gating and bounded diagnostics');
+assert.ok(pipe710.includes("version:'7.0.11'")||pipe710.includes("version:'7.0.12'")||pipe710.includes("version:'7.0.13'")||(pipe710.includes("version:'7.2'")||pipe710.includes("version:'7.3.7'"))&&pipe710.includes('phaseCircleLampArcPreclockGate:true')&&pipe710.includes('fullGpuFaultRingBounded:true'),'7.0.11 runtime audit must expose phase-circle Lamp Arc gating and bounded diagnostics');
 assert.ok(runtime711.includes('f._fullGpuFaults.length=0')&&runtime711.includes('f._fullGpuFaultCount=0'),'7.0.11 reused render frames must clear FullGPU faults every frame');
 assert.ok(pipe710.includes('SOMATA_FULL_GPU_FRAME_FAULT_LIMIT=32')&&pipe710.includes('priorFaults=')&&pipe710.includes('.slice(-SOMATA_FULL_GPU_FRAME_FAULT_LIMIT)'),'7.0.11 FINAL diagnostics must snapshot a bounded fault ring instead of embedding the live array');
 assert.ok(lamp711.includes('async function ensureReady()')&&lamp711.includes('async function ensureWebGPUReady()'),'7.0.11 lamp WebGPU initialization must be awaitable by phase preparation');
@@ -502,12 +505,12 @@ const html713=fs.readFileSync(path.join(root,'index.html'),'utf8');
 assert.ok(appC713.includes('TUNNEL_CENTER_SHADE_DEFAULT_PERCENT = 60')&&appC713.includes('const alpha = 1 - centerShadeStrength * (1 - depthAlpha);'),'Corridor center shading must be explicit and exactly neutral at 0%');
 assert.ok(appC713.includes('const centerCullAlpha = Math.max(0.0025, Number(copies?._centerCullAlpha) || 0.0025);')&&appC713.includes('if (alpha <= centerCullAlpha && fillAlpha <= centerCullAlpha && particleAlpha <= centerCullAlpha) continue;'),'Center shading must postpone visually buried line/fill/particle copies before GPU submission');
 assert.ok(html713.includes('id="tunnelCenterShadePercent"')&&html713.includes('type="number"')&&html713.includes('class="tunnel-fade-unit">%</span>'),'Center shading UI must be a percentage number field with no checkbox');
-assert.ok((pipe713.includes("version:'7.0.13'")||(pipe713.includes("version:'7.2'")||pipe713.includes("version:'7.2.4'")))&&pipe713.includes('corridorCenterShadeAdjustable:true')&&pipe713.includes('corridorCenterShadeGpuCull:true'),'Runtime audit must expose adjustable center shading and GPU culling');
+assert.ok((pipe713.includes("version:'7.0.13'")||(pipe713.includes("version:'7.2'")||pipe713.includes("version:'7.3.7'")))&&pipe713.includes('corridorCenterShadeAdjustable:true')&&pipe713.includes('corridorCenterShadeGpuCull:true'),'Runtime audit must expose adjustable center shading and GPU culling');
 
 assert.ok(pipe.includes("SOMATA_RECOVERABLE_GPU_CONTRACT_CODES=new Set(['STRICT_SPIRAL_CANVAS_PATH_TOUCHED','FINAL_FULL_GPU_PRESENT_FAILED'])"),'7.2 must classify recoverable strict-frame diagnostics separately from actual GPU errors');
 assert.ok(pipe.includes('console.warn(`[Somata GPU diagnostic]'),'GPU warm-up/wait diagnostics must not enter the red error console');
-assert.ok(pipe.includes('(recoverable?console.warn:console.error)(`[Somata 7.2.4 FullGPU]'),'Recoverable FullGPU frame rejections should be warnings while real GPU faults remain errors');
-console.log('Somata 7.2.4 Spiral GPU/Bézier invariants: PASS');
+assert.ok(pipe.includes('(recoverable?console.warn:console.error)(`[Somata 7.3.7 FullGPU]'),'Recoverable FullGPU frame rejections should be warnings while real GPU faults remain errors');
+console.log('Somata 7.3.7 Spiral GPU/Bézier invariants: PASS');
 
 // Graffiti Glow repair — the hidden carrier may still exist as a transparent scene/root utility,
 // but it must never be used as the visible Glow source. Glow is deferred to the exact GPU ribbon.
@@ -524,6 +527,7 @@ assert.ok(appC.includes("const fullscreenWorkspace = document.getElementById('ma
 // 7.0.9 — GPU Web is a non-blocking consumer of the Morph rail and stale corner state rebuilds.
 const webBridge709=read('js/render/web-morph-bridge.js');
 const webRenderer709=read('js/gpu/web-morph-renderer.js');
+const webCorner728=read('js/gpu/web-corner-resource.js');
 assert.ok(appC.includes('MORPH_WEB_FULL_GPU_PREWARM_FAILED')&&appC.includes('Crucial: Web failure does not mutate gpuPhasePreparing')&&appC.includes('WebGPUWebMorphRenderer.ensureReady'), '7.0.9 Web preparation must never leave Blue Morph clock gated');
 assert.ok(webRenderer709.includes('ensureReady:()=>initAsync()'), '7.0.9 GPU Web renderer must expose awaitable prewarm readiness');
 assert.ok(!webBridge709.includes("return'topology-change-needs-corner-tracking-fallback'")&&webBridge709.includes('self-deadlock'), '7.0.9 stale Web corner state must rebuild instead of blocking the new Morph topology');
@@ -551,3 +555,11 @@ assert.ok(pipe712.includes('somataFxBenchmark?.noteFrame?.')&&pipe712.includes('
     assert.ok(bezierShared.includes('coreOpacity')&&bezierShared.includes('Number(visual.strength)*brightness')&&bezierShared.includes('coreColorGain=1'), 'Bézier GPU Glint must keep Core color/width independent from Glow brightness');
     assert.ok(lightningShared.includes('paGlow')&&lightningShared.includes('paCore')&&lightningShared.includes('frame.prechargeGlowIntensity*bright'), 'Lightning GPU preflash must split Glow alpha from Core opacity');
 }
+
+// 7.2.4 hotfix6 — Closed Spiral last segment is a self-similar period, not a raw loop.
+assert.ok(appA.includes('function finalizePeriodicSpiralBezierCarrier(')&&appA.includes('last.c2.x=2*expectedP3.x-expectedNextC1.x')&&appA.includes('out._spiroPeriodic=true'), 'Closed Spiral retained cubics must canonicalize the last P3/C2 to the next rotate+scale period once at geometry build time');
+assert.ok(spiral.includes('cpuPathPeriodic=new Uint32Array(pathCount)')&&spiral.includes("cpuPathPeriodic[pi]=(sc0.periodic&&dc0.periodic&&cpuPathClosure[co+6]>.5)?1:0"), 'Retained Spiral Morph must expose periodic topology separately from ordinary closed topology and disable it for Torn/fade seams');
+assert.ok(arc.includes('w is sampling topology: 0=open, 1=ordinary closed, 2=self-similar Spiral period')&&arc.includes('expandedPathRanges[o+3]=logicalPeriodic&&logicalPeriodic[pi]?2'), 'GPU Arc path metadata must carry a dedicated periodic sampling topology without changing the historical closed flag');
+assert.ok(arc.includes('periodic:Boolean(layer?.spiralClosed!==false&&path?.spiralContinuityProtected===true)')&&arc.includes('cpuPathPeriodic[pi]=rec.periodic?1:0'), 'Static Spiral Arc resources must mark continuity-protected closed spirals as periodic');
+assert.ok(webCorner728.includes('fn periodicMultiplier(pathIndex:u32)')&&webCorner728.includes('fn applyPeriodicTurn(')&&webCorner728.includes('topology==2u&&turn!=0'), 'GPU Web master-thread compute must cross the last Spiral segment through the next/previous rotate+scale period instead of modulo-jumping to the raw first point');
+assert.ok(webCorner728.includes('if(topology==0u){d=clamp(')&&!webRenderer709.includes('fn samplePath('), 'GPU Web master-thread compute must clamp genuinely open paths, while raster must not repeat path sampling per vertex');

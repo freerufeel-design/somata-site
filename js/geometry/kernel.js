@@ -314,7 +314,11 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             const fillHasRenderableTopology=spiralEndpoint?hasStaticFillTopology:true;
             const fillRequested=fillConfigured&&fillHasRenderableTopology;
             const corridor=state.tunnel?.active===true;
-            const nativeGpuFillEligible=fillRequested&&hasStaticFillTopology&&!dynamic&&!spiralEndpoint&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(!corridor||!tunnelColorShiftIsActive());
+            // Somata 7.2.6 — dynamic Corridor Morph has an authoritative frame-resident
+            // command rail.  Fill may consume its closed subpaths directly as a native GPU
+            // stencil fan; dynamic no longer means "Canvas mask required".
+            const dynamicCorridorNative=fillRequested&&dynamic&&corridor&&!spiralEndpoint&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerGeometry);
+            const nativeGpuFillEligible=fillRequested&&!spiralEndpoint&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(!corridor||!tunnelColorShiftIsActive())&&(hasStaticFillTopology&&!dynamic||dynamicCorridorNative);
             const gpuMaskEligible=fillRequested&&hasStaticFillTopology&&!dynamic&&!spiralEndpoint&&!corridor&&!unsupportedFillKind&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerFillInstances);
             const contract={
                 kind:String(plan.kind||'static'),
@@ -324,7 +328,7 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
                 fillRequested,
                 fillAlpha,
                 fillStyle:layer.fillColor||layer.strokeColor||'#ffffff',
-                gpuMaskEligible,nativeGpuFillEligible,
+                gpuMaskEligible,nativeGpuFillEligible,dynamicCorridorNative,
                 exactCanvasFillRequired:fillRequested&&!gpuMaskEligible&&!nativeGpuFillEligible,
                 topologyStable:dynamic!==true,
                 geometry

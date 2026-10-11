@@ -450,7 +450,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 'endpointPending','progress','renderProgress','parameterProgress','transitionProgress','renderMode',
                 'frameGeometryProgress','frameGeometryLayerProgress','frameRenderLayers','frameMorphSettings','frameTunnelSettings','frameLampConfig','crossfadeConfigSide','lastSettingsUiAt','lockedCamera','backgroundActive','transitionActive','sourceCaptured','restoreProject'
             ],
-            tunnel: ['raf','phase','travelPhase','lastTime'],
+            tunnel: ['active','raf','phase','travelPhase','lastTime'],
             tapTempo: [
                 'tapTimes','anchorTime','lastTapAt','lastAppliedBpm','autoPrevSpectrum','autoFluxHistory',
                 'autoBeatTimes','autoLastPeakAt','autoConfidence','autoTempoCandidate',
@@ -490,7 +490,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 endpointPending:false, progress:0, renderProgress:0, parameterProgress:0, transitionProgress:0, renderMode:'morph',
                 frameGeometryProgress:-1, frameGeometryLayerProgress:[], frameRenderLayers:[], frameMorphSettings:null, frameTunnelSettings:null, frameLampConfig:null, crossfadeConfigSide:null, lastSettingsUiAt:0, lockedCamera:null, backgroundActive:false, transitionActive:false, sourceCaptured:false, restoreProject:null
             },
-            tunnel: { raf:0, phase:0, travelPhase:0, lastTime:0 },
+            tunnel: { active:false, raf:0, phase:0, travelPhase:0, lastTime:0 },
             tapTempo: {
                 tapTimes:[], anchorTime:0, lastTapAt:0, lastAppliedBpm:0, autoPrevSpectrum:null,
                 autoFluxHistory:[], autoBeatTimes:[], autoLastPeakAt:0, autoConfidence:0, autoTempoCandidate:0,

@@ -920,7 +920,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             if (profLen < 2) return singlePath(P, closedLoop !== false);
 
             const isFlat = profilePts.every(p => Math.abs(p.y) < 0.001);
-            const smoothFlatSpline = isFlat && !spiralEnabled && options.profileMode === 'spline' && normalizeSplineRenderMode(options.splineRenderMode) === 'smooth';
+            const smoothFlatSpline = isFlat && !spiralEnabled && options.profileMode === 'spline';
             // v239: only Discrete/segment geometry may take the flat polygon shortcut.
             // Smooth spline keeps all configured profile samples per construction edge;
             // at rounding=0 cornerFlags split those samples into N edge-local splines.
@@ -1027,8 +1027,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
 
             const perEdge = isBroken ? profLen : Math.max(0, profLen - 1);
             const totalPoints = P.length * perEdge;
-            const smoothSplineRenderer = options.profileMode === 'spline' &&
-                normalizeSplineRenderMode(options.splineRenderMode) === 'smooth';
+            const smoothSplineRenderer = options.profileMode === 'spline';
             // Only authored segment profiles have intrinsic corners inside one scaled
             // profile copy.  A sampled spline in Discrete mode is already the curve;
             // treating every sample as a corner would over-round the entire profile.
@@ -1184,7 +1183,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             // renders intermediate profile samples with lineTo/roundMorphPolyline and
             // therefore makes a smooth static spline visibly faceted on the first morph
             // frame. Any transition involving a spline uses the quality path below.
-            const smoothSplineRenderer = normalizeSplineRenderMode(layer?.splineRenderMode) === 'smooth';
+            const smoothSplineRenderer = layer?.profileMode === 'spline' || sourceLayer?.profileMode === 'spline' || targetLayer?.profileMode === 'spline';
             const straightProfileNeedsSmooth = smoothSplineRenderer && (isFlatProfileNodes(sourceLayer?.profileNodes) || isFlatProfileNodes(targetLayer?.profileNodes));
             if (!isSpiralLayer(layer) && sourceLayer.profileMode !== 'spline' && targetLayer.profileMode !== 'spline' && !straightProfileNeedsSmooth) {
                 const R = getEffectiveLayerRadius(layer, getEffectiveLayerRadius(sourceLayer,220));
@@ -1330,7 +1329,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     ctx.globalAlpha = alpha * localAlpha;
                     drawMorphConstructionGuide(ctx, pl.points, pl.closed, layer, alpha * localAlpha);
                     if (isSpiral) {
-                        strokeVariableWidthSpiralPath(ctx, pl.points, roundingFrac, pl.cornerFlags || [], normalizeSplineRenderMode(layer?.splineRenderMode) === 'smooth' && (morphProfileMode === 'spline' || splineBlend > 1e-6));
+                        strokeVariableWidthSpiralPath(ctx, pl.points, roundingFrac, pl.cornerFlags || [], (morphProfileMode === 'spline' || splineBlend > 1e-6));
                     } else {
                         ctx.beginPath();
                         // v228: true centripetal spline rendering during Morphing, using the
@@ -1498,7 +1497,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const round=Math.max(0,Math.min(2,Number(roundingFrac)||0));
             const hasExplicitBlend=splineBlend!=null;
             const blend=hasExplicitBlend?Math.max(0,Math.min(1,Number(splineBlend)||0)):(profileMode==='spline'?1:0);
-            const renderMode=normalizeSplineRenderMode(splineRenderMode);
+            const renderMode=profileMode==='spline'?'smooth':normalizeSplineRenderMode(splineRenderMode);
             const splineInvolved=continuousProfileBlend || (hasExplicitBlend ? blend>1e-7 : profileMode==='spline');
             const bridgePolicy=Array.isArray(bridgeRoundFlags) && bridgeRoundFlags.length===points.length;
             const flatProfileSmoothRounding=renderMode==='smooth' && round>0 && isFlatProfileConstructionPath(points,cornerFlags);
@@ -1566,7 +1565,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 drawMorphConstructionGuide(ctx,base,pathClosed,layer,pathAlpha);
                 const roundingFrac=getRoundingStrength(layer.rounding);
                 if(isSpiralLayer(layer)){
-                    strokeVariableWidthSpiralPath(ctx,base,roundingFrac,[], normalizeSplineRenderMode(layer?.splineRenderMode) === 'smooth' && (srcProfileMode === 'spline' || dstProfileMode === 'spline'));
+                    strokeVariableWidthSpiralPath(ctx,base,roundingFrac,[], (srcProfileMode === 'spline' || dstProfileMode === 'spline'));
                 }else{
                     ctx.beginPath();
                     if(path?._stableRoundedSplineRail){
@@ -1687,7 +1686,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 drawMorphConstructionGuide(ctx, base, pathClosed, layer, pathAlpha);
                 const roundingFrac = getRoundingStrength(layer.rounding);
                 if (isSpiralLayer(layer)) {
-                    strokeVariableWidthSpiralPath(ctx, base, roundingFrac, [], normalizeSplineRenderMode(layer?.splineRenderMode) === 'smooth' && (srcProfileMode === 'spline' || dstProfileMode === 'spline'));
+                    strokeVariableWidthSpiralPath(ctx, base, roundingFrac, [], (srcProfileMode === 'spline' || dstProfileMode === 'spline'));
                 } else {
                     ctx.beginPath();
                     // Uniform-window smoothing rounds the interpolated path

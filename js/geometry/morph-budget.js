@@ -26,7 +26,7 @@ function morphBudgetProfileInfo(layer,profile){
     if(nodes.length>=2){
         for(const p of nodes){if(Math.abs(Number(p?.y)||0)>1e-4){flat=false;break;}}
     }
-    const smooth=mode==='spline'&&typeof normalizeSplineRenderMode==='function'&&normalizeSplineRenderMode(layer?.splineRenderMode)==='smooth';
+    const smooth=mode==='spline';
     return{mode,nodes,count,flat,smooth};
 }
 function estimateMorphEndpointComplexity(layer,visual,profile){

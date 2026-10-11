@@ -30,13 +30,19 @@ assert.ok(app.includes("'MORPH_GPU_PREPARE_WAIT'"),'GPU preparation waits must b
 assert.ok(app.includes("noteMorphGpuPrepareWait(runtimeState.morph,'Blue Morph',now)"),'Blue Morph GPU preparation must be monitored');
 assert.ok(app.includes("noteMorphGpuPrepareWait(pmRt,'Project Morph',now)"),'Project Morph GPU preparation must be monitored');
 assert.ok(app.includes('window.__somataMorphFreezeContext'),'Freeze reports must include current Morph mode/progress context');
+assert.ok(app.includes("const circleDirectPathMode = state.morph.mode === 'circleSlide' || spiralMorphUsesCircleRebuild();"),'Circle Slide must have an explicit direct-path phase mode');
+assert.ok(app.includes('if (lightMode || circleDirectPathMode) {'),'All Circle Slide variants must skip the dense generic endpoint snapshot builder, including Chaos layers');
+assert.ok(app.includes('const circleAngularMode = circleDirectPathMode &&')&&!app.includes('const circleAngularMode = circleDirectPathMode && !chaosGeometryMode'),'A Chaos sibling must not suppress retained Spiral GPU preparation during Circle Slide');
+assert.ok(app.indexOf('if (lightMode || circleDirectPathMode) {')<app.indexOf('prepareMorphLayerSampleBudgets()'),'Circle Slide direct-path return must occur before dense Morph sample-budget/topology preparation');
+assert.ok(pipeline.includes('const directChaosCircleMode=Boolean(')&&pipeline.includes('(directChaosCircleMode || (provider.sourceGeometry &&'),'Chaos Circle Slide must remain a dynamic provider even when dense endpoint geometry is intentionally absent');
+assert.ok(pipeline.includes('circleSlideSkipsDenseGenericTopology:true')&&pipeline.includes('chaosCircleDirectWithoutDenseEndpoints:true'),'Runtime audit must expose the 7.2.8 Circle Slide rebase contract');
 
 assert.ok(pipeline.includes('somataFullGpuDiag.lastAt=performance.now()'),'FullGPU diagnostics must expose timing for freeze correlation');
 assert.ok(pipeline.includes('window.__somataGpuRuntimeDiagnostics'),'GPU path diagnostics must expose timing for freeze correlation');
 assert.ok(overlay.includes("startsWith('[Somata Morph Freeze]')"),'In-app console must capture Morph freeze warnings');
 assert.ok(overlay.includes("?'morph.freeze':'gpu.warning'"),'In-app console must label Morph freezes distinctly');
 assert.ok(overlay.includes('screenErrorOverlayCopy'),'Copy-all button must remain available for freeze reports');
-assert.ok(html.includes('js/core/scheduler.js?v=20261011-v724-hotfix5'),'Freeze-diagnostics scheduler must be cache-busted');
-assert.ok(html.includes('js/legacy/app-c.js?v=20261011-v724-hotfix5'),'Morph runtime changes must be cache-busted');
-assert.ok(html.includes('js/render/main-pipeline.js?v=20261011-v724-hotfix5'),'GPU diagnostic timing changes must be cache-busted');
+assert.ok(html.includes('js/core/scheduler.js?v=20261012-v737'),'Freeze-diagnostics scheduler must be cache-busted');
+assert.ok(html.includes('js/legacy/app-c.js?v=20261012-v737'),'Morph runtime changes must be cache-busted');
+assert.ok(html.includes('js/render/main-pipeline.js?v=20261012-v737'),'GPU diagnostic timing changes must be cache-busted');
 console.log('Morph freeze diagnostics invariants OK');

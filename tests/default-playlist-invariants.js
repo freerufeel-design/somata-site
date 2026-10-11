@@ -25,7 +25,7 @@ assert.ok(app.includes("stage='download'")&&app.includes("stage='parse'")&&app.i
 assert.ok(app.includes('HTTP ${response.status}'),'HTTP status must be reported when default.plist cannot be loaded');
 assert.ok(app.includes('Сервер вернул HTML вместо default.plist'),'SPA/404 HTML fallback must be diagnosed explicitly');
 assert.ok(app.includes("showShortcutToast('default.plist не открыт · причина в консоли (клик по FPS)')"),'Failure must point the user to the FPS error console');
-assert.ok(html.includes('js/legacy/app-c.js?v=20261011-v72'),'Default playlist code must be cache-busted for 7.2');
+assert.ok(html.includes('js/legacy/app-c.js?v=20261012-v737'),'Default playlist code must be cache-busted for 7.3.7');
 assert.ok(app.includes("cache:'default'"),'Deployed default.plist should be allowed to use the browser HTTP cache');
 assert.ok(!app.includes('project: cloneData(project)'),'Playlist open must not JSON-clone every freshly parsed project');
 assert.ok(app.includes('Promise.allSettled(list.map(async file=>'),'Bulk project import should read/parse selected files concurrently');
