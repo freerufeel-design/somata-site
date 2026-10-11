@@ -1,0 +1,14 @@
+const fs=require('fs');
+const path=require('path');
+const assert=require('assert');
+const root=path.resolve(__dirname,'..');
+const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+const head=(html.match(/<head>[\s\S]*?<\/head>/i)||[''])[0];
+const body=(html.match(/<body>[\s\S]*?<\/body>/i)||[''])[0];
+const srcs=[...head.matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*>/gi)].map(m=>m[1]);
+assert(srcs[0]&&srcs[0].startsWith('js/bootstrap/boot-guard.js?'),'External boot guard must be first script in head');
+assert(srcs[1]&&srcs[1].startsWith('js/bootstrap/error-overlay.js?'),'Error overlay must remain first application script');
+assert(srcs[srcs.length-1]&&srcs[srcs.length-1].startsWith('js/legacy/app-c.js?'),'Application script order must remain intact through app-c.js');
+assert(!/<script\b[^>]*\bsrc=/i.test(body),'Application scripts must not remain at the bottom of body');
+assert((body.match(/id="/g)||[]).length>100,'Original application DOM must remain embedded in index.html');
+console.log('Somata 7.2.4 iOS bootstrap invariants: PASS');

@@ -1,0 +1,227 @@
+*(français plus bas)*
+
+# Grist Simple Filer Widget
+*Simple Filter* is a widget to quickly filter a table.
+
+## Features
+* Easy to use and quick to access 
+* Supports *OR* and *AND* searches
+* Supports *contains*, *starts with*, *ends with*, *exactly equals* search options
+* Supports negation
+* Supports regular expressions (regex)
+
+![image](images/example.png)
+
+## Installation
+1. Add a new *Custom* view to your page, choosing as source the table to which you wish to add filtering
+2. Choose the *Custom URL* widget and paste the following URL into the field: https://varamil.github.io/grist-widget/simplefilter/index.html then click on *Add widget*
+3. In the configuration of the table to be filtered (right pane), in *Table* then *Source data*, choose the new widget for *SELECT BY*.
+4. The widget is now functional
+
+## Configuration
+In the widget configuration (right-hand pane), via *Open configuration*, you can modify the filter's behavior:
+
+![image](images/config.png)
+
+* *Include hidden columns*: if unchecked, only the columns displayed will be used for the search.
+* *If search is empty...*: if checked, when the search field is empty, no line will be displayed.
+* *Default search type*: defines the default search type (when the user doesn't use any gobal option)
+* *Default value*: default value present in the search field
+* *Save search in current browsing session*: if checked, as long as the browsing session is open, you can navigate to other pages, and when you return to this one, your search will be restored.
+* *Session ID*: allows you to set a session ID to synchronize multiple search fields on different pages. *Save search in current browsing session* must be checked.
+* *List columns IDs...*: allows you to restrict the list of columns used by the search. Use Grist IDs (without the $) and separate them with commas. If listed columns are hidden and *Include hidden columns* is unchecked, they will be ignored.
+* *Search field placeholder*: changes the default text displayed in the search field.
+* *Help message*: modifies the help message displayed when the user types “?
+
+
+Click *Apply* to apply the changes and then click on Grist *Save* to save them.
+
+## Usage
+Simply type the various *words* you wish to search for into the widget field. The search is launched on *Enter* or when you leave the field.
+
+You can click on the *logic* on the search field left to automatically switch the current reserch logic.
+
+Example available here: https://docs.getgrist.com/wrUr32FUVsDo/simple-filter/p/2
+
+## Filtering options
+By default, the search is based on *OR* logic, i.e. if one of the *words* is present in the line, it will be displayed.
+
+A *word* is a string of characters containing no spaces. Consequently, spaces are used to separate *words*. So by default, if at least one *word* is present in a line, it is displayed.
+
+For example, `martin paul` is considered as two *words*, `martin` and `paul`, so if a line contains `martin` or `paul` or both at different positions or in different columns, then the line will be displayed.
+
+### Global options
+The following options modify the overall behavior of the filter. They should always be placed at the beginning of the search.
+
+* `?`: displays a message summarizing the present options
+
+
+* `&`: search now follows *AND* logic, all words must be present in the line for it to be displayed (but not necessarily in the same column)
+
+
+* `&&`: same as `&` but all words must be present in the **same cell**
+
+
+* `“...”`: considers everything enclosed in quotation marks to be part of the same word, allowing spaces to be included in a word. The whole word doesn't need to be enclosed in quotation marks `mar “tin paul”` will have the same result as `“martin paul”`. However, for regular expressions (see next paragraph), quotation marks must be outside `/` (`“/.../”`) to not be interpreted. If quotation marks are to be included in the word, use `\"` to escape.
+
+
+* `@IdCol1,IdCol2`: doesn't have to be at the beginning, but must be a word in its own (so if it's at the beginning, a space is required after the last ID and before the first word). Allows you to specify the columns in which to search. Overwrites configuration, but applies to visible/hidden columns as defined in configuration. The IDs to be used are those of Grist (without the $) and must be separated by commas. Case is not important anymore, and even a partial match can be used (if column id is *Reference* then *@ref* will match).
+
+### Words options
+The following options are applied to the word, and must always be at the beginning of the word:
+
+* `!` : *negation*, indicates that the *word* **must not** be present. Must always come first, before the other modifiers listed below.
+
+
+* `==` : *exactly equal*, indicates that the line must contain a cell that **exactly** contains this *word*. Use `!=` for the inverse (**is different from**) 
+
+* `=` : *equal*, like `==`, except if the a number is following the `=`, then a numerical comparison is performed (instead of a literal comparison). To force a literal comparison, use `==`. Example: `=1` will match `1` and `1.0`, but `==1` won't match `1.0`.
+
+* `<<` : *begins with*, indicates that the line must contain a cell **beginning with** this *word* (e.g. `<martin` will display lines with `martin paul` but not `jean martin`). Use `!<` for the reverse (**does not begin with**) 
+
+* `<` : *strictly inferior*, like `<<`, except if the a number is following the `<`, then a numerical comparison is performed, and the cell content must be strictly inferior to the given value.
+
+* `<=` : *inferior or equal*, like `<<`, except if the a number is following the `<`, then a numerical comparison is performed, and the cell content must be inferior or equal to the given value.
+
+* `>>` : *terminates with*, indicates that the line must contain a cell **terminating with** this *word* (e.g. `>martin` will display lines with `jean martin` but not `martin paul`). Use `!<` for the reverse (**does not end with**).
+
+* `>` : *strictly superior*, like `>>`, except if the a number is following the `>`, then a numerical comparison is performed, and the cell content must be strictly superior to the given value.
+
+* `>=` : *superior or equal*, ike `>>`, except if the a number is following the `>`, then a numerical comparison is performed, and the cell content must be superior or equal to the given value.
+
+* `'` : *independent word*, indicates that the text following the `'` is to be found as a “complete word”. Thus, `'ok` will display lines where the word `ok` is found, but not those containing words including `ok` such as `books` or `look`. Use `!'` to find the absence of a word, but cannot be used with `=`, `<` or `>`.
+
+* `/` : *regex*, indicates that the line must contain a cell that **verifies** the regular expression. Directly uses the format of [JavaScript](https://developer.mozilla.org/fr/docs/Web/JavaScript/Reference/Global_Objects/RegExp). Replace spaces by `\s` or use `"` outside the regex (e.g. `"/reg ex/"`), else the regex will be split. Use `\\s` to escape. By default, `im` modifiers are used. Use `!/` for reverse (**must not verifies**). Cannot be used with `=`, `<` or `>` as it makes no sense, as regexes can handle these options (via `^` and `$`). 
+
+* `@IdCol1,IdCol2`: must be at the end of the *word* (unlike the others). Allows you to specify the columns in which to search for the *word*. Overwrites configuration, but applies to visible/hidden columns as defined in configuration. The IDs to be used are those of Grist (without the $) and must be separated by commas. Please note that case is important. **If the search contains a `@`, add a `@` at the very end of the word to ignore** (e.g. `martin@paul.com@` to be able to search `martin@paul.com` otherwise will search `martin` in the `paul.com` column).
+
+## Requirements
+A Grist table with read access.
+
+## Author
+Varamil - [GitHub](https://github.com/Varamil)
+
+# Français
+*Simple Filter* est un widget pour effectuer un filtre rapide d'une table. 
+
+## Fonctionnalités
+* Simple d'utilisation et accès rapide 
+* Supporte des recherches de type *OU* et *ET*
+* Supporte des options de recherche de type *contient*, *commence par*, *termine par*, *exactement égal*
+* Supporte la négation
+* Supporte les expressions régulières (regex)
+
+![image](images/example.png)
+
+## Installation
+1. Ajouter une nouvelle vue de type *Personnalisée* à votre page en choisissant comme source la table à laquelle vous souhaitez ajouter un filtrage
+2. Choisir le widget *URL personnalisé* et coller dans le champs l'URL suivante :  https://varamil.github.io/grist-widget/simplefilter/index.html puis cliquer sur *Ajouter un widget*
+3. Dans la configuration de la table à filtrer (volet de droite), dans *Table* puis *Données source*, choisir le nouveau widget pour *SÉLECTIONNER PAR*
+4. Le widget est maintenant fonctionnel
+
+## Configuration
+Dans la configuration du widget (volet de droite), via *Ouvrir la configuration*, vous pouvez modifier le comportement du filtre:
+
+![image](images/config.png)
+
+* *Include hidden columns* : si décoché, seule les colonnes affichées seront utilisées pour la recherche
+* *If search is empty...* : si coché, alors quand le champ de recherche sera vide, aucune ligne ne sera affichée
+* *Default search type* : défini le type de recherche par défaut (quand l'utilisateur n'utilise aucune option gobale)
+* *Default value* : valeur présente par défaut dans le champ de recherche
+* *Save search in current browsing session* : si coché, tant que la session de navigation sera ouverte, vous pouvez naviguer vers d'autres pages et quand vous reviendrez à celle-ci, votre recherche sera restorée
+* *Session ID* : permet de fixer un identifiant de session pour synchroniser plusieurs champs de recherche sur des pages différentes. *Save search in current browsing session* doit être coché
+* *List columns IDs...* : vous permet de restreindre la liste des colonnes utilisées par la recherche. Utiliser les IDs Grist (sans le $) et les séparer par des virgues. Si des colonnes listées sont cachées et que *Include hidden columns* n'est pas coché, alors elles seront ignorées
+* *Search field placeholder* : permet de modifier le text par défaut affiché dans le champ de recherche
+* *Help message* : permet de modifier le message d'aide affiché quand l'utilisateur tape "?"
+
+Faire *Apply* pour appliquer les modifications et bien cliquer sur l'*Enregistrer* de Grist pour conserver ces modifications.
+
+Voici les textes français recommandés :
+
+*Search field placeholder* :
+`Recherche (? + Entrer pour obtenir de l'aide)`
+
+*Help message* :
+```
+Aide
+Effectue une recherche de type OU des mots listés (séparés par des espaces) dans les différentes colonnes.\n
+• Commencer une recherche par un '&' ⇒ tous les mots doivent être présents dans la ligne
+• Commencer une recherche par '&&' ⇒ tous les mots doivent être présent dans une même colonne
+• '!' avant un mot ⇒ le mot ne doit pas être présent
+• '=', '<' ou '>' avant un mot (et après le '!' s'il y a) ⇒ la cellule doit être exactement égale, commencer par ou terminer par le mot. Avec le '=', remplacer les espaces par '\\s', sinon le mot sera découpé
+• '=', '<', '>', '>=' ou '<=' avant un nombre (et après le '!' s'il y a) ⇒ la valeur de la cellule doit valider la comparaison. Pour forcer une comparaison textuelle utiliser '==', '<<' et '>>'.
+• '"..."' ⇒ considère tous ce qu'il y a entre guillemets comme un mot (incluant les espaces)
+• ' avant un mot ⇒ le mot doit être présent de manière indépendante ('eau' ne vérifie pas 'gâteaux')
+• Terminer un mot par '@IdCol1,IdCol2' ⇒ le mot doit être présent dans la liste des colonnes indiquée (séparées par des virgules). Si un mot recherché contient '@', alors ajouter un '@' à la fin pour ignorer
+• Utiliser '@IdCol1,IdCol2' comme mot ⇒ les autres mots ne seront cherchés que dans ces colonnes
+• '/' avant un mot ⇒ utiliser une regex. Utiliser '\\s' pour les espaces, sinon la regex sera découpée
+
+``` 
+
+## Utilisation
+Simplement taper les différents *mots* que vous souhaitez rechercher dans le champs du widget. La recherche est lancée sur *Entrer* ou quand vous quittez le champs.
+
+Vous pouvez cliquer sur la *logique* à gauche du champ de recherche pour basculer automatiquement le type de logique de votre recherche.
+
+Un exemple est disponible ici : https://docs.getgrist.com/wrUr32FUVsDo/simple-filter/p/2
+
+## Options de filtrage
+Par défaut, la recherche se fait suivant la logique *OU*, c'est à dire que si l'un des *mots* est présent dans la ligne alors celle-ci sera affichée.
+
+Un *mot* est une suite de charactères ne contenant pas d'espace. Par conséquent, les espaces sont utilisés pour séparer les *mots*. Ainsi par défaut si ou moins un des *mots* est présent dans une ligne, alors elle est affichée.
+
+`martin paul` est considéré comme deux *mots*, `martin` et `paul`, et donc si une ligne contient `martin` ou `paul` ou les deux à des positions ou dans des colonnes différentes, alors la ligne sera affichée. 
+
+### Options globales
+Les options suivantes modifies le comportement global du filtre. Elles doivent être toujours placées au début de la recherche.
+
+* `?` : affiche un message qui récapitule les présentes options
+
+
+* `&` : la recherche suit maintenant la logique *ET*, tous les mots doivent être présent dans la ligne pour qu'elle soit affichée (mais pas forcément dans la même colonne)
+
+
+* `&&` : comme le `&` mais alors les mots doivent être présent dans la **même cellule**
+
+* `"..."` : considère que tous ce qui est contenu entre les quillemets fait parti du même mot, permet aini d'inclure des espaces dans un mot. Tout le mot n'a pas besoin d'être entre guillemets `mar"tin paul"` aura le même résulat que `"martin paul"`. Cependant pour les expressions régulières (voir paragraphe suivant) les guillemets doivent être à l'extérieur des `/` (`"/.../"`) pour ne pas être interprêtés. Si des guillemets doivent être inclus dans le mot, utiliser `\"` échapper.
+
+
+* `@IdCol1,IdCol2` : n'a pas besoin d'être au début, mais doit être un mot à part entière (et donc s'il est au début il faut un espace après le dernier ID et le début du premier mot). Permet de spécifier les colonnes dans lesquelles faire la recherche. Écrase la configuration, mais s'applique aux colonnes visibles/cachées comme défini dans la configuration. Les IDs à utiliser sont ceux de Grist (sans les $) et doivent être séparés par des virgules. La casse n'est plus importante et une correspondance partielle peut être utilisée (si l'id de la colonne est *Reference* alors utiliser *@ref* fonctionnera).
+
+
+### Options de mot
+Les options suivantes sont appliquées au mots, et doivent toujours être au début de celui-ci:
+
+* `!` : *négation*, indique que le *mot* **ne doit pas** être présent. Doit toujours être en premier, avant les autres modificateurs listé ci-après
+
+* `==` : *exactement égal*, indique que la ligne doit contenir une cellule contenant **exactement** ce *mot*. Utiliser `!==` pour l'inverse (**est différent de**). 
+
+* `=` : *égal*, ce comporte comme `==`, sauf si ce qui suit le `=` est un nombre, alors une comparaison numérique est fait (au lieu d'une comparaison littérale). Pour forcer la comparaison littérale utiliser le `==`. Exemple : `=1` va être vrai pour des cellules contenant `1` ou `1.0`, alors que `==1` ne vérifiera que `1`.
+
+* `<<` : *commence par*, indique que la ligne doit contenir une cellule **commençant par** ce *mot* (ex: `<martin` affichera les lignes avec `martin paul` mais pas `jean martin`). Utiliser `!<` pour l'inverse (**ne commence pas par**).
+
+* `<` : *inférieur strict*, ce comporte comme `<<`, sauf si ce qui suit le `<` est un nombre, auquel cas une comparaison numérique est fait, et le contenu de la cellule doit être strictement inférieure à la valeur indiquée.
+
+* `<=` : *inférieur ou égal*, ce comporte comme `<<`, sauf si ce qui suit le `<` est un nombre, auquel cas une comparaison numérique est fait, et le contenu de la cellule doit être inférieure ou égale à la valeur indiquée.
+
+* `>>` : *termine par*, indique que la ligne doit contenir une cellule **terminant par** ce *mot* (ex: `>martin` affichera les lignes avec `jean martin` mais pas `martin paul`). Utiliser `!<` pour l'inverse (**ne termine pas par**) 
+
+* `>` : *supérieur strict*, ce comporte comme `>>`, sauf si ce qui suit le `>` est un nombre, auquel cas une comparaison numérique est fait, et le contenu de la cellule doit être strictement supérieure à la valeur indiquée.
+
+* `>=` : *supérieur ou égal*, ce comporte comme `>>`, sauf si ce qui suit le `>` est un nombre, auquel cas une comparaison numérique est fait, et le contenu de la cellule doit être supérieure ou égale à la valeur indiquée.
+
+* `'` : *mot indépendant*, indique que le texte qui suit le `'` doit être trouvé comme un "mot complet". Ainsi, `'eau` affichera les lignes où le mot `eau` est trouvé, mais pas celles qui contiendront des mots incluants `eau` tels que `gateaux` ou `rideau`. Utiliser `!'` pour trouver l'absence d'un mot, mais ne peut pas être utilisé avec `=`, `<` ou `>`.
+
+
+* `/` : *regex*, indique que la ligne doit contenir une cellule qui **vérifie** l'expression régulière. Utilise directement le format de [JavaScript](https://developer.mozilla.org/fr/docs/Web/JavaScript/Reference/Global_Objects/RegExp). Remplacer les espaces par des `\s` ou utiliser des `"` à l'extérieur de la regex (ex: `"/reg ex/"`) pour que la regex ne soit pas découpée. Utiliser `\\s` pour échapper. Par défaut les modificateurs `im` sont utilisés. Utiliser `!/` pour l'inverse (**de doit pas vérifier**). Ne peut pas être utilisé avec `=`, `<` ou `>` car ça n'a pas de sens, les regex permettant de gérer ces options (via `^` et `$`). 
+
+* `@IdCol1,IdCol2` : doit être à la fin du *mot* (contrairement aux autres). Permet de spécifier les colonnes dans lesquelles faire la recherche du *mot*. Écrase la configuration, mais s'applique aux colonnes visibles/cachées comme défini dans la configuration. Les IDs à utiliser sont ceux de Grist (sans les $) et doivent être séparés par des virgules. La casse n'est plus importante et une correspondance partielle peut être utilisée (si l'id de la colonne est *Reference* alors utiliser *@ref* fonctionnera). **Si la recherche contien un `@`, ajouter un `@` à la toute fin du mot pour ignorer** (ex: `martin@paul.com@` pour pouvoir chercher `martin@paul.com` sinon va chercher `martin` dans la colonne `paul.com`)
+
+## Limitations
+La principale limitation est qu'il n'est pas possible de faire des combinaisons de *OU* et de *ET*. 
+
+## Exigences
+Une table Grist avec un accès en lecture.
+
+## Auteur
+Varamil - [GitHub](https://github.com/Varamil)

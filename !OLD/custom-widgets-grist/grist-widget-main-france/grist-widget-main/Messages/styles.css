@@ -1,0 +1,150 @@
+
+:root {
+  --background-color: #f4f7fa;
+  --background-element: white;
+  --text-color: black;
+}
+
+@media (prefers-color-scheme: dark) { 
+  :root {
+    --background-color: #262633;
+    --background-element: #32323F;
+    --text-color: white;
+  }
+}
+
+body {
+    font-family: -apple-system,BlinkMacSystemFont,Segoe UI,Liberation Sans,
+    Helvetica,Arial,sans-serif,Apple Color Emoji,Segoe UI Emoji,Segoe UI Symbol;
+    font-size: 14px;
+    background-color: var(--background-color);
+  }
+  
+  .chat-container {
+    max-width: 1000px;
+    margin: auto;
+    padding-top: 10px;
+    padding-bottom: 0px;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  
+  .card {
+    background-color: var(--background-element);
+    border-radius: 8px;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    margin-bottom: 16px;    
+  }
+  
+  .card-header {
+    background-color: #16B378;
+    color: var(--background-element);
+    padding: 10px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+  }
+  
+  .card-content {
+    padding: 15px;
+  }
+
+  .card-content p {
+    margin: 0px;
+  }
+
+  .card-content img {
+    width: 100%;
+  }
+  
+  .author {
+    font-weight: bold;
+  }
+  
+  .date {
+    float: right;
+  }
+  
+  .new-message {
+    display: flex;
+  }
+  
+  textarea {
+    flex-grow:1;
+    padding:10px;
+  }
+  
+  button {
+    padding:10px;
+  }
+  
+  .card{
+     box-shadow :0px4px8px rgba(0,0,0,0.2); 
+     margin-bottom :20px; 
+     border-radius :8px; 
+     overflow:hidden; 
+  }
+
+  .form-card .new-message {
+    display: flex;
+    flex-direction: column;
+    padding: 0px;    
+  }
+  
+  .add-msg {
+    align-self: flex-end; /* Aligne le bouton à droite */
+    background-color: #16B378;
+    color: var(--background-element);
+    border: none;
+    padding: 10px 20px;
+    cursor: pointer;
+    border-radius: 5px;
+    margin-top :10px; 
+  }
+  
+  .add-msg:hover{
+    background-color:#009058; 
+  }
+
+  .card-message {
+    color: var(--text-color);
+  }
+
+  /* Quill */
+  .ql-toolbar.ql-snow {
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    padding-top: 0px;
+  }
+  
+  .ql-container.ql-snow {
+    height: auto;
+    flex: 1;
+    overflow: auto;
+  } 
+  
+  .editor-container{
+    border: 1px;
+    height: 300px;
+    display: flex;
+    flex-direction: column;
+    font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif,
+      Apple Color Emoji, Segoe UI Emoji, Segoe UI Symbol;
+    overflow: hidden;
+  }
+  
+  .ql-snow .ql-picker.ql-size .ql-picker-label::before {
+    content: 'Regular'
+  }
+  .ql-snow .ql-picker.ql-size .ql-picker-item::before {
+    content: 'Regular'
+  }
+
+  .ql-bubble * {
+    background-color: #F8F8F8;
+    padding: 5px;
+  }
+
+  .ql-editor {
+    color: var(--text-color);
+  }

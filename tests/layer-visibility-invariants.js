@@ -1,0 +1,16 @@
+'use strict';
+const assert=require('assert');
+const fs=require('fs');
+const path=require('path');
+const root=path.resolve(__dirname,'..');
+const app=fs.readFileSync(path.join(root,'js/legacy/app-c.js'),'utf8');
+const morph=fs.readFileSync(path.join(root,'js/core/morph-controller.js'),'utf8');
+const pipeline=fs.readFileSync(path.join(root,'js/render/main-pipeline.js'),'utf8');
+assert.ok(app.includes('function syncRuntimeLayerVisibility('),'Layer visibility must have one runtime synchronization path');
+assert.ok(app.includes("frame.visible=canonicalLayer?.visible!==false"),'Blue Morph frame visibility must follow the canonical eye state every frame');
+assert.ok(app.includes("syncRuntimeLayerVisibility(l,l.id===layer.id,'layer-isolation')"),'Right-click isolation must synchronize runtime Morph layers');
+assert.ok(app.includes("syncRuntimeLayerVisibility(layer,layer.visible===false,'layer-visibility-toggle')"),'Eye toggle must work for true/false/legacy-undefined visibility');
+assert.ok(morph.includes('frame.visible=canonical.visible!==false'),'Morph display lookup must defensively mirror live visibility');
+assert.ok(!pipeline.includes('Fail-visible: hide the previously presented GPU surface'),'Strict Spiral failure must not intentionally blank the last valid GPU presentation');
+assert.ok(pipeline.includes('Preserve the last successfully presented FullGPU surface'),'Strict Spiral should preserve the last valid GPU frame during a transient failed present');
+console.log('Layer visibility / Spiral presentation invariants OK');

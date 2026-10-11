@@ -1,0 +1,1887 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Универсальный просмотрщик документов</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf_viewer.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+    <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+    <style>
+        .action-btn {
+            padding: 6px 10px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            transition: all 0.2s ease;
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+            height: 30px;
+            box-sizing: border-box;
+        }
+        .btn-secondary { background: #34495e; color: #fff; }
+        .btn-secondary:hover { background: #415b76; }
+        .btn-orange { background: #e67e22; color: #fff; }
+        .btn-orange:hover { background: #d35400; }
+
+        select {
+            padding: 5px;
+            background: #fff;
+            color: #333;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            cursor: pointer;
+            outline: none;
+            height: 30px;
+            font-size: 13px;
+            box-sizing: border-box;
+        }
+        
+        .loading-zip {
+            animation: pulse 1.5s infinite ease-in-out;
+            opacity: 0.7;
+            pointer-events: none;
+        }
+        @keyframes pulse {
+            0 { transform: scale(1); }
+            50% { transform: scale(0.95); }
+            100% { transform: scale(1); }
+        }
+
+        /* МЕНЮ ДЕЙСТВИЙ */
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: #fff;
+            min-width: 210px;
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+            z-index: 1001;
+            border-radius: 4px;
+            overflow: hidden;
+            top: 32px;
+            left: 0;
+        }
+        .dropdown-content div {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+            font-weight: bold;
+            transition: opacity 0.2s;
+        }
+        .dropdown-content div:hover {
+            opacity: 0.85;
+        }
+        .dropdown:hover .dropdown-content {
+            display: block;
+        }
+
+        .dd-upload { background-color: #3498db; color: white; border-bottom: 1px solid rgba(255,255,255,0.2); }
+        .dd-make-first { background-color: #e67e22; color: white; border-bottom: 1px solid rgba(255,255,255,0.2); }
+        .dd-download { background-color: #27ae60; color: white; }
+        .dd-download-all { background-color: #16a085; color: white; }
+        .dd-rename { background-color: #2980b9; color: white; }
+        .dd-move { background-color: #8e44ad; color: white; }
+        .dd-copy { background-color: #34495e; color: white; }
+        .dd-delete { background-color: #c0392b; color: white; }
+
+        /* ИНТЕРФЕЙС DRAG & DROP */
+        .upload-zone {
+            max-width: 550px;
+            margin: 20px auto 10px auto;
+            padding: 40px 30px;
+            border: 3px dashed #bdc3c7;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            color: #fff;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-sizing: border-box;
+            outline: none;
+        }
+        .upload-zone.dragover {
+            border-color: #2ecc71;
+            background: rgba(46, 204, 113, 0.15);
+            transform: scale(1.02);
+        }
+        .upload-zone h3 {
+            margin: 0 0 12px 0;
+            font-size: 20px;
+        }
+        .upload-zone p {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            opacity: 0.8;
+            line-height: 1.4;
+        }
+        .upload-zone .kbd-tip {
+            display: inline-block;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            border: 1px solid rgba(255,255,255,0.2);
+            margin-top: 5px;
+        }
+
+        /* ПАНЕЛЬ ЛОГИРОВАНИЯ */
+        .log-panel {
+            max-width: 550px;
+            margin: 15px auto;
+            background: #1e1e1e;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 12px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #39ff14;
+            text-align: left;
+            box-sizing: border-box;
+            max-height: 150px;
+            overflow-y: auto;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
+        }
+        .log-line {
+            margin-bottom: 4px;
+            line-height: 1.3;
+            border-bottom: 1px solid rgba(57, 255, 20, 0.1);
+            padding-bottom: 2px;
+        }
+        .log-err { color: #ff3333; }
+        .log-success { color: #00ffff; }
+
+        /* СТИЛИ ДЛЯ ТАБЛИЦ EXCEL */
+        .excel-table-container table {
+            border-collapse: separate;
+            border-spacing: 0;
+            width: auto; 
+            table-layout: auto;
+            font-family: Arial, sans-serif;
+            border: 1px solid #ddd;
+            background: #fff;
+        }
+        .excel-table-container td, .excel-table-container th {
+            padding: 6px 8px;
+            border-bottom: 1px solid #ddd;
+            border-right: 1px solid #ddd;
+            white-space: nowrap; 
+            overflow: hidden;
+            text-overflow: ellipsis; 
+            min-width: 95px;
+            max-width: 160px; 
+            vertical-align: middle;
+            box-sizing: border-box;
+            background: #fff;
+        }
+        .excel-table-container th {
+            background: #f2f2f2;
+            font-weight: bold;
+            position: relative;
+            padding-right: 24px; 
+        }
+
+        .col-toggle-btn {
+            position: absolute;
+            right: 2px;
+            top: 5px;
+            width: 18px;
+            height: 18px;
+            background: rgba(189, 195, 199, 0.4); 
+            color: rgba(51, 51, 51, 0.8);
+            border: 1px solid rgba(0,0,0,0.15);
+            border-radius: 3px;
+            font-size: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            padding: 0;
+            transition: all 0.2s;
+            z-index: 10;
+        }
+        .col-toggle-btn:hover {
+            background: rgba(127, 135, 141, 0.8);
+            color: #fff;
+        }
+        .col-toggle-btn.active {
+            background: rgba(39, 174, 96, 0.7); 
+            color: #fff;
+        }
+        .excel-table-container .expanded-col {
+            min-width: 180px !important;    
+            max-width: 25vw !important;     
+            width: 25vw !important;
+            white-space: normal !important; 
+            word-break: break-word;        
+        }
+
+        .row-lock-cell {
+            width: 28px;
+            min-width: 28px !important;
+            max-width: 28px !important;
+            padding: 6px 0 !important;
+            text-align: center;
+            background: #f9f9f9 !important;
+            cursor: pointer;
+            user-select: none;
+            border-right: 2px solid #ccc !important;
+        }
+        .row-lock-icon {
+            opacity: 0;
+            transition: opacity 0.15s ease, color 0.15s ease;
+            font-size: 12px;
+            color: #7f8c8d;
+        }
+        tr:hover .row-lock-icon {
+            opacity: 1;
+        }
+        .row-lock-icon.locked {
+            opacity: 1 !important;
+            color: #e74c3c !important;
+        }
+        .excel-table-container tr.frozen-row td, 
+        .excel-table-container tr.frozen-row th {
+            position: sticky !important;
+            z-index: 100 !important;
+            background: #f1f4f6 !important;
+            box-shadow: inset 0 -2px 0 #2c3e50;
+        }
+
+        /* МОДАЛЬНОЕ ОКНО */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            font-family: Arial, sans-serif;
+        }
+        .modal-box {
+            background: #fff;
+            border-radius: 6px;
+            width: 450px;
+            max-width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+        .modal-header {
+            padding: 15px;
+            background: #2c3e50;
+            color: #fff;
+            font-weight: bold;
+            font-size: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .modal-close {
+            cursor: pointer;
+            background: none;
+            border: none;
+            color: #fff;
+            font-size: 18px;
+            font-weight: bold;
+            padding: 0 5px;
+        }
+        .modal-body {
+            padding: 15px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            box-sizing: border-box;
+        }
+        .modal-file-info {
+            font-weight: bold; 
+            color: #334155; 
+            background: #f1f5f9;
+            padding: 10px 12px;
+            border-radius: 4px;
+            border-left: 4px solid #34495e;
+            font-size: 13px;
+            line-height: 1.4;
+            word-break: break-all;
+        }
+        .modal-rows-list {
+            max-height: 250px;
+            overflow-y: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+        }
+        .modal-row-item {
+            padding: 10px 12px;
+            border-bottom: 1px solid #edf2f7;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 13px;
+            color: #2d3748;
+            word-break: break-all;
+        }
+        .modal-row-item:hover {
+            background: #f7fafc;
+            color: #1a202c;
+        }
+
+        /* СТИЛИ ДЛЯ WORD */
+        #word-body p {
+            margin: 4px 0 !important;
+            line-height: 1.35 !important;
+        }
+        #word-body table {
+            border-collapse: collapse;
+            width: 100% !important;
+            margin: 15px 0;
+            font-family: Arial, sans-serif;
+        }
+        #word-body table td, #word-body table th {
+            border: 1px solid #b3b3b3 !important;
+            padding: 6px 8px !important;
+            min-width: 40px;
+        }
+        #word-body table th {
+            background-color: #f4f6f7 !important;
+            font-weight: bold;
+        }
+        
+        /* СТИЛИ PDF */
+        .annotationLayer {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            opacity: 1;
+            z-index: 3;
+            pointer-events: none;
+        }
+        .annotationLayer .linkAnnotation {
+            position: absolute;
+            z-index: 4;
+            pointer-events: none;
+        }
+        .annotationLayer .linkAnnotation > a {
+            position: absolute;
+            font-size: 1em;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: transparent;
+            box-sizing: border-box;
+            cursor: pointer !important;
+            pointer-events: auto !important;
+        }
+        .annotationLayer .linkAnnotation > a:hover {
+            background: rgba(52, 152, 219, 0.15);
+            border: 1px solid #3498db;
+        }
+
+        .textLayer {
+            z-index: 2;
+            pointer-events: auto !important;
+        }
+
+        /* ПЛАВАЮЩИЕ КНОПКИ */
+        .floating-controls-wrapper {
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            z-index: 999;
+            display: flex;
+            gap: 6px;
+        }
+        .reset-zoom-floating {
+            background: rgba(44, 62, 80, 0.85);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            padding: 8px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            font-weight: bold;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+        .reset-zoom-floating:hover {
+            background: rgba(230, 126, 34, 0.95);
+            border-color: #e67e22;
+        }
+    </style>
+</head>
+<body style="margin: 0; padding: 0; overflow: hidden;">
+
+<div id="toolbar" style="
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 48px;
+  background: #2c3e50;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 15px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  z-index: 1000;
+  font-family: Arial, sans-serif;
+  font-size: 13px;
+  box-sizing: border-box;
+">
+  
+  <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+    <button id="prev-btn" class="action-btn btn-secondary" title="Предыдущий файл">←</button>
+    <span id="file-counter" style="min-width: 50px; text-align: center; font-weight: bold; white-space: nowrap;">0 из 0</span>
+    <button id="next-btn" class="action-btn btn-secondary" title="Следующий файл">→</button>
+    
+    <div style="width: 1px; height: 20px; background: rgba(255,255,255,0.2); margin: 0 4px; flex-shrink: 0;"></div>
+
+    <button id="refresh-btn" class="action-btn btn-orange" style="white-space: nowrap; display: none;" title="Вернуться к текущей строке">🔄 Сброс</button>
+    
+    <div class="dropdown" id="actions-dropdown">
+        <button class="action-btn btn-secondary" style="background: #34495e; border: 1px solid #5d6d7e; white-space: nowrap;">⚡ Действия ▼</button>
+        <div class="dropdown-content">
+            <div id="upload-new-btn" class="dd-upload">📤 Загрузить новый файл</div>
+            <div id="make-first-btn" class="dd-make-first">🔝 Сделать первым</div>
+            <div id="download-btn" class="dd-download">📥 Скачать файл</div>
+            <div id="download-all-btn" class="dd-download-all">📦 Скачать всё (ZIP)</div>
+            <div id="rename-btn" class="dd-rename">✏️ Переименовать</div>
+            <div id="move-btn" class="dd-move">➡️ Перенести файл</div>
+            <div id="copy-btn" class="dd-copy">👯 Скопировать файл</div>
+            <div id="delete-btn" class="dd-delete">❌ Удалить файл</div>
+        </div>
+    </div>
+  </div>
+
+  <div id="zoom-controls" style="display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin: 0 10px;">
+    <button id="zoom-out" class="action-btn btn-secondary" style="width: 30px; padding:0;">-</button>
+    <input id="zoom-input" type="text" value="100%" style="
+      width: 50px; 
+      text-align: center; 
+      height: 30px;
+      border: 1px solid #ccc; 
+      border-radius: 4px; 
+      background: #fff; 
+      color: #333;
+      outline: none;
+      font-size: 12px;
+      box-sizing: border-box;
+    " />
+    <button id="zoom-in" class="action-btn btn-secondary" style="width: 30px; padding:0;">+</button>
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 10px; flex-grow: 1; justify-content: flex-end; max-width: 65%; min-width: 340px;">
+    <div style="display: flex; align-items: center; gap: 5px; flex: 1 1 35%; min-width: 100px;">
+      <label for="row-selector" id="row-label" style="white-space: nowrap; color: #bdc3c7; font-weight: bold;">Строка (0):</label>
+      <select id="row-selector" style="width: 100%; text-overflow: ellipsis; white-space: nowrap; overflow: hidden;"></select>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 5px; flex: 1 1 55%; min-width: 130px;">
+      <label for="file-selector" id="file-label" style="white-space: nowrap; color: #bdc3c7; font-weight: bold;">Файл:</label>
+      <select id="file-selector" style="width: 100%; text-overflow: ellipsis; white-space: nowrap; overflow: hidden;"></select>
+    </div>
+    
+    <button id="config-btn" class="action-btn btn-secondary" title="Настройки" style="padding: 0 8px;">⚙️</button>
+  </div>
+</div>
+
+<div id="floating-controls-container" class="floating-controls-wrapper"></div>
+<div id="modal-container"></div>
+
+<div id="viewer-container" style="
+  margin-top: 48px;
+  width: 100%;
+  height: calc(100vh - 48px);
+  overflow: auto;
+  background: #525659;
+  padding: 10px 0;
+  font-family: Arial, sans-serif;
+  box-sizing: border-box;
+">
+  <div style="padding: 40px; color: #fff; text-align: center;" id="status">Загрузка данных виджета...</div>
+</div>
+
+<script>
+const WIDGET_VERSION = "2026-07-15";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+let currentTableId = null;  
+let customConfigTableId = ""; 
+
+let tokenInfo = null;
+let allRecords = [];           
+let currentFiles = []; 
+let currentIndex = 0;  
+let currentPdf = null; 
+let currentBlobData = null; 
+let currentImageSrc = null;
+
+let gristSelectedRecordId = null; 
+let currentViewedRecordId = null;  
+let rawGristRecordObject = null; 
+
+let fileTypeMode = 0; 
+let pdfScale = 1.0; 
+let autoScaleFactor = 1.0; 
+let activeExcelSheetIndex = 0;
+
+let isDraggingImage = false;
+let startX, startY;
+
+// Сортировка строк по имени
+const collator = new Intl.Collator('ru', { numeric: true, sensitivity: 'base' });
+
+function writeLog(message, type = 'info') {
+  const logBox = document.getElementById('debug-log-box');
+  if (!logBox) {
+    console.log(`[Grist-Viewer Log] [${type}] ${message}`);
+    return;
+  }
+  const timestamp = new Date().toLocaleTimeString();
+  let cssClass = '';
+  if (type === 'error') cssClass = 'log-err';
+  if (type === 'success') cssClass = 'log-success';
+
+  logBox.innerHTML += `<div class="log-line ${cssClass}">[${timestamp}] ${message}</div>`;
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+grist.ready({ requiredAccess: 'full', onEditOptions: function() {} });
+
+grist.onOptions(function(options, interaction) {
+  if (interaction && interaction.tableId) {
+    currentTableId = interaction.tableId.replace(/_summary_.*$/, '').replace(/Summary.*$/, '');
+    writeLog(`Определена текущая таблица из Grist API: "${currentTableId}"`, 'success');
+  }
+  if (options && options.custom_service_table_id) {
+    customConfigTableId = options.custom_service_table_id;
+    writeLog(`Найдено имя таблицы в настройках: "${customConfigTableId}"`);
+  }
+});
+
+grist.docApi.getAccessToken({ readOnly: false }).then(info => { 
+  tokenInfo = info; 
+  writeLog("Grist Access Token успешно получен", "success");
+}).catch(err => {
+  writeLog("Ошибка получения Grist Access Token: " + err.message, "error");
+});
+
+document.getElementById('prev-btn').addEventListener('click', () => switchFile(currentIndex - 1));
+document.getElementById('next-btn').addEventListener('click', () => switchFile(currentIndex + 1));
+document.getElementById('file-selector').addEventListener('change', (e) => switchFile(parseInt(e.target.value, 10)));
+document.getElementById('row-selector').addEventListener('change', (e) => switchRow(parseInt(e.target.value, 10)));
+document.getElementById('refresh-btn').addEventListener('click', resetToGristRecord);
+document.getElementById('upload-new-btn').addEventListener('click', renderUploadInterface);
+document.getElementById('make-first-btn').addEventListener('click', makeActiveFileFirst);
+document.getElementById('download-btn').addEventListener('click', downloadCurrentFile);
+document.getElementById('download-all-btn').addEventListener('click', downloadAllFilesAsZip);
+document.getElementById('rename-btn').addEventListener('click', renameCurrentFile);
+document.getElementById('move-btn').addEventListener('click', () => openRowModal('move'));
+document.getElementById('copy-btn').addEventListener('click', () => openRowModal('copy'));
+document.getElementById('delete-btn').addEventListener('click', deleteCurrentFile);
+document.getElementById('config-btn').addEventListener('click', openConfigModal);
+
+document.getElementById('zoom-in').addEventListener('click', () => changeZoom(0.1));
+document.getElementById('zoom-out').addEventListener('click', () => changeZoom(-0.1));
+document.getElementById('zoom-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    let val = parseInt(this.value.replace('%', ''), 10);
+    if (!isNaN(val) && val > 10 && val < 1000) {
+      pdfScale = val / 100;
+      applyZoom();
+    } else {
+      this.value = Math.round(pdfScale * 100) + '%';
+    }
+  }
+});
+
+function openConfigModal() {
+  const container = document.getElementById('modal-container');
+  container.innerHTML = `
+    <div class="modal-overlay" id="config-overlay">
+      <div class="modal-box">
+        <div class="modal-header">
+          <span>⚙️ Настройки виджета (Версия ${WIDGET_VERSION})</span>
+          <button class="modal-close" id="config-close">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="modal-file-info" style="border-left-color: #e67e22;">
+            Параметры интеграции виджета с базой Grist.
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-weight:bold; font-size:12px; color:#2d3748;">Техническое имя таблицы (Table ID) [Опционально]:</label>
+            <input type="text" id="config-input-tableid" value="${customConfigTableId}" placeholder="Например: Table1" style="padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;" />
+            <span style="font-size:11px; color:#718096; line-height:1.3;">По умолчанию берется из Grist API. Если пусто, используется данное значение.</span>
+          </div>
+          <button id="config-save-btn" class="action-btn btn-orange" style="margin-top:10px; height:36px; width:100%;">Сохранить настройки</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('config-close').addEventListener('click', () => { container.innerHTML = ''; });
+  document.getElementById('config-save-btn').addEventListener('click', async () => {
+    const val = document.getElementById('config-input-tableid').value.trim();
+    customConfigTableId = val;
+    await grist.setOption('custom_service_table_id', val);
+    container.innerHTML = '';
+    writeLog(`Сохранено кастомное имя таблицы: "${val}"`, 'success');
+  });
+}
+
+grist.onRecords(function(records) { 
+  allRecords = records || []; 
+  if (allRecords.length === 0) {
+    gristSelectedRecordId = null;
+    currentViewedRecordId = null;
+    rawGristRecordObject = null;
+    writeLog("Событие onRecords: Таблица пустая.");
+    renderNullStateInterface();
+  } else {
+    writeLog(`Загружено записей в кэш виджета: ${allRecords.length}`);
+    updateRowSelector(currentViewedRecordId);
+  }
+});
+
+grist.onRecord(async function(record) {
+  if (!record || record.id === 0) {
+    gristSelectedRecordId = null;
+    currentViewedRecordId = null;
+    rawGristRecordObject = null;
+    writeLog("Событие onRecord: Пустая или нулевая запись.");
+    renderNullStateInterface();
+    return;
+  }
+  gristSelectedRecordId = record.id;
+  writeLog(`Фокус переведен на строку ID: ${record.id}`);
+  await processSelectedRecord(record);
+});
+
+function renderNullStateInterface() {
+  document.getElementById('floating-controls-container').innerHTML = ''; 
+  document.getElementById('file-counter').innerText = '0 из 0';
+  document.getElementById('row-selector').innerHTML = '<option value="">Нет строк</option>';
+  document.getElementById('file-selector').innerHTML = '<option value="">Нет файлов</option>';
+  
+  const container = document.getElementById('viewer-container');
+  container.style.background = '#2c3e50'; 
+  container.innerHTML = `
+    <div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding: 20px; box-sizing:border-box; color: #fff; font-family: Arial, sans-serif; gap: 15px; overflow-y: auto;">
+      <div style="text-align: center; width: 100%; max-width: 450px; background: rgba(0, 0, 0, 0.2); padding: 30px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); margin-top: 20px;">
+        <div style="font-size: 54px; margin-bottom: 10px;">📂</div>
+        <h3 style="margin: 0 0 10px 0; font-size: 20px; font-weight: bold;">Таблица пуста</h3>
+        <p style="font-size: 13px; opacity: 0.8; line-height: 1.5; margin: 0 0 20px 0;">
+          Для отображения документов создайте хотя бы одну строку в базе данных.
+        </p>
+        <button id="create-record-btn" class="action-btn btn-orange" style="font-size: 14px; padding: 10px 24px; height: auto; border-radius: 6px; box-shadow: 0 4px 10px rgba(0,0,0,0.25); width: 100%; max-width: 250px; font-weight: bold;">
+          ➕ Создать запись
+        </button>
+      </div>
+
+      <div style="width:100%; max-width:550px; text-align:left;">
+        <span style="font-size:11px; color:#bdc3c7; font-weight:bold; margin-left: 5px;">Лог трассировки операций:</span>
+        <div class="log-panel" id="debug-log-box"></div>
+      </div>
+    </div>
+  `;
+  document.getElementById('create-record-btn').addEventListener('click', createNewRecordDirectly);
+  writeLog("Интерфейс пустой таблицы успешно отрисован. Готов к созданию.");
+}
+
+async function createNewRecordDirectly() {
+  writeLog("Нажата кнопка «Создать запись». Запуск процесса создания...");
+  
+  try {
+    let tableId = customConfigTableId || currentTableId;
+    
+    if (!tableId && typeof grist.getSelectedTableId === 'function') {
+      try {
+        tableId = await grist.getSelectedTableId();
+        writeLog(`Имя таблицы получено через getSelectedTableId: "${tableId}"`);
+      } catch (e) {
+        writeLog("Не удалось выполнить getSelectedTableId(): " + e.message, "error");
+      }
+    }
+
+    if (tableId) {
+      tableId = tableId.replace(/_summary_.*$/, '').replace(/Summary.*$/, '');
+    }
+
+    if (!tableId) {
+      writeLog("Имя таблицы не определено ни в API, ни в настройках.", "error");
+      const userTableId = prompt("Укажите техническое имя таблицы (Table ID) для создания записи:", "Table1");
+      if (!userTableId) {
+        writeLog("Создание отменено пользователем.", "error");
+        return;
+      }
+      tableId = userTableId.trim();
+      writeLog(`Имя таблицы задано вручную пользователем: "${tableId}"`);
+    }
+
+    let fileFieldKey = "Прикрепы";
+    if (rawGristRecordObject) {
+      fileFieldKey = findAttachmentFieldKey(rawGristRecordObject);
+    }
+    writeLog(`Поле для сохранения прикрепов определено как: "${fileFieldKey}"`);
+
+    const payload = {
+      [fileFieldKey]: ['L']
+    };
+    
+    if (allRecords.length > 0 && allRecords[0].hasOwnProperty("Название")) {
+       payload["Название"] = "Новая запись";
+    }
+
+    writeLog(`Отправка экшена в Grist API: [AddRecord, ${tableId}, null, ${JSON.stringify(payload)}]`);
+    await grist.docApi.applyUserActions([
+      ["AddRecord", tableId, null, payload]
+    ]);
+    writeLog("Запись успешно создана в базе!", "success");
+  } catch (err) {
+    writeLog(`КРИТИЧЕСКАЯ ОШИБКА Grist API при создании записи: ${err.message}`, "error");
+    alert("Не удалось создать запись: " + err.message + "\n\nПроверьте техническое имя таблицы (Table ID).");
+  }
+}
+
+async function resetToGristRecord() {
+  if (!gristSelectedRecordId || allRecords.length === 0) return;
+  const originalRecord = allRecords.find(r => r.id === gristSelectedRecordId);
+  if (originalRecord) {
+    await processSelectedRecord(originalRecord);
+  }
+}
+
+function updateToolbarUI() {
+  const toolbar = document.getElementById('toolbar');
+  const refreshBtn = document.getElementById('refresh-btn');
+  const rowLabel = document.getElementById('row-label');
+  const fileLabel = document.getElementById('file-label');
+  
+  const isSubTabMode = (gristSelectedRecordId !== null && currentViewedRecordId !== gristSelectedRecordId);
+
+  if (isSubTabMode) {
+    toolbar.style.background = '#fcf3cf';
+    toolbar.style.color = '#333';
+    rowLabel.style.color = '#7e5109';
+    fileLabel.style.color = '#7e5109';
+    refreshBtn.style.display = 'inline-flex';
+  } else {
+    toolbar.style.background = '#2c3e50';
+    toolbar.style.color = '#fff';
+    rowLabel.style.color = '#bdc3c7';
+    fileLabel.style.color = '#bdc3c7';
+    refreshBtn.style.display = 'none';
+  }
+}
+
+// Поиск поля со вложениями (прикрепами)
+function findAttachmentFieldKey(record) {
+  if (!record) return "Прикрепы";
+  for (const key in record) {
+    if (Object.prototype.hasOwnProperty.call(record, key) && key !== 'id') {
+      const val = record[key];
+      if (val && val !== 'L' && Array.isArray(val)) return key;
+    }
+  }
+  const commonKeys = ['Прикрепы', 'Файлы', 'Файл', 'Вложения', 'Attachments', 'Attachment', 'Files'];
+  for (const k of commonKeys) {
+    if (k in record) return k;
+  }
+  return "Прикрепы";
+}
+
+// Извлечение ID вложений
+function extractAttachmentIds(record) {
+  if (!record) return [];
+  let rawIds = [];
+  for (const key in record) {
+    if (Object.prototype.hasOwnProperty.call(record, key) && key !== 'id') {
+      const value = record[key];
+      if (value && value !== 'L' && Array.isArray(value)) {
+        value.forEach(item => {
+          if (item && typeof item === 'object' && 'id' in item) rawIds.push(item.id);
+          else if (typeof item === 'number') rawIds.push(item);
+        });
+      }
+    }
+  }
+  return [...new Set(rawIds)];
+}
+
+// Получение понятного имени для записи
+function getRowName(row) {
+  if (!row) return "Новая запись";
+  if (row.Название) return row.Название;
+  if (row.Name) return row.Name;
+  if (row.Наименование) return row.Наименование;
+  
+  for (const key in row) {
+    if (Object.prototype.hasOwnProperty.call(row, key) && !Array.isArray(row[key]) && key !== 'id') {
+      if (typeof row[key] === 'string' && row[key].trim().length > 0) return row[key];
+    }
+  }
+  return row.id ? `Строка ID ${row.id}` : "Новая запись";
+}
+
+async function processSelectedRecord(record) {
+  if (!record || record.id === 0) {
+    renderNullStateInterface();
+    return;
+  }
+  currentViewedRecordId = record.id;
+  rawGristRecordObject = record;
+  
+  updateToolbarUI();
+  updateRowSelector(currentViewedRecordId);
+
+  const rawIds = extractAttachmentIds(record);
+  currentFiles = [];
+  currentIndex = 0;
+  currentPdf = null;
+  currentBlobData = null;
+  currentImageSrc = null;
+  activeExcelSheetIndex = 0;
+
+  if (rawIds.length > 0) {
+    try {
+      const attachmentsTable = await grist.docApi.fetchTable('_grist_Attachments');
+      currentFiles = rawIds.map((id, idx) => {
+        const fileRowIndex = attachmentsTable.id.indexOf(id);
+        let realName = `Файл ${idx + 1}`;
+        if (fileRowIndex !== -1 && attachmentsTable.fileName && attachmentsTable.fileName[fileRowIndex]) {
+          realName = attachmentsTable.fileName[fileRowIndex];
+        }
+        return { id: id, name: realName, originalIndex: idx };
+      });
+
+      // Сортировка файлов по имени
+      currentFiles.sort((a, b) => collator.compare(a.name, b.name));
+
+    } catch (err) {
+      currentFiles = rawIds.map((id, idx) => ({ id: id, name: `Файл ${idx + 1} (ID: ${id})`, originalIndex: idx }));
+      currentFiles.sort((a, b) => collator.compare(a.name, b.name));
+    }
+  }
+
+  updateFileSelector();
+  if (currentFiles.length > 0) {
+    switchFile(0);
+  } else {
+    renderNoFilesInterface();
+  }
+}
+
+function updateRowSelector(activeId) {
+  const rowSelector = document.getElementById('row-selector');
+  const rowLabel = document.getElementById('row-label');
+  if (!rowSelector) return;
+
+  rowSelector.innerHTML = '';
+  
+  // Создаем отсортированный клон записей для красивого порядка в выпадающем списке
+  const sortedRecords = [...allRecords].sort((a, b) => collator.compare(getRowName(a), getRowName(b)));
+
+  sortedRecords.forEach(row => {
+    const opt = document.createElement('option');
+    opt.value = row.id;
+    opt.innerText = `[ID ${row.id}] ${getRowName(row)}`;
+    if (row.id === activeId) opt.selected = true;
+    rowSelector.appendChild(opt);
+  });
+
+  rowLabel.innerText = `Строка (${allRecords.length}):`;
+}
+
+function updateFileSelector() {
+  const fileSelector = document.getElementById('file-selector');
+  if (!fileSelector) return;
+  fileSelector.innerHTML = '';
+  currentFiles.forEach((file, index) => {
+    const opt = document.createElement('option');
+    opt.value = index;
+    opt.innerText = `${index + 1}. ${file.name}`;
+    if (index === currentIndex) opt.selected = true;
+    fileSelector.appendChild(opt);
+  });
+}
+
+function updateToolbar() {
+  const total = currentFiles.length;
+  document.getElementById('file-counter').innerText = total > 0 ? `${currentIndex + 1} из ${total}` : '0 из 0';
+  updateFileSelector();
+}
+
+async function switchRow(targetId) {
+  if (!targetId) return;
+  const targetRecord = allRecords.find(r => r.id === targetId);
+  if (targetRecord) {
+    await processSelectedRecord(targetRecord);
+  }
+}
+
+async function switchFile(index) {
+  if (currentFiles.length === 0) {
+    renderNoFilesInterface();
+    return;
+  }
+  if (index < 0) index = 0;
+  if (index >= currentFiles.length) index = currentFiles.length - 1;
+
+  currentIndex = index;
+  updateToolbar();
+
+  const file = currentFiles[currentIndex];
+  renderLoading(`Загрузка файла "${file.name}"...`);
+
+  try {
+    const url = `${tokenInfo.url}/attachments/${file.id}/download`;
+    const response = await fetch(url, {
+      headers: { 'Authorization': `Bearer ${tokenInfo.token}` }
+    });
+    if (!response.ok) throw new Error(`HTTP status ${response.status}`);
+    
+    currentBlobData = await response.blob();
+    displayBlob(currentBlobData, file.name);
+  } catch (err) {
+    renderError(`Ошибка загрузки: ${err.message}`);
+  }
+}
+
+function displayBlob(blob, filename) {
+  const ext = filename.split('.').pop().toLowerCase();
+  
+  document.getElementById('floating-controls-container').innerHTML = '';
+
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) {
+    fileTypeMode = 1;
+    const url = URL.createObjectURL(blob);
+    currentImageSrc = url;
+    renderImage(url);
+  } else if (['pdf'].includes(ext)) {
+    fileTypeMode = 4;
+    const url = URL.createObjectURL(blob);
+    renderPdfFile(url);
+  } else if (['docx'].includes(ext)) {
+    fileTypeMode = 2;
+    renderWordFile(blob);
+  } else if (['xlsx', 'xls', 'csv'].includes(ext)) {
+    fileTypeMode = 3;
+    activeExcelSheetIndex = 0;
+    renderExcelFile(blob);
+  } else if (['txt', 'log', 'json', 'xml', 'ini', 'js', 'css', 'html'].includes(ext)) {
+    fileTypeMode = 5;
+    renderTextFile(blob);
+  } else {
+    fileTypeMode = 0;
+    renderUnsupported(filename);
+  }
+}
+
+/* ОТРИСОВКА ИЗОБРАЖЕНИЙ */
+function renderImage(url) {
+  pdfScale = 1.0;
+  const container = document.getElementById('viewer-container');
+  container.style.background = '#525659';
+  container.innerHTML = `
+    <div id="img-scroll-wrapper" style="
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: auto;
+      cursor: grab;
+      position: relative;
+    ">
+      <img id="viewed-image-el" src="${url}" style="
+        max-width: 95%;
+        max-height: 95%;
+        object-fit: contain;
+        user-select: none;
+        -webkit-user-drag: none;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        transition: width 0.1s, height 0.1s;
+        transform-origin: center center;
+      " />
+    </div>
+  `;
+
+  const imgEl = document.getElementById('viewed-image-el');
+  const wrapper = document.getElementById('img-scroll-wrapper');
+
+  imgEl.onload = function() {
+    autoScaleFactor = Math.min(
+      (wrapper.clientWidth * 0.95) / imgEl.naturalWidth,
+      (wrapper.clientHeight * 0.95) / imgEl.naturalHeight
+    );
+    if (autoScaleFactor > 1) autoScaleFactor = 1;
+    pdfScale = autoScaleFactor;
+    adjustWrapperSize(imgEl, pdfScale);
+  };
+
+  wrapper.addEventListener('mousedown', (e) => {
+    isDraggingImage = true;
+    wrapper.style.cursor = 'grabbing';
+    startX = e.clientX - wrapper.scrollLeft;
+    startY = e.clientY - wrapper.scrollTop;
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isDraggingImage) return;
+    wrapper.scrollLeft = startX - e.clientX;
+    wrapper.scrollTop = startY - e.clientY;
+  });
+
+  window.addEventListener('mouseup', () => {
+    isDraggingImage = false;
+    wrapper.style.cursor = 'grab';
+  });
+}
+
+function adjustWrapperSize(imgEl, scale) {
+  if (!imgEl) return;
+  imgEl.style.maxWidth = 'none';
+  imgEl.style.maxHeight = 'none';
+  imgEl.style.width = (imgEl.naturalWidth * scale) + 'px';
+  imgEl.style.height = (imgEl.naturalHeight * scale) + 'px';
+}
+
+/* ОТРИСОВКА PDF */
+async function renderPdfFile(url) {
+  pdfScale = 1.0;
+  const container = document.getElementById('viewer-container');
+  container.style.background = '#525659';
+  container.innerHTML = `<div id="pdf-scroll-container" style="width:100%; height:100%; overflow:auto; position:relative;"></div>`;
+  
+  try {
+    const loadingTask = pdfjsLib.getDocument(url);
+    currentPdf = await loadingTask.promise;
+    
+    const page = await currentPdf.getPage(1);
+    const containerWidth = container.clientWidth - 40;
+    const pageViewport = page.getViewport({ scale: 1.0 });
+    autoScaleFactor = containerWidth / pageViewport.width;
+    if (autoScaleFactor > 2.0) autoScaleFactor = 2.0;
+    pdfScale = autoScaleFactor;
+
+    renderPdfPages();
+  } catch (err) {
+    renderError(`Ошибка загрузки PDF: ${err.message}`);
+  }
+}
+
+async function renderPdfPages() {
+  const container = document.getElementById('pdf-scroll-container');
+  if (!container || !currentPdf) return;
+
+  const savedScrollRatio = container.scrollHeight > 0 
+    ? container.scrollTop / (container.scrollHeight - container.clientHeight)
+    : null;
+
+  container.innerHTML = '';
+
+  for (let pageNum = 1; pageNum <= currentPdf.numPages; pageNum++) {
+    const pageWrapper = document.createElement('div');
+    pageWrapper.style.position = 'relative';
+    pageWrapper.style.margin = '0 auto 20px auto';
+    pageWrapper.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+    pageWrapper.style.background = '#fff';
+    container.appendChild(pageWrapper);
+
+    try {
+      const page = await currentPdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: pdfScale });
+
+      pageWrapper.style.width = Math.floor(viewport.width) + 'px';
+      pageWrapper.style.height = Math.floor(viewport.height) + 'px';
+
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width * window.devicePixelRatio);
+      canvas.height = Math.floor(viewport.height * window.devicePixelRatio);
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
+      canvas.style.display = 'block';
+      pageWrapper.appendChild(canvas);
+
+      const renderContext = {
+        canvasContext: canvas.getContext('2d'),
+        viewport: viewport,
+        transform: [window.devicePixelRatio, 0, 0, window.devicePixelRatio, 0, 0]
+      };
+      await page.render(renderContext).promise;
+
+      // Текстовый слой
+      const textLayerDiv = document.createElement('div');
+      textLayerDiv.className = 'textLayer';
+      textLayerDiv.style.position = 'absolute';
+      textLayerDiv.style.top = '0';
+      textLayerDiv.style.left = '0';
+      textLayerDiv.style.width = '100%';
+      textLayerDiv.style.height = '100%';
+      textLayerDiv.style.overflow = 'hidden';
+      textLayerDiv.style.opacity = '0.3';
+      pageWrapper.appendChild(textLayerDiv);
+
+      const textContent = await page.getTextContent();
+      pdfjsLib.renderTextLayer({
+        textContent: textContent,
+        container: textLayerDiv,
+        viewport: viewport,
+        textDivs: []
+      });
+
+      // Аннотации (ссылки)
+      const annotations = await page.getAnnotations();
+      if (annotations && annotations.length > 0) {
+        const annotationLayerDiv = document.createElement('div');
+        annotationLayerDiv.className = 'annotationLayer';
+        pageWrapper.appendChild(annotationLayerDiv);
+
+        annotations.forEach(annot => {
+          if (annot.subtype === 'Link' && annot.rect) {
+            const rect = viewport.convertToViewportRectangle(annot.rect);
+            const link = document.createElement('a');
+            
+            const left = Math.min(rect[0], rect[2]);
+            const top = Math.min(rect[1], rect[3]);
+            const width = Math.abs(rect[0] - rect[2]);
+            const height = Math.abs(rect[1] - rect[3]);
+
+            link.style.left = left + 'px';
+            link.style.top = top + 'px';
+            link.style.width = width + 'px';
+            link.style.height = height + 'px';
+
+            if (annot.url) {
+              link.href = annot.url;
+              link.target = '_blank';
+              link.title = annot.url;
+            } else if (annot.dest) {
+              link.href = '#';
+              link.title = `Переход на назначение: ${JSON.stringify(annot.dest)}`;
+            }
+
+            const wrapperLink = document.createElement('div');
+            wrapperLink.className = 'linkAnnotation';
+            wrapperLink.appendChild(link);
+            annotationLayerDiv.appendChild(wrapperLink);
+          }
+        });
+      }
+
+    } catch (err) {
+      const errorBlock = document.createElement('div');
+      errorBlock.style.margin = '0 auto 20px auto';
+      errorBlock.style.width = '100%';
+      errorBlock.style.maxWidth = '500px';
+      errorBlock.style.background = '#fff';
+      errorBlock.style.padding = '20px';
+      errorBlock.style.color = '#c0392b';
+      errorBlock.style.textAlign = 'center';
+      errorBlock.innerText = `⚠️ Ошибка отображения страницы ${pageNum}`;
+      container.appendChild(errorBlock);
+    }
+  }
+
+  if (savedScrollRatio !== null) {
+    container.scrollTop = savedScrollRatio * (container.scrollHeight - container.clientHeight);
+  }
+}
+
+/* ОТРИСОВКА WORD (mammoth) */
+function renderWordFile(blob) {
+  const container = document.getElementById('viewer-container');
+  container.style.background = '#f3f4f6';
+  container.innerHTML = `
+    <div id="word-scroll" style="width:100%; height:100%; overflow:auto; padding:20px 10px; box-sizing:border-box;">
+      <div id="word-body" style="
+        max-width: 800px;
+        margin: 0 auto;
+        background: #fff;
+        padding: 40px 50px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+        border-radius: 4px;
+        color: #333;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        line-height: 1.5;
+        box-sizing: border-box;
+      ">Запуск конвертера Word...</div>
+    </div>
+  `;
+
+  const reader = new FileReader();
+  reader.onload = function(event) {
+    const arrayBuffer = event.target.result;
+    mammoth.convertToHtml({ arrayBuffer: arrayBuffer })
+      .then(result => {
+        document.getElementById('word-body').innerHTML = result.value || '<p style="text-align:center; color:#7f8c8d;">[Документ пуст]</p>';
+      })
+      .catch(err => {
+        renderError(`Не удалось прочитать docx: ${err.message}`);
+      });
+  };
+  reader.readAsArrayBuffer(blob);
+}
+
+/* ОТРИСОВКА EXCEL (xlsx-js-style) */
+function renderExcelFile(blob) {
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const data = new Uint8Array(e.target.result);
+    try {
+      const workbook = XLSX.read(data, { type: 'array', cellStyles: true });
+      renderExcelSheets(workbook);
+    } catch (err) {
+      renderError(`Ошибка обработки Excel: ${err.message}`);
+    }
+  };
+  reader.readAsArrayBuffer(blob);
+}
+
+function renderExcelSheets(workbook) {
+  const container = document.getElementById('viewer-container');
+  container.style.background = '#eaeded';
+
+  if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+    renderError("Книга Excel не содержит листов");
+    return;
+  }
+
+  const sheetName = workbook.SheetNames[activeExcelSheetIndex] || workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[sheetName];
+
+  const floatingContainer = document.getElementById('floating-controls-container');
+  floatingContainer.innerHTML = '';
+  
+  if (workbook.SheetNames.length > 1) {
+    const selectSheet = document.createElement('select');
+    selectSheet.style.background = 'rgba(44, 62, 80, 0.9)';
+    selectSheet.style.color = '#fff';
+    selectSheet.style.border = '1px solid rgba(255,255,255,0.3)';
+    selectSheet.style.height = '32px';
+    selectSheet.style.padding = '4px 8px';
+    selectSheet.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+
+    workbook.SheetNames.forEach((name, idx) => {
+      const opt = document.createElement('option');
+      opt.value = idx;
+      opt.innerText = `📄 ${name}`;
+      if (idx === activeExcelSheetIndex) opt.selected = true;
+      selectSheet.appendChild(opt);
+    });
+
+    selectSheet.addEventListener('change', (e) => {
+      activeExcelSheetIndex = parseInt(e.target.value, 10);
+      renderExcelSheets(workbook);
+    });
+    floatingContainer.appendChild(selectSheet);
+  }
+
+  const resetBtn = document.createElement('button');
+  resetBtn.className = 'reset-zoom-floating';
+  resetBtn.innerText = '🎯 Сбросить зум';
+  resetBtn.addEventListener('click', () => { pdfScale = 1.0; applyZoom(); });
+  floatingContainer.appendChild(resetBtn);
+
+  let htmlTable = `<table id="excel-rendered-table">`;
+  const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1:A1');
+
+  htmlTable += `<thead><tr><th class="row-lock-cell" style="background:#f2f2f2; font-weight:bold;">#</th>`;
+  for (let C = range.s.c; C <= range.e.c; ++C) {
+    const colName = XLSX.utils.encode_col(C);
+    htmlTable += `<th>${colName}<button class="col-toggle-btn" onclick="toggleExcelCol(${C})" id="col-toggle-${C}">↔</button></th>`;
+  }
+  htmlTable += `</tr></thead><tbody>`;
+
+  for (let R = range.s.r; R <= range.e.r; ++R) {
+    let rowHtml = `<tr><td class="row-lock-cell" onclick="toggleFreezeRow(this)"><span class="row-lock-icon">📌</span></td>`;
+    let rowHasData = false;
+
+    for (let C = range.s.c; C <= range.e.c; ++C) {
+      const cellAddress = { c: C, r: R };
+      const cellRef = XLSX.utils.encode_cell(cellAddress);
+      const cell = worksheet[cellRef];
+      
+      let styleStr = "";
+      if (cell && cell.s) {
+        const s = cell.s;
+        if (s.fill && s.fill.fgColor && s.fill.fgColor.rgb) {
+          styleStr += `background-color: #${s.fill.fgColor.rgb.substring(2)};`;
+        }
+        if (s.font) {
+          if (s.font.bold) styleStr += "font-weight: bold;";
+          if (s.font.color && s.font.color.rgb) {
+            styleStr += `color: #${s.font.color.rgb.substring(2)};`;
+          }
+        }
+      }
+
+      let val = "";
+      if (cell && cell.v !== undefined) {
+        val = cell.w || cell.v;
+        rowHasData = true;
+      }
+
+      rowHtml += `<td style="${styleStr}">${val}</td>`;
+    }
+    rowHtml += `</tr>`;
+    
+    if (rowHasData) {
+      htmlTable += rowHtml;
+    }
+  }
+
+  htmlTable += `</tbody></table>`;
+
+  container.innerHTML = `
+    <div id="excel-zoom-wrapper" style="
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+      padding: 15px;
+      box-sizing: border-box;
+      transform-origin: top left;
+      transition: transform 0.1s ease;
+    ">
+      <div class="excel-table-container">${htmlTable}</div>
+    </div>
+  `;
+
+  applyZoom();
+}
+
+function toggleExcelCol(colIndex) {
+  const table = document.getElementById('excel-rendered-table');
+  if (!table) return;
+
+  const button = document.getElementById(`col-toggle-${colIndex}`);
+  const makeExpanded = button ? !button.classList.contains('active') : true;
+
+  if (button) {
+    if (makeExpanded) button.classList.add('active');
+    else button.classList.remove('active');
+  }
+
+  const rows = table.querySelectorAll('tr');
+  rows.forEach(row => {
+    const cell = row.cells[colIndex + 1];
+    if (cell) {
+      if (makeExpanded) {
+        cell.classList.add('expanded-col');
+      } else {
+        cell.classList.remove('expanded-col');
+      }
+    }
+  });
+}
+
+function toggleFreezeRow(tdCell) {
+  const row = tdCell.parentNode;
+  const icon = tdCell.querySelector('.row-lock-icon');
+  
+  if (row.classList.contains('frozen-row')) {
+    row.classList.remove('frozen-row');
+    if (icon) icon.classList.remove('locked');
+  } else {
+    row.classList.add('frozen-row');
+    if (icon) icon.classList.add('locked');
+  }
+}
+
+/* ОТРИСОВКА ТЕКСТОВЫХ ФАЙЛОВ */
+function renderTextFile(blob) {
+  const container = document.getElementById('viewer-container');
+  container.style.background = '#273746';
+  container.innerHTML = `
+    <div style="width:100%; height:100%; overflow:auto; padding:20px; box-sizing:border-box;">
+      <pre id="text-pre" style="
+        max-width: 900px;
+        margin: 0 auto;
+        background: #1e2831;
+        color: #eceff1;
+        padding: 25px;
+        border-radius: 6px;
+        font-family: monospace;
+        font-size: 13px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-break: break-all;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        box-sizing: border-box;
+      ">Чтение файла...</pre>
+    </div>
+  `;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    document.getElementById('text-pre').textContent = e.target.result;
+  };
+  reader.readAsText(blob, 'UTF-8');
+}
+
+/* ОБРАБОТКА МАСШТАБА (ZOOM) */
+function changeZoom(delta) {
+  let newScale = pdfScale + delta;
+  if (newScale >= 0.2 && newScale <= 6.0) { 
+    pdfScale = Math.round(newScale * 10) / 10; 
+    applyZoom(); 
+  }
+}
+
+function applyZoom() {
+  document.getElementById('zoom-input').value = Math.round(pdfScale * 100) + '%';
+  
+  if (fileTypeMode === 1) {
+    const imgEl = document.getElementById('viewed-image-el');
+    if (imgEl) adjustWrapperSize(imgEl, pdfScale);
+  } else if (fileTypeMode === 4) {
+    renderPdfPages(); 
+  } else if (fileTypeMode === 3) {
+    const zoomWrapper = document.getElementById('excel-zoom-wrapper');
+    if (zoomWrapper) {
+      zoomWrapper.style.transform = `scale(${pdfScale})`;
+      zoomWrapper.style.width = (100 / pdfScale) + '%';
+      zoomWrapper.style.height = (100 / pdfScale) + '%';
+    }
+  }
+}
+
+/* ИНТЕРФЕЙСНЫЕ ОШИБКИ И ЗАГРУЗКИ */
+function renderLoading(msg) {
+  document.getElementById('viewer-container').innerHTML = `
+    <div style="padding: 50px; color:#fff; text-align:center;">
+      <div style="font-size:30px; margin-bottom:10px;">⏳</div>
+      <div>${msg}</div>
+    </div>
+  `;
+}
+
+function renderError(msg) {
+  document.getElementById('viewer-container').innerHTML = `
+    <div style="padding: 50px; color:#e74c3c; text-align:center;">
+      <div style="font-size:30px; margin-bottom:10px;">⚠️</div>
+      <div>${msg}</div>
+    </div>
+  `;
+}
+
+function renderNoFilesInterface() {
+  const container = document.getElementById('viewer-container');
+  container.style.background = '#2c3e50';
+  container.innerHTML = `
+    <div style="width:100%; height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; padding: 20px; box-sizing:border-box; color: #fff;">
+      <div style="font-size: 54px; margin-bottom: 10px;">📄</div>
+      <h3 style="margin: 0 0 10px 0;">У этой строки нет прикрепленных файлов</h3>
+      <p style="font-size: 13px; opacity: 0.8; margin-bottom: 20px; text-align:center;">
+        Вы можете перетащить файл сюда или использовать меню «Действия» для загрузки.
+      </p>
+      <button id="no-files-upload-btn" class="action-btn btn-orange">📤 Загрузить первый файл</button>
+    </div>
+  `;
+  document.getElementById('no-files-upload-btn').addEventListener('click', renderUploadInterface);
+}
+
+function renderUnsupported(filename) {
+  document.getElementById('viewer-container').innerHTML = `
+    <div style="padding: 50px; color:#fff; text-align:center;">
+      <div style="font-size:40px; margin-bottom:15px;">📁</div>
+      <div style="font-size:16px; font-weight:bold; margin-bottom:8px;">${filename}</div>
+      <div style="color:#bdc3c7; font-size:13px; margin-bottom:20px;">Превью для данного формата не поддерживается браузером</div>
+      <button class="action-btn btn-orange" onclick="downloadCurrentFile()">📥 Скачать файл</button>
+    </div>
+  `;
+}
+
+/* ЗАГРУЗКА И DRAG & DROP */
+function renderUploadInterface() {
+  const container = document.getElementById('viewer-container');
+  container.style.background = '#2c3e50';
+  container.innerHTML = `
+    <div style="width:100%; height:100%; overflow-y:auto; padding:20px; box-sizing:border-box;">
+      <div id="drop-zone" class="upload-zone" tabindex="0">
+        <h3>📤 Загрузка файлов</h3>
+        <p>Перетащите один или несколько файлов прямо в эту область</p>
+        <p>или просто нажмите здесь, чтобы выбрать их вручную</p>
+        <span class="kbd-tip">CTRL + V — Вставка скриншота из буфера обмена</span>
+        <input type="file" id="manual-file-input" multiple style="display:none;" />
+      </div>
+      <div class="log-panel" id="debug-log-box"></div>
+    </div>
+  `;
+
+  writeLog("Интерфейс загрузки подготовлен. Ожидание файлов от пользователя...");
+
+  const zone = document.getElementById('drop-zone');
+  const input = document.getElementById('manual-file-input');
+
+  zone.addEventListener('click', () => input.click());
+  input.addEventListener('change', (e) => uploadRawFiles(e.target.files));
+
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('dragover');
+    uploadRawFiles(e.dataTransfer.files);
+  });
+
+  window.addEventListener('paste', handleGlobalClipboardPaste);
+}
+
+function handleGlobalClipboardPaste(e) {
+  if (!e.clipboardData) return;
+  const items = e.clipboardData.items;
+  let filesToUpload = [];
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].kind === 'file') {
+      const file = items[i].getAsFile();
+      if (file) {
+        let name = file.name || `clipboard_${Date.now()}.png`;
+        const namedFile = new File([file], name, { type: file.type });
+        filesToUpload.push(namedFile);
+      }
+    }
+  }
+  if (filesToUpload.length > 0) {
+    writeLog("Перехвачена вставка файла из буфера обмена!");
+    uploadRawFiles(filesToUpload);
+  }
+}
+
+async function uploadRawFiles(files) {
+  if (!files || files.length === 0) return;
+  if (!tokenInfo) {
+    alert("Токен авторизации не готов!");
+    return;
+  }
+
+  writeLog(`Начало подготовки к отправке файлов в базу (${files.length} шт)...`);
+
+  const formData = new FormData();
+  for (let i = 0; i < files.length; i++) {
+    formData.append('upload', files[i]);
+    writeLog(`В очередь добавлен файл: "${files[i].name}" (${Math.round(files[i].size / 1024)} Кб)`);
+  }
+
+  try {
+    const uploadUrl = `${tokenInfo.url}/attachments`;
+    writeLog(`Отправка POST запроса на эндпоинт: ${uploadUrl}`);
+    
+    const response = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${tokenInfo.token}` },
+      body: formData
+    });
+
+    if (!response.ok) {
+      throw new Error(`Сервер Grist вернул ошибку с кодом ${response.status}`);
+    }
+
+    const uploadedMeta = await response.json();
+    writeLog("Файлы успешно залиты в хранилище Grist!", "success");
+
+    const newIds = uploadedMeta.map(item => item.id);
+    await attachIdsToRow(newIds);
+  } catch (err) {
+    writeLog(`Ошибка при загрузке: ${err.message}`, "error");
+    alert("Ошибка загрузки файлов: " + err.message);
+  }
+}
+
+async function attachIdsToRow(newAttachmentIds) {
+  try {
+    let tableId = customConfigTableId || currentTableId;
+    if (tableId) {
+       tableId = tableId.replace(/_summary_.*$/, '').replace(/Summary.*$/, '');
+    }
+    
+    if (!tableId && typeof grist.getSelectedTableId === 'function') {
+      tableId = await grist.getSelectedTableId();
+      if (tableId) {
+         tableId = tableId.replace(/_summary_.*$/, '').replace(/Summary.*$/, '');
+      }
+    }
+
+    if (!tableId) {
+      throw new Error("Не удалось определить имя таблицы для привязки. Пропишите Table ID в настройках виджета.");
+    }
+
+    const fileFieldKey = findAttachmentFieldKey(rawGristRecordObject);
+    writeLog(`Привязка ID вложений к полю "${fileFieldKey}" в таблице "${tableId}"...`);
+
+    const currentRawList = rawGristRecordObject[fileFieldKey] || [];
+    let existingIds = [];
+    if (Array.isArray(currentRawList)) {
+      currentRawList.forEach(item => {
+        if (item && typeof item === 'object' && 'id' in item) existingIds.push(item.id);
+        else if (typeof item === 'number') existingIds.push(item);
+      });
+    }
+
+    const updatedIdsList = ['L', ...existingIds, ...newAttachmentIds];
+    writeLog(`Новый список связей: ${JSON.stringify(updatedIdsList)}`);
+
+    await grist.docApi.applyUserActions([
+      ["UpdateRecord", tableId, currentViewedRecordId, { [fileFieldKey]: updatedIdsList }]
+    ]);
+
+    writeLog("Связи успешно сохранены в базе!", "success");
+    window.removeEventListener('paste', handleGlobalClipboardPaste);
+    
+    const updatedRecord = allRecords.find(r => r.id === currentViewedRecordId);
+    if (updatedRecord) {
+      await processSelectedRecord(updatedRecord);
+    } else {
+      location.reload();
+    }
+  } catch (err) {
+    writeLog(`Ошибка обновления связей в БД: ${err.message}`, "error");
+    alert("Не удалось сохранить связи в базе данных: " + err.message);
+  }
+}
+
+/* ОПЕРАЦИИ С ФАЙЛАМИ */
+async function makeActiveFileFirst() {
+  if (currentFiles.length <= 1) return;
+  const file = currentFiles[currentIndex];
+  
+  const confirmAction = confirm(`Сделать файл "${file.name}" первым в списке?`);
+  if (!confirmAction) return;
+
+  try {
+    let tableId = customConfigTableId || currentTableId;
+    if (tableId) tableId = tableId.replace(/_summary_.*$/, '').replace(/Summary.*$/, '');
+    const fileFieldKey = findAttachmentFieldKey(rawGristRecordObject);
+
+    // Удаляем сортировку только для этой операции, принудительно делая выбранный элемент первым в массиве Grist.
+    // Обратите внимание: при последующем перечитывании onRecord сортировка collator.compare может вернуть файлы в буквенно-цифровой порядок. 
+    // Если требуется жесткий кастомный порядок, отключите вызов .sort() в processSelectedRecord().
+    const reorderedIds = [
+      file.id,
+      ...currentFiles.filter((_, idx) => idx !== currentIndex).map(f => f.id)
+    ];
+
+    await grist.docApi.applyUserActions([
+      ["UpdateRecord", tableId, currentViewedRecordId, { [fileFieldKey]: ['L', ...reorderedIds] }]
+    ]);
+
+    const updatedRecord = allRecords.find(r => r.id === currentViewedRecordId);
+    if (updatedRecord) {
+      await processSelectedRecord(updatedRecord);
+    }
+  } catch (err) {
+    alert("Ошибка перестановки: " + err.message);
+  }
+}
+
+function downloadCurrentFile() {
+  if (currentFiles.length === 0 || !currentBlobData) return;
+  const file = currentFiles[currentIndex];
+  const url = URL.createObjectURL(currentBlobData);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = file.name;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function downloadAllFilesAsZip() {
+  if (currentFiles.length === 0) return;
+  const btn = document.getElementById('download-all-btn');
+  btn.classList.add('loading-zip');
+  btn.innerText = "⏳ Архивирование...";
+
+  try {
+    const zip = new JSZip();
+    for (let i = 0; i < currentFiles.length; i++) {
+      const file = currentFiles[i];
+      const url = `${tokenInfo.url}/attachments/${file.id}/download`;
+      const response = await fetch(url, { headers: { 'Authorization': `Bearer ${tokenInfo.token}` } });
+      const blob = await response.blob();
+      zip.file(file.name, blob);
+    }
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    const zipUrl = URL.createObjectURL(zipBlob);
+    const a = document.createElement('a');
+    a.href = zipUrl;
+    a.download = `attachments_row_${currentViewedRecordId}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(zipUrl);
+  } catch (err) {
+    alert("Ошибка архивации: " + err.message);
+  } finally {
+    btn.classList.remove('loading-zip');
+    btn.innerText = "📦 Скачать всё (ZIP)";
+  }
+}
+
+async function renameCurrentFile() {
+  if (currentFiles.length === 0) return;
+  const file = currentFiles[currentIndex];
+  const newName = prompt(`Укажите новое имя файла:`, file.name);
+  if (!newName || newName.trim() === "" || newName === file.name) return;
+
+  try {
+    await grist.docApi.applyUserActions([
+      ["UpdateRecord", "_grist_Attachments", file.id, { fileName: newName.trim() }]
+    ]);
+
+    file.name = newName.trim();
+    updateToolbar();
+    displayBlob(currentBlobData, file.name);
+  } catch (err) {
+    alert("Ошибка переименования: " + err.message);
+  }
+}
+
+async function deleteCurrentFile() {
+  if (currentFiles.length === 0) return;
+  const file = currentFiles[currentIndex];
+  
+  const confirmAction = confirm(`Вы действительно хотите удалить файл "${file.name}" из данной строки?`);
+  if (!confirmAction) return;
+
+  try {
+    let tableId = customConfigTableId || currentTableId;
+    if (tableId) tableId = tableId.replace(/_summary_.*$/, '').replace(/Summary.*$/, '');
+    const fileFieldKey = findAttachmentFieldKey(rawGristRecordObject);
+
+    const updatedIds = currentFiles
+      .filter((_, idx) => idx !== currentIndex)
+      .map(f => f.id);
+
+    await grist.docApi.applyUserActions([
+      ["UpdateRecord", tableId, currentViewedRecordId, { [fileFieldKey]: ['L', ...updatedIds] }]
+    ]);
+
+    const updatedRecord = allRecords.find(r => r.id === currentViewedRecordId);
+    if (updatedRecord) {
+      await processSelectedRecord(updatedRecord);
+    }
+  } catch (err) {
+    alert("Ошибка удаления файла: " + err.message);
+  }
+}
+
+/* МОДАЛКА ПЕРЕНОСА И КОПИРОВАНИЯ НА СТРОКИ */
+function openRowModal(actionType) {
+  if (currentFiles.length === 0) return;
+  const file = currentFiles[currentIndex];
+  const container = document.getElementById('modal-container');
+  
+  const actionTitle = actionType === 'move' ? 'Перенести в другую строку' : 'Скопировать в другую строку';
+
+  let rowsHtml = '';
+  // Используем сортировку по имени и для модального окна переноса
+  const sortedRecords = [...allRecords].sort((a, b) => collator.compare(getRowName(a), getRowName(b)));
+
+  sortedRecords.forEach(row => {
+    if (row.id !== currentViewedRecordId) {
+      rowsHtml += `<div class="modal-row-item" onclick="executeRowAction('${actionType}', ${row.id})">` +
+                  `<strong>[ID ${row.id}]</strong> ${getRowName(row)}` +
+                  `</div>`;
+    }
+  });
+
+  if (rowsHtml === '') {
+    rowsHtml = `<div style="padding: 15px; color:#7f8c8d; text-align:center;">Нет других строк в базе для действия.</div>`;
+  }
+
+  container.innerHTML = `
+    <div class="modal-overlay" id="row-modal-overlay">
+      <div class="modal-box">
+        <div class="modal-header">
+          <span>${actionTitle}</span>
+          <button class="modal-close" onclick="closeRowModal()">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="modal-file-info">
+            Выбранный файл:<br><strong>${file.name}</strong>
+          </div>
+          <div style="font-size:12px; font-weight:bold; color:#4a5568;">Выберите целевую строку:</div>
+          <div class="modal-rows-list">${rowsHtml}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function closeRowModal() {
+  document.getElementById('modal-container').innerHTML = '';
+}
+
+async function executeRowAction(actionType, targetRowId) {
+  if (!targetRowId) return;
+  const file = currentFiles[currentIndex];
+
+  try {
+    let tableId = customConfigTableId || currentTableId;
+    if (tableId) tableId = tableId.replace(/_summary_.*$/, '').replace(/Summary.*$/, '');
+    const fileFieldKey = findAttachmentFieldKey(rawGristRecordObject);
+
+    const targetRecord = allRecords.find(r => r.id === targetRowId);
+    if (!targetRecord) throw new Error("Целевая строка не найдена.");
+
+    const targetRawList = targetRecord[fileFieldKey] || [];
+    let targetExistingIds = [];
+    if (Array.isArray(targetRawList)) {
+      targetRawList.forEach(item => {
+        if (item && typeof item === 'object' && 'id' in item) targetExistingIds.push(item.id);
+        else if (typeof item === 'number') targetExistingIds.push(item);
+      });
+    }
+
+    if (!targetExistingIds.includes(file.id)) {
+      targetExistingIds.push(file.id);
+      await grist.docApi.applyUserActions([
+        ["UpdateRecord", tableId, targetRowId, { [fileFieldKey]: ['L', ...targetExistingIds] }]
+      ]);
+    }
+
+    if (actionType === 'move') {
+      const updatedCurrentIds = currentFiles
+        .filter((_, idx) => idx !== currentIndex)
+        .map(f => f.id);
+
+      await grist.docApi.applyUserActions([
+        ["UpdateRecord", tableId, currentViewedRecordId, { [fileFieldKey]: ['L', ...updatedCurrentIds] }]
+      ]);
+    }
+
+    closeRowModal();
+
+    const updatedRecord = allRecords.find(r => r.id === currentViewedRecordId);
+    if (updatedRecord) {
+      await processSelectedRecord(updatedRecord);
+    }
+  } catch (err) {
+    alert("Ошибка при обработке действия: " + err.message);
+  }
+}
+</script>
+
+</body>
+</html>

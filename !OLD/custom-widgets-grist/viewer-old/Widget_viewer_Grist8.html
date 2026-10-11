@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Универсальный просмотрщик документов</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf_viewer.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+    <style>
+        .action-btn {
+            padding: 6px 10px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            transition: all 0.2s ease;
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+            height: 30px;
+            box-sizing: border-box;
+        }
+        .btn-secondary { background: #34495e; color: #fff; }
+        .btn-secondary:hover { background: #415b76; }
+        .btn-orange { background: #e67e22; color: #fff; }
+        .btn-orange:hover { background: #d35400; }
+
+        .subtab-mode .btn-secondary { background: #e5e7e9; color: #333; }
+        .subtab-mode .btn-secondary:hover { background: #d5dbdb; }
+
+        select {
+            padding: 5px;
+            background: #fff;
+            color: #333;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            cursor: pointer;
+            outline: none;
+            height: 30px;
+            font-size: 13px;
+            box-sizing: border-box;
+        }
+        
+        .loading-zip {
+            animation: pulse 1.5s infinite ease-in-out;
+            opacity: 0.7;
+            pointer-events: none;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(0.95); }
+            100% { transform: scale(1); }
+        }
+
+        /* КОНТЕЙНЕР ВЫПАДАЮЩЕГО МЕНЮ ДЕЙСТВИЙ */
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            background-color: #fff;
+            min-width: 210px;
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+            z-index: 1001;
+            border-radius: 4px;
+            overflow: hidden;
+            top: 32px;
+            left: 0;
+        }
+        .dropdown-content div {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-family: Arial, sans-serif;
+            font-size: 13px;
+            font-weight: bold;
+            transition: opacity 0.2s;
+        }
+        .dropdown-content div:hover {
+            opacity: 0.85;
+        }
+        .dropdown:hover .dropdown-content {
+            display: block;
+        }
+
+        /* Цветовая кодировка элементов выпадающего списка */
+        .dd-download { background-color: #27ae60; color: white; }
+        .dd-download-all { background-color: #16a085; color: white; }
+        .dd-rename { background-color: #2980b9; color: white; }
+        .dd-move { background-color: #8e44ad; color: white; }
+        .dd-copy { background-color: #34495e; color: white; }
+        .dd-delete { background-color: #c0392b; color: white; }
+
+        /* МОДАЛЬНОЕ ОКНО БЕЗ ПОЛОСЫ ПРОКРУТКИ */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            font-family: Arial, sans-serif;
+        }
+        .modal-box {
+            background: #fff;
+            border-radius: 6px;
+            width: 450px;
+            max-width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+        .modal-header {
+            padding: 15px;
+            background: #2c3e50;
+            color: #fff;
+            font-weight: bold;
+            font-size: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .modal-close {
+            cursor: pointer;
+            background: none;
+            border: none;
+            color: #fff;
+            font-size: 18px;
+            font-weight: bold;
+            padding: 0 5px;
+        }
+        .modal-body {
+            padding: 15px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            box-sizing: border-box;
+        }
+        .modal-file-info {
+            font-weight: bold; 
+            color: #334155; 
+            background: #f1f5f9;
+            padding: 10px 12px;
+            border-radius: 4px;
+            border-left: 4px solid #34495e;
+            font-size: 13px;
+            line-height: 1.4;
+            word-break: break-all;
+            white-space: normal;
+        }
+        .modal-rows-list {
+            max-height: 250px;
+            overflow-y: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
+        }
+        .modal-row-item {
+            padding: 10px 12px;
+            border-bottom: 1px solid #edf2f7;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 13px;
+            color: #2d3748;
+            word-break: break-all;
+            white-space: normal;
+        }
+        .modal-row-item:last-child {
+            border-bottom: none;
+        }
+        .modal-row-item:hover {
+            background: #f7fafc;
+            color: #1a202c;
+        }
+    </style>
+</head>
+<body style="margin: 0; padding: 0; overflow: hidden;">
+
+<div id="toolbar" style="
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  height: 48px;
+  background: #2c3e50;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 15px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+  z-index: 1000;
+  font-family: Arial, sans-serif;
+  font-size: 13px;
+  box-sizing: border-box;
+  transition: background 0.3s ease, color 0.3s ease;
+">
+  
+  <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+    <button id="prev-btn" class="action-btn btn-secondary" title="Предыдущий файл">←</button>
+    <span id="file-counter" style="min-width: 50px; text-align: center; font-weight: bold; white-space: nowrap;">0 из 0</span>
+    <button id="next-btn" class="action-btn btn-secondary" title="Следующий файл">→</button>
+    
+    <div style="width: 1px; height: 20px; background: rgba(255,255,255,0.2); margin: 0 4px; flex-shrink: 0;"></div>
+
+    <button id="refresh-btn" class="action-btn btn-orange" style="white-space: nowrap;" title="Вернуться к оригинальной строке">🔄 Сброс</button>
+    
+    <div class="dropdown" id="actions-dropdown">
+        <button class="action-btn btn-secondary" style="background: #34495e; border: 1px solid #5d6d7e; white-space: nowrap;">⚡ Действия ▼</button>
+        <div class="dropdown-content">
+            <div id="download-btn" class="dd-download">📥 Скачать файл</div>
+            <div id="download-all-btn" class="dd-download-all">📦 Скачать всё (ZIP)</div>
+            <div id="rename-btn" class="dd-rename">✏️ Переименовать</div>
+            <div id="move-btn" class="dd-move">➡️ Перенести файл</div>
+            <div id="copy-btn" class="dd-copy">👯 Скопировать файл</div>
+            <div id="delete-btn" class="dd-delete">❌ Удалить файл</div>
+        </div>
+    </div>
+  </div>
+
+  <div id="zoom-controls" style="display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin: 0 15px;">
+    <button id="zoom-out" class="action-btn btn-secondary" style="width: 30px; padding:0;">-</button>
+    <input id="zoom-input" type="text" value="100%" style="
+      width: 50px; 
+      text-align: center; 
+      height: 30px;
+      border: 1px solid #ccc; 
+      border-radius: 4px; 
+      background: #fff; 
+      color: #333;
+      outline: none;
+      font-size: 12px;
+      box-sizing: border-box;
+    " />
+    <button id="zoom-in" class="action-btn btn-secondary" style="width: 30px; padding:0;">+</button>
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 12px; flex-grow: 1; justify-content: flex-end; max-width: 55%; min-width: 250px;">
+    <div style="display: flex; align-items: center; gap: 5px; width: 50%; min-width: 120px;">
+      <label for="row-selector" id="row-label" style="white-space: nowrap; color: #bdc3c7; font-weight: bold;">Строка:</label>
+      <select id="row-selector" style="width: 100%; text-overflow: ellipsis; white-space: nowrap; overflow: hidden;"></select>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 5px; width: 50%; min-width: 120px;">
+      <label for="file-selector" id="file-label" style="white-space: nowrap; color: #bdc3c7; font-weight: bold;">Файл:</label>
+      <select id="file-selector" style="width: 100%; text-overflow: ellipsis; white-space: nowrap; overflow: hidden;"></select>
+    </div>
+  </div>
+</div>
+
+<div id="modal-container"></div>
+
+<div id="viewer-container" style="
+  margin-top: 48px;
+  width: 100%;
+  height: calc(100vh - 48px);
+  overflow-y: auto;
+  background: #525659;
+  padding: 10px 0;
+  font-family: Arial, sans-serif;
+  box-sizing: border-box;
+">
+  <div style="padding: 40px; color: #fff; text-align: center;" id="status">Выберите запись с файлом...</div>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+const BRAND_COL = 'E';      
+let currentTableId = null;  
+
+let tokenInfo = null;
+let allRecords = [];           
+let filteredRows = [];         
+let currentFiles = []; 
+let currentIndex = 0;  
+let currentPdf = null; 
+let currentBlobData = null; 
+let currentImageSrc = null;
+
+let gristSelectedRecordId = null; 
+let currentViewedRecordId = null;  
+let rawGristRecordObject = null; 
+let isSubTabMode = false;
+
+let isWordDocument = false;
+let isImageFile = false;
+
+let pdfScale = 1.0; 
+let autoScaleFactor = 1.0; 
+
+grist.ready({ 
+  requiredAccess: 'full', 
+  onEditOptions: function() {} 
+});
+
+grist.onOptions(function(options, interaction) {
+  if (interaction && interaction.tableId) {
+    currentTableId = interaction.tableId;
+  }
+});
+
+grist.docApi.getAccessToken({ readOnly: false }).then(info => {
+  tokenInfo = info;
+});
+
+document.getElementById('prev-btn').addEventListener('click', () => switchFile(currentIndex - 1));
+document.getElementById('next-btn').addEventListener('click', () => switchFile(currentIndex + 1));
+document.getElementById('file-selector').addEventListener('change', (e) => switchFile(parseInt(e.target.value, 10)));
+document.getElementById('row-selector').addEventListener('change', (e) => switchRow(parseInt(e.target.value, 10)));
+document.getElementById('refresh-btn').addEventListener('click', resetToGristRecord);
+document.getElementById('download-btn').addEventListener('click', downloadCurrentFile);
+document.getElementById('download-all-btn').addEventListener('click', downloadAllFilesAsZip);
+document.getElementById('rename-btn').addEventListener('click', renameCurrentFile);
+document.getElementById('move-btn').addEventListener('click', () => openRowModal('move'));
+document.getElementById('copy-btn').addEventListener('click', () => openRowModal('copy'));
+document.getElementById('delete-btn').addEventListener('click', deleteCurrentFile);
+
+document.getElementById('zoom-in').addEventListener('click', () => changeZoom(0.1));
+document.getElementById('zoom-out').addEventListener('click', () => changeZoom(-0.1));
+document.getElementById('zoom-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') {
+    let val = parseInt(this.value.replace('%', ''), 10);
+    if (!isNaN(val) && val > 10 && val < 500) {
+      pdfScale = val / 100;
+      applyZoom();
+    } else {
+      this.value = Math.round(pdfScale * 100) + '%';
+    }
+  }
+});
+
+grist.onRecords(function(records) {
+  allRecords = records;
+});
+
+grist.onRecord(async function(record) {
+  if (!record) return;
+  gristSelectedRecordId = record.id;
+  if (isSubTabMode) return;
+  await processSelectedRecord(record);
+});
+
+async function resetToGristRecord() {
+  if (!gristSelectedRecordId || allRecords.length === 0) return;
+  const originalRecord = allRecords.find(r => r.id === gristSelectedRecordId);
+  if (originalRecord) {
+    isSubTabMode = false;
+    updateToolbarUI();
+    await processSelectedRecord(originalRecord);
+  }
+}
+
+function updateToolbarUI() {
+  const toolbar = document.getElementById('toolbar');
+  const refreshBtn = document.getElementById('refresh-btn');
+  const rowLabel = document.getElementById('row-label');
+  const fileLabel = document.getElementById('file-label');
+
+  if (isSubTabMode) {
+    toolbar.classList.add('subtab-mode');
+    toolbar.style.background = '#fcf3cf'; 
+    toolbar.style.color = '#333';
+    rowLabel.style.color = '#7e5109';
+    fileLabel.style.color = '#7e5109';
+    refreshBtn.style.display = 'inline-flex';
+  } else {
+    toolbar.classList.remove('subtab-mode');
+    toolbar.style.background = '#2c3e50';
+    toolbar.style.color = '#fff';
+    rowLabel.style.color = '#bdc3c7';
+    fileLabel.style.color = '#bdc3c7';
+    refreshBtn.style.display = 'none';
+  }
+}
+
+function parseBrands(brandValue) {
+  if (!brandValue) return [];
+  if (Array.isArray(brandValue)) {
+    return brandValue.filter(b => b !== 'L' && b !== 'C' && b !== null && b !== undefined).map(b => String(b).trim());
+  }
+  return String(brandValue).split(/[,;;\n]+/).map(b => b.trim()).filter(b => b.length > 0);
+}
+
+function findAttachmentFieldKey(record) {
+  for (const key in record) {
+    if (Object.prototype.hasOwnProperty.call(record, key) && key !== 'id') {
+      const val = record[key];
+      if (val && val !== 'L' && Array.isArray(val)) {
+        return key;
+      }
+    }
+  }
+  return null;
+}
+
+function extractAttachmentIds(record) {
+  let rawIds = [];
+  for (const key in record) {
+    if (Object.prototype.hasOwnProperty.call(record, key) && key !== 'id') {
+      const value = record[key];
+      if (value && value !== 'L' && Array.isArray(value)) {
+        value.forEach(item => {
+          if (item && typeof item === 'object' && 'id' in item) {
+            rawIds.push(item.id);
+          } else if (typeof item === 'number') {
+            rawIds.push(item);
+          }
+        });
+      }
+    }
+  }
+  return [...new Set(rawIds)];
+}
+
+function getRowName(row) {
+  if (row.Название) return row.Название;
+  for (const key in row) {
+    if (Object.prototype.hasOwnProperty.call(row, key) && !Array.isArray(row[key]) && key !== 'id') {
+      if (typeof row[key] === 'string' && row[key].trim().length > 0) {
+        return row[key];
+      }
+    }
+  }
+  return `Строка ID ${row.id}`;
+}
+
+async function processSelectedRecord(record) {
+  if (!record) return;
+  currentViewedRecordId = record.id;
+  rawGristRecordObject = record; 
+
+  isSubTabMode = (gristSelectedRecordId !== null && currentViewedRecordId !== gristSelectedRecordId);
+  updateToolbarUI();
+
+  const baseRecord = allRecords.find(r => r.id === gristSelectedRecordId) || record;
+  const searchBrands = parseBrands(baseRecord[BRAND_COL]);
+  
+  if (searchBrands.length > 0 && allRecords.length > 0) {
+    filteredRows = allRecords.filter(r => {
+      const rowBrands = parseBrands(r[BRAND_COL]);
+      return rowBrands.some(b => searchBrands.includes(b));
+    });
+  } else {
+    filteredRows = [baseRecord];
+  }
+
+  updateRowSelector(currentViewedRecordId);
+
+  const rawIds = extractAttachmentIds(record);
+  currentFiles = [];
+  currentIndex = 0;
+  currentPdf = null;
+  currentBlobData = null;
+  currentImageSrc = null;
+
+  if (rawIds.length > 0) {
+    try {
+      const attachmentsTable = await grist.docApi.fetchTable('_grist_Attachments');
+      currentFiles = rawIds.map((id, idx) => {
+        const fileRowIndex = attachmentsTable.id.indexOf(id);
+        let realName = `Файл ${idx + 1}`;
+        if (fileRowIndex !== -1 && attachmentsTable.fileName && attachmentsTable.fileName[fileRowIndex]) {
+          realName = attachmentsTable.fileName[fileRowIndex];
+        }
+        return { id: id, name: realName };
+      });
+    } catch (err) {
+      console.warn("Резервный поиск имен:", err);
+      currentFiles = rawIds.map((id, idx) => ({ id: id, name: `Файл ${idx + 1} (ID: ${id})` }));
+    }
+  }
+
+  updateToolbar();
+
+  const dropdownMenu = document.getElementById('actions-dropdown');
+  if (currentFiles.length > 0) {
+    dropdownMenu.style.display = 'inline-block';
+    loadAndRenderFile();
+  } else {
+    dropdownMenu.style.display = 'none';
+    document.getElementById('viewer-container').innerHTML = '<div style="padding: 40px; color: #fff; text-align: center;">В этой строке файлы не найдены</div>';
+  }
+}
+
+function updateRowSelector(currentRecordId) {
+  const rowSelector = document.getElementById('row-selector');
+  rowSelector.innerHTML = '';
+
+  if (filteredRows.length === 0) {
+    rowSelector.innerHTML = '<option value="">Нет строк</option>';
+    return;
+  }
+
+  filteredRows.forEach(row => {
+    const option = document.createElement('option');
+    option.value = row.id;
+    const rowName = getRowName(row);
+    const fileIds = extractAttachmentIds(row);
+    let label = `${rowName}`;
+    if (fileIds.length > 0) label += ` (${fileIds.length})`;
+
+    option.innerText = label;
+    if (row.id === currentRecordId) option.selected = true;
+    rowSelector.appendChild(option);
+  });
+}
+
+async function switchRow(rowId) {
+  const targetRecord = allRecords.find(r => r.id === rowId);
+  if (targetRecord) {
+    await processSelectedRecord(targetRecord);
+  }
+}
+
+function updateToolbar() {
+  const selector = document.getElementById('file-selector');
+  const counter = document.getElementById('file-counter');
+  selector.innerHTML = '';
+  
+  if (currentFiles.length === 0) {
+    counter.innerText = '0 из 0';
+    selector.innerHTML = '<option value="">Нет файлов</option>';
+    return;
+  }
+
+  counter.innerText = `${currentIndex + 1} из ${currentFiles.length}`;
+
+  currentFiles.forEach((file, index) => {
+    const option = document.createElement('option');
+    option.value = index;
+    option.innerText = `${index + 1}. ${file.name}`;
+    if (index === currentIndex) option.selected = true;
+    selector.appendChild(option);
+  });
+}
+
+function switchFile(newIndex) {
+  if (newIndex >= 0 && newIndex < currentFiles.length) {
+    currentIndex = newIndex;
+    updateToolbar();
+    loadAndRenderFile();
+  }
+}
+
+function downloadCurrentFile() {
+  const file = currentFiles[currentIndex];
+  if (!file || !tokenInfo) return;
+  const fileUrl = `${tokenInfo.baseUrl}/attachments/${file.id}/download?auth=${tokenInfo.token}`;
+  const a = document.createElement('a');
+  a.href = fileUrl;
+  a.download = file.name; 
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+async function downloadAllFilesAsZip() {
+  if (currentFiles.length === 0 || !tokenInfo) return;
+  
+  const btn = document.getElementById('download-all-btn');
+  const originalText = btn.innerHTML;
+  
+  try {
+    btn.innerHTML = '⏳ Сборка ZIP...';
+    btn.classList.add('loading-zip');
+    
+    const zip = new JSZip();
+    
+    const downloadPromises = currentFiles.map(async (file) => {
+      const fileUrl = `${tokenInfo.baseUrl}/attachments/${file.id}/download?auth=${tokenInfo.token}`;
+      const response = await fetch(fileUrl);
+      if (!response.ok) throw new Error(`Ошибка загрузки файла ${file.name}`);
+      const blob = await response.blob();
+      zip.file(file.name, blob); 
+    });
+    
+    await Promise.all(downloadPromises);
+    
+    const zipBlob = await zip.generateAsync({ type: 'blob' });
+    
+    const currentRecord = allRecords.find(r => r.id === currentViewedRecordId);
+    let archiveName = currentRecord ? getRowName(currentRecord) : `files_row_${currentViewedRecordId}`;
+    archiveName = archiveName.replace(/[\/\\?%*:|"<>\s]+/g, '_'); 
+    
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(zipBlob);
+    link.download = `${archiveName}.zip`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+    
+  } catch (err) {
+    console.error(err);
+    alert('Не удалось создать архив: ' + err.message);
+  } finally {
+    btn.innerHTML = originalText;
+    btn.classList.remove('loading-zip');
+  }
+}
+
+/* ДЕЙСТВИЕ: ПЕРЕИМЕНОВАТЬ ФАЙЛ */
+async function renameCurrentFile() {
+  const file = currentFiles[currentIndex];
+  if (!file) return;
+
+  const newName = prompt("Введите новое имя для файла:", file.name);
+  if (newName === null || newName.trim() === "" || newName === file.name) return;
+
+  try {
+    // Обновляем имя системной записи в таблице вложений _grist_Attachments
+    await grist.docApi.applyUserActions([
+      ["UpdateRecord", "_grist_Attachments", file.id, { "fileName": newName.trim() }]
+    ]);
+
+    // Обновляем локальные данные и интерфейс
+    file.name = newName.trim();
+    updateToolbar();
+    
+    // Если открыт документ Word, перерисуем заголовок
+    if (isWordDocument) { renderWord(); }
+
+  } catch (error) {
+    console.error(error);
+    alert("Не удалось переименовать файл: " + error.message);
+  }
+}
+
+function openRowModal(mode) {
+  const file = currentFiles[currentIndex];
+  if (!file || !rawGristRecordObject) return;
+
+  const modalContainer = document.getElementById('modal-container');
+  const modalTitle = mode === 'move' ? 'Перенести файл в строку' : 'Скопировать файл в строку';
+
+  let rowsHtml = '';
+  filteredRows.forEach(row => {
+    if (row.id !== currentViewedRecordId) {
+      rowsHtml += `<div class="modal-row-item" onclick="executeFileAction('${mode}', ${row.id})">📁 ${getRowName(row)}</div>`;
+    }
+  });
+
+  if (!rowsHtml) {
+    rowsHtml = '<div style="padding:15px; color:#7f8c8d; text-align:center; font-size:13px;">Нет других строк для выбора.</div>';
+  }
+
+  modalContainer.innerHTML = `
+    <div class="modal-overlay" onclick="closeRowModal()">
+      <div class="modal-box" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <span>${modalTitle}</span>
+          <button class="modal-close" onclick="closeRowModal()">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="modal-file-info">
+            Файл: ${file.name}
+          </div>
+          <div class="modal-rows-list">
+            ${rowsHtml}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function closeRowModal() {
+  document.getElementById('modal-container').innerHTML = '';
+}
+
+async function executeFileAction(mode, targetRowId) {
+  const file = currentFiles[currentIndex];
+  if (!file || !rawGristRecordObject) return;
+
+  const targetRecord = allRecords.find(r => r.id === targetRowId);
+  if (!targetRecord) return;
+
+  closeRowModal();
+
+  try {
+    const fileFieldKey = findAttachmentFieldKey(rawGristRecordObject);
+    if (!fileFieldKey) throw new Error("Не удалось определить колонку вложений");
+
+    let tableId = currentTableId;
+    if (!tableId && typeof grist.getSelectedTableId === 'function') {
+      tableId = await grist.getSelectedTableId();
+    }
+    if (!tableId) throw new Error("Не удалось получить имя текущей таблицы.");
+
+    const actions = [];
+
+    if (mode === 'move') {
+      const currentList = rawGristRecordObject[fileFieldKey] || [];
+      let updatedCurrentListIds = [];
+      currentList.forEach(item => {
+        let id = (item && typeof item === 'object') ? item.id : item;
+        if (id !== 'L' && id !== file.id && id !== null && id !== undefined) {
+          updatedCurrentListIds.push(id);
+        }
+      });
+      actions.push(["UpdateRecord", tableId, currentViewedRecordId, { [fileFieldKey]: ['L', ...updatedCurrentListIds] }]);
+    }
+
+    const targetList = targetRecord[fileFieldKey] || [];
+    let updatedTargetListIds = [];
+    targetList.forEach(item => {
+      let id = (item && typeof item === 'object') ? item.id : item;
+      if (id !== 'L' && id !== null && id !== undefined) {
+        updatedTargetListIds.push(id);
+      }
+    });
+    
+    if (!updatedTargetListIds.includes(file.id)) {
+      updatedTargetListIds.push(file.id);
+    }
+    actions.push(["UpdateRecord", tableId, targetRowId, { [fileFieldKey]: ['L', ...updatedTargetListIds] }]);
+
+    await grist.docApi.applyUserActions(actions);
+
+    setTimeout(async () => {
+      const refreshedRecord = allRecords.find(r => r.id === currentViewedRecordId);
+      if (refreshedRecord) {
+         await processSelectedRecord(refreshedRecord);
+      }
+    }, 250);
+
+  } catch (error) {
+    console.error(error);
+    alert('Не удалось выполнить действие: ' + error.message);
+  }
+}
+
+async function deleteCurrentFile() {
+  const file = currentFiles[currentIndex];
+  if (!file || !rawGristRecordObject) return;
+
+  const confirmDelete = confirm(`Вы уверены, что хотите полностью удалить файл "${file.name}" из этой строки?`);
+  if (!confirmDelete) return;
+
+  try {
+    const fileFieldKey = findAttachmentFieldKey(rawGristRecordObject);
+    if (!fileFieldKey) throw new Error("Не удалось определить колонку вложений");
+
+    let tableId = currentTableId;
+    if (!tableId && typeof grist.getSelectedTableId === 'function') {
+      tableId = await grist.getSelectedTableId();
+    }
+    if (!tableId) throw new Error("Не удалось получить имя текущей таблицы из API Grist.");
+
+    const currentList = rawGristRecordObject[fileFieldKey];
+    
+    let updatedListIds = [];
+    currentList.forEach(item => {
+      let id = (item && typeof item === 'object') ? item.id : item;
+      if (id !== 'L' && id !== file.id && id !== null && id !== undefined) {
+         updatedListIds.push(id);
+      }
+    });
+
+    const finalGristPayload = ['L', ...updatedListIds];
+
+    const actions = [
+      ["UpdateRecord", tableId, currentViewedRecordId, { [fileFieldKey]: finalGristPayload }],
+      ["RemoveRecord", "_grist_Attachments", file.id] 
+    ];
+
+    await grist.docApi.applyUserActions(actions);
+
+    setTimeout(async () => {
+      const refreshedRecord = allRecords.find(r => r.id === currentViewedRecordId);
+      if (refreshedRecord) {
+         await processSelectedRecord(refreshedRecord);
+      } else {
+         rawGristRecordObject[fileFieldKey] = finalGristPayload;
+         await processSelectedRecord(rawGristRecordObject);
+      }
+    }, 250);
+
+  } catch (error) {
+    console.error(error);
+    alert('Ошибка при удалении: ' + error.message);
+  }
+}
+
+async function loadAndRenderFile() {
+  const container = document.getElementById('viewer-container');
+  const file = currentFiles[currentIndex];
+  if (!file || !tokenInfo) return;
+
+  try {
+    container.innerHTML = `<div style="padding: 40px; color: #fff; text-align: center;">Загрузка файла: ${file.name}...</div>`;
+    
+    const fileUrl = `${tokenInfo.baseUrl}/attachments/${file.id}/download?auth=${tokenInfo.token}`;
+    const response = await fetch(fileUrl);
+    if (!response.ok) throw new Error("Сервер Grist не отдал файл");
+    
+    const contentType = response.headers.get('content-type') || '';
+    const blob = await response.blob();
+    
+    currentBlobData = await blob.arrayBuffer();
+
+    isImageFile = contentType.includes('image/') || /\.(jpg|jpeg|png|gif|webp|bmp)$/i.test(file.name);
+    isWordDocument = !isImageFile && (contentType.includes('word') || contentType.includes('officedocument.wordprocessingml') || contentType.includes('msword') || file.name.toLowerCase().endsWith('.docx') || file.name.toLowerCase().endsWith('.doc'));
+
+    pdfScale = 1.0; 
+    document.getElementById('zoom-input').value = '100%';
+
+    if (isImageFile) {
+      if (currentImageSrc) URL.revokeObjectURL(currentImageSrc);
+      currentImageSrc = URL.createObjectURL(blob);
+      
+      const img = new Image();
+      img.src = currentImageSrc;
+      img.onload = function() {
+        const containerWidth = container.clientWidth - 40;
+        autoScaleFactor = containerWidth / img.naturalWidth;
+        renderImage();
+      };
+    } else if (isWordDocument) {
+      renderWord();
+    } else {
+      const objectURL = URL.createObjectURL(blob);
+      const loadingTask = pdfjsLib.getDocument(objectURL);
+      currentPdf = await loadingTask.promise;
+      
+      const firstPage = await currentPdf.getPage(1);
+      const containerWidth = container.clientWidth - 40; 
+      const unscaledViewport = firstPage.getViewport({ scale: 1.0 });
+      autoScaleFactor = containerWidth / unscaledViewport.width;
+      
+      renderPdf();
+    }
+  } catch (error) {
+    container.innerHTML = `<div style="padding: 40px; color: #ff6b6b; text-align: center;">Ошибка загрузки: ${error.message}</div>`;
+  }
+}
+
+function renderImage() {
+  const container = document.getElementById('viewer-container');
+  container.style.background = '#525659'; 
+  const finalWidth = Math.round((container.clientWidth - 40) * pdfScale);
+  container.innerHTML = `
+    <div style="width: 100%; text-align: center; padding: 10px 0;">
+      <img src="${currentImageSrc}" style="width: ${finalWidth}px; max-width: none; height: auto; box-shadow: 0 4px 8px rgba(0,0,0,0.3); display: inline-block;" />
+    </div>`;
+}
+
+function renderWord() {
+  const container = document.getElementById('viewer-container');
+  const file = currentFiles[currentIndex];
+  container.style.background = '#ffffff'; 
+  const currentFontSize = Math.round(16 * pdfScale);
+
+  mammoth.convertToHtml({ arrayBuffer: currentBlobData })
+    .then(function(result) {
+      container.innerHTML = `
+        <div id="word-body" style="max-width: 800px; margin: 0 auto; padding: 40px 20px; color: #333; line-height: 1.6; text-align: left; font-size: ${currentFontSize}px; user-select: text !important; -webkit-user-select: text !important;">
+          <h3 style="border-bottom: 1px solid #ddd; padding-bottom: 10px; color: #2c3e50; font-size: 1.5em;">${file.name}</h3>
+          ${result.value}
+        </div>`;
+    });
+}
+
+async function renderPdf() {
+  const container = document.getElementById('viewer-container');
+  if (!currentPdf) return;
+  container.style.background = '#525659'; 
+  container.innerHTML = ''; 
+
+  const finalScale = autoScaleFactor * pdfScale;
+
+  for (let pageNum = 1; pageNum <= currentPdf.numPages; pageNum++) {
+    const page = await currentPdf.getPage(pageNum);
+    const viewport = page.getViewport({ scale: finalScale });
+    
+    const pageWrapper = document.createElement('div');
+    pageWrapper.style.position = 'relative';
+    pageWrapper.style.margin = '0 auto 20px auto';
+    pageWrapper.style.width = viewport.width + 'px';
+    pageWrapper.style.height = viewport.height + 'px';
+    pageWrapper.style.boxShadow = '0 4px 8px rgba(0,0,0,0.3)';
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const context = canvas.getContext('2d');
+    pageWrapper.appendChild(canvas);
+    
+    const textLayerDiv = document.createElement('div');
+    textLayerDiv.setAttribute('class', 'textLayer');
+    textLayerDiv.style.width = viewport.width + 'px';
+    textLayerDiv.style.height = viewport.height + 'px';
+    textLayerDiv.style.position = 'absolute';
+    textLayerDiv.style.top = '0';
+    textLayerDiv.style.left = '0';
+    pageWrapper.appendChild(textLayerDiv);
+    
+    container.appendChild(pageWrapper);
+    await page.render({ canvasContext: context, viewport: viewport }).promise;
+    
+    const textContent = await page.getTextContent();
+    pdfjsLib.renderTextLayer({ textContent: textContent, container: textLayerDiv, viewport: viewport, textDivs: [] });
+  }
+}
+
+function changeZoom(delta) {
+  let newScale = pdfScale + delta;
+  if (newScale >= 0.2 && newScale <= 4.0) {
+    pdfScale = Math.round(newScale * 10) / 10;
+    applyZoom();
+  }
+}
+
+function applyZoom() {
+  document.getElementById('zoom-input').value = Math.round(pdfScale * 100) + '%';
+  if (isImageFile) { renderImage(); } else if (isWordDocument) { renderWord(); } else { renderPdf(); }
+}
+</script>
+</body>
+</html>

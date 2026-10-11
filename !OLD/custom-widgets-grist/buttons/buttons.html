@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>Grist Buttons Ultimate Navigation</title>
+  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+  <style>
+    :root {
+      --bg-panel: #004085;       
+      --bg-button: #f5f5dc;      
+      --text-button: #000000;    
+      --radius-button: 6px;      
+      --width-button: 140px;     
+      --height-button: auto;
+      --font-size-button: 14px;
+      --pad-vertical: 8px;     
+    }
+
+    body, html {
+      margin: 0; padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background-color: var(--bg-panel);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .panel-container {
+      position: relative;
+      padding: 15px 15px 15px 45px; 
+      box-sizing: border-box;
+    }
+
+    .buttons-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(var(--width-button), 1fr)); 
+      gap: 8px;
+      width: 100%;
+    }
+
+    .btn-item, .dropdown-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: var(--height-button);
+      min-height: var(--height-button);
+      box-sizing: border-box;
+      padding: var(--pad-vertical) 12px;
+      background-color: var(--bg-button);
+      color: var(--text-button);
+      border: 2px solid transparent;
+      border-radius: var(--radius-button);
+      font-size: var(--font-size-button);
+      font-weight: 600;
+      text-align: center;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: all 0.2s;
+      user-select: none;
+    }
+    
+    .btn-item:hover, .dropdown-toggle:hover { filter: brightness(0.9); }
+
+    .dropdown-container { position: relative; }
+    .dropdown-menu {
+      display: none;
+      position: absolute;
+      top: 100%; left: 0; width: 100%;
+      background-color: #ffffff;
+      border-radius: var(--radius-button);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      z-index: 100;
+      margin-top: 5px;
+      padding: 5px 0;
+    }
+    .dropdown-container:hover .dropdown-menu { display: block; }
+    .dropdown-menu .btn-item {
+      background: transparent;
+      color: #333;
+      border-radius: 0;
+      text-align: left;
+      padding: 6px 15px;
+      height: auto;
+      min-height: auto;
+    }
+    .dropdown-menu .btn-item:hover { background: #f0f0f0; }
+
+    .settings-gear {
+      position: absolute; top: 12px; left: 12px;
+      cursor: pointer; color: rgba(255, 255, 255, 0.7);
+      font-size: 22px; user-select: none; z-index: 1000;
+    }
+    .settings-gear:hover { color: #fff; }
+    .settings-gear.active { color: #ffc107; }
+
+    .editor-bottom-panel {
+      display: none;
+      background: #ffffff;
+      color: #333;
+      border-top: 3px solid #004085;
+      padding: 20px;
+      box-sizing: border-box;
+      font-size: 13px;
+      margin-top: 15px;
+    }
+
+    .editor-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 600px) {
+      .editor-layout { grid-template-columns: 1fr; }
+    }
+
+    .panel-actions { 
+      flex-direction: column; 
+      gap: 10px; 
+      margin-bottom: 15px;
+    }
+    
+    .btn-save-exit {
+      display: block;
+      width: 100%;
+      padding: 12px;
+      background-color: #28a745;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 14px;
+      cursor: pointer;
+      text-align: center;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    }
+    .btn-save-exit:hover { background-color: #218838; }
+
+    .status-log { 
+      color: #333; 
+      font-weight: normal; 
+      display: none; 
+      font-size: 12px; 
+      padding: 10px; 
+      border-radius: 4px; 
+      text-align: left;
+      white-space: pre-wrap;
+      font-family: monospace;
+      border: 1px solid #ccc;
+      background: #f8f9fa;
+      margin-top: 10px;
+    }
+    .status-log.success { border-color: #28a745; background: #e6f4ea; color: #1e7e34; font-weight: bold; }
+    .status-log.error { border-color: #dc3545; background: #fce8e6; color: #bd2130; }
+
+    .editor-bottom-panel h4 { margin: 0 0 10px 0; color: #000; font-size: 15px; border-bottom: 2px solid #004085; padding-bottom: 5px; }
+    .subtitle { color: #666; margin-bottom: 15px; font-size: 11px; }
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+    
+    .color-palette { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; max-width: 250px; }
+    .color-swatch { height: 24px; border: 1px solid #ccc; border-radius: 4px; cursor: pointer; }
+    .color-swatch:hover { border-color: #000; transform: scale(1.05); }
+    
+    .size-wrapper { display: flex; align-items: center; gap: 10px; max-width: 250px; }
+    .size-wrapper input { width: 100%; }
+
+    .mapping-table { width: 100%; border-collapse: collapse; }
+    .mapping-table td { padding: 5px; font-size: 12px; }
+    .mapping-table select, .mapping-table input[type="text"] { 
+      width: 100%; box-sizing: border-box; padding: 6px; font-size: 12px; 
+      border: 1px solid #bbb; border-radius: 4px; background: #fff; font-weight: bold; 
+    }
+    .mapping-table input[type="text"] {
+      background: #fffdf0;
+      border: 1px solid #ffc107;
+    }
+    .input-grist-url {
+      background: #f0f7ff !important;
+      border: 1px solid #0056b3 !important;
+    }
+
+    .edit-mode-active .btn-item, .edit-mode-active .dropdown-toggle { cursor: crosshair; border: 2px dashed #ffc107 !important; }
+    .edit-mode-active .selected-target { border: 2px solid #00fff0 !important; box-shadow: 0 0 10px #00fff0; }
+  </style>
+</head>
+<body onclick="onBackgroundClick(event)">
+
+  <div class="settings-gear" id="gearBtn" onclick="toggleEditMode(event)">⚙</div>
+
+  <div class="panel-container">
+    <div class="buttons-grid" id="buttonsGrid"></div>
+  </div>
+
+  <div class="editor-bottom-panel" id="editorBottomPanel" onclick="event.stopPropagation()">
+    <div class="panel-actions">
+      <button class="btn-save-exit" onclick="saveAndExitConfig()">Сохранить изменения</button>
+      <div class="status-log" id="statusLog"></div>
+    </div>
+
+    <div class="editor-layout">
+      <div>
+        <h4 id="settingsTitle">Объект: Фон панели</h4>
+        <div class="subtitle" id="settingsSubtitle">Кликните по любой кнопке для её индивидуальной настройки</div>
+        
+        <div class="form-group">
+          <label id="colorLabel">Цвет фонда панели:</label>
+          <div class="color-palette" id="btnPalette"></div>
+        </div>
+
+        <div class="form-group" id="textColorGroup">
+          <label id="textLabel">Цвет текста по умолчанию:</label>
+          <div class="color-palette" id="textPalette"></div>
+        </div>
+
+        <div class="form-group" id="radiusGroup">
+          <label>Скругление углов кнопок:</label>
+          <div class="size-wrapper">
+            <input type="range" id="radiusInput" min="0" max="25" value="6" oninput="previewRadius(this.value)">
+            <span id="radiusVal">6px</span>
+          </div>
+        </div>
+
+        <div class="form-group" id="sizeGroup" style="border-top: 1px dashed #ccc; padding-top: 10px;">
+          <label>Размер шрифта текста:</label>
+          <div class="size-wrapper" style="margin-bottom: 8px;">
+            <input type="range" id="fontInput" min="10" max="24" value="14" oninput="previewFontSize(this.value)">
+            <span id="fontVal">14px</span>
+          </div>
+
+          <label>Ширина кнопок (минимальная):</label>
+          <div class="size-wrapper" style="margin-bottom: 8px;">
+            <input type="range" id="widthInput" min="40" max="300" value="140" oninput="previewWidth(this.value)">
+            <span id="widthVal">140px</span>
+          </div>
+
+          <label>Высота кнопок:</label>
+          <div class="size-wrapper">
+            <input type="range" id="heightInput" min="15" max="100" value="35" oninput="previewHeight(this.value)">
+            <span id="heightVal">Авто</span>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <h4>Настройки Grist среды</h4>
+        <table class="mapping-table">
+          <tbody>
+            <tr style="background: #e6f0fa;">
+              <td style="font-weight: bold; color: #004085;">Базовый URL Grist:</td>
+              <td><input type="text" id="map_gristBaseUrl" class="input-grist-url" placeholder="http://localhost:8484/" oninput="manualBaseUrlRemap(this.value)"></td>
+            </tr>
+            <tr style="background: #fff3cd;">
+              <td style="font-weight: bold; width: 40%;">Имя таблицы (ID):</td>
+              <td><input type="text" id="map_tableNameInput" placeholder="Определяем из данных..." oninput="manualTableRemap(this.value)"></td>
+            </tr>
+            <tr style="background: #e9ecef;"><td style="font-weight: bold;">Хранилище конфига:</td><td><select id="map_configStorage" onchange="manualRemap('configStorage', this.value)"></select></td></tr>
+            <tr><td>Текст кнопки:</td><td><select id="map_label" onchange="manualRemap('label', this.value)"></select></td></tr>
+            <tr><td>Ссылка:</td><td><select id="map_url" onchange="manualRemap('url', this.value)"></select></td></tr>
+            <tr><td>Тип поля:</td><td><select id="map_type" onchange="manualRemap('type', this.value)"></select></td></tr>
+            <tr><td>Родительское меню:</td><td><select id="map_parent" onchange="manualRemap('parent', this.value)"></select></td></tr>
+            <tr><td>Цвет кнопки:</td><td><select id="map_btnColor" onchange="manualRemap('btnColor', this.value)"></select></td></tr>
+            <tr><td>Цвет текста:</td><td><select id="map_textColor" onchange="manualRemap('textColor', this.value)"></select></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const standardColors = [
+      '#004085', '#f5f5dc', '#000000', '#ffffff', '#28a745', 
+      '#dc3545', '#ffc107', '#17a2b8', '#343a40', '#6f42c1'
+    ];
+
+    let currentRecords = [];
+    let isEditMode = false;
+    let selectedTarget = { type: 'panel', id: null };
+    let userSelectedTableId = ""; 
+    let gristBaseUrl = "http://localhost:8484/"; 
+
+    let localGlobalConfig = { panelBg: '#004085', textColor: '#000000', radius: 6, btnWidth: 140, btnHeight: 0, btnFontSize: 14 };
+    let pendingButtonsUpdates = {};
+    let colMap = { configStorage: '', label: '', url: '', type: '', parent: '', btnColor: '', textColor: '' };
+
+    function assignTableId(rawId) {
+      if (!rawId) return;
+      userSelectedTableId = String(rawId).replace(/_summary_.*$/, '').replace(/Summary.*$/, '').trim();
+      const inp = document.getElementById('map_tableNameInput');
+      if (inp) inp.value = userSelectedTableId;
+    }
+
+    function manualTableRemap(val) {
+      userSelectedTableId = val.trim().replace(/\s+/g, '_');
+    }
+
+    function manualBaseUrlRemap(val) {
+      gristBaseUrl = val.trim();
+      if (gristBaseUrl && !gristBaseUrl.endsWith('/')) {
+        gristBaseUrl += '/';
+      }
+    }
+
+    function getTechColumns(records) {
+      if (!records || records.length === 0) return [];
+      return Object.keys(records[0])
+        .filter(k => k !== 'id' && !k.startsWith('_'))
+        .map(k => k.startsWith('$') ? k.substring(1) : k)
+        .sort();
+    }
+
+    function updateSidebarDropdowns() {
+      const inpTable = document.getElementById('map_tableNameInput');
+      if (inpTable && userSelectedTableId) inpTable.value = userSelectedTableId;
+
+      const inpUrl = document.getElementById('map_gristBaseUrl');
+      if (inpUrl) inpUrl.value = gristBaseUrl;
+
+      const cols = getTechColumns(currentRecords);
+      const mapKeys = ['configStorage', 'label', 'url', 'type', 'parent', 'btnColor', 'textColor'];
+      
+      mapKeys.forEach(mapKey => {
+        const select = document.getElementById(`map_${mapKey}`);
+        if (!select) return;
+        const currentValue = colMap[mapKey];
+        select.innerHTML = '<option value="">-- Не выбрано --</option>';
+        cols.forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c; opt.textContent = c;
+          select.appendChild(opt);
+        });
+        select.value = currentValue || '';
+      });
+    }
+
+    function manualRemap(mapKey, colId) {
+      colMap[mapKey] = colId;
+      renderPanel(currentRecords);
+    }
+
+    function getMappedValue(row, mapKey) {
+      if (row && row.id && pendingButtonsUpdates[row.id] && pendingButtonsUpdates[row.id][mapKey]) {
+        return pendingButtonsUpdates[row.id][mapKey];
+      }
+      const technicalKey = colMap[mapKey];
+      if (!technicalKey || !row) return '';
+      const val = row[technicalKey] !== undefined ? row[technicalKey] : row['$' + technicalKey];
+      if (val && typeof val === 'object') {
+        return val.labels?.[0] || val.id || '';
+      }
+      return val !== undefined && val !== null ? String(val).trim() : '';
+    }
+
+    function initPalettes() {
+      ['btnPalette', 'textPalette'].forEach(id => {
+        const container = document.getElementById(id);
+        container.innerHTML = '';
+        standardColors.forEach(color => {
+          const swatch = document.createElement('div');
+          swatch.className = 'color-swatch';
+          swatch.style.backgroundColor = color;
+          swatch.onclick = () => previewColor(id, color);
+          container.appendChild(swatch);
+        });
+      });
+    }
+    initPalettes();
+
+    function toggleEditMode(event) {
+      if (event && event.stopPropagation) event.stopPropagation();
+      isEditMode = !isEditMode;
+      const gear = document.getElementById('gearBtn');
+      const bottomPanel = document.getElementById('editorBottomPanel');
+      
+      if (isEditMode) {
+        gear.classList.add('active');
+        bottomPanel.style.display = 'block';
+        document.body.classList.add('edit-mode-active');
+        selectTarget('panel', null, 'Фон панели');
+        updateSidebarDropdowns();
+      } else {
+        gear.classList.remove('active');
+        bottomPanel.style.display = 'none';
+        document.body.classList.remove('edit-mode-active');
+        removeVisualSelection();
+      }
+    }
+
+    function selectTarget(type, id, name, element = null) {
+      selectedTarget = { type, id };
+      document.getElementById('settingsTitle').textContent = type === 'panel' ? 'Объект: Фон панели' : `Объект: ${name}`;
+      const colorLabel = document.getElementById('colorLabel');
+      const textLabel = document.getElementById('textLabel');
+      const radiusGroup = document.getElementById('radiusGroup');
+      const sizeGroup = document.getElementById('sizeGroup');
+
+      if (type === 'panel') {
+        colorLabel.textContent = 'Цвет фонда панели:';
+        textLabel.textContent = 'Цвет текста по умолчанию:';
+        radiusGroup.style.display = 'block';
+        sizeGroup.style.display = 'block';
+      } else {
+        colorLabel.textContent = 'Цвет кнопки:';
+        textLabel.textContent = 'Цвет текста:';
+        radiusGroup.style.display = 'none'; 
+        sizeGroup.style.display = 'none';
+      }
+      removeVisualSelection();
+      if (element) element.classList.add('selected-target');
+    }
+
+    function removeVisualSelection() {
+      document.querySelectorAll('.selected-target').forEach(el => el.classList.remove('selected-target'));
+    }
+
+    function onBackgroundClick(event) {
+      if (!isEditMode) return;
+      if (event.target === document.body || event.target.classList.contains('panel-container') || event.target.classList.contains('buttons-grid')) {
+        selectTarget('panel', null, 'Фон панели');
+      }
+    }
+
+    function previewColor(paletteId, hexColor) {
+      if (selectedTarget.type === 'panel') {
+        if (paletteId === 'btnPalette') {
+          localGlobalConfig.panelBg = hexColor;
+          document.documentElement.style.setProperty('--bg-panel', hexColor);
+        }
+        if (paletteId === 'textPalette') {
+          localGlobalConfig.textColor = hexColor;
+          document.documentElement.style.setProperty('--text-button', hexColor);
+        }
+      } else if (selectedTarget.type === 'button' && selectedTarget.id) {
+        if (!pendingButtonsUpdates[selectedTarget.id]) pendingButtonsUpdates[selectedTarget.id] = {};
+        if (paletteId === 'btnPalette') pendingButtonsUpdates[selectedTarget.id]['btnColor'] = hexColor;
+        if (paletteId === 'textPalette') pendingButtonsUpdates[selectedTarget.id]['textColor'] = hexColor;
+        renderPanel(currentRecords);
+      }
+    }
+
+    function previewRadius(val) {
+      document.getElementById('radiusVal').textContent = val + 'px';
+      document.documentElement.style.setProperty('--radius-button', val + 'px');
+      localGlobalConfig.radius = parseInt(val);
+    }
+
+    function previewWidth(val) {
+      document.getElementById('widthVal').textContent = val + 'px';
+      document.documentElement.style.setProperty('--width-button', val + 'px');
+      localGlobalConfig.btnWidth = parseInt(val);
+    }
+
+    function previewFontSize(val) {
+      document.getElementById('fontVal').textContent = val + 'px';
+      document.documentElement.style.setProperty('--font-size-button', val + 'px');
+      localGlobalConfig.btnFontSize = parseInt(val);
+    }
+
+    function previewHeight(val) {
+      const v = parseInt(val);
+      if (v <= 15) {
+        document.getElementById('heightVal').textContent = 'Авто';
+        document.documentElement.style.setProperty('--height-button', 'auto');
+        document.documentElement.style.setProperty('--pad-vertical', '8px'); 
+        localGlobalConfig.btnHeight = 0;
+      } else {
+        document.getElementById('heightVal').textContent = v + 'px';
+        document.documentElement.style.setProperty('--height-button', v + 'px');
+        
+        if (v < 30) {
+          const dynamicPad = Math.max(0, Math.floor((v - 14) / 2));
+          document.documentElement.style.setProperty('--pad-vertical', dynamicPad + 'px');
+        } else {
+          document.documentElement.style.setProperty('--pad-vertical', '8px');
+        }
+        localGlobalConfig.btnHeight = v;
+      }
+    }
+
+    function handleElementClick(event, row, isMenu, element) {
+      if (isEditMode) {
+        if (event && event.preventDefault) event.preventDefault();
+        if (event && event.stopPropagation) event.stopPropagation();
+        selectTarget('button', row.id, getMappedValue(row, 'label') || 'Кнопка', element);
+        return;
+      }
+      
+      if (isMenu) return;
+
+      const urlValue = getMappedValue(row, 'url'); 
+      const label = getMappedValue(row, 'label') || 'Кнопка';
+      
+      if (!urlValue) return;
+
+      const cleanBase = gristBaseUrl.replace(/\/$/, "");
+      const isLocalGristLink = urlValue.startsWith(cleanBase) || urlValue.startsWith('/') || urlValue.includes('#a1.');
+
+      if (isLocalGristLink) {
+        if (event && event.stopPropagation) event.stopPropagation();
+        if (event && event.preventDefault) event.preventDefault();
+
+        try {
+          window.open(urlValue, '_top');
+        } catch (e) {
+          try {
+            window.parent.location.href = urlValue;
+          } catch (err) {}
+        }
+      } else {
+        if (event && event.preventDefault) event.preventDefault();
+        window.open(urlValue, '_blank', 'noopener,noreferrer');
+      }
+    }
+
+    async function saveAndExitConfig() {
+      if (!userSelectedTableId) {
+        showStatus('Ошибка: Не определен ID таблицы. Введите вручную.', 'error');
+        return;
+      }
+      if (!colMap.configStorage) { 
+        showStatus('Ошибка: Выберите столбец для хранения конфига!', 'error'); 
+        return; 
+      }
+
+      let tableId = userSelectedTableId;
+      try {
+        const jsonString = JSON.stringify({
+          globalStyles: localGlobalConfig,
+          mappings: colMap,
+          userSelectedTableId: tableId,
+          gristBaseUrl: gristBaseUrl
+        });
+
+        const targetCol = colMap.configStorage;
+        const finalKey = (currentRecords.length > 0 && currentRecords[0].hasOwnProperty('$' + targetCol)) ? '$' + targetCol : targetCol;
+        const firstRowId = currentRecords.length > 0 ? currentRecords[0].id : 1;
+        
+        const userActionsBatch = [["UpdateRecord", tableId, firstRowId, { [finalKey]: jsonString }]];
+
+        for (const bId in pendingButtonsUpdates) {
+          const data = pendingButtonsUpdates[bId];
+          let rowPayload = {};
+          if (data.btnColor && colMap.btnColor) {
+            const k = (currentRecords.length > 0 && currentRecords[0].hasOwnProperty('$' + colMap.btnColor)) ? '$' + colMap.btnColor : colMap.btnColor;
+            rowPayload[k] = data.btnColor;
+          }
+          if (data.textColor && colMap.textColor) {
+            const k = (currentRecords.length > 0 && currentRecords[0].hasOwnProperty('$' + colMap.textColor)) ? '$' + colMap.textColor : colMap.textColor;
+            rowPayload[k] = data.textColor;
+          }
+          if (Object.keys(rowPayload).length > 0) {
+            userActionsBatch.push(["UpdateRecord", tableId, parseInt(bId), rowPayload]);
+          }
+        }
+
+        showStatus("Сохранение изменений на сервере Grist...", "success");
+        await grist.docApi.applyUserActions(userActionsBatch);
+        
+        showStatus("✓ ВСЁ УСПЕШНО СОХРАНЕНО!", 'success');
+        pendingButtonsUpdates = {};
+      } catch (err) {
+        showStatus(`❌ ОШИБКА СОХРАНЕНИЯ:\n${err.message || err}`, 'error');
+      }
+    }
+
+    grist.ready({ requiredAccess: 'full' });
+    
+    grist.onRecords(function(records) {
+      currentRecords = records;
+      
+      if (!userSelectedTableId && records.length > 0) {
+        try {
+          for (let row of records) {
+            for (let key in row) {
+              if (row[key] && typeof row[key] === 'object') {
+                if (row[key].context?.tableId || row[key].tableId) {
+                  assignTableId(row[key].context?.tableId || row[key].tableId);
+                  break;
+                }
+              }
+            }
+            if (userSelectedTableId) break;
+          }
+        } catch(e) {}
+      }
+
+      if (records.length > 0) {
+        let parsedConfig = null;
+        for (const key in records[0]) {
+          if (key !== 'id' && !key.startsWith('_')) {
+            const rawVal = String(records[0][key]).trim();
+            if (rawVal.startsWith('{"globalStyles"')) {
+              try { parsedConfig = JSON.parse(rawVal); break; } catch(e) {}
+            }
+          }
+        }
+
+        if (parsedConfig) {
+          if (parsedConfig.mappings) colMap = parsedConfig.mappings;
+          if (parsedConfig.userSelectedTableId) userSelectedTableId = parsedConfig.userSelectedTableId;
+          if (parsedConfig.gristBaseUrl) gristBaseUrl = parsedConfig.gristBaseUrl;
+          if (parsedConfig.globalStyles) {
+            localGlobalConfig = parsedConfig.globalStyles;
+            document.documentElement.style.setProperty('--bg-panel', localGlobalConfig.panelBg || '#004085');
+            document.documentElement.style.setProperty('--text-button', localGlobalConfig.textColor || '#000000');
+            
+            const fs = localGlobalConfig.btnFontSize || 14;
+            document.documentElement.style.setProperty('--font-size-button', fs + 'px');
+            document.getElementById('fontInput').value = fs;
+            document.getElementById('fontVal').textContent = fs + 'px';
+
+            const rad = localGlobalConfig.radius !== undefined ? localGlobalConfig.radius : 6;
+            document.documentElement.style.setProperty('--radius-button', rad + 'px');
+            document.getElementById('radiusInput').value = rad;
+            document.getElementById('radiusVal').textContent = rad + 'px';
+
+            const w = localGlobalConfig.btnWidth || 140;
+            document.documentElement.style.setProperty('--width-button', w + 'px');
+            document.getElementById('widthInput').value = w;
+            document.getElementById('widthVal').textContent = w + 'px';
+
+            const h = localGlobalConfig.btnHeight || 0;
+            if (h <= 15) {
+              document.documentElement.style.setProperty('--height-button', 'auto');
+              document.documentElement.style.setProperty('--pad-vertical', '8px');
+              document.getElementById('heightInput').value = 15;
+              document.getElementById('heightVal').textContent = 'Авто';
+            } else {
+              document.documentElement.style.setProperty('--height-button', h + 'px');
+              document.getElementById('heightInput').value = h;
+              document.getElementById('heightVal').textContent = h + 'px';
+              if (h < 30) {
+                const dynamicPad = Math.max(0, Math.floor((h - 14) / 2));
+                document.documentElement.style.setProperty('--pad-vertical', dynamicPad + 'px');
+              } else {
+                document.documentElement.style.setProperty('--pad-vertical', '8px');
+              }
+            }
+          }
+        }
+      }
+
+      if (isEditMode) updateSidebarDropdowns();
+      renderPanel(records);
+    });
+
+    function renderPanel(records) {
+      const grid = document.getElementById('buttonsGrid');
+      grid.innerHTML = '';
+      if (!records || records.length === 0) return;
+      const menus = {};
+
+      records.forEach(row => {
+        const type = getMappedValue(row, 'type').toLowerCase();
+        const label = getMappedValue(row, 'label');
+        if (type.includes('меню') && !type.includes('пункт') && label) {
+          menus[label] = { row: row, children: [] };
+        }
+      });
+
+      records.forEach(row => {
+        const type = getMappedValue(row, 'type').toLowerCase();
+        if (type.includes('пункт')) {
+          const parentName = getMappedValue(row, 'parent');
+          if (parentName && menus[parentName]) menus[parentName].children.push(row);
+        }
+      });
+
+      records.forEach(row => {
+        const type = getMappedValue(row, 'type').toLowerCase();
+        const label = getMappedValue(row, 'label') || 'Без названия';
+        const btnColor = getMappedValue(row, 'btnColor');
+        const textColor = getMappedValue(row, 'textColor');
+
+        if (type.includes('кнопка') || type === '') {
+          const btn = document.createElement('div');
+          btn.className = 'btn-item'; btn.textContent = label;
+          if (btnColor && btnColor.startsWith('#')) btn.style.backgroundColor = btnColor;
+          if (textColor && textColor.startsWith('#')) btn.style.color = textColor;
+          if (selectedTarget.type === 'button' && selectedTarget.id === row.id) btn.classList.add('selected-target');
+          btn.onmousedown = (e) => handleElementClick(e, row, false, btn);
+          grid.appendChild(btn);
+        }
+
+        if (type.includes('меню') && !type.includes('пункт')) {
+          const menuData = menus[label]; if (!menuData) return;
+          const container = document.createElement('div');
+          container.className = 'dropdown-container';
+
+          const toggle = document.createElement('div');
+          toggle.className = 'dropdown-toggle'; toggle.textContent = label + ' ▾';
+          if (btnColor && btnColor.startsWith('#')) toggle.style.backgroundColor = btnColor;
+          if (textColor && textColor.startsWith('#')) toggle.style.color = textColor;
+          if (selectedTarget.type === 'button' && selectedTarget.id === row.id) toggle.classList.add('selected-target');
+          toggle.onmousedown = (e) => handleElementClick(e, row, true, toggle);
+          container.appendChild(toggle);
+
+          if (menuData.children.length > 0) {
+            const menuBody = document.createElement('div');
+            menuBody.className = 'dropdown-menu';
+            menuData.children.forEach(subRow => {
+              const subBtn = document.createElement('div');
+              subBtn.className = 'btn-item'; subBtn.textContent = getMappedValue(subRow, 'label') || 'Пункт';
+              const subBtnColor = getMappedValue(subRow, 'btnColor');
+              const subTextColor = getMappedValue(subRow, 'textColor');
+              if (subBtnColor && subBtnColor.startsWith('#')) subBtn.style.backgroundColor = subBtnColor;
+              if (subTextColor && subTextColor.startsWith('#')) subBtn.style.color = subTextColor;
+              if (selectedTarget.type === 'button' && selectedTarget.id === subRow.id) subBtn.classList.add('selected-target');
+              subBtn.onmousedown = (e) => handleElementClick(e, subRow, false, subBtn);
+              menuBody.appendChild(subBtn);
+            });
+            container.appendChild(menuBody);
+          }
+          grid.appendChild(container);
+        }
+      });
+    }
+
+    function showStatus(text, type) {
+      const logEl = document.getElementById('statusLog');
+      if(!logEl) return;
+      logEl.style.display = 'block';
+      logEl.className = 'status-log ' + type;
+      logEl.textContent = text;
+    }
+  </script>
+</body>
+</html>

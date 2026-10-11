@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Универсальный просмотрщик документов</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf_viewer.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+    <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+    
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body style="margin: 0; padding: 0; overflow: hidden;">
+
+<div id="toolbar">
+  <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
+    <button id="prev-btn" class="action-btn btn-secondary" title="Предыдущий файл">←</button>
+    <span id="file-counter">0 из 0</span>
+    <button id="next-btn" class="action-btn btn-secondary" title="Следующий файл">→</button>
+    
+    <div style="width: 1px; height: 20px; background: rgba(255,255,255,0.2); margin: 0 4px; flex-shrink: 0;"></div>
+
+    <button id="refresh-btn" class="action-btn btn-orange" style="white-space: nowrap; display: none;" title="Вернуться к оригинальной строке">🔄 Сброс</button>
+    
+    <div class="dropdown" id="actions-dropdown">
+        <button class="action-btn btn-secondary" style="background: #34495e; border: 1px solid #5d6d7e; white-space: nowrap;">⚡ Действия ▼</button>
+        <div class="dropdown-content">
+            <div id="upload-new-btn" class="dd-upload">📤 Загрузить новый файл</div>
+            <div id="make-first-btn" class="dd-make-first">🔝 Сделать первым</div>
+            <div id="download-btn" class="dd-download">📥 Скачать файл</div>
+            <div id="download-all-btn" class="dd-download-all">📦 Скачать всё (ZIP)</div>
+            <div id="rename-btn" class="dd-rename">✏️ Переименовать</div>
+            <div id="move-btn" class="dd-move">➡️ Перенести файл</div>
+            <div id="copy-btn" class="dd-copy">👯 Скопировать файл</div>
+            <div id="delete-btn" class="dd-delete">❌ Удалить файл</div>
+        </div>
+    </div>
+  </div>
+
+  <div id="zoom-controls">
+    <button id="zoom-out" class="action-btn btn-secondary" style="width: 30px; padding:0;">-</button>
+    <input id="zoom-input" type="text" value="100%" />
+    <button id="zoom-in" class="action-btn btn-secondary" style="width: 30px; padding:0;">+</button>
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 10px; flex-grow: 1; justify-content: flex-end; max-width: 65%; min-width: 340px;">
+    <div style="display: flex; align-items: center; gap: 5px; flex: 1 1 35%; min-width: 100px;">
+      <label for="row-selector" id="row-label">Строка (0):</label>
+      <select id="row-selector" style="width: 100%; text-overflow: ellipsis; white-space: nowrap; overflow: hidden;"></select>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 5px; flex: 1 1 55%; min-width: 130px;">
+      <label for="file-selector" id="file-label">Файл:</label>
+      <select id="file-selector" style="width: 100%; text-overflow: ellipsis; white-space: nowrap; overflow: hidden;"></select>
+    </div>
+
+    <div class="sort-wrapper">
+      <button class="sort-icon-btn" id="sort-icon-indicator" title="Сортировка списка файлов">▼</button>
+      <select id="sort-selector" class="sort-hidden-select">
+        <option value="name" selected>🔤 Имя (по умолч.)</option>
+        <option value="default">🕒 Порядковый номер</option>
+        <option disabled value="">─────────────────</option>
+        <option disabled value="">v14.07.2026 11:41 MSK</option>
+      </select>
+    </div>
+  </div>
+</div>
+
+<div id="floating-controls-container" class="floating-controls-wrapper"></div>
+<div id="modal-container"></div>
+
+<div id="viewer-container">
+  <div style="padding: 40px; color: #fff; text-align: center;" id="status">Загрузка данных виджета...</div>
+</div>
+
+<script src="grist-core.js"></script>
+<script src="ui-controller.js"></script>
+<script src="actions-handler.js"></script>
+<script src="uploader.js"></script>
+<script src="renderers.js"></script>
+<script src="office-renderers.js"></script>
+
+</body>
+</html>

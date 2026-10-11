@@ -1,0 +1,540 @@
+// Somata 7.0 — retained cubic Bézier Spiral Morph on WebGPU.
+// Endpoint rails are prepared once per Morph phase. rAF only uploads the phase scalar and
+// Corridor copy transforms; cubic evaluation, polar phase interpolation and variable width
+// happen in the vertex shader. CPU auxiliary consumers use the same compact endpoint anchors.
+window.__spiroRegisterModule?.('js/gpu/spiral-bezier-morph-renderer');
+
+const WebGPUSpiralBezierMorphRenderer = (() => {
+    const SUBDIV=12, ARC_SUBDIV=8, FLOATS_PER_CUBIC=24;
+    let device=null,format=null,pipelineMax=null,pipelineOver=null,uniformPipelineMax=null,uniformPipelineOver=null,effectCubicPipeline=null,closurePipeline=null,cornerBuffer=null,renderUniformLayout=null,renderCubicLayout=null,renderCopyLayout=null,renderPipelineLayout=null;
+    let width=0,height=0,generation=-1,ready=false,initializing=null,lastError='not-initialized';
+    const resources=new Map(),retiredResources=[],staticVisualResources=new Map();
+    let retireTimer=0;
+    const stats={phaseBuilds:0,layerBuilds:0,staticVisualBuilds:0,staticVisualHits:0,uploads:0,uploadSkips:0,frames:0,baseFrames:0,glowFrames:0,fusedFrames:0,corridorFrames:0,deferredLayerSceneFrames:0,directFrameSceneFrames:0,cubics:0,gpuSegments:0,arcSubdiv:ARC_SUBDIV,cubicComputeDispatches:0,cubicComputeReuses:0,auxFrames:0,auxHits:0,auxPoints:0,retired:0,fallbacks:0,errors:0,gpuSceneUnavailable:0};
+    const decision={eligible:false,reason:'not-requested',layerIndex:-1,frameId:-1};
+    const uniformBytes=new ArrayBuffer(80),uf=new Float32Array(uniformBytes),uu=new Uint32Array(uniformBytes);
+    const TWO_PI=Math.PI*2;
+
+
+    // Effects consume the exact same polar-interpolated retained cubics as the visible Spiral.
+    // This compute pass materializes only 4 control points per logical cubic on GPU; it never
+    // emits a CPU point cloud or a per-frame spline approximation.
+    const EFFECT_CUBIC_WGSL=`
+struct U { count:u32, _a:u32, _b:u32, _c:u32, phase:vec4<f32>, };
+@group(0) @binding(0) var<storage,read> endpointData:array<vec4<f32>>;
+@group(0) @binding(1) var<storage,read_write> currentCubics:array<vec4<f32>>;
+@group(0) @binding(2) var<uniform> u:U;
+fn polarXY(a:vec2<f32>)->vec2<f32>{return vec2<f32>(a.x*cos(a.y),a.x*sin(a.y));}
+fn polarMix(a:vec2<f32>,b:vec2<f32>,t:f32)->vec2<f32>{let r=mix(a.x,b.x,t);let ang=mix(a.y,b.y,t);return vec2<f32>(r*cos(ang),r*sin(ang));}
+fn safeSpiralMix(a:vec2<f32>,b:vec2<f32>,t:f32,cartesian:bool)->vec2<f32>{return select(polarMix(a,b,t),mix(polarXY(a),polarXY(b),t),cartesian);}
+@compute @workgroup_size(128)
+fn main(@builtin(global_invocation_id) gid:vec3<u32>){
+ let i=gid.x;if(i>=u.count){return;}let b=i*6u;
+ let s0=endpointData[b];let s1=endpointData[b+1u];let d0=endpointData[b+2u];let d1=endpointData[b+3u];let metaData=endpointData[b+5u];let t=clamp(u.phase.x,0.0,1.0);let cartesian=metaData.z>0.5;
+ let p0=safeSpiralMix(s0.xy,d0.xy,t,cartesian);let c1=safeSpiralMix(s0.zw,d0.zw,t,cartesian);let c2=safeSpiralMix(s1.xy,d1.xy,t,cartesian);let p3=safeSpiralMix(s1.zw,d1.zw,t,cartesian);
+ currentCubics[i*2u]=vec4<f32>(p0,c1);currentCubics[i*2u+1u]=vec4<f32>(c2,p3);
+}`;
+
+    // 6.9: a Closed Spiral is periodic rather than a conventional p3==p0 loop.
+    // After endpoint cubic interpolation, patch the last P3 of each continuity-protected
+    // path so it is EXACTLY the rotate+scale image of the current first P0. This keeps the
+    // period seam closed for Continuous/Phase/Phase-Circle/Minimal-Turn without changing
+    // Torn, where a temporary discontinuity is explicitly allowed by the mode.
+    const CLOSURE_WGSL=`
+struct U { count:u32, _a:u32, _b:u32, _c:u32, phase:vec4<f32>, };
+@group(0) @binding(0) var<storage,read_write> currentCubics:array<vec4<f32>>;
+@group(0) @binding(1) var<storage,read> pathRanges:array<vec4<u32>>;
+@group(0) @binding(2) var<storage,read> closureData:array<vec4<f32>>;
+@group(0) @binding(3) var<uniform> u:U;
+fn rotateScale(p:vec2<f32>,ang:f32,sc:f32)->vec2<f32>{let c=cos(ang);let s=sin(ang);return vec2<f32>((c*p.x-s*p.y)*sc,(s*p.x+c*p.y)*sc);}
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid:vec3<u32>){
+ let pi=gid.x;if(pi>=arrayLength(&pathRanges)){return;}let range=pathRanges[pi];let first=range.x;let n=range.y;if(n==0u){return;}
+ let spec=closureData[pi*2u];let flags=closureData[pi*2u+1u];if(flags.z<0.5){return;}
+ let t=clamp(u.phase.x,0.0,1.0);let strength=mix(flags.x,flags.y,t);if(strength<=0.000001){return;}
+ let delta=mix(spec.x,spec.z,t);let scale=exp(mix(spec.y,spec.w,t));let firstQ=currentCubics[first*2u];let p0=firstQ.xy;let c1=firstQ.zw;let expectedP3=rotateScale(p0,delta,scale);let expectedNextC1=rotateScale(c1,delta,scale);let expectedC2=2.0*expectedP3-expectedNextC1;
+ let last=first+n-1u;var q=currentCubics[last*2u+1u];let k=clamp(strength,0.0,1.0);q.xy=mix(q.xy,expectedC2,k);q.zw=mix(q.zw,expectedP3,k);currentCubics[last*2u+1u]=q;
+}`;
+
+    const WGSL=`
+struct U {
+  viewport:vec2<f32>, cubicCount:u32, copyCount:u32,
+  row0:vec4<f32>, row1:vec4<f32>,
+  params:vec4<f32>, // halfWidth, glowRadius, coreAlpha, glowAlpha
+  phase:vec4<f32>,  // t, reserved...
+};
+@group(0) @binding(0) var<uniform> u:U;
+@group(1) @binding(0) var<storage,read> cubicData:array<vec4<f32>>;
+@group(1) @binding(1) var<storage,read> currentCubics:array<vec4<f32>>;
+@group(2) @binding(0) var<storage,read> copyData:array<vec4<f32>>;
+struct Vin { @location(0) corner:vec2<f32>, };
+struct Vout {
+ @builtin(position) position:vec4<f32>, @location(0) local:vec2<f32>,
+ @location(1) @interpolate(flat) segLen:f32,
+ @location(2) @interpolate(flat) halfWidth0:f32,
+ @location(3) @interpolate(flat) halfWidth1:f32,
+ @location(4) @interpolate(flat) glowRadius:f32,
+ @location(5) @interpolate(flat) alpha:f32,
+ @location(6) @interpolate(flat) color:vec4<f32>,
+};
+fn polarMix(a:vec2<f32>,b:vec2<f32>,t:f32)->vec2<f32>{
+ let r=mix(a.x,b.x,t);let ang=mix(a.y,b.y,t);return vec2<f32>(r*cos(ang),r*sin(ang));
+}
+fn cubic(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,t:f32)->vec2<f32>{
+ let q=1.0-t;return q*q*q*p0+3.0*q*q*t*c1+3.0*q*t*t*c2+t*t*t*p3;
+}
+fn screenPoint(p:vec2<f32>)->vec2<f32>{return vec2<f32>(u.row0.x*p.x+u.row0.y*p.y+u.row0.z,u.row1.x*p.x+u.row1.y*p.y+u.row1.z);}
+@vertex fn vs(v:Vin,@builtin(instance_index) iid:u32)->Vout{
+ var o:Vout;let cubicIndex=(iid/${SUBDIV}u)%max(1u,u.cubicCount);let sub=iid%${SUBDIV}u;let ci=iid/(max(1u,u.cubicCount)*${SUBDIV}u);let b=cubicIndex*6u;
+ let w=cubicData[b+4u];let metaData=cubicData[b+5u];let q=currentCubics[cubicIndex*2u];let r=currentCubics[cubicIndex*2u+1u];
+ let t=clamp(u.phase.x,0.0,1.0);let p0=q.xy;let c1=q.zw;let c2=r.xy;let p3=r.zw;
+ let q0=f32(sub)/f32(${SUBDIV});let q1=f32(sub+1u)/f32(${SUBDIV});let a0=cubic(p0,c1,c2,p3,q0);let b0=cubic(p0,c1,c2,p3,q1);
+ let cp0=copyData[ci*3u];let cp1=copyData[ci*3u+1u];let cp2=copyData[ci*3u+2u];
+ let a=vec2<f32>(cp0.x*a0.x+cp0.y*a0.y,cp1.x*a0.x+cp1.y*a0.y);let bb=vec2<f32>(cp0.x*b0.x+cp0.y*b0.y,cp1.x*b0.x+cp1.y*b0.y);
+ let sp0=screenPoint(a);let sp1=screenPoint(bb);let delta=sp1-sp0;let len=max(length(delta),0.0001);let dir=delta/len;let normal=vec2<f32>(-dir.y,dir.x);
+ let ws0=exp(mix(log(max(.02,w.x)),log(max(.02,w.z)),t));let ws1=exp(mix(log(max(.02,w.y)),log(max(.02,w.w)),t));
+ let l0=exp(mix(log(max(.02,ws0)),log(max(.02,ws1)),q0));let l1=exp(mix(log(max(.02,ws0)),log(max(.02,ws1)),q1));let sc=max(.000001,abs(cp0.w));
+ let hw0=max(.18,u.params.x*sc*l0);let hw1=max(.18,u.params.x*sc*l1);let gr=max(0.0,u.params.y*sc);let pad=max(hw0,hw1)+gr+2.0;
+ let tx=(v.corner.x+1.0)*.5;let lx=mix(-pad,len+pad,tx);let ly=v.corner.y*pad;let pos=sp0+dir*lx+normal*ly;
+ let presence=mix(metaData.x,metaData.y,t);o.position=vec4<f32>(pos.x/u.viewport.x*2.0-1.0,1.0-pos.y/u.viewport.y*2.0,0.0,1.0);o.local=vec2<f32>(lx,ly);o.segLen=len;o.halfWidth0=hw0;o.halfWidth1=hw1;o.glowRadius=gr;o.alpha=cp0.z*presence;o.color=vec4<f32>(cp1.z,cp1.w,cp2.x,cp2.y);return o;
+}
+@fragment fn fs(v:Vout)->@location(0) vec4<f32>{
+ if(v.alpha<=.00001||v.color.a<=.00001){discard;}let cx=clamp(v.local.x,0.0,v.segLen);let q=cx/max(.0001,v.segLen);let hw=exp(mix(log(max(.001,v.halfWidth0)),log(max(.001,v.halfWidth1)),q));let d=length(vec2<f32>(v.local.x-cx,v.local.y));var cov=0.0;
+ if(u.params.w>.00001&&v.glowRadius>.01){let edge=max(0.0,d-hw);let z=edge/max(.55,v.glowRadius*.44);cov=exp(-z*z*1.65)*(1.0-smoothstep(v.glowRadius*.76,v.glowRadius+2.0,edge))*u.params.w;}else{cov=clamp(hw+.75-d,0.0,1.0)*u.params.z;}
+ let a=clamp(cov*v.alpha*v.color.a,0.0,1.0);if(a<.0001){discard;}return vec4<f32>(v.color.rgb*a,a);
+}
+
+// 6.9 rev4 — continuous base ribbon. The glow entry point above intentionally
+// remains capsule based; only the visible base uses this strip so each GPU
+// subdivision shares an exact cross-section with its neighbour.
+struct UniformOut {
+ @builtin(position) position:vec4<f32>, @location(0) edge:f32,
+ @location(1) halfWidth:f32, @location(2) alpha:f32, @location(3) color:vec4<f32>,
+};
+fn cubicDerivative(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,t:f32)->vec2<f32>{
+ let q=1.0-t;return 3.0*q*q*(c1-p0)+6.0*q*t*(c2-c1)+3.0*t*t*(p3-c2);
+}
+fn safeUnit(v:vec2<f32>,fallback:vec2<f32>)->vec2<f32>{let n=length(v);if(n>.00001){return v/n;}let f=length(fallback);if(f>.00001){return fallback/f;}return vec2<f32>(1.0,0.0);}
+fn screenVector(v:vec2<f32>,cp0:vec4<f32>,cp1:vec4<f32>)->vec2<f32>{
+ let a=vec2<f32>(cp0.x*v.x+cp0.y*v.y,cp1.x*v.x+cp1.y*v.y);return vec2<f32>(u.row0.x*a.x+u.row0.y*a.y,u.row1.x*a.x+u.row1.y*a.y);
+}
+fn currentTangent(ci:u32,t:f32,cp0:vec4<f32>,cp1:vec4<f32>,fallback:vec2<f32>)->vec2<f32>{
+ let q=currentCubics[ci*2u];let r=currentCubics[ci*2u+1u];return safeUnit(screenVector(cubicDerivative(q.xy,q.zw,r.xy,r.zw,t),cp0,cp1),fallback);
+}
+fn joinedCurrentTangent(ci:u32,t:f32,flags:f32,cp0:vec4<f32>,cp1:vec4<f32>,fallback:vec2<f32>)->vec2<f32>{
+ let cur=currentTangent(ci,t,cp0,cp1,fallback);var sum=cur;let first=(flags>=.5&&flags<1.5)||flags>=2.5;let last=flags>=1.5;
+ if(t<.00001&&!first){sum=sum+currentTangent(ci-1u,1.0,cp0,cp1,cur);}if(t>.99999&&!last){sum=sum+currentTangent(ci+1u,0.0,cp0,cp1,cur);}return safeUnit(sum,cur);
+}
+@vertex fn vsUniform(v:Vin,@builtin(instance_index) iid:u32)->UniformOut{
+ var o:UniformOut;let ci=(iid/${SUBDIV}u)%max(1u,u.cubicCount);let sub=iid%${SUBDIV}u;let copyIndex=iid/(max(1u,u.cubicCount)*${SUBDIV}u);let b=ci*6u;
+ let w=cubicData[b+4u];let metaData=cubicData[b+5u];let q=currentCubics[ci*2u];let r=currentCubics[ci*2u+1u];let phaseT=clamp(u.phase.x,0.0,1.0);
+ let t=select(f32(sub)/f32(${SUBDIV}),f32(sub+1u)/f32(${SUBDIV}),v.corner.x>0.0);let local=cubic(q.xy,q.zw,r.xy,r.zw,t);
+ let cp0=copyData[copyIndex*3u];let cp1=copyData[copyIndex*3u+1u];let cp2=copyData[copyIndex*3u+2u];let copied=vec2<f32>(cp0.x*local.x+cp0.y*local.y,cp1.x*local.x+cp1.y*local.y);let center=screenPoint(copied);
+ let chord=currentTangent(ci,t,cp0,cp1,vec2<f32>(1.0,0.0));let tangent=joinedCurrentTangent(ci,t,metaData.w,cp0,cp1,chord);let normal=vec2<f32>(-tangent.y,tangent.x);
+ let ws0=exp(mix(log(max(.02,w.x)),log(max(.02,w.z)),phaseT));let ws1=exp(mix(log(max(.02,w.y)),log(max(.02,w.w)),phaseT));let scaleAt=exp(mix(log(max(.02,ws0)),log(max(.02,ws1)),t));let sc=max(.000001,abs(cp0.w));let hw=max(.18,u.params.x*sc*scaleAt);let pad=hw+.75;let pos=center+normal*(v.corner.y*pad);
+ let presence=mix(metaData.x,metaData.y,phaseT);o.position=vec4<f32>(pos.x/u.viewport.x*2.0-1.0,1.0-pos.y/u.viewport.y*2.0,0.0,1.0);o.edge=v.corner.y*pad;o.halfWidth=hw;o.alpha=cp0.z*presence;o.color=vec4<f32>(cp1.z,cp1.w,cp2.x,cp2.y);return o;
+}
+@fragment fn fsUniform(v:UniformOut)->@location(0) vec4<f32>{
+ if(v.alpha<=.00001||v.color.a<=.00001||u.params.z<=.00001){discard;}let hw=max(.001,v.halfWidth);let cc=min(1.0,2.0*hw);let cov=min(cc,clamp(hw+.5-abs(v.edge),0.0,1.0))*u.params.z;let a=clamp(cov*v.alpha*v.color.a,0.0,1.0);if(a<.0001){discard;}return vec4<f32>(v.color.rgb*a,a);
+}`;
+
+    function destroyResource(rec){
+        for(const b of [rec?.buffer,rec?.copyBuffer,rec?.uniformBase,rec?.uniformGlow,rec?.cubicBuffer,rec?.cubicUniformBuffer,rec?.pathRangeBuffer,rec?.segmentMetaBuffer,rec?.pathSegmentRangeBuffer,rec?.pathClosureBuffer])try{b?.destroy?.();}catch(_){}
+    }
+    function destroyStaticVisual(rec){
+        for(const b of [rec?.metaBuffer,rec?.copyBuffer,rec?.uniformBase,rec?.uniformGlow])try{b?.destroy?.();}catch(_){}
+    }
+    function resetStaticVisuals(){for(const rec of staticVisualResources.values())destroyStaticVisual(rec);staticVisualResources.clear();}
+    function flushRetired(){retireTimer=0;while(retiredResources.length)destroyResource(retiredResources.pop());}
+    function scheduleRetiredFlush(){if(retireTimer)return;const run=()=>flushRetired();if(typeof requestIdleCallback==='function')retireTimer=requestIdleCallback(run,{timeout:800});else retireTimer=setTimeout(run,80);}
+    function retireCurrentResources(reason='phase-change'){try{invalidateGpuMorphArcResources?.(`spiral-bezier-${reason}`);}catch(_){}for(const rec of resources.values()){retiredResources.push(rec);stats.retired++;}resources.clear();decision.reason=reason;scheduleRetiredFlush();}
+    // 6.7 phase-handoff fix: build the next phase beside the currently visible one, then
+    // swap the resource map atomically. While the async build is running the old phase stays
+    // drawable at its exact handoff t, so there is no WebGPU -> CPU -> WebGPU flash at a boundary.
+    function replaceResources(nextResources,reason='phase-swap'){
+        try{invalidateGpuMorphArcResources?.(`spiral-bezier-${reason}`);}catch(_){}
+        for(const rec of resources.values()){retiredResources.push(rec);stats.retired++;}
+        resources.clear();
+        for(const [key,rec] of nextResources)resources.set(key,rec);
+        decision.reason=reason;
+        scheduleRetiredFlush();
+    }
+    function invalidate(reason='phase-change'){retireCurrentResources(reason);}
+    // Stop is intentionally cheap: the last completed canonical phase is already in state.layers.
+    // Keep endpoint/copy buffers resident until the next phase replaces them; destroying dozens of
+    // WebGPU buffers synchronously on the Stop click was a visible main-thread hitch.
+    function park(reason='stopped'){decision.eligible=false;decision.reason=reason;for(const rec of resources.values()){rec.copyPackedFrameId=-1;rec.auxT=NaN;}return true;}
+    function reset(){for(const rec of resources.values())destroyResource(rec);resources.clear();resetStaticVisuals();flushRetired();try{cornerBuffer?.destroy?.();}catch(_){}pipelineMax=null;pipelineOver=null;uniformPipelineMax=null;uniformPipelineOver=null;effectCubicPipeline=null;closurePipeline=null;cornerBuffer=null;renderUniformLayout=null;renderCubicLayout=null;renderCopyLayout=null;renderPipelineLayout=null;width=0;height=0;device=null;ready=false;}
+    async function ensureReady(){
+        const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration?.():-1;
+        if(ready&&device&&gen===generation)return true;if(initializing)return initializing;
+        if(ready&&gen!==generation)reset();
+        initializing=(async()=>{try{if(typeof WebGPUDeviceHub==='undefined')throw new Error('WebGPUDeviceHub unavailable');const sh=await WebGPUDeviceHub.acquire();device=sh.device;generation=sh.generation;format=navigator.gpu.getPreferredCanvasFormat();const mod=device.createShaderModule({label:'Somata Spiral Bézier Morph WGSL',code:WGSL}),effectMod=device.createShaderModule({label:'Somata Spiral Bézier shared effect cubics WGSL',code:EFFECT_CUBIC_WGSL});if(typeof assertWebGPUShaderModule==='function'){await assertWebGPUShaderModule(mod,'Somata Spiral Bézier Morph WGSL');await assertWebGPUShaderModule(effectMod,'Somata Spiral Bézier shared effect cubics WGSL');}effectCubicPipeline=device.createComputePipeline({label:'Somata Spiral Bézier shared effect cubics',layout:'auto',compute:{module:effectMod,entryPoint:'main'}});const closureMod=device.createShaderModule({label:'Somata 7.0 Spiral periodic closure WGSL',code:CLOSURE_WGSL});if(typeof assertWebGPUShaderModule==='function')await assertWebGPUShaderModule(closureMod,'Somata 7.0 Spiral periodic closure WGSL');closurePipeline=device.createComputePipeline({label:'Somata 6.9 Spiral periodic closure',layout:'auto',compute:{module:closureMod,entryPoint:'main'}});const blendOver={color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}},blendMax={color:{srcFactor:'one',dstFactor:'one',operation:'max'},alpha:{srcFactor:'one',dstFactor:'one',operation:'max'}};const vertexBuffers=[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}];
+            // 7.0.5: all four Spiral Morph render pipelines share ONE explicit layout.
+            // WebGPU auto-layout objects are pipeline-private; reusing a bind group created
+            // from pipelineMax with uniformPipelineMax is invalid even when the declarations
+            // are structurally identical. Fused Glow+Base switches pipelines inside one pass,
+            // so its bind groups must come from a common explicit GPUBindGroupLayout.
+            renderUniformLayout=device.createBindGroupLayout({label:'Somata Spiral Morph render uniforms',entries:[{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'uniform'}}]});
+            renderCubicLayout=device.createBindGroupLayout({label:'Somata Spiral Morph retained cubics',entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}},{binding:1,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
+            renderCopyLayout=device.createBindGroupLayout({label:'Somata Spiral Morph corridor copies',entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
+            renderPipelineLayout=device.createPipelineLayout({label:'Somata Spiral Morph shared render layout',bindGroupLayouts:[renderUniformLayout,renderCubicLayout,renderCopyLayout]});
+            const makePipeline=(kind,blend)=>device.createRenderPipeline({label:`Somata 7.0 Spiral Bézier Morph ${kind}`,layout:renderPipelineLayout,vertex:{module:mod,entryPoint:'vs',buffers:vertexBuffers},fragment:{module:mod,entryPoint:'fs',targets:[{format,blend}]},primitive:{topology:'triangle-strip'}});const makeUniformPipeline=(kind,blend)=>device.createRenderPipeline({label:`Somata 7.0 Uniform Spiral Bézier Morph ${kind}`,layout:renderPipelineLayout,vertex:{module:mod,entryPoint:'vsUniform',buffers:vertexBuffers},fragment:{module:mod,entryPoint:'fsUniform',targets:[{format,blend}]},primitive:{topology:'triangle-strip'}});pipelineMax=makePipeline('MAX union',blendMax);pipelineOver=makePipeline('source-over',blendOver);uniformPipelineMax=makeUniformPipeline('MAX union',blendMax);uniformPipelineOver=makeUniformPipeline('source-over',blendOver);cornerBuffer=device.createBuffer({label:'Somata Spiral Bézier corners',size:32,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(cornerBuffer,0,new Float32Array([-1,-1,1,-1,-1,1,1,1]));ready=true;lastError='';
+            // Iter30 — async readiness is itself a render invalidation. A strict Spiral frame
+            // may have intentionally kept the previous GPU presentation while this pipeline was
+            // compiling; without a completion repaint it could stay there until an unrelated UI event.
+            try{requestMainCanvasRender?.();}catch(_){}
+            return true;}catch(err){lastError=String(err?.message||err);stats.errors++;ready=false;return false;}finally{initializing=null;}})();return initializing;
+    }
+    function warmup(){void ensureReady();return ready;}
+    function ensureSize(){if(!ready||!device)return false;width=Math.max(1,mainCanvas.width|0);height=Math.max(1,mainCanvas.height|0);return true;}
+    const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+    function lineCubics(points){const out=[];for(let i=0;i<points.length-1;i++){const p0=points[i],p3=points[i+1],c1={x:p0.x+(p3.x-p0.x)/3,y:p0.y+(p3.y-p0.y)/3},c2={x:p0.x+2*(p3.x-p0.x)/3,y:p0.y+2*(p3.y-p0.y)/3};out.push({p0:{...p0},c1,c2,p3:{...p3},widthScale0:Math.max(.02,Number(p0.widthScale)||1),widthScale1:Math.max(.02,Number(p3.widthScale)||1)});}return out;}
+    function endpointCubics(path,layer){
+        const points=path?.points||[];if(points.length<2)return [];
+        if(Array.isArray(path?._bezierSegments)&&path._bezierSegments.length)return path._bezierSegments;
+        if(Array.isArray(points?._spiroRetainedCubics)&&points._spiroRetainedCubics.length)return points._spiroRetainedCubics;
+        const smooth=layer?.profileMode==='spline'&&typeof normalizeSplineRenderMode==='function'&&normalizeSplineRenderMode(layer?.splineRenderMode)==='smooth'&&path?.spiralProfileSplineBaked!==true;
+        const round=path?.spiralProfileRoundingBaked===true?0:Math.max(0,Math.min(2,Number(typeof getRoundingStrength==='function'?getRoundingStrength(layer?.rounding):layer?.rounding)||0));
+        if(typeof buildSpiralBezierSegments==='function'){const c=buildSpiralBezierSegments(points,round,path?.cornerFlags||[],smooth);if(c?.length)return c;}
+        if(typeof __spiroBuildSpiralBezierSegments==='function'){const c=__spiroBuildSpiralBezierSegments(points,round,path?.cornerFlags||[],smooth);if(c?.length)return c;}
+        return lineCubics(points);
+    }
+    function periodicClosureSpec(path,cubics,layer){
+        const periodic=Boolean(layer?.spiralEnabled===true&&layer?.spiralClosed!==false&&cubics?.length);
+        if(!periodic)return{periodic:false,delta:0,logScale:0,error:0};
+        const p0=cubics[0].p0,p3=cubics[cubics.length-1].p3,meta=path?.points?.[0]||null;
+        let delta=Number(meta?.__spiralDelta),scale=Number(meta?.__spiralTargetScale);
+        if(!Number.isFinite(delta)){delta=Math.atan2(Number(p3.y)||0,Number(p3.x)||0)-Math.atan2(Number(p0.y)||0,Number(p0.x)||0);while(delta>Math.PI)delta-=TWO_PI;while(delta<=-Math.PI)delta+=TWO_PI;}
+        if(!(Number.isFinite(scale)&&scale>0)){const r0=Math.hypot(Number(p0.x)||0,Number(p0.y)||0),r3=Math.hypot(Number(p3.x)||0,Number(p3.y)||0);scale=r0>1e-9?Math.max(1e-6,r3/r0):1;}
+        const c=Math.cos(delta),sn=Math.sin(delta),ex=(c*(Number(p0.x)||0)-sn*(Number(p0.y)||0))*scale,ey=(sn*(Number(p0.x)||0)+c*(Number(p0.y)||0))*scale;
+        const firstC1=cubics[0]?.c1||p0,lastC2=cubics[cubics.length-1]?.c2||p3,ec1x=(c*(Number(firstC1.x)||0)-sn*(Number(firstC1.y)||0))*scale,ec1y=(sn*(Number(firstC1.x)||0)+c*(Number(firstC1.y)||0))*scale,ec2x=2*ex-ec1x,ec2y=2*ey-ec1y;
+        return{periodic:true,delta,logScale:Math.log(Math.max(1e-6,scale)),error:Math.hypot((Number(p3.x)||0)-ex,(Number(p3.y)||0)-ey),tangentError:Math.hypot((Number(lastC2.x)||0)-ec2x,(Number(lastC2.y)||0)-ec2y)};
+    }
+    function lerpPoint(a,b,t){return{x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t};}
+    function splitCubic(q,t){const p01=lerpPoint(q.p0,q.c1,t),p12=lerpPoint(q.c1,q.c2,t),p23=lerpPoint(q.c2,q.p3,t),p012=lerpPoint(p01,p12,t),p123=lerpPoint(p12,p23,t),p=lerpPoint(p012,p123,t);return[{p0:{...q.p0},c1:p01,c2:p012,p3:p},{p0:p,c1:p123,c2:p23,p3:{...q.p3}}];}
+    function cubicSubsegment(q,a,b){a=clamp(a,0,1);b=clamp(b,a,1);let out;if(a<=1e-12&&b>=1-1e-12)out={...q,p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}};else{let left=q;if(b<1-1e-12)left=splitCubic(q,b)[0];out=a<=1e-12?left:splitCubic(left,a/Math.max(1e-12,b))[1];}
+        // Corner identity belongs to authored knots, not to technical De Casteljau cut points.
+        // Preserve it only when the exact subcurve still touches the original endpoint.
+        out.__profileCorner0=a<=1e-8&&q.__profileCorner0===true;out.__profileCorner1=b>=1-1e-8&&q.__profileCorner1===true;
+        return out;}
+    function cubicPoint(q,t){const u=1-t,u2=u*u,t2=t*t;return{x:u2*u*q.p0.x+3*u2*t*q.c1.x+3*u*t2*q.c2.x+t2*t*q.p3.x,y:u2*u*q.p0.y+3*u2*t*q.c1.y+3*u*t2*q.c2.y+t2*t*q.p3.y};}
+    function cubicSpeed(q,t){const u=1-t,dx=3*u*u*(q.c1.x-q.p0.x)+6*u*t*(q.c2.x-q.c1.x)+3*t*t*(q.p3.x-q.c2.x),dy=3*u*u*(q.c1.y-q.p0.y)+6*u*t*(q.c2.y-q.c1.y)+3*t*t*(q.p3.y-q.c2.y);return Math.hypot(dx,dy);}
+    function cubicArcLengthGauss3(q,a=0,b=1){const m=(a+b)*.5,h=(b-a)*.5,x=.7745966692414834;return Math.max(1e-12,h*((8/9)*cubicSpeed(q,m)+(5/9)*(cubicSpeed(q,m-h*x)+cubicSpeed(q,m+h*x))));}
+    function cubicApproxLength(q){return Math.max(1e-9,cubicArcLengthGauss3(q,0,1));}
+    function cubicArcLut(q,steps=12){const ts=new Float32Array(steps+1),ls=new Float32Array(steps+1);let total=0;for(let i=1;i<=steps;i++){const a=(i-1)/steps,t=i/steps;total+=cubicArcLengthGauss3(q,a,t);ts[i]=t;ls[i]=total;}return{ts,ls,total:Math.max(1e-9,total)};}
+    function buildRailArcMap(cubics){const src=Array.isArray(cubics)?cubics:[],entries=[],knots=[0];let total=0;for(let i=0;i<src.length;i++){const lut=cubicArcLut(src[i]);entries.push({q:src[i],lut,start:total,end:total+lut.total});total+=lut.total;}total=Math.max(1e-9,total);for(const e of entries)knots.push(e.end/total);knots[knots.length-1]=1;return{entries,total,knots};}
+    function localTAtArcFraction(entry,localFraction){const f=clamp(localFraction,0,1),target=f*entry.lut.total,ls=entry.lut.ls,ts=entry.lut.ts;let hi=1;while(hi<ls.length&&ls[hi]<target)hi++;if(hi>=ls.length)return 1;const lo=Math.max(0,hi-1),den=Math.max(1e-9,ls[hi]-ls[lo]),u=(target-ls[lo])/den;return ts[lo]+(ts[hi]-ts[lo])*u;}
+    function railLocationAtFraction(map,f){const target=clamp(f,0,1)*map.total;let i=0;while(i<map.entries.length-1&&target>map.entries[i].end+1e-9)i++;const e=map.entries[i],local=(target-e.start)/Math.max(1e-9,e.end-e.start);return{index:i,t:localTAtArcFraction(e,local)};}
+    function uniqueFractions(values){const a=(values||[]).map(v=>clamp(Number(v)||0,0,1)).sort((x,y)=>x-y),out=[];for(const v of a)if(!out.length||Math.abs(v-out[out.length-1])>1e-6)out.push(v);if(!out.length||out[0]>1e-8)out.unshift(0);else out[0]=0;if(out[out.length-1]<1-1e-8)out.push(1);else out[out.length-1]=1;return out;}
+    function splitRailAtFractions(map,fractions){const out=[];for(let k=0;k<fractions.length-1;k++){const fa=fractions[k],fb=fractions[k+1];if(fb-fa<1e-8)continue;const a=railLocationAtFraction(map,fa),b=railLocationAtFraction(map,fb);if(a.index!==b.index){/* union includes all original knots, so only floating-point boundary drift can land here */const boundary=map.knots[Math.min(a.index,b.index)+1];const aa=railLocationAtFraction(map,Math.min(fb,boundary-1e-8)),bb=railLocationAtFraction(map,Math.max(fa,boundary+1e-8));if(a.index!==aa.index||bb.index!==b.index)continue;}
+        const e=map.entries[a.index];let tb=b.index===a.index?b.t:1;let ta=a.t;if(k===fractions.length-2&&fb>=1-1e-8){const last=map.entries.length-1;if(a.index===last)tb=1;}const r=cubicSubsegment(e.q,ta,tb),lw0=Math.log(Math.max(.02,Number(e.q.widthScale0)||1)),lw1=Math.log(Math.max(.02,Number(e.q.widthScale1)||1));r.widthScale0=Math.exp(lw0+(lw1-lw0)*ta);r.widthScale1=Math.exp(lw0+(lw1-lw0)*tb);out.push(r);
+    }return out;}
+    function equalizeCubicRailsByArc(srcCubics,dstCubics,sourceMap=null,targetMap=null){const sm=sourceMap||buildRailArcMap(srcCubics),dm=targetMap||buildRailArcMap(dstCubics),fractions=uniqueFractions([0,1,...sm.knots,...dm.knots]);const source=splitRailAtFractions(sm,fractions),target=splitRailAtFractions(dm,fractions);if(source.length!==target.length||!source.length){const count=Math.max(srcCubics.length,dstCubics.length),fallback=(cubics)=>{const map=buildRailArcMap(cubics),f=[];for(let i=0;i<=count;i++)f.push(i/count);return splitRailAtFractions(map,f);};return{source:fallback(srcCubics),target:fallback(dstCubics),fractions:Array.from({length:count+1},(_,i)=>i/count),fallback:true};}return{source,target,fractions,fallback:false};}
+    function cubicRailPoints(cubics){if(!cubics?.length)return[];const out=[{...cubics[0].p0,widthScale:Math.max(.02,Number(cubics[0].widthScale0)||1)}];for(const q of cubics)out.push({...q.p3,widthScale:Math.max(.02,Number(q.widthScale1)||1)});return out;}
+    function cubicRailLength(cubics){let d=0;for(const q of cubics||[])d+=cubicApproxLength(q);return d;}
+    function cubicKnotFractions(cubics){const src=cubics||[];if(!src.length)return[0,1];return buildRailArcMap(src).knots;}
+    function polarSequence(cubics){const seq=[];for(let i=0;i<cubics.length;i++){const q=cubics[i];if(i===0)seq.push(q.p0);seq.push(q.c1,q.c2,q.p3);}let prev=null;const out=[];for(const p of seq){let a=Math.atan2(Number(p.y)||0,Number(p.x)||0);if(prev!==null){while(a-prev>Math.PI)a-=TWO_PI;while(a-prev<-Math.PI)a+=TWO_PI;}prev=a;out.push({r:Math.hypot(Number(p.x)||0,Number(p.y)||0),a});}return out;}
+    function alignMinimalTurnPolarAngles(sp,dp){
+        const n=Math.min(sp.length,dp.length);if(!n)return 0;let scale=0;for(let i=0;i<n;i++)scale=Math.max(scale,sp[i].r,dp[i].r);const radiusEps=Math.max(1e-6,scale*.0015);
+        // Iter9: use ONE integer 2π representative for the whole retained path. Source and
+        // destination sequences are already internally unwrapped by polarSequence(); allowing
+        // C1/C2/endpoints to pick different wrap branches creates a corkscrew during t∈(0,1).
+        // A global 2π shift preserves every destination control point EXACTLY at t=1 while
+        // choosing the least-rotation equivalent path. No post-DP angle clamping is allowed,
+        // because a non-2π clamp changes the actual destination geometry.
+        let meanNum=0,meanDen=0;
+        for(let i=0;i<n;i++){const r=Math.max(sp[i].r,dp[i].r),w=r<=radiusEps?.01:(.08+.92*Math.min(1,r/Math.max(radiusEps,scale*.15)));meanNum+=(sp[i].a-dp[i].a)*w;meanDen+=w;}
+        const k0=Math.round((meanNum/Math.max(1e-9,meanDen))/TWO_PI);let bestK=k0,bestCost=Infinity,bestMax=Infinity;
+        for(let k=k0-2;k<=k0+2;k++){const shift=k*TWO_PI;let cost=0,maxAbs=0,weight=0;for(let i=0;i<n;i++){const r=Math.max(sp[i].r,dp[i].r),w=r<=radiusEps?.01:(.08+.92*Math.min(1,r/Math.max(radiusEps,scale*.15))),d=(dp[i].a+shift)-sp[i].a;cost+=d*d*w;maxAbs=Math.max(maxAbs,Math.abs(d));weight+=w;}cost/=Math.max(1e-9,weight);const score=cost+maxAbs*maxAbs*.08;if(score<bestCost-1e-12||(Math.abs(score-bestCost)<1e-12&&maxAbs<bestMax)){bestCost=score;bestMax=maxAbs;bestK=k;}}
+        const globalPhaseK=bestK,shift=globalPhaseK*TWO_PI;for(let i=0;i<n;i++)dp[i].a+=shift;
+        return globalPhaseK;
+    }
+    function packPairCubics(srcCubics,dstCubics,srcPresent,dstPresent,out,offset,morphType='phaseCircle'){
+        const n=Math.min(srcCubics.length,dstCubics.length);if(!n)return offset;const sp=polarSequence(srcCubics),dp=polarSequence(dstCubics);
+        if(morphType==='minimalTurn')alignMinimalTurnPolarAngles(sp,dp);else{const shift=Math.round((sp[0].a-dp[0].a)/TWO_PI)*TWO_PI;for(const p of dp)p.a+=shift;}
+        const at=(arr,i,slot)=>arr[i*3+slot],minimal=morphType==='minimalTurn',forceCartesian=morphType==='continuous'||morphType==='torn';
+        // Iter11: choose the interpolation metric ONCE for the complete retained path. A per-cubic
+        // choice is mathematically invalid: P3 of cubic i and P0 of cubic i+1 are the same knot,
+        // so different interpolation metrics would move that shared knot to two different places.
+        // One path-wide Cartesian fallback preserves C0 continuity and exact endpoints while the
+        // normal case remains the cheaper least-turn polar interpolation.
+        // Iter14: first determine ONE final radius scale, then score every control against it.
+        // The previous one-pass form changed the weight/near-origin threshold as larger controls
+        // were encountered, so the result depended on control ordering and could occasionally
+        // choose polar interpolation for a path whose outer turns visibly spun.
+        let pathMaxRadius=1e-9;for(let i=0;i<n;i++){const S=[at(sp,i,0),at(sp,i,1),at(sp,i,2),at(sp,i,3)],D=[at(dp,i,0),at(dp,i,1),at(dp,i,2),at(dp,i,3)];for(let k=0;k<4;k++)pathMaxRadius=Math.max(pathMaxRadius,S[k].r,D[k].r);}
+        let pathMaxPolarTurn=0,pathNearOriginTurn=0,visibleTurnEnergy=0,visibleTurnWeight=0,outerMaxTurn=0,outerTurnEnergy=0,outerTurnWeight=0,outerSignedTurn=0;for(let i=0;i<n;i++){const S=[at(sp,i,0),at(sp,i,1),at(sp,i,2),at(sp,i,3)],D=[at(dp,i,0),at(dp,i,1),at(dp,i,2),at(dp,i,3)];for(let k=0;k<4;k++){const signed=D[k].a-S[k].a,turn=Math.abs(signed),r=Math.max(S[k].r,D[k].r);pathMaxPolarTurn=Math.max(pathMaxPolarTurn,turn);if(Math.min(S[k].r,D[k].r)<pathMaxRadius*.006)pathNearOriginTurn=Math.max(pathNearOriginTurn,turn);const w=Math.max(.01,r/pathMaxRadius);visibleTurnEnergy+=turn*turn*w;visibleTurnWeight+=w;if(r>=pathMaxRadius*.28){outerMaxTurn=Math.max(outerMaxTurn,turn);outerTurnEnergy+=turn*turn*w;outerSignedTurn+=signed*w;outerTurnWeight+=w;}}}
+        const visibleTurnRms=Math.sqrt(visibleTurnEnergy/Math.max(1e-9,visibleTurnWeight)),outerTurnRms=Math.sqrt(outerTurnEnergy/Math.max(1e-9,outerTurnWeight)),coherentOuterTurn=Math.abs(outerSignedTurn/Math.max(1e-9,outerTurnWeight));
+        // Iter15: Minimal Turn is judged by the visible OUTER rail first. Near-centre controls
+        // may have arbitrary polar phase, while the outer turns define perceived spin. Once the
+        // outer rail approaches a large quarter-turn, switch the whole retained path to exact-
+        // endpoint Cartesian cubic interpolation. This keeps shared knots continuous and removes
+        // the remaining 'whole spiral suddenly spins' cases without changing either endpoint.
+        // Iter17: a coherent whole-rail rotation is perceptually much worse than the same RMS
+        // error split between opposite local bends. Minimal Turn therefore switches the complete
+        // retained path to endpoint-exact Cartesian cubic interpolation before a visible outer
+        // quarter-turn can accumulate. This is a path-wide decision, so shared knots remain C0.
+        // Iter18: "Minimal Turn" now treats coherent visible rotation above 22.5° as a
+        // deformation problem rather than a rotation request. Exact endpoint Cartesian cubic
+        // interpolation is cheaper perceptually than letting the whole Spiral orbit swing. Local
+        // bends still keep polar interpolation when their signed turns cancel across the rail.
+        const coherentSpinGuard=coherentOuterTurn>Math.PI*.125;
+        const excessiveVisibleTurn=coherentSpinGuard||(coherentOuterTurn>Math.PI*.15&&outerTurnRms>Math.PI*.10)||(outerMaxTurn>Math.PI*.24&&outerTurnRms>Math.PI*.12)||(pathMaxPolarTurn>Math.PI*.40&&visibleTurnRms>Math.PI*.18);
+        // Angle is ill-conditioned at the centre. A control that nearly collapses to r=0 can
+        // accumulate a visually meaningless large polar phase and whip its neighbouring handle.
+        // Minimal Turn also switches the whole path when a near-origin control has an ill-conditioned large phase.
+        const pathCartesianFallback=forceCartesian||(minimal&&(pathMaxPolarTurn>Math.PI+1e-5||pathNearOriginTurn>Math.PI*.75||excessiveVisibleTurn));
+        for(let i=0;i<n;i++){const s0=at(sp,i,0),s1=at(sp,i,1),s2=at(sp,i,2),s3=at(sp,i,3),d0=at(dp,i,0),d1=at(dp,i,1),d2=at(dp,i,2),d3=at(dp,i,3);const s=srcCubics[i],d=dstCubics[i],o=offset*FLOATS_PER_CUBIC;
+            const localMaxPolarTurn=Math.max(Math.abs(d0.a-s0.a),Math.abs(d1.a-s1.a),Math.abs(d2.a-s2.a),Math.abs(d3.a-s3.a));
+            out[o]=s0.r;out[o+1]=s0.a;out[o+2]=s1.r;out[o+3]=s1.a;out[o+4]=s2.r;out[o+5]=s2.a;out[o+6]=s3.r;out[o+7]=s3.a;out[o+8]=d0.r;out[o+9]=d0.a;out[o+10]=d1.r;out[o+11]=d1.a;out[o+12]=d2.r;out[o+13]=d2.a;out[o+14]=d3.r;out[o+15]=d3.a;out[o+16]=Math.max(.02,Number(s.widthScale0)||1);out[o+17]=Math.max(.02,Number(s.widthScale1)||1);out[o+18]=Math.max(.02,Number(d.widthScale0)||1);out[o+19]=Math.max(.02,Number(d.widthScale1)||1);out[o+20]=srcPresent?1:0;out[o+21]=dstPresent?1:0;out[o+22]=pathCartesianFallback?1:0;out[o+23]=(i===0?1:0)+(i===n-1?2:0);offset++;}return offset;
+    }
+    function minimalTurnPathReference(path){
+        const pts=path?.points||[];let fallback=0;
+        for(const p of pts){const x=Number(p?.x)||0,y=Number(p?.y)||0,r=Math.hypot(x,y);if(r>1e-5)return Math.atan2(y,x);if(r>0)fallback=Math.atan2(y,x);}
+        return fallback;
+    }
+    function shortestAngleDelta(a,b){let d=(Number(b)||0)-(Number(a)||0);while(d<=-Math.PI)d+=TWO_PI;while(d>Math.PI)d-=TWO_PI;return d;}
+    function minimalTurnPathPairCost(a,b){
+        const ap=a?.points||[],bp=b?.points||[];if(!ap.length||!bp.length){const d=shortestAngleDelta(minimalTurnPathReference(a),minimalTurnPathReference(b));return d*d;}
+        // Score the whole visible orbit. Angular error dominates, while a modest logarithmic
+        // radius penalty prevents an inner turn from being matched to a remote outer turn just
+        // because their first polar angle happens to be close. Near-origin angles remain cheap.
+        const samples=Math.min(11,Math.max(3,Math.min(ap.length,bp.length))),at=(arr,q)=>arr[Math.min(arr.length-1,Math.max(0,Math.round(q*(arr.length-1))))];let cost=0,weight=0,maxR=1;
+        for(const p of ap)maxR=Math.max(maxR,Math.hypot(Number(p?.x)||0,Number(p?.y)||0));for(const p of bp)maxR=Math.max(maxR,Math.hypot(Number(p?.x)||0,Number(p?.y)||0));
+        for(let k=0;k<samples;k++){const q=samples===1?0:k/(samples-1),pa=at(ap,q),pb=at(bp,q),ar=Math.hypot(Number(pa?.x)||0,Number(pa?.y)||0),br=Math.hypot(Number(pb?.x)||0,Number(pb?.y)||0),visibility=Math.max(ar,br)/maxR,w=Math.max(.025,Math.min(1,visibility)),d=shortestAngleDelta(Math.atan2(Number(pa?.y)||0,Number(pa?.x)||0),Math.atan2(Number(pb?.y)||0,Number(pb?.x)||0)),radial=(ar-br)/maxR;cost+=(d*d*w)+.32*radial*radial;weight+=w+.32;}
+        return cost/Math.max(1e-6,weight);
+    }
+    function minimalTurnRetainedBezierPairCost(a,b,srcLayer,dstLayer,srcMetrics=null,dstMetrics=null){
+        try{
+            // Somata 7.0: path-pair search can evaluate the same retained rail O(N) times.
+            // Build its cubic arc map once per endpoint/path for this phase instead of rebuilding
+            // every LUT for every candidate pair (the old hot path was effectively O(N²*cubics)).
+            const metrics=(path,layer,cache)=>{
+                if(cache?.has(path))return cache.get(path);
+                const cubics=endpointCubics(path,layer),map=cubics.length?buildRailArcMap(cubics):null,rec={cubics,map};
+                try{cache?.set(path,rec);}catch(_){}
+                return rec;
+            };
+            const am=metrics(a,srcLayer,srcMetrics).map,bm=metrics(b,dstLayer,dstMetrics).map;if(!am||!bm)return minimalTurnPathPairCost(a,b);
+            const samples=13;let maxR=1;
+            const samplePoint=(map,q)=>{const loc=railLocationAtFraction(map,q),e=map.entries[loc.index];return cubicPoint(e.q,loc.t);};
+            for(let k=0;k<samples;k++){const q=k/(samples-1),pa=samplePoint(am,q),pb=samplePoint(bm,q);maxR=Math.max(maxR,Math.hypot(pa.x,pa.y),Math.hypot(pb.x,pb.y));}
+            let cost=0,weight=0;for(let k=0;k<samples;k++){const q=k/(samples-1),pa=samplePoint(am,q),pb=samplePoint(bm,q),ar=Math.hypot(pa.x,pa.y),br=Math.hypot(pb.x,pb.y),w=Math.max(.02,Math.min(1,Math.max(ar,br)/maxR)),da=shortestAngleDelta(Math.atan2(pa.y,pa.x),Math.atan2(pb.y,pb.x)),dr=(ar-br)/maxR;cost+=da*da*w+.35*dr*dr;weight+=w+.35;}
+            return cost/Math.max(1e-6,weight);
+        }catch(_){return minimalTurnPathPairCost(a,b);}
+    }
+    function pairMinimalTurnSpiralPaths(srcPaths,dstPaths,srcLayer=null,dstLayer=null){
+        const src=Array.isArray(srcPaths)?srcPaths:[],dst=Array.isArray(dstPaths)?dstPaths:[];
+        const srcMetrics=new Map(),dstMetrics=new Map();
+        const pairCost=(a,b)=>minimalTurnRetainedBezierPairCost(a,b,srcLayer,dstLayer,srcMetrics,dstMetrics);
+        const attachMetrics=(pairs)=>{for(const pair of pairs||[]){pair._sourceRetainedMetrics=srcMetrics.get(pair.src)||null;pair._targetRetainedMetrics=dstMetrics.get(pair.dst)||null;}return pairs||[];};
+        if(!src.length||!dst.length)return[];
+        // Equal orbit populations are one cyclic sequence. Score the ENTIRE retained path for
+        // each possible cyclic shift rather than only its first point; this removes the common
+        // 'one cheap endpoint, huge interior spin' failure when N/K/profile geometry changes.
+        if(src.length===dst.length&&src.length>1){
+            let bestShift=0,bestCost=Infinity;
+            for(let shift=0;shift<src.length;shift++){let cost=0;for(let i=0;i<src.length;i++)cost+=pairCost(src[i],dst[(i+shift)%dst.length]);if(cost<bestCost-1e-12){bestCost=cost;bestShift=shift;}}
+            return attachMetrics(src.map((sp,i)=>({src:sp,dst:dst[(i+bestShift)%dst.length],sourcePathPresent:true,targetPathPresent:true,minimalTurnPathShift:bestShift,minimalTurnPathCost:bestCost})));
+        }
+        // Split/merge phases need the same whole-path metric. The generic pairer uses a single
+        // reference angle and can attach a new/retiring orbit to a distant turn of the spiral.
+        // Preserve its population semantics (one continuing population, extras fade in/out),
+        // but choose every candidate by the full retained path cost.
+        const pairs=[];
+        if(src.length>dst.length){
+            const candidates=[];
+            for(let si=0;si<src.length;si++){let best=0,bestCost=Infinity;for(let di=0;di<dst.length;di++){const c=pairCost(src[si],dst[di]);if(c<bestCost){bestCost=c;best=di;}}candidates.push({src:src[si],dst:dst[best],radialMerge:true,sourcePathPresent:true,targetPathPresent:false,_minimalTargetIndex:best,_minimalPairCost:bestCost});}
+            for(let di=0;di<dst.length;di++){let winner=null;for(const q of candidates)if(q._minimalTargetIndex===di&&(!winner||q._minimalPairCost<winner._minimalPairCost))winner=q;if(winner)winner.targetPathPresent=true;}
+            pairs.push(...candidates);
+        }else{
+            const candidates=[];
+            for(let di=0;di<dst.length;di++){let best=0,bestCost=Infinity;for(let si=0;si<src.length;si++){const c=pairCost(src[si],dst[di]);if(c<bestCost){bestCost=c;best=si;}}candidates.push({src:src[best],dst:dst[di],radialSplit:true,sourcePathPresent:false,targetPathPresent:true,_minimalSourceIndex:best,_minimalPairCost:bestCost});}
+            for(let si=0;si<src.length;si++){let winner=null;for(const q of candidates)if(q._minimalSourceIndex===si&&(!winner||q._minimalPairCost<winner._minimalPairCost))winner=q;if(winner)winner.sourcePathPresent=true;}
+            pairs.push(...candidates);
+        }
+        return attachMetrics(pairs);
+    }
+    function buildLayerCpuResource(layerIndex){
+        const srcLayer=runtimeState.morph?.renderSourceLayers?.[layerIndex],dstLayer=runtimeState.morph?.renderTargetLayers?.[layerIndex];if(!srcLayer||!dstLayer)return null;
+        if(!(srcLayer.spiralEnabled===true||dstLayer.spiralEnabled===true))return null;if(state?.fourierMode===true)return null;
+        const morphType=typeof getSpiralMorphType==='function'?getSpiralMorphType():String(state?.morph?.spiralMorphType||'phaseCircle');
+        let srcPaths=buildOrbitPolylines(srcLayer)||[],dstPaths=buildOrbitPolylines(dstLayer)||[];if(!srcPaths.length||!dstPaths.length)return null;const pairs=morphType==='minimalTurn'?pairMinimalTurnSpiralPaths(srcPaths,dstPaths,srcLayer,dstLayer):MorphGeometry.pairMorphPaths(srcPaths,dstPaths);if(!pairs.length)return null;
+        // 6.8: build the two exact endpoint cubic rails FIRST, then only split cubics with
+        // De Casteljau until both endpoints have the same logical cubic count. Splitting is
+        // exact: no point resampling, no spline re-fit, no CPU polyline rail.
+        const records=[];let cubicCount=0;
+        for(let pairIndex=0;pairIndex<pairs.length;pairIndex++){
+            const pair=pairs[pairIndex],sourceMetrics=pair._sourceRetainedMetrics||null,targetMetrics=pair._targetRetainedMetrics||null,rawSc=sourceMetrics?.cubics||endpointCubics(pair.src,srcLayer),rawDc=targetMetrics?.cubics||endpointCubics(pair.dst,dstLayer);if(!rawSc.length||!rawDc.length)continue;
+            // Somata 7.0: one endpoint arc map feeds knot fractions, exact rail equalization and
+            // endpoint length metadata. Rev4 rebuilt the same Gauss/LUT map two or three times.
+            const sourceRawArcMap=sourceMetrics?.map||buildRailArcMap(rawSc),targetRawArcMap=targetMetrics?.map||buildRailArcMap(rawDc),sourceRawKnotFractions=sourceRawArcMap.knots,targetRawKnotFractions=targetRawArcMap.knots;
+            const eq=equalizeCubicRailsByArc(rawSc,rawDc,sourceRawArcMap,targetRawArcMap),sc=eq.source,dc=eq.target,n=Math.min(sc.length,dc.length);if(!n)continue;
+            const sp=cubicRailPoints(sc),dp=cubicRailPoints(dc),sourceClosure=periodicClosureSpec(pair.src,rawSc,srcLayer),targetClosure=periodicClosureSpec(pair.dst,rawDc,dstLayer);records.push({pair,sp,dp,sc:sc.slice(0,n),dc:dc.slice(0,n),count:n,closed:Boolean(pair?.src?.closed&&pair?.dst?.closed),sourceClosure,targetClosure,periodic:Boolean(sourceClosure.periodic&&targetClosure.periodic),sourceRawCubics:rawSc,targetRawCubics:rawDc,sourceRawKnotFractions,targetRawKnotFractions,sourcePathLength:sourceRawArcMap.total,targetPathLength:targetRawArcMap.total,knotFractions:eq.fractions.slice(0,n+1),arcEqualized:true});cubicCount+=n;
+        }
+        if(!cubicCount)return null;const data=new Float32Array(cubicCount*FLOATS_PER_CUBIC);let ci=0;for(const r of records)ci=packPairCubics(r.sc,r.dc,r.pair.sourcePathPresent!==false,r.pair.targetPathPresent!==false,data,ci,morphType);
+        const pathCount=records.length,cpuSegmentMeta=new Uint32Array(cubicCount*4),cpuPathSegmentRanges=new Uint32Array(pathCount*4),pathRanges=new Uint32Array(pathCount*4),cpuEndpointPathLengths=new Float32Array(pathCount*2),cpuPathKnotFractions=new Array(pathCount),cpuPathClosure=new Float32Array(pathCount*8);let seg=0,pointBase=0,maxEndpointClosureError=0,maxEndpointTangentClosureError=0;
+        for(let pi=0;pi<records.length;pi++){
+            const rec0=records[pi],n=rec0.sc.length,po=pi*4;cpuPathSegmentRanges[po]=seg;cpuPathSegmentRanges[po+1]=n;cpuPathSegmentRanges[po+2]=pointBase;cpuPathSegmentRanges[po+3]=n+1;
+            pathRanges[po]=pointBase;pathRanges[po+1]=n+1;pathRanges[po+2]=rec0.closed?1:0;pathRanges[po+3]=pi;
+            const co=pi*8,sc0=rec0.sourceClosure||{},dc0=rec0.targetClosure||{};cpuPathClosure[co]=Number(sc0.delta)||0;cpuPathClosure[co+1]=Number(sc0.logScale)||0;cpuPathClosure[co+2]=Number(dc0.delta)||0;cpuPathClosure[co+3]=Number(dc0.logScale)||0;cpuPathClosure[co+4]=sc0.periodic?1:0;cpuPathClosure[co+5]=dc0.periodic?1:0;cpuPathClosure[co+6]=morphType==='torn'||state?.morph?.mode==='fade'?0:1;cpuPathClosure[co+7]=0;maxEndpointClosureError=Math.max(maxEndpointClosureError,Number(sc0.error)||0,Number(dc0.error)||0);maxEndpointTangentClosureError=Math.max(maxEndpointTangentClosureError,Number(sc0.tangentError)||0,Number(dc0.tangentError)||0);
+            cpuEndpointPathLengths[pi*2]=Math.max(1e-9,Number(rec0.sourcePathLength)||cubicRailLength(rec0.sc));cpuEndpointPathLengths[pi*2+1]=Math.max(1e-9,Number(rec0.targetPathLength)||cubicRailLength(rec0.dc));
+            // Lamps/corner markers care about authored endpoint knots, not the extra exact
+            // De Casteljau split boundaries introduced only to equalize source/target rails.
+            cpuPathKnotFractions[pi]={source:rec0.sourceRawKnotFractions||cubicKnotFractions(rec0.sourceRawCubics),target:rec0.targetRawKnotFractions||cubicKnotFractions(rec0.targetRawCubics),common:rec0.knotFractions||cubicKnotFractions(rec0.sc)};
+            for(let j=0;j<n;j++,seg++){const o=seg*4,sq=rec0.sc[j],dq=rec0.dc[j];let flags=0;if(sq?.__profileCorner0===true||dq?.__profileCorner0===true)flags|=0x40000000;if(sq?.__profileCorner1===true||dq?.__profileCorner1===true)flags|=0x80000000;cpuSegmentMeta[o]=pointBase+j;cpuSegmentMeta[o+1]=pointBase+j+1;cpuSegmentMeta[o+2]=pi;cpuSegmentMeta[o+3]=flags>>>0;}pointBase+=n+1;
+        }
+        const auxPairs=records.map(r=>({source:r.sp,target:r.dp,sourcePresent:r.pair.sourcePathPresent!==false,targetPresent:r.pair.targetPathPresent!==false,closed:r.closed===true,points:[]}));const allClosed=records.length>0&&records.every(r=>r.closed===true);
+        const interpolationMetric=(morphType==='continuous'||morphType==='torn')?'cartesian':(morphType==='minimalTurn'?'least-turn-polar':'polar');
+        return{layerIndex,phaseSerial:Number(runtimeState.morph?.gpuPhasePrepareSerial)||0,morphType,interpolationMetric,data,cubicCount,segmentCount:cubicCount,pathCount,pointCount:pointBase,allClosed,topologySignature:`spiral-bezier:${morphType}:${layerIndex}:${pathCount}:${cubicCount}:${records.map(r=>r.closed?1:0).join('')}`,cpuSegmentMeta,cpuPathSegmentRanges,cpuPathRanges:pathRanges,cpuEndpointPathLengths,cpuPathKnotFractions,cpuPathClosure,maxEndpointClosureError,maxEndpointTangentClosureError,pathRanges,auxPairs,buffer:null,bind:null,uniformBase:null,uniformGlow:null,uniformBaseBind:null,uniformGlowBind:null,cubicBuffer:null,cubicUniformBuffer:null,cubicBind:null,pathRangeBuffer:null,segmentMetaBuffer:null,pathSegmentRangeBuffer:null,pathClosureBuffer:null,closureBind:null,bezierVisualRail:true,bezierSubdiv:12,arcSubdiv:ARC_SUBDIV,specialSpiralBezierRail:true,exactEndpointCubics:true,gpuOnlySpiralEffects:true,copyBuffer:null,copyBind:null,copyCapacity:0,copyData:new Float32Array(0),copyPackedFrameId:-1,copyPackedCount:0,copyPackedMultiColor:false,auxT:NaN,lastCubicT:NaN,currentCubicsCommittedFrameId:-1,currentCubicsCommittedT:NaN,currentCubicsRootProducerFrameId:-1,currentCubicsRootProducerT:NaN,ready:false};
+    }
+    async function preparePhase(){
+        if(!(state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild())||(typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()))){retireCurrentResources('prepare-ineligible');return 0;}
+        if(!await ensureReady()){retireCurrentResources('prepare-unavailable');return 0;}
+        const nextResources=new Map();let built=0;
+        try{
+            for(let i=0;i<(state.layers?.length||0);i++){const rec=buildLayerCpuResource(i);if(!rec)continue;rec.buffer=device.createBuffer({label:`Somata Spiral Bézier Morph L${i}`,size:Math.max(96,Math.ceil(rec.data.byteLength/16)*16),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.buffer,0,rec.data.buffer,rec.data.byteOffset,rec.data.byteLength);rec.cubicBuffer=device.createBuffer({label:`Somata Spiral Bézier shared current cubics L${i}`,size:Math.max(32,rec.cubicCount*32),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});rec.bind=device.createBindGroup({layout:renderCubicLayout,entries:[{binding:0,resource:{buffer:rec.buffer}},{binding:1,resource:{buffer:rec.cubicBuffer}}]});rec.cubicUniformBuffer=device.createBuffer({label:`Somata Spiral Bézier shared cubic phase L${i}`,size:32,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});rec.cubicBind=device.createBindGroup({layout:effectCubicPipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:rec.buffer}},{binding:1,resource:{buffer:rec.cubicBuffer}},{binding:2,resource:{buffer:rec.cubicUniformBuffer}}]});rec.pathRangeBuffer=device.createBuffer({label:`Somata Spiral Bézier effect path ranges L${i}`,size:Math.max(16,rec.pathRanges.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.pathRangeBuffer,0,rec.pathRanges);rec.segmentMetaBuffer=device.createBuffer({label:`Somata Spiral Bézier effect segment metadata L${i}`,size:Math.max(16,rec.cpuSegmentMeta.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.segmentMetaBuffer,0,rec.cpuSegmentMeta);rec.pathSegmentRangeBuffer=device.createBuffer({label:`Somata Spiral Bézier effect segment ranges L${i}`,size:Math.max(16,rec.cpuPathSegmentRanges.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.pathSegmentRangeBuffer,0,rec.cpuPathSegmentRanges);rec.pathClosureBuffer=device.createBuffer({label:`Somata 7.0 Spiral periodic closure L${i}`,size:Math.max(32,rec.cpuPathClosure.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.pathClosureBuffer,0,rec.cpuPathClosure);rec.closureBind=device.createBindGroup({layout:closurePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:rec.cubicBuffer}},{binding:1,resource:{buffer:rec.pathSegmentRangeBuffer}},{binding:2,resource:{buffer:rec.pathClosureBuffer}},{binding:3,resource:{buffer:rec.cubicUniformBuffer}}]});rec.uniformBase=device.createBuffer({label:`Somata Spiral Bézier Morph base uniforms L${i}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});rec.uniformGlow=device.createBuffer({label:`Somata Spiral Bézier Morph glow uniforms L${i}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});rec.uniformBaseBind=device.createBindGroup({layout:renderUniformLayout,entries:[{binding:0,resource:{buffer:rec.uniformBase}}]});rec.uniformGlowBind=device.createBindGroup({layout:renderUniformLayout,entries:[{binding:0,resource:{buffer:rec.uniformGlow}}]});rec.ready=true;nextResources.set(i,rec);built++;stats.layerBuilds++;stats.uploads+=rec.data.byteLength;stats.cubics+=rec.cubicCount;stats.gpuSegments+=rec.cubicCount*SUBDIV;}
+            replaceResources(nextResources,'phase-atomic-swap');
+            stats.phaseBuilds++;return built;
+        }catch(err){
+            for(const rec of nextResources.values())destroyResource(rec);
+            retireCurrentResources('prepare-error');
+            lastError=String(err?.message||err);stats.errors++;return 0;
+        }
+    }
+    // Iter26 — static Spiral Base now consumes the exact same retained cubic buffer that
+    // Spiral effects/Arc already use. The morph raster pipeline only needs two extra pieces:
+    // constant width/presence metadata and the normal per-frame copy/uniform bindings.
+    // No Canvas recorder, point re-sampling or hidden WebGPU canvas participates in this path.
+    function getStaticVisualResource(frameCtx){
+        if(!frameCtx||frameCtx.morphFrameActive||state?.tunnel?.active===true||typeof isSpiralLayer!=='function'||!isSpiralLayer(frameCtx.layer))return null;
+        if(!ready||!device)return null;
+        try{warmupGpuMorphArcResource?.();}catch(_){}
+        const source=typeof getStaticSpiralBezierResource==='function'?getStaticSpiralBezierResource(frameCtx.layerIndex,device,generation):null;
+        if(!source?.ready||!source.cubicBuffer||!(source.cubicCount>0))return null;
+        const key=Number(frameCtx.layerIndex)||0,old=staticVisualResources.get(key);
+        if(old?.source===source&&old?.generation===generation&&old?.ready){stats.staticVisualHits++;return old;}
+        if(old)destroyStaticVisual(old);
+        try{
+            const meta=new Float32Array(source.cubicCount*24);
+            for(let i=0;i<source.cubicCount;i++){const o=i*24,w0=Math.max(.02,Number(source.cpuCubicWidthScales?.[i*2])||1),w1=Math.max(.02,Number(source.cpuCubicWidthScales?.[i*2+1])||1);meta[o+16]=w0;meta[o+17]=w1;meta[o+18]=w0;meta[o+19]=w1;meta[o+20]=1;meta[o+21]=1;}for(let pi=0;pi<(source.pathCount||0);pi++){const ro=pi*4,first=source.cpuPathSegmentRanges?.[ro]>>>0,count=source.cpuPathSegmentRanges?.[ro+1]>>>0;if(!count)continue;meta[first*24+23]=meta[first*24+23]+1;meta[(first+count-1)*24+23]=meta[(first+count-1)*24+23]+2;}
+            const metaBuffer=device.createBuffer({label:`Somata static Spiral visual metadata L${key}`,size:Math.max(96,meta.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+            device.queue.writeBuffer(metaBuffer,0,meta);
+            const uniformBase=device.createBuffer({label:`Somata static Spiral base uniforms L${key}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+            const uniformGlow=device.createBuffer({label:`Somata static Spiral glow uniforms L${key}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+            const rec={source,generation,layerIndex:key,phaseSerial:0,staticVisual:true,ready:true,cubicCount:source.cubicCount,pathCount:source.pathCount||0,cubicBuffer:source.cubicBuffer,metaBuffer,bind:device.createBindGroup({layout:renderCubicLayout,entries:[{binding:0,resource:{buffer:metaBuffer}},{binding:1,resource:{buffer:source.cubicBuffer}}]}),uniformBase,uniformGlow,uniformBaseBind:device.createBindGroup({layout:renderUniformLayout,entries:[{binding:0,resource:{buffer:uniformBase}}]}),uniformGlowBind:device.createBindGroup({layout:renderUniformLayout,entries:[{binding:0,resource:{buffer:uniformGlow}}]}),copyBuffer:null,copyBind:null,copyCapacity:0,copyData:new Float32Array(0),copyPackedFrameId:-1,copyPackedCount:0,copyPackedMultiColor:false,currentCubicsRootProducerFrameId:-1,currentCubicsRootProducerT:0};
+            staticVisualResources.set(key,rec);stats.staticVisualBuilds++;stats.uploads+=meta.byteLength;return rec;
+        }catch(err){lastError=String(err?.message||err);stats.errors++;return null;}
+    }
+    function getVisualResource(frameCtx){return frameCtx?.morphFrameActive?getResource(frameCtx.layerIndex):getStaticVisualResource(frameCtx);}
+    function resolveEffectT(rec,t){let tt=clamp(Number(t)||0,0,1);const currentPhaseSerial=Number(runtimeState.morph?.gpuPhasePrepareSerial)||0;if(runtimeState.morph?.gpuPhasePreparing===true&&Number(rec?.phaseSerial)!==currentPhaseSerial)tt=clamp(Number(runtimeState.morph?.gpuPhaseHandoffT),0,1);return tt;}
+    function encodeEffectCubics(rec,encoder,t){if(!rec?.ready||!rec.cubicBind||!effectCubicPipeline||!encoder)return false;const tt=resolveEffectT(rec,t);const raw=rec.cubicUniformStaging||(rec.cubicUniformStaging=new ArrayBuffer(32)),u32=rec.cubicUniformU32||(rec.cubicUniformU32=new Uint32Array(raw)),f32=rec.cubicUniformF32||(rec.cubicUniformF32=new Float32Array(raw));u32[0]=rec.cubicCount>>>0;f32[4]=tt;device.queue.writeBuffer(rec.cubicUniformBuffer,0,raw);let pass=encoder.beginComputePass({label:`Somata Spiral shared effect cubics L${rec.layerIndex}`});pass.setPipeline(effectCubicPipeline);pass.setBindGroup(0,rec.cubicBind);pass.dispatchWorkgroups(Math.ceil(rec.cubicCount/128));pass.end();if(rec.closureBind&&closurePipeline&&rec.pathCount>0){pass=encoder.beginComputePass({label:`Somata 7.0 Spiral periodic closure L${rec.layerIndex}`});pass.setPipeline(closurePipeline);pass.setBindGroup(0,rec.closureBind);pass.dispatchWorkgroups(Math.ceil(rec.pathCount/64));pass.end();}rec.lastCubicT=tt;stats.cubicComputeDispatches++;return true;}
+    function canReuseOrderedCurrentCubics(rec,frameCtx,target,currentT){const fid=Math.max(0,Number(frameCtx?.frameId)||0),tt=rec?.staticVisual===true?0:resolveEffectT(rec,currentT);return Boolean(rec?.ready&&(target?.deferred===true||target?.deferredFrame===true)&&Number(rec.currentCubicsRootProducerFrameId)===fid&&Math.abs((Number(rec.currentCubicsRootProducerT)||0)-tt)<1e-12);}
+    function buildCurrentCubicsPrerequisite(rec,frameId,t){
+        if(!rec?.ready||!device)return null;const tt=resolveEffectT(rec,t),fid=Math.max(0,Number(frameId)||0);
+        if(Number(rec.currentCubicsCommittedFrameId)===fid&&Math.abs((Number(rec.currentCubicsCommittedT)||0)-tt)<1e-12)return{ready:true,committed:true,commandBuffer:null,onSubmitted:null};
+        try{const enc=device.createCommandEncoder({label:`Somata Spiral current-cubic prerequisite L${rec.layerIndex}`});if(!encodeEffectCubics(rec,enc,tt))return null;return{ready:true,committed:false,commandBuffer:enc.finish(),onSubmitted:()=>{rec.currentCubicsCommittedFrameId=fid;rec.currentCubicsCommittedT=tt;}};}catch(err){lastError=String(err?.message||err);return null;}
+    }
+    function getResource(i){const rec=resources.get(Number(i)||0)||null;if(rec&&!rec.encodeCurrentCubics){rec.resolveMorphT=(t)=>resolveEffectT(rec,t);rec.encodeCurrentCubics=(encoder,t)=>encodeEffectCubics(rec,encoder,t);rec.buildCurrentCubicsPrerequisite=(frameId,t)=>buildCurrentCubicsPrerequisite(rec,frameId,t);}return rec;}
+    function reason(frameCtx,mode='base'){
+        if(!frameCtx)return'no-frame';
+        const hiddenGraffitiGlow=mode==='glow'&&frameCtx.lineProfileStrokeOnly===true&&frameCtx.lineProfileApplication==='graffiti';
+        if(state?.fourierMode===true)return'fourier';if(state?.showRoundingGuides)return'rounding-guides';if(frameCtx.lineProfileStrokeOnly&&!hiddenGraffitiGlow)return'profile-replaces-base';if(mode==='base'&&!frameCtx.lineDisplayEnabled)return'line-hidden';
+        if(frameCtx.morphFrameActive){if(frameCtx.geometryProvider!==frameCtx.blueMorphProvider)return'another-provider';if(frameCtx.geometryPlan?.kind!=='blue-circle-slide')return'kind-'+String(frameCtx.geometryPlan?.kind||'unknown');const rec=getResource(frameCtx.layerIndex);if(!rec?.ready)return'resource-not-ready';return'';}
+        if(state?.tunnel?.active===true)return'static-corridor-owned';
+        if(typeof isSpiralLayer!=='function'||!isSpiralLayer(frameCtx.layer))return'not-static-spiral';
+        if(frameCtx.geometryPlan?.dynamic===true)return'static-dynamic-geometry';
+        if(!ready){warmup();return'renderer-warming';}
+        try{warmupGpuMorphArcResource?.();}catch(_){}
+        const rec=getStaticVisualResource(frameCtx);if(!rec?.ready)return'static-resource-not-ready';return'';
+    }
+    function isEligible(frameCtx,mode='base'){const r=reason(frameCtx,mode);decision.eligible=!r;decision.reason=r||'gpu-spiral-bezier';decision.layerIndex=Number(frameCtx?.layerIndex)||0;decision.frameId=Number(frameCtx?.frameId)||0;return !r;}
+    function ensureCopyCapacity(rec,n){
+        const need=Math.max(1,n|0);if(rec.copyBuffer&&rec.copyCapacity>=need)return;
+        const cap=Math.max(8,1<<Math.ceil(Math.log2(need)));try{rec.copyBuffer?.destroy?.();}catch(_){}
+        rec.copyCapacity=cap;rec.copyData=new Float32Array(cap*12);rec.copyBuffer=device.createBuffer({label:`Somata Spiral Bézier Morph copies L${rec.layerIndex}`,size:rec.copyData.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});rec.copyBind=device.createBindGroup({layout:renderCopyLayout,entries:[{binding:0,resource:{buffer:rec.copyBuffer}}]});rec.copyPackedFrameId=-1;
+    }
+    function rgba(style){try{return GPUColorCache.rgba(style||'#fff');}catch(_){return[1,1,1,1];}}
+    function packCopies(frameCtx,rec){
+        const fid=Number(frameCtx?.frameId)||0;if(rec.copyBuffer&&rec.copyPackedFrameId===fid)return rec.copyPackedCount;
+        const corridor=state.tunnel?.active===true,copies=corridor?frameCtx.visibleInstances?.copies:[{scale:1}],alphas=corridor?frameCtx.visibleInstances?.alphas:[1],src=Array.isArray(copies)&&copies.length?copies:[{scale:1}];ensureCopyCapacity(rec,src.length);let k=0,firstStyle=null,multiColor=false;
+        for(let i=0;i<src.length;i++){const ca=clamp(Number(alphas?.[i]??1),0,1);if(ca<=.0001)continue;const cp=src[i]||{},sc=corridor?Math.max(.000001,Math.abs(Number(cp.scale)||0)):1,ang=corridor&&typeof getMotionTunnelLagRadians==='function'?getMotionTunnelLagRadians(cp,frameCtx.layer):0,cs=Math.cos(ang),sn=Math.sin(ang);const style=corridor&&typeof getTunnelCopyColor==='function'?getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,cp,frameCtx.tunnelPaletteProfile):(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#fff'),styleKey=String(style||''),c=rgba(style),o=k*12;if(firstStyle===null)firstStyle=styleKey;else if(styleKey!==firstStyle)multiColor=true;rec.copyData[o]=sc*cs;rec.copyData[o+1]=-sc*sn;rec.copyData[o+2]=ca;rec.copyData[o+3]=sc;rec.copyData[o+4]=sc*sn;rec.copyData[o+5]=sc*cs;rec.copyData[o+6]=c[0];rec.copyData[o+7]=c[1];rec.copyData[o+8]=c[2];rec.copyData[o+9]=c[3];k++;}
+        if(k){device.queue.writeBuffer(rec.copyBuffer,0,rec.copyData.buffer,0,k*48);stats.uploads+=k*48;}else stats.uploadSkips++;
+        rec.copyPackedFrameId=fid;rec.copyPackedCount=k;rec.copyPackedMultiColor=multiColor;return k;
+    }
+    function prepareUniform(frameCtx,rec,copyCount,ctx,mode,opts){
+        const tr=ctx.getTransform(),a=Number(tr.a)||1,b=Number(tr.b)||0,c=Number(tr.c)||0,d=Number(tr.d)||1,e=Number(tr.e)||0,f=Number(tr.f)||0;const matrixScale=Math.sqrt(Math.max(1e-12,Math.abs(a*d-b*c))),combined=Math.max(.001,Math.abs(Number(frameCtx.combinedScale)||1)),outerScale=matrixScale/combined;const hw=Math.max(.18,Math.max(.001,Number(frameCtx.strokeWidth)||1.5)*outerScale*.5),gr=mode==='glow'?Math.max(.5,Number(opts?.radiusPx)||0):0,core=mode==='base'?clamp(Number(opts?.alphaScale??1),0,1)*clamp(Number(frameCtx.baseAlpha)||0,0,1):0,glow=mode==='glow'?clamp(Number(opts?.alphaScale??1),0,1)*clamp(Number(frameCtx.baseAlpha)||0,0,1):0;let t=rec?.staticVisual===true?0:clamp(Number(frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress)||0,0,1);
+        const currentPhaseSerial=Number(runtimeState.morph?.gpuPhasePrepareSerial)||0;
+        if(rec?.staticVisual!==true&&runtimeState.morph?.gpuPhasePreparing===true&&Number(rec?.phaseSerial)!==currentPhaseSerial)t=clamp(Number(runtimeState.morph?.gpuPhaseHandoffT),0,1);
+        uf.fill(0);uf[0]=width;uf[1]=height;uu[2]=rec.cubicCount>>>0;uu[3]=copyCount>>>0;uf[4]=a;uf[5]=c;uf[6]=e;uf[8]=b;uf[9]=d;uf[10]=f;uf[12]=hw;uf[13]=gr;uf[14]=core;uf[15]=glow;uf[16]=t;const buf=mode==='glow'?rec.uniformGlow:rec.uniformBase;device.queue.writeBuffer(buf,0,uniformBytes);stats.uploads+=80;return mode==='glow'?rec.uniformGlowBind:rec.uniformBaseBind;
+    }
+    function resolveTarget(frameCtx,opts={}){
+        // Fastest path: simple Spiral layers write source-over straight into the frame-global
+        // GPU scene.  No per-layer scratch texture and no fullscreen LayerScene -> FrameScene seal.
+        if(opts.deferFrameScene===true&&typeof WebGPUStrokeRenderer!=='undefined'&&WebGPUStrokeRenderer.getExternalFrameSceneTarget){
+            const t=WebGPUStrokeRenderer.getExternalFrameSceneTarget(frameCtx.frameId);if(t?.view){width=Math.max(1,Number(t.width)||mainCanvas.width||1);height=Math.max(1,Number(t.height)||mainCanvas.height||1);return{view:t.view,deferredFrame:true,deferred:false,loadOp:'load'};}
+        }
+        if(opts.deferLayerScene===true&&typeof WebGPUStrokeRenderer!=='undefined'&&WebGPUStrokeRenderer.getExternalLayerSceneTarget){
+            const t=WebGPUStrokeRenderer.getExternalLayerSceneTarget(frameCtx.frameId);if(t?.view){width=Math.max(1,Number(t.width)||mainCanvas.width||1);height=Math.max(1,Number(t.height)||mainCanvas.height||1);return{view:t.view,deferred:true,deferredFrame:false,loadOp:'clear'};}
+        }
+        // 6.8 strict Spiral contract: do not render into a hidden WebGPU canvas and then
+        // drawImage it through Canvas2D.  If the frame/layer GPU scene is not available,
+        // report ineligible so the caller can keep the frame GPU-resident via another GPU path.
+        stats.gpuSceneUnavailable=(stats.gpuSceneUnavailable||0)+1;return null;
+    }
+    function finishEncoded(frameCtx,targetCtx,enc,target,opts={},rec=null,currentT=NaN){
+        const cmd=enc.finish();
+        if(target.deferredFrame){
+            if(WebGPUStrokeRenderer.deferExternalFrameScene?.(cmd,frameCtx.frameId,'spiral-bezier-morph')){frameCtx.frame.gpuMainSceneEmpty=frameCtx.frame.gpuMainCanvasHasContent!==true;frameCtx._spiralBezierFrameSceneDirect=true;stats.directFrameSceneFrames++;if(rec?.ready&&Number.isFinite(Number(currentT))){rec.currentCubicsRootProducerFrameId=Math.max(0,Number(frameCtx.frameId)||0);rec.currentCubicsRootProducerT=rec.staticVisual===true?0:resolveEffectT(rec,currentT);}return true;}
+            stats.fallbacks++;return false;
+        }
+        if(target.deferred){
+            if(WebGPUStrokeRenderer.deferExternalLayerScene?.(cmd,frameCtx.frameId,'spiral-bezier-morph')){
+                frameCtx.frame.gpuLayerSceneDeferred=true;frameCtx.frame.gpuMainSceneEmpty=frameCtx.frame.gpuMainCanvasHasContent!==true;frameCtx._spiralBezierLayerSceneDeferred=true;stats.deferredLayerSceneFrames++;
+                // This root command buffer is submitted before all queued LayerScene effects.
+                // Therefore its current-cubic compute is a real ordered prerequisite, not merely
+                // an encode-time promise in an unrelated command buffer.
+                if(rec?.ready&&Number.isFinite(Number(currentT))){rec.currentCubicsRootProducerFrameId=Math.max(0,Number(frameCtx.frameId)||0);rec.currentCubicsRootProducerT=rec.staticVisual===true?0:resolveEffectT(rec,currentT);}
+                return true;
+            }
+            stats.fallbacks++;return false;
+        }
+        stats.gpuSceneUnavailable=(stats.gpuSceneUnavailable||0)+1;return false;
+    }
+    function draw(frameCtx,targetCtx,mode,opts={}){
+        if(!isEligible(frameCtx,mode)){stats.fallbacks++;return false;}const rec=getVisualResource(frameCtx);const target=resolveTarget(frameCtx,opts);if(!rec?.ready||!target){stats.fallbacks++;return false;}
+        try{targetCtx.save();applyLayerFrameEffectTransform(targetCtx,frameCtx);const copies=packCopies(frameCtx,rec);if(!copies){targetCtx.restore();return true;}const ub=prepareUniform(frameCtx,rec,copies,targetCtx,mode,opts);targetCtx.restore();const enc=device.createCommandEncoder({label:`Somata Spiral Bézier ${rec.staticVisual===true?'Static':'Morph'} ${mode}`});const currentT=rec.staticVisual===true?0:resolveEffectT(rec,frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress);if(rec.staticVisual!==true){if(canReuseOrderedCurrentCubics(rec,frameCtx,target,currentT))stats.cubicComputeReuses++;else if(!encodeEffectCubics(rec,enc,currentT)){stats.fallbacks++;return false;}}const pass=enc.beginRenderPass({colorAttachments:[{view:target.view,clearValue:{r:0,g:0,b:0,a:0},loadOp:target.loadOp||'clear',storeOp:'store'}]});const useUniform=mode==='base'&&frameCtx?.spiralLineType!=='segmented'&&uniformPipelineMax;const blendPipe=useUniform?((target.deferredFrame||rec.copyPackedMultiColor)?uniformPipelineOver:uniformPipelineMax):((target.deferredFrame||((mode==='base')&&rec.copyPackedMultiColor))?pipelineOver:pipelineMax);pass.setPipeline(blendPipe);pass.setBindGroup(0,ub);pass.setBindGroup(1,rec.bind);pass.setBindGroup(2,rec.copyBind);pass.setVertexBuffer(0,cornerBuffer);pass.draw(4,rec.cubicCount*SUBDIV*copies);pass.end();if(!finishEncoded(frameCtx,targetCtx,enc,target,opts,rec,currentT))return false;stats.frames++;if(mode==='glow')stats.glowFrames++;else stats.baseFrames++;if(state.tunnel?.active===true)stats.corridorFrames++;return true;}catch(err){try{targetCtx.restore();}catch(_){}lastError=String(err?.message||err);stats.errors++;stats.fallbacks++;return false;}
+    }
+    function render(frameCtx,targetCtx,opts={}){return draw(frameCtx,targetCtx,opts.mode==='glow'?'glow':'base',opts);}
+    function renderGlowAndBase(frameCtx,targetCtx,opts={}){
+        if(!isEligible(frameCtx,'glow')||!isEligible(frameCtx,'base')){stats.fallbacks++;return false;}const rec=getVisualResource(frameCtx),target=resolveTarget(frameCtx,opts);if(!target){stats.fallbacks++;return false;}
+        try{targetCtx.save();applyLayerFrameEffectTransform(targetCtx,frameCtx);const copies=packCopies(frameCtx,rec);if(!copies){targetCtx.restore();return true;}const ug=prepareUniform(frameCtx,rec,copies,targetCtx,'glow',{radiusPx:opts.radiusPx,alphaScale:opts.glowAlphaScale}),ub=prepareUniform(frameCtx,rec,copies,targetCtx,'base',{alphaScale:opts.baseAlphaScale});targetCtx.restore();const enc=device.createCommandEncoder({label:`Somata Spiral Bézier ${rec.staticVisual===true?'Static':'Morph'} fused Glow+Base`});const currentT=rec.staticVisual===true?0:resolveEffectT(rec,frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress);if(rec.staticVisual!==true&&!encodeEffectCubics(rec,enc,currentT)){stats.fallbacks++;return false;}const pass=enc.beginRenderPass({colorAttachments:[{view:target.view,clearValue:{r:0,g:0,b:0,a:0},loadOp:target.loadOp||'clear',storeOp:'store'}]});pass.setPipeline(target.deferredFrame?pipelineOver:pipelineMax);pass.setBindGroup(1,rec.bind);pass.setBindGroup(2,rec.copyBind);pass.setVertexBuffer(0,cornerBuffer);pass.setBindGroup(0,ug);pass.draw(4,rec.cubicCount*SUBDIV*copies);const basePipe=frameCtx?.spiralLineType!=='segmented'&&uniformPipelineMax?((target.deferredFrame||rec.copyPackedMultiColor)?uniformPipelineOver:uniformPipelineMax):((target.deferredFrame||rec.copyPackedMultiColor)?pipelineOver:pipelineMax);pass.setPipeline(basePipe);pass.setBindGroup(0,ub);pass.draw(4,rec.cubicCount*SUBDIV*copies);pass.end();if(!finishEncoded(frameCtx,targetCtx,enc,target,opts,rec,currentT))return false;stats.frames++;stats.glowFrames++;stats.baseFrames++;stats.fusedFrames++;if(state.tunnel?.active===true)stats.corridorFrames++;return true;}catch(err){try{targetCtx.restore();}catch(_){}lastError=String(err?.message||err);stats.errors++;stats.fallbacks++;return false;}
+    }
+    function auxiliaryPaths(layerIndex,t){
+        const rec=getResource(layerIndex);if(!rec?.ready||!rec?.pathCount)return null;const tt=resolveEffectT(rec,t);if(Number.isFinite(rec.auxT)&&Math.abs(rec.auxT-tt)<1e-12){stats.auxHits++;return rec.auxPairs;}
+        const subdiv=6,data=rec.data,ranges=rec.cpuPathSegmentRanges;
+        const polarXY=(r,a)=>({x:r*Math.cos(a),y:r*Math.sin(a)}),mixPolar=(sr,sa,dr,da,cart=false)=>{if(cart){const s=polarXY(sr,sa),d=polarXY(dr,da);return{x:s.x+(d.x-s.x)*tt,y:s.y+(d.y-s.y)*tt};}const r=sr+(dr-sr)*tt,a=sa+(da-sa)*tt;return{x:r*Math.cos(a),y:r*Math.sin(a)};};
+        const cubicAt=(p0,c1,c2,p3,q)=>{const z=1-q,z2=z*z,q2=q*q;return{x:z2*z*p0.x+3*z2*q*c1.x+3*z*q2*c2.x+q2*q*p3.x,y:z2*z*p0.y+3*z2*q*c1.y+3*z*q2*c2.y+q2*q*p3.y};};
+        for(let pi=0;pi<rec.pathCount;pi++){
+            const pair=rec.auxPairs[pi],ro=pi*4,first=ranges[ro]>>>0,count=ranges[ro+1]>>>0,need=count*subdiv+1;while(pair.points.length<need)pair.points.push({x:0,y:0,widthScale:1});pair.points.length=need;let w=0;
+            for(let j=0;j<count;j++){
+                const ci=first+j,o=ci*FLOATS_PER_CUBIC,cart=data[o+22]>.5,p0=mixPolar(data[o],data[o+1],data[o+8],data[o+9],cart),c1=mixPolar(data[o+2],data[o+3],data[o+10],data[o+11],cart),c2=mixPolar(data[o+4],data[o+5],data[o+12],data[o+13],cart),p3=mixPolar(data[o+6],data[o+7],data[o+14],data[o+15],cart),ws0=Math.exp(Math.log(Math.max(.02,data[o+16]))*(1-tt)+Math.log(Math.max(.02,data[o+18]))*tt),ws1=Math.exp(Math.log(Math.max(.02,data[o+17]))*(1-tt)+Math.log(Math.max(.02,data[o+19]))*tt);
+                const q0=j===0?0:1;for(let sj=q0;sj<=subdiv;sj++){const q=sj/subdiv,p=cubicAt(p0,c1,c2,p3,q),dst=pair.points[w++];dst.x=p.x;dst.y=p.y;dst.widthScale=Math.exp(Math.log(Math.max(.02,ws0))*(1-q)+Math.log(Math.max(.02,ws1))*q);}
+            }
+            pair.points.length=w;pair.closed=pair.closed===true;const base=first*FLOATS_PER_CUBIC;pair.alpha=(data[base+20]*(1-tt)+data[base+21]*tt);
+        }
+        rec.auxT=tt;stats.auxFrames++;stats.auxPoints+=rec.auxPairs.reduce((n,p)=>n+p.points.length,0);return rec.auxPairs;
+    }
+    function status(){const active=[...resources.entries()].map(([layerIndex,r])=>({layerIndex,morphType:r.morphType||'',interpolationMetric:r.interpolationMetric||'',cubicCount:r.cubicCount||0,pathCount:r.pathCount||0,ready:r.ready===true,periodicPaths:r.cpuPathClosure?Array.from({length:r.pathCount||0},(_,pi)=>r.cpuPathClosure[pi*8+4]>0.5&&r.cpuPathClosure[pi*8+5]>0.5).filter(Boolean).length:0,maxEndpointClosureError:Number(r.maxEndpointClosureError)||0,maxEndpointTangentClosureError:Number(r.maxEndpointTangentClosureError)||0}));return{supported:!!globalThis.navigator?.gpu,ready,initializing:Boolean(initializing),generation,lastError,resources:resources.size,active,staticVisualResources:staticVisualResources.size,stats:{...stats},lastDecision:{...decision},contract:'Somata 7.0 retained Spiral Morph stays cubic Bézier end-to-end. Base supports a continuous derivative-joined ribbon by default (with the historical segmented capsule mode retained); Glow keeps MAX-unioned analytic capsules, while multicolor overlap alone uses source-over. Continuous/Phase/Phase-Circle/Minimal-Turn additionally patch the current GPU cubic rail to the exact periodic rotate+scale position + C1 tangent closure at every phase; Torn may intentionally remain discontinuous. Effects consume the same patched current-cubic buffer.'};}
+    return{warmup,isReady:()=>ready,preparePhase,invalidate,park,getResource,isEligible,reason,render,renderGlowAndBase,auxiliaryPaths,status};
+})();
+window.prepareGpuSpiralBezierMorphResources=()=>WebGPUSpiralBezierMorphRenderer.preparePhase();
+window.invalidateGpuSpiralBezierMorphResources=(reason)=>WebGPUSpiralBezierMorphRenderer.invalidate(reason);
+window.parkGpuSpiralBezierMorphResources=(reason)=>WebGPUSpiralBezierMorphRenderer.park(reason);
+window.getGpuSpiralBezierMorphAuxPaths=(layerIndex,t)=>WebGPUSpiralBezierMorphRenderer.auxiliaryPaths(layerIndex,t);
+window.__somataSpiralBezierMorphStatus=()=>WebGPUSpiralBezierMorphRenderer.status();
+// Iter28 — compile the dedicated retained-Bézier raster pipeline before the first Spiral
+// interaction when the browser is idle.  This does not build layer geometry or start an
+// animation; it only removes first-use shader/pipeline latency from the user gesture.
+(()=>{if(!globalThis.navigator?.gpu||globalThis.isSecureContext!==true)return;const kick=()=>{try{WebGPUSpiralBezierMorphRenderer.warmup?.();}catch(_){}};if(typeof requestIdleCallback==='function')requestIdleCallback(kick,{timeout:350});else setTimeout(kick,0);})();
