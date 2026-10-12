@@ -55,4 +55,4 @@ assert.ok(moz?.settings?.morph?.defaultActive===true && moz?.settings?.tunnel?.d
 assert.ok(['projectDefaultModesPostCommitActivation:true','projectDefaultCorridorBeforeMorph:true','projectCommitQuiescesRuntime:true','projectDefaultPostPaintVerifyOnly:true','tunnelActiveRuntimeOnly:true','tunnelActiveNotSerialized:true'].every(x=>pipe.includes(x)),
   'Runtime audit must expose the atomic project-startup ownership repair');
 
-console.log('Somata 7.3.7 project default activation invariants: PASS');
+console.log('Somata 7.3.9 project default activation invariants: PASS');

@@ -62,7 +62,7 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
         }
 
         function useSmoothSplinePath(layer, roundingFrac = 0, path = null) {
-            // Somata 7.3.7: profileMode is the geometry contract. A Spline profile is always
+            // Somata 7.3.9: profileMode is the geometry contract. A Spline profile is always
             // rendered by the continuous cubic carrier; square/discrete sampling belongs only
             // to Segment profiles. Keeping a stale `splineRenderMode=discrete` on a layer must
             // never downgrade Spiral (or any other contour) back to a polyline.
@@ -1139,12 +1139,17 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
         function appendSpiralPolylineSlice(out, points, metrics, d0, d1) {
             const a=Math.max(0,Math.min(metrics.total,d0)),b=Math.max(a,Math.min(metrics.total,d1));
             if(b<=a+1e-9)return;
-            const start=spiralPolylinePointAt(points,metrics,a);
+            // Preserve the exact endpoint objects when a slice reaches a real period endpoint.
+            // Their mapped derivative metadata is the only reliable way to distinguish a true
+            // Tangential C1 seam from the finite chord angle of a tessellated logarithmic arc.
+            // Interior clip points remain freshly interpolated, so stale controls still cannot
+            // leak across shortened spans (the high-rounding tail guard remains intact).
+            const start=a<=1e-9?{...points[0]}:spiralPolylinePointAt(points,metrics,a);
             if(!out.length||Math.hypot(start.x-out[out.length-1].x,start.y-out[out.length-1].y)>1e-7)out.push(start);
             for(let i=1;i<points.length-1;i++){
                 const d=metrics.cum[i];if(d>a+1e-9&&d<b-1e-9)out.push({...points[i]});
             }
-            const end=spiralPolylinePointAt(points,metrics,b);
+            const end=b>=metrics.total-1e-9?{...points[points.length-1]}:spiralPolylinePointAt(points,metrics,b);
             if(!out.length||Math.hypot(end.x-out[out.length-1].x,end.y-out[out.length-1].y)>1e-7)out.push(end);
         }
 
@@ -1180,6 +1185,23 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
             if(ul<1e-8||vl<1e-8)return 0;
             const dot=Math.max(-1,Math.min(1,(ux*vx+uy*vy)/(ul*vl)));
             return Math.acos(dot)*180/Math.PI;
+        }
+        function spiralVectorTurnAngleDeg(ax,ay,bx,by){
+            const al=Math.hypot(ax,ay),bl=Math.hypot(bx,by);
+            if(al<1e-9||bl<1e-9)return null;
+            const dot=Math.max(-1,Math.min(1,(ax*bx+ay*by)/(al*bl)));
+            return Math.acos(dot)*180/Math.PI;
+        }
+        function spiralExactTangentialSeamAngleDeg(points,delta,scale){
+            const src=Array.isArray(points)?points:[];
+            if(src.length<2||src[0]?.__spiralTangential!==true)return null;
+            const first=src[0],last=src[src.length-1];
+            const sx=Number(first?.__spiralBezierOutTx),sy=Number(first?.__spiralBezierOutTy);
+            const ex=Number(last?.__spiralBezierInTx),ey=Number(last?.__spiralBezierInTy);
+            if(![sx,sy,ex,ey].every(Number.isFinite))return null;
+            const c=Math.cos(delta),q=Math.sin(delta),k=Math.max(1e-9,Number(scale)||1);
+            const expectedX=(c*sx-q*sy)*k,expectedY=(q*sx+c*sy)*k;
+            return spiralVectorTurnAngleDeg(ex,ey,expectedX,expectedY);
         }
         function spiralDistance(a,b){
             if(!a||!b)return Infinity;
@@ -1231,6 +1253,12 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
             const n=Math.max(4,Math.min(20,Math.round(Number(steps)||10)));
             if(!out.length||Math.hypot((Number(out[out.length-1]?.x)||0)-(Number(a?.x)||0),(Number(out[out.length-1]?.y)||0)-(Number(a?.y)||0))>1e-7){
                 const p=copySpiralMeta({...a},meta);p.__spiralClosureProtected=true;p.__spiralClosureFillet=tag;out.push(p);
+            }else{
+                // A slice ending exactly at the fillet cut already owns this point. Mark that
+                // existing boundary too: mapped Bézier controls on the preceding authored span
+                // target the OLD, untrimmed endpoint and must not be reused across a shortened
+                // span (at larger rounding they reverse the endpoint tangent and form a tail).
+                const p=out[out.length-1];copySpiralMeta(p,meta);p.__spiralClosureProtected=true;p.__spiralClosureFillet=tag;
             }
             for(let i=1;i<=n;i++){
                 const q=spiralQuadraticPoint(a,corner,b,i/n);
@@ -1283,6 +1311,12 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
                 copySpiralMeta(q,src[0]);q.__spiralClosureProtected=true;q.__spiralClosureFillet=tag;out.push(q);
             }
             appendSpiralPolylineSlice(out,src,cm,cutStart,cm.total-cutEnd);
+            // The slice endpoint is a newly trimmed point on the last authored span. Protect it
+            // before rebuilding retained cubics. Otherwise the preceding original knot can keep
+            // its full-span mapped C1/C2 controls even though P3 moved inward; once the cut passes
+            // C2 (roughly >33% on a two-piece straight profile) the cubic turns backwards and the
+            // visible period seam grows the characteristic hook/tail.
+            if(out.length){const p=out[out.length-1];copySpiralMeta(p,src[0]);p.__spiralClosureProtected=true;p.__spiralClosureFillet=tag;}
             // ...and the INCOMING half of the next-copy start corner. The following copy
             // contributes the complementary outgoing half, so there is no doubled geometry.
             for(let i=1;i<=steps;i++){
@@ -1331,9 +1365,20 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
             if(amount<=0.001)return period;
 
             const tangentCtx=spiralEndpointTangentContext(src,delta,scale);
-            const seamAngle=tangentCtx?.startIncoming&&tangentCtx?.startOutgoing
-                ? spiralTurnAngleDeg(tangentCtx.startIncoming,src[0],tangentCtx.startOutgoing)
-                : 0;
+            // A Tangential Spiral is curved even when it is perfectly C1. Measuring its seam
+            // from the first/last tessellation chords therefore reports a false kink (often a
+            // few degrees), so ANY non-zero rounding used to insert a closure fillet and visibly
+            // destroy the authored tangential trajectory. Prefer the mapped endpoint derivatives
+            // when they are available; fall back to chord geometry only for non-tangential or
+            // legacy/imported rails that do not carry exact derivative metadata.
+            const exactTangentialSeamAngle=!hasBridge&&tangential
+                ? spiralExactTangentialSeamAngleDeg(src,delta,scale)
+                : null;
+            const seamAngle=Number.isFinite(exactTangentialSeamAngle)
+                ? exactTangentialSeamAngle
+                : (tangentCtx?.startIncoming&&tangentCtx?.startOutgoing
+                    ? spiralTurnAngleDeg(tangentCtx.startIncoming,src[0],tangentCtx.startOutgoing)
+                    : 0);
             const bridgeAngle=hasBridge&&tangentCtx?.endIncoming
                 ? spiralTurnAngleDeg(tangentCtx.endIncoming,src[src.length-1],nextStart)
                 : 0;
@@ -1436,6 +1481,7 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
                 out.push(q);
             }
             appendSpiralPolylineSlice(out,pts,cm,cuts.currentStartCut,cm.total-cuts.currentEndCut);
+            if(out.length){const p=out[out.length-1];copySpiralMeta(p,pts[0]);p.__spiralSeamRoundFraction=cuts.endFraction;p.__spiralSeamProtected=true;p.__spiralOrdinaryClosedFillet=true;}
             for(let i=1;i<=steps;i++){
                 const u=i/steps,t=.5-.5*(1-u)*(1-u);const q=spiralQuadraticPoint(a1,v1,b1,t);
                 q.__spiralDelta=delta;q.__spiralTargetScale=scale;q.__spiralClosed=true;q.__spiralTangential=pts[0]?.__spiralTangential===true;q.__spiralRoundSeams=true;
@@ -1720,13 +1766,20 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
                 y:(s*(Number(p?.x)||0)+c*(Number(p?.y)||0))*scale
             });
             const expectedP3=map(first.p0),expectedNextC1=map(first.c1);
-            // Closed Spiral is a self-similar PERIOD, not a conventional p3==p0 loop.
-            // Canonicalize the retained carrier once at geometry-build time so every GPU
-            // consumer (Base, Corridor, Arc/Web, Morph endpoints) sees the exact same seam.
+            const hasAutoCloseBridge=src.some(p=>p?.__spiralAutoCloseBridgeEnd===true);
+            const hasExplicitSeamFillet=src.some(p=>p?.__spiralClosureProtected===true||p?.__spiralSeamProtected===true||Boolean(p?.__spiralClosureFillet)||Number(p?.__spiralSeamRoundFraction)>0);
+            // Positional periodicity is always exact. Tangent periodicity is NOT: a segmented,
+            // non-tangential Spiral at 0% rounding intentionally has a hard corner at every
+            // period seam. The old unconditional C2 rewrite converted its single straight span
+            // into a large Bézier bow (the reported 0% -> curved regression). Only a genuinely
+            // tangential continuous period, or an explicitly generated seam fillet, owns C1.
+            const tangentPeriodic=(src[0]?.__spiralTangential===true&&!hasAutoCloseBridge)||hasExplicitSeamFillet;
             last.p3.x=expectedP3.x;last.p3.y=expectedP3.y;
-            last.c2.x=2*expectedP3.x-expectedNextC1.x;last.c2.y=2*expectedP3.y-expectedNextC1.y;
+            if(tangentPeriodic){
+                last.c2.x=2*expectedP3.x-expectedNextC1.x;last.c2.y=2*expectedP3.y-expectedNextC1.y;
+            }
             if(Number.isFinite(Number(first.widthScale0)))last.widthScale1=Math.max(.02,Number(first.widthScale0)*scale);
-            out._spiroPeriodic=true;out._spiroPeriodicDelta=delta;out._spiroPeriodicScale=scale;
+            out._spiroPeriodic=true;out._spiroPeriodicDelta=delta;out._spiroPeriodicScale=scale;out._spiroPeriodicTangent=tangentPeriodic;
             return out;
         }
 
@@ -2506,12 +2559,14 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
             });
         }
 
-        function markNearestSpiralProfileKeys(sampled, authored, authoredFlags) {
-            const pts=Array.isArray(sampled)?sampled:[];
-            for(const p of pts)p.__profileKeyCorner=false;
+        function nearestSpiralProfileLogicalCornerFlags(sampled, authored, authoredFlags) {
+            // Lamp bend identity is independent from the visible spline. Find the sampled
+            // location of each authored polyline bend without tagging the geometry itself:
+            // tagging __profileCorner would turn a Smooth spline back into a hard corner.
+            const pts=Array.isArray(sampled)?sampled:[],out=pts.map(()=>false);
             for(let i=0;i<(authoredFlags?.length||0);i++){
                 if(!authoredFlags[i])continue;
-                const a=authored[i];
+                const a=authored?.[i];
                 let best=-1,bestD=Infinity;
                 for(let j=0;j<pts.length;j++){
                     const dx=(Number(pts[j]?.x)||0)-(Number(a?.x)||0);
@@ -2519,9 +2574,9 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
                     const d=dx*dx+dy*dy;
                     if(d<bestD){bestD=d;best=j;}
                 }
-                if(best>=0)pts[best].__profileKeyCorner=true;
+                if(best>=0)out[best]=true;
             }
-            return pts;
+            return out;
         }
 
         // Iter37 — Spiral profiles now inherit the polygon spline contract instead of
@@ -2603,11 +2658,14 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
             if(layer?.profileMode==='spline'){
                 if(profileSpaceSplineAlreadySampled===true){
                     // Morph snapshots already contain samples on the source/target profile
-                    // curve. Do not spline a spline. Their short line spans are only a
-                    // transport representation and are mapped as-is.
-                    return {points:base,roundingBaked:true,splineBaked:true,profileSpaceSplineBaked:true,polygonProfileSplineCarrier:false,keyFlags:base.map(()=>false)};
+                    // curve. Do not spline a spline. If the phase snapshot carries separate
+                    // logical lamp-bend flags, keep them without feeding them into stroke geometry.
+                    const carried=Array.isArray(layer?.__lampLogicalCornerFlags)&&layer.__lampLogicalCornerFlags.length===base.length
+                        ? layer.__lampLogicalCornerFlags.map(Boolean):base.map(()=>false);
+                    return {points:base,roundingBaked:true,splineBaked:true,profileSpaceSplineBaked:true,polygonProfileSplineCarrier:false,keyFlags:carried};
                 }
                 const polygonSpline=buildPolygonProfileSplineSamplesForSpiral(base,target);
+                const authoredLogicalCorners=segmentProfileCornerFlags(base);
                 return {
                     points:polygonSpline,
                     roundingBaked:true,
@@ -2615,7 +2673,9 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
                     profileSpaceSplineBaked:true,
                     polygonProfileSplineCarrier:true,
                     profileSourceCubicCount:Number(polygonSpline?._spiroProfileSourceCubicCount)||Math.max(0,polygonSpline.length-1),
-                    keyFlags:polygonSpline.map(()=>false)
+                    // Smooth geometry has no geometric kink, but «На изломах» must still
+                    // remember the bends of the authored control polyline.
+                    keyFlags:nearestSpiralProfileLogicalCornerFlags(polygonSpline,base,authoredLogicalCorners)
                 };
             }
 
@@ -2724,6 +2784,11 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
                 p.__spiralProfileCornerIndex=cornerIndex;
                 p.__spiralProfileCut=cut;
                 out.push(p);
+            }else{
+                // Same clipped-span rule as closure fillets: if the cut point was emitted by
+                // appendSpiralPolylineSlice(), tag that exact object so stale mapped controls
+                // cannot bridge from an untouched knot into a shortened span.
+                const p=out[out.length-1];copySpiralMeta(p,meta);p.__spiralProfileFinalRound=true;p.__spiralProfileFillet=true;p.__spiralProfileCornerIndex=cornerIndex;p.__spiralProfileCut=cut;
             }
             for(let i=1;i<=n;i++){
                 const q=spiralQuadraticPoint(a,corner,b,i/n);
@@ -3177,7 +3242,7 @@ window.__spiroRegisterModule?.('js/legacy/app-a');
             // In Spiral/Segments the authored profile may already be rounded in profile
             // space.  Keep separate logical key markers for lamps, but do NOT feed those
             // markers back into the stroke rounding a second time.
-            const spiralLampCornerFlags = spiralEnabled && layer.profileMode === 'segments'
+            const spiralLampCornerFlags = spiralEnabled && (layer.profileMode === 'segments' || layer.profileMode === 'spline')
                 ? (spiralProfileData?.keyFlags || profilePts.map(()=>false))
                 : null;
 
@@ -4281,12 +4346,14 @@ struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
                 // v522.9: the explicit “Линии” visibility block mirrors the Base carrier backend.
                 // Profile/Sprite/Graffiti have their own telemetry roots below.
                 geometry:['#geometrySettingsGroup','.line-display-group'],
+                geometryCircles:['.geometry-circles-row'],
                 glow:['#paramGlow','#paramGlowIntensity'],
                 outline:['.line-outline-row'],
                 fill:['#fillSettingsBlock'],
                 profile:['#lineRenderModeControl','#lineProfileRenderControl','#graffitiProfileRow','#graffitiNibRow'],
                 motion:['#lineMotionFxBlock'],
                 sprite:['#lineSpriteBlock'],
+                particles:['.particle-settings-group'],
                 sweep:['.sweep-settings-group'],
                 web:['.web-settings-group'],
                 lamps:['.lamp-settings-group'],
@@ -9917,9 +9984,10 @@ fn markerSd(p:vec2<f32>)->f32{
                         }
                         all.push({...p,...q,pathIndex,vertexIndex,orbitIndex:path?.orbitIndex,lampContourFraction:contourFraction,lampEndpointRole:endpointRole,lampId:`key:${pathIndex}:${vertexIndex}`,lampSeed:lampHash32(`${layerKey}:key:${pathIndex}:${vertexIndex}`)});
                     };
+                    // Lamp mode «Ключевое» on a Spiral means ONLY the two ends of
+                    // each logical Spiral segment/path. Interior bends belong to
+                    // «На изломах» and must never leak into the Key population.
                     pushPoint(pts[0],0,'start');
-                    const flags=path.lampCornerFlags||path.cornerFlags||[];
-                    for(let i=1;i<pts.length-1;i++) if(flags[i]) pushPoint(pts[i],i,'interior');
                     if(pts.length>1 && !spiralSeamShared) pushPoint(pts[pts.length-1],pts.length-1,'end');
                 }
                 const points=dedupeSpiralLampPoints(all,maxPoints);

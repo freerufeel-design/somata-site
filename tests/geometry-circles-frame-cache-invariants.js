@@ -1,0 +1,11 @@
+'use strict';
+const assert=require('assert');
+const fs=require('fs');
+const path=require('path');
+const root=path.resolve(__dirname,'..');
+const framePaths=fs.readFileSync(path.join(root,'js/geometry/frame-paths.js'),'utf8');
+const pipeline=fs.readFileSync(path.join(root,'js/render/main-pipeline.js'),'utf8');
+assert(pipeline.includes('if(frameCtx?._geometryCircleFrameData!==undefined)return frameCtx._geometryCircleFrameData;'),'Geometry Circles must retain their per-frame memoization');
+assert(framePaths.includes('ctx._geometryCircleFrameData=undefined;'),'Pooled LayerFrame contexts must clear Geometry Circles frame cache on every acquire');
+assert(framePaths.indexOf('ctx._geometryCircleFrameData=undefined;')<framePaths.indexOf('return ctx;'),'Geometry Circles cache reset must happen before the pooled frame context is returned');
+console.log('Geometry Circles frame-cache invariants: PASS');

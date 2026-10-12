@@ -20,6 +20,6 @@ if(!corner.includes('Web master thread geometry')||!corner.includes('retainedCub
 for(const flag of ['webHaloCoreFusedMrt:true','webAnalyticCoverageNoMsaa:true','webSingleCompositePerLayerScene:true','webLegacyAndMorphGpuPathsFused:true','webMasterThreadGeometryCompute:true','webPerVertexArcSamplingRemoved:true','webCorridorReusesMasterGeometry:true']){
   if(!pipeline.includes(flag)) throw new Error(`Runtime audit missing ${flag}`);
 }
-if(!pipeline.includes("version:'7.3.7'")||!pipeline.includes('iteration:16')) throw new Error('Runtime audit must be 7.2.8 iteration 16');
-if(!html.includes('<title>Somata 7.3.7</title>')||!html.includes('?v=20261012-v737')) throw new Error('7.2.8 build/cache epoch missing');
-console.log('Somata 7.3.7 Web GPU pressure invariants: PASS');
+if(!pipeline.includes("version:'7.3.9'")||!pipeline.includes('iteration:17')) throw new Error('Runtime audit must be 7.3.9 iteration 17');
+if(!html.includes('<title>Somata 7.3.20</title>')||!html.includes('?v=20261012-v7320')) throw new Error('7.2.8 build/cache epoch missing');
+console.log('Somata 7.3.9 Web GPU pressure invariants: PASS');

@@ -353,6 +353,9 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             if(!layer || typeof layer!=='object') return state.lamps;
             const owner=(typeof getPersistentEffectLayer==='function' ? getPersistentEffectLayer(layer) : null) || layer;
             if(!owner.lamps || typeof owner.lamps!=='object') owner.lamps=cloneLampConfig(state.lamps);
+            const hadRainDegrees=Object.prototype.hasOwnProperty.call(owner.lamps,'freezeRainDegrees');
+            const hadRainDirectionVersion=Object.prototype.hasOwnProperty.call(owner.lamps,'freezeRainDirectionVersion');
+            const legacyRainDegrees=hadRainDegrees?Number(owner.lamps.freezeRainDegrees):NaN;
             const base=state.lamps||{};
             for(const [k,v] of Object.entries(base)) if(!Object.prototype.hasOwnProperty.call(owner.lamps,k)) owner.lamps[k]=cloneEffectConfig(v);
             if (Number.isFinite(Number(owner.lamps.brightnessMultiplier)) && Number(owner.lamps.brightnessMultiplier) !== 1) owner.lamps.brightness=Math.max(0,Math.min(200,(Number(owner.lamps.brightness)||0)*Number(owner.lamps.brightnessMultiplier)));
@@ -363,6 +366,20 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             if(typeof owner.lamps.freezeLight!=='boolean') owner.lamps.freezeLight=false;
             if(!Number.isFinite(Number(owner.lamps.freezeTailSec)))owner.lamps.freezeTailSec=1.5;
             owner.lamps.freezeTailSec=Math.max(.05,Math.min(30,Number(owner.lamps.freezeTailSec)||1.5));
+            owner.lamps.freezeHardness=Math.max(0,Math.min(100,Number.isFinite(Number(owner.lamps.freezeHardness))?Number(owner.lamps.freezeHardness):50));
+            owner.lamps.freezeColorMode=['lamp','line','fixed','hue'].includes(owner.lamps.freezeColorMode)?owner.lamps.freezeColorMode:'lamp';
+            owner.lamps.freezeColor=typeof owner.lamps.freezeColor==='string'?owner.lamps.freezeColor:'#00ffcc';
+            owner.lamps.freezeHueDegrees=Math.max(0,Math.min(180,Number.isFinite(Number(owner.lamps.freezeHueDegrees))?Number(owner.lamps.freezeHueDegrees):45));
+            if(typeof owner.lamps.freezeChromatic!=='boolean')owner.lamps.freezeChromatic=false;
+            owner.lamps.freezeChromaticColor=typeof owner.lamps.freezeChromaticColor==='string'?owner.lamps.freezeChromaticColor:'#22d3ee';
+            if(typeof owner.lamps.freezeRain!=='boolean')owner.lamps.freezeRain=false;
+            if(!hadRainDirectionVersion&&hadRainDegrees&&Number.isFinite(legacyRainDegrees))owner.lamps.freezeRainDegrees=legacyRainDegrees+90;
+            owner.lamps.freezeRainDirectionVersion=2;
+            owner.lamps.freezeRainDegrees=((Number.isFinite(Number(owner.lamps.freezeRainDegrees))?Number(owner.lamps.freezeRainDegrees):180)%360+360)%360;
+            owner.lamps.freezeRainSource=owner.lamps.freezeRainSource==='lamp'?'lamp':'core';
+            owner.lamps.freezeRainSpeed=Math.max(0,Math.min(100,Number.isFinite(Number(owner.lamps.freezeRainSpeed))?Number(owner.lamps.freezeRainSpeed):50));
+            owner.lamps.freezeRainTailSec=Math.max(.05,Math.min(30,Number.isFinite(Number(owner.lamps.freezeRainTailSec))?Number(owner.lamps.freezeRainTailSec):1.5));
+            owner.lamps.freezeRainHardness=Math.max(0,Math.min(100,Number.isFinite(Number(owner.lamps.freezeRainHardness))?Number(owner.lamps.freezeRainHardness):50));
             if(typeof owner.lamps.adaptiveBrightness!=='boolean') owner.lamps.adaptiveBrightness=true;
             if(typeof owner.lamps.adaptiveAdjustBrightness!=='boolean') owner.lamps.adaptiveAdjustBrightness=false;
             if(!Number.isFinite(Number(owner.lamps.adaptiveStrength)))owner.lamps.adaptiveStrength=100;
@@ -522,7 +539,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 motionRotation: { enabled:false, speed:30, multiplier:1, direction:'ccw', tunnelLag:0, tunnelLagMultiplier:1 },
                 opacity: 100,
                 lineOpacity: 100,
-                // 7.3.7: generic line overlap/layering policy. Uniform unions neighbouring
+                // 7.3.9: generic line overlap/layering policy. Uniform unions neighbouring
                 // stroke/glow coverage; Segmented keeps source-over accumulation per segment.
                 lineLayerMode: 'uniform',
                 spiralLineType: 'uniform', // legacy project/import alias; migrated to lineLayerMode

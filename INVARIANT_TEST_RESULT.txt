@@ -1,0 +1,7 @@
+Somata 7.3.20 hotfix 11
+Invariant suite: 51/51 PASS
+Application JavaScript syntax: 59/59 PASS
+New regression: iPhone fullscreen / VisualViewport presentation fallback PASS
+PWA manifest JSON: PASS
+Default playlist unchanged: SHA-256 69ca8e228e099320acc198a6eec7a7dc326fd6cade8aa29ff5a30f156c005a6a
+Native iPhone Safari element fullscreen cannot be certified because WebKit does not expose arbitrary-element Fullscreen API on iPhone; fallback path is static/invariant tested in this sandbox.

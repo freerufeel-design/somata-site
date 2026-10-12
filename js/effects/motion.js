@@ -398,7 +398,12 @@ window.__spiroRegisterModule?.('js/effects/motion');
             if (!nodesChanged && !primitivesChanged) return cached.signature;
 
             let nodeSig = cached?.nodeSig || '';
-            if (nodesChanged) {
+            // geometryVersion is an invalidation signal, not part of structural identity.
+            // Project reloads recreate equivalent layer objects with fresh version serials; if
+            // that serial leaks into the shared key, identical geometry accumulates one resident
+            // cache record per reload. Re-sample node coordinates whenever the version changes,
+            // then let the exact structural signature decide whether cross-project reuse is safe.
+            if (nodesChanged || !cached || cached.geometryVersion !== geometryVersion) {
                 let parts = '';
                 for (let i = 0; i < nodes.length; i++) {
                     const p = nodes[i] || {};
@@ -406,7 +411,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
                 }
                 nodeSig = parts;
             }
-            const signature = `${N}|${K}|${customSuborbits}|ch:${chaosStar},${chaosStepMinus},${chaosStepPlus},${chaosClosures},${chaosSeed}|${closedLoop}|${lineJoinType}|roundMode:${roundingMode}|${radius}|rm:${radiusMultiplier}|${rotation}|${profileMode}|${splineRenderMode}|${preSampledSpline}|${configuredSplinePoints}|${splineSegments}|${splineMix}|${spiralEnabled}|${spiralOrder}|${spiralTangential}|${spiralRoundSeams}|${spiralClosed}|${spiralStep}|${spiralStepLinked}|${spiralStepRatio}|sr:${spiralRounding}|${nodeSig}|gv:${geometryVersion}`;
+            const signature = `${N}|${K}|${customSuborbits}|ch:${chaosStar},${chaosStepMinus},${chaosStepPlus},${chaosClosures},${chaosSeed}|${closedLoop}|${lineJoinType}|roundMode:${roundingMode}|${radius}|rm:${radiusMultiplier}|${rotation}|${profileMode}|${splineRenderMode}|${preSampledSpline}|${configuredSplinePoints}|${splineSegments}|${splineMix}|${spiralEnabled}|${spiralOrder}|${spiralTangential}|${spiralRoundSeams}|${spiralClosed}|${spiralStep}|${spiralStepLinked}|${spiralStepRatio}|sr:${spiralRounding}|${nodeSig}`;
             cached = {
                 geometryVersion, N, K, customSuborbits, chaosStar, chaosStepMinus, chaosStepPlus, chaosClosures, chaosSeed, closedLoop, lineJoinType, roundingMode, radius, radiusMultiplier, rotation, profileMode, splineRenderMode, preSampledSpline,
                 configuredSplinePoints, splineSegments, splineMix, spiralEnabled, spiralOrder, spiralTangential, spiralRoundSeams, spiralClosed, spiralStep, spiralStepLinked, spiralStepRatio, spiralRounding, nodes, nodeRefs: nodes.slice(), nodeSig, signature
@@ -464,9 +469,13 @@ window.__spiroRegisterModule?.('js/effects/motion');
             const geometryKey = layerGeometrySignature(layer);
             const roundingValue = Number(layer.rounding) || 0;
             const sharedKey = `${geometryKey}|r:${roundingValue}`;
+            // Resolved Morph/frame layers are short-lived clones. They may legitimately change
+            // every phase and must never populate the cross-project static LRU. Their own WeakMap
+            // entry is enough for the current frame/phase; only canonical state.layers are shared.
+            const sharedEligible=Array.isArray(state?.layers)&&state.layers.includes(layer);
             let cached = layerDrawCache.get(layer);
             if (!cached || cached.geometryKey !== geometryKey || cached.roundingValue !== roundingValue) {
-                const shared=sharedLayerDrawDataGet(sharedKey);
+                const shared=sharedEligible?sharedLayerDrawDataGet(sharedKey):null;
                 if(shared){layerDrawCache.set(layer,shared);return shared;}
                 let paths = buildOrbitPolylines(layer);
                 const monoradius=applyMonoradiusRoundingCompensation(paths,layer,roundingValue);
@@ -528,7 +537,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
                     }
                 }
             }
-            sharedLayerDrawDataPut(sharedKey,cached);
+            if(sharedEligible)sharedLayerDrawDataPut(sharedKey,cached);
             return cached;
         }
 

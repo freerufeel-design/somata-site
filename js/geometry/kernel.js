@@ -304,21 +304,22 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             ].some(candidate=>candidate&&isSpiralLayer(candidate));
             const unsupportedFillKind=plan.kind==='orange-fade'||plan.kind==='blue-fade'||plan.kind==='green-fade'||plan.kind==='lightning';
             const hasStaticFillTopology=dynamic?false:(Number(geometry?.fillContourCount)||0)>0&&geometry?.hasClosedFillTopology===true;
-            // Somata 6.8 Iter19 — a Spiral carrier is an open canonical stroke rail even when
-            // `spiralClosed` is enabled: its auto-close bridge is already baked into that rail.
-            // There is therefore no separate closed polygon Fill contour. Treating the UI Fill
-            // toggle as a requested polygon fill made strict Spiral wait forever for a native
-            // fill mesh that cannot exist, suppressing the valid retained-Bezier Base as well.
-            // Dynamic polygon morphs keep their existing Fill contract; Spiral endpoints do not
-            // request Fill until an authoritative closed fill topology is actually provided.
-            const fillHasRenderableTopology=spiralEndpoint?hasStaticFillTopology:true;
+            // Static Fill exists only when the authoritative geometry actually exposes a closed
+            // fill contour. This applies to every static carrier, not just Spiral: requesting Fill
+            // on an open contour can only end in a backend-chain failure. Dynamic Morph keeps its
+            // historical contract because its frame topology may be materialized later in the pass.
+            const fillHasRenderableTopology=dynamic?true:hasStaticFillTopology;
             const fillRequested=fillConfigured&&fillHasRenderableTopology;
             const corridor=state.tunnel?.active===true;
             // Somata 7.2.6 — dynamic Corridor Morph has an authoritative frame-resident
             // command rail.  Fill may consume its closed subpaths directly as a native GPU
             // stencil fan; dynamic no longer means "Canvas mask required".
-            const dynamicCorridorNative=fillRequested&&dynamic&&corridor&&!spiralEndpoint&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerGeometry);
-            const nativeGpuFillEligible=fillRequested&&!spiralEndpoint&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(!corridor||!tunnelColorShiftIsActive())&&(hasStaticFillTopology&&!dynamic||dynamicCorridorNative);
+            // Dynamic Corridor already has a frame-resident command rail. Spiral phases are
+            // allowed to TRY the same native stencil preparation; if that rail has no closed
+            // fill contour the render pipeline now skips only Fill for that frame instead of
+            // putting the whole Morph into an endless corridor-gpu-wait loop.
+            const dynamicCorridorNative=fillRequested&&dynamic&&corridor&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerGeometry);
+            const nativeGpuFillEligible=fillRequested&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(!corridor||!tunnelColorShiftIsActive())&&((hasStaticFillTopology&&!dynamic&&!spiralEndpoint)||dynamicCorridorNative);
             const gpuMaskEligible=fillRequested&&hasStaticFillTopology&&!dynamic&&!spiralEndpoint&&!corridor&&!unsupportedFillKind&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerFillInstances);
             const contract={
                 kind:String(plan.kind||'static'),

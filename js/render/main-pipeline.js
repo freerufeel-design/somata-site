@@ -35,7 +35,7 @@ function somataGpuContractError(code,ctx=null,details=null){
     }
     const key=`${payload.code}:${payload.layerIndex}`;const now=performance.now(),prev=somataFullGpuDiag.lastLogAt.get(key)||-1e9;
     const minLogGapMs=recoverable?5000:500;
-    if(now-prev>minLogGapMs){somataFullGpuDiag.lastLogAt.set(key,now);(recoverable?console.warn:console.error)(`[Somata 7.3.7 FullGPU] ${payload.code}`,payload);}
+    if(now-prev>minLogGapMs){somataFullGpuDiag.lastLogAt.set(key,now);(recoverable?console.warn:console.error)(`[Somata 7.3.9 FullGPU] ${payload.code}`,payload);}
     return false;
 }
 window.__somataFullGpuDiagnostics=()=>({strict:true,canvasFallbackAllowed:false,fastGpuAllowed:false,errors:somataFullGpuDiag.errors,warnings:somataFullGpuDiag.warnings,last:somataFullGpuDiag.last,lastAt:somataFullGpuDiag.lastAt,byCode:{...somataFullGpuDiag.byCode}});
@@ -60,8 +60,11 @@ function prepareMainRenderFrame(renderFrame) {
     const mainContainer = mainContainerEl;
     const { w, h, dpr } = ensureMainCanvasSize(mainContainer);
     renderFrame.w=w; renderFrame.h=h; renderFrame.dpr=dpr;
-    LampGPURenderer.beginFrame(mainCanvas.width,mainCanvas.height,renderFrame.now);
-    WebGPUStrokeRenderer.clearDeferredLayerScene?.();
+    const gpuBackendAllowed=(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed());
+    if(gpuBackendAllowed){
+        LampGPURenderer.beginFrame(mainCanvas.width,mainCanvas.height,renderFrame.now);
+        WebGPUStrokeRenderer.clearDeferredLayerScene?.();
+    }
     const displayLayers=(typeof SpiroMorphController!=='undefined'&&typeof SpiroMorphController.getDisplayLayers==='function')
         ? SpiroMorphController.getDisplayLayers()
         : (state.layers||[]);
@@ -78,12 +81,12 @@ function prepareMainRenderFrame(renderFrame) {
     }
     // v429: Sprite/Moving Line own a transparent WebGPU overlay. Clear it exactly once
     // per main frame; it remains available even when another effect uses Canvas/Legacy.
-    renderFrame.pathFxOverlayReady=WebGPUPathFxRenderer.beginOverlayFrame?.(renderFrame.id,mainCanvas.width,mainCanvas.height,displayLayers.some(l=>l?.visible!==false&&(l?.sprite?.enabled===true||l?.lineMotionFx?.enabled===true)))===true;
-    renderFrame.particleOverlayReady=WebGPUParticleRenderer?.beginOverlayFrame?.(renderFrame.id,mainCanvas.width,mainCanvas.height,displayLayers.some(l=>l?.visible!==false&&normalizeParticleConfig(l?.particles).enabled===true))===true;
-    WebGPUGraffitiRibbonRenderer.beginOverlayFrame?.(renderFrame.id,mainCanvas.width,mainCanvas.height,displayLayers.some(l=>l?.visible!==false&&l?.lineProfileApplication==='graffiti'));
+    renderFrame.pathFxOverlayReady=gpuBackendAllowed&&WebGPUPathFxRenderer.beginOverlayFrame?.(renderFrame.id,mainCanvas.width,mainCanvas.height,displayLayers.some(l=>l?.visible!==false&&(l?.sprite?.enabled===true||l?.lineMotionFx?.enabled===true)))===true;
+    renderFrame.particleOverlayReady=gpuBackendAllowed&&WebGPUParticleRenderer?.beginOverlayFrame?.(renderFrame.id,mainCanvas.width,mainCanvas.height,displayLayers.some(l=>l?.visible!==false&&normalizeParticleConfig(l?.particles).enabled===true))===true;
+    if(gpuBackendAllowed)WebGPUGraffitiRibbonRenderer.beginOverlayFrame?.(renderFrame.id,mainCanvas.width,mainCanvas.height,displayLayers.some(l=>l?.visible!==false&&l?.lineProfileApplication==='graffiti'));
     // v514: start compiling the procedural Morph Graffiti pipeline before effect planning.
     // If it is not ready this frame, the exact compatibility path remains authoritative.
-    try{if(displayLayers.some(l=>l?.visible!==false&&l?.lineProfileApplication==='graffiti'))WebGPUGraffitiMorphRenderer?.warmup?.();}catch(_){}
+    try{if(gpuBackendAllowed&&displayLayers.some(l=>l?.visible!==false&&l?.lineProfileApplication==='graffiti'))WebGPUGraffitiMorphRenderer?.warmup?.();}catch(_){}
     
     const transparentDesktop = state.transparentDesktop === true;
     const presentationBgColor = transparentDesktop ? 'transparent' : state.bgColor;
@@ -303,9 +306,14 @@ function preflightLayerPathFxReplacement(frameCtx){
         if(canvasReady){frameCtx._pathFxReplacementCommitted=true;frameCtx._pathFxReplacementKind='sprite-canvas-fallback';frameCtx._pathFxCanvasSprite=true;return true;}
         return false;
     }
-    if(motion?.enabled===true&&motion?.cfg?.replaceBase===true&&gpuReady){
-        const ok=typeof queueLayerPathFxPass==='function'&&queueLayerPathFxPass(frameCtx,motion,'motion',motion.cfg)===true;
-        if(ok){frameCtx._pathFxReplacementCommitted=true;frameCtx._pathFxReplacementKind='motion';frameCtx._pathFxPrequeuedMotion=true;return true;}
+    if(motion?.enabled===true&&motion?.cfg?.replaceBase===true){
+        if(gpuReady){
+            const ok=typeof queueLayerPathFxPass==='function'&&queueLayerPathFxPass(frameCtx,motion,'motion',motion.cfg)===true;
+            if(ok){frameCtx._pathFxReplacementCommitted=true;frameCtx._pathFxReplacementKind='motion';frameCtx._pathFxPrequeuedMotion=true;return true;}
+        }
+        if(!isStrictSpiralWebGPUFrame(frameCtx)&&typeof prepareLayerMotionCanvasFallback==='function'&&prepareLayerMotionCanvasFallback(frameCtx,motion)===true){
+            frameCtx._pathFxReplacementCommitted=true;frameCtx._pathFxReplacementKind='motion-canvas-fallback';return true;
+        }
     }
     return false;
 }
@@ -314,6 +322,7 @@ function preflightLayerPathFxReplacement(frameCtx){
 // The surfaces are composited later at their historical pass positions, so Fill, geometry
 // circles and destination-over Outline preserve the exact Canvas ordering.
 function prepareLayerStrokeWebGPUBatch(frameCtx){
+    if(typeof somataCpuBackendForced==='function'&&somataCpuBackendForced())return null;
     frameCtx._webgpuStrokeBatch=null;frameCtx._webgpuFillPrepared=null;frameCtx._nativeFillMeshCandidate=null;frameCtx._topologyMorphGpuNative=false;
     const strictSpiralBatch=isStrictSpiralWebGPUFrame(frameCtx);
     const pathFxNeeded=frameCtx?.effectsPlan?.motion?.enabled===true||frameCtx?.effectsPlan?.sprite?.enabled===true;
@@ -469,7 +478,7 @@ function renderLayerGlowPass(frameCtx) {
     const {w,h,dpr}=frameCtx.frame;
     // v294: ordinary and spiral line glow share the analytic WebGL path. Spiral
     // variable width is already encoded into the recorded per-segment line widths.
-    if(!frameCtx.lineProfileStrokeOnly&&!state.showRoundingGuides&&LineEffectsGPURenderer.isAvailable()){
+    if((typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed())&&!frameCtx.lineProfileStrokeOnly&&!state.showRoundingGuides&&LineEffectsGPURenderer.isAvailable()){
         const gpuOpt={effectMode:'glow',radiusPx:Math.max(.5,effect.amount*.55*dpr),alphaScale:effect.compositeAlpha,composite:'source-over'};
         if(tryRenderCorridorLineEffectGPU(frameCtx,gpuOpt)){renderBackendTelemetry.mark('glow','gpu','GPU Corridor glow');return;}
         const commands=getFrameGLStrokeCommands(frameCtx);
@@ -579,7 +588,8 @@ function getLayerGeometryCircleFrameData(frameCtx){
     if(frameCtx?._geometryCircleFrameData!==undefined)return frameCtx._geometryCircleFrameData;
     const layer=frameCtx?.layer,cfg=layer?.geometryCircles;if(!layer||cfg?.enabled!==true||(!cfg.circumscribed&&!cfg.inscribed&&!cfg.median&&!cfg.keyPoints))return frameCtx?(frameCtx._geometryCircleFrameData=null):null;
     const paths=getLayerFrameAuxiliaryPaths(frameCtx),circles=computeLayerGeometryCircles(paths,cfg);if(!circles.length)return frameCtx?(frameCtx._geometryCircleFrameData=null):null;
-    const commands=!state.showRoundingGuides?buildGeometryCircleGPUCommands(frameCtx,circles):null,data={circles,commands};if(frameCtx)frameCtx._geometryCircleFrameData=data;return data;
+    const gpuAllowed=(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed());
+    const commands=gpuAllowed&&!state.showRoundingGuides?buildGeometryCircleGPUCommands(frameCtx,circles):null,data={circles,commands};if(frameCtx)frameCtx._geometryCircleFrameData=data;return data;
 }
 function renderLayerGeometryCirclesPass(frameCtx){
     const data=getLayerGeometryCircleFrameData(frameCtx);if(!data)return;const {circles,commands}=data,layer=frameCtx.layer;
@@ -588,12 +598,13 @@ function renderLayerGeometryCirclesPass(frameCtx){
     if(frameCtx.frame?.gpuLayerSceneDeferred&&commands?.length){
         const scene=WebGPUStrokeRenderer.getDeferredLayerSceneTexture?.(frameCtx.frameId);
         const rec=scene?.texture?WebGPUStrokeRenderer.encodeGeometryCirclesToLayerScene?.(scene.texture,commands):null;
-        if(rec?.handled){if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,15,rec.commandBuffer,'geometry-circles');return;}
-        if(isStrictSpiralWebGPUFrame(frameCtx)){renderBackendTelemetry.mark('geometry','gpu','strict Spiral geometry circles GPU unavailable');somataGpuContractError('SPIRAL_GEOMETRY_CIRCLES_GPU_UNAVAILABLE',frameCtx,{stage:'layer-scene'});try{requestMainCanvasRender?.();}catch(_){}return;}
+        if(rec?.handled){if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,15,rec.commandBuffer,'geometry-circles');renderBackendTelemetry.mark('geometryCircles','gpu','resident Layer Scene');return;}
+        if(isStrictSpiralWebGPUFrame(frameCtx)){renderBackendTelemetry.mark('geometryCircles','gpu','strict Spiral geometry circles GPU unavailable');renderBackendTelemetry.mark('geometry','gpu','strict Spiral geometry circles GPU unavailable');somataGpuContractError('SPIRAL_GEOMETRY_CIRCLES_GPU_UNAVAILABLE',frameCtx,{stage:'layer-scene'});try{requestMainCanvasRender?.();}catch(_){}return;}
         if(!materializeDeferredLayerScene(frameCtx))return;
     }
-    if(isStrictSpiralWebGPUFrame(frameCtx)){renderBackendTelemetry.mark('geometry','gpu','strict Spiral geometry circles missing resident Layer Scene');somataGpuContractError('SPIRAL_GEOMETRY_CIRCLES_NO_SCENE',frameCtx,{stage:'resident-scene'});try{requestMainCanvasRender?.();}catch(_){}return;}
-    if(commands&&GeometryGPURenderer.render(commands,mainCtx))return;
+    if(isStrictSpiralWebGPUFrame(frameCtx)){renderBackendTelemetry.mark('geometryCircles','gpu','strict Spiral geometry circles missing resident Layer Scene');renderBackendTelemetry.mark('geometry','gpu','strict Spiral geometry circles missing resident Layer Scene');somataGpuContractError('SPIRAL_GEOMETRY_CIRCLES_NO_SCENE',frameCtx,{stage:'resident-scene'});try{requestMainCanvasRender?.();}catch(_){}return;}
+    if(commands&&GeometryGPURenderer.render(commands,mainCtx)){renderBackendTelemetry.mark('geometryCircles','gpu','Geometry GPU renderer');return;}
+    renderBackendTelemetry.mark('geometryCircles','canvas','Canvas2D geometry circles');
     const copies=frameCtx.visibleInstances?.copies||[{scale:1}],alphas=frameCtx.visibleInstances?.alphas||[1];
     for(let i=0;i<copies.length;i++){
         const copy=copies[i],alpha=Number(alphas[i]??1);if(alpha<=.001)continue;
@@ -893,7 +904,7 @@ function canDeferLayerSceneForFrame(frameCtx,batch){
 }
 function ensureStrictSpiralEffectLayerSceneRoot(frameCtx){
     if(!isStrictSpiralWebGPUFrame(frameCtx)||!frameCtx?.frame)return false;
-    // Somata 7.3.7 — gpuLayerSceneDeferred is frame-wide history, not resident ownership.
+    // Somata 7.3.9 — gpuLayerSceneDeferred is frame-wide history, not resident ownership.
     // After one layer is sealed into Frame Scene that boolean may remain true while the shared
     // per-layer scratch has already been released. Only the renderer's resident record proves
     // that THIS layer has a writable Layer Scene. A global Frame Scene may coexist with it.
@@ -902,7 +913,7 @@ function ensureStrictSpiralEffectLayerSceneRoot(frameCtx){
     // Normal visible Base must remain the root producer, otherwise a pre-clear command would
     // occupy the one deferred LayerScene slot before the retained-Bézier Base can publish it.
     const baseWillOwnScene=frameCtx.lineDisplayEnabled===true&&frameCtx.lineProfileStrokeOnly!==true&&!isPathFxBaseReplacementActive(frameCtx);
-    // Somata 7.3.7 — Web is an underlay. If strict Spiral Web is enabled, open a transparent
+    // Somata 7.3.9 — Web is an underlay. If strict Spiral Web is enabled, open a transparent
     // LayerScene root before Base so Web can be queued at phase 4.5 and Base at phase 5 even
     // though the logical Web pass runs later. This also gives every exact effect one stable
     // canonical scene owner instead of racing for the external LayerScene slot.
@@ -929,6 +940,7 @@ function ensureStrictSpiralEffectLayerSceneRoot(frameCtx){
 // Iter19 — frame-level Spiral intent is needed before LayerFrame construction so entering
 // Spiral cannot clear the only presented image while WebGPU asynchronously warms up.
 function hasStrictSpiralPresentationIntent(displayLayers){
+    if(typeof somataCpuBackendForced==='function'&&somataCpuBackendForced())return false;
     if(state?.fourierMode===true)return false;
     const spiral=(layer)=>Boolean(layer&&typeof isSpiralLayer==='function'&&isSpiralLayer(layer));
     if(Array.isArray(displayLayers)&&displayLayers.some(layer=>layer?.visible!==false&&spiral(layer)))return true;
@@ -942,12 +954,13 @@ function hasStrictSpiralPresentationIntent(displayLayers){
     return false;
 }
 function isStrictSpiralWebGPUFrame(frameCtx){
+    if(typeof somataCpuBackendForced==='function'&&somataCpuBackendForced())return false;
     if(state?.fourierMode===true||!frameCtx)return false;
     const spiral=(layer)=>Boolean(layer&&typeof isSpiralLayer==='function'&&isSpiralLayer(layer));
     if(spiral(frameCtx.layer)||spiral(frameCtx.sourceLayer)||spiral(frameCtx.geometryPlan?.sourceLayer)||spiral(frameCtx.geometryPlan?.targetLayer)||spiral(frameCtx.blueMorphProvider?.sourceLayer)||spiral(frameCtx.blueMorphProvider?.targetLayer))return true;
     // 6.8 iter7: a polygon<->Spiral Morph can have a temporary render layer that is not
     // itself tagged as Spiral. The special retained rail is the authoritative geometry owner.
-    try{const rec=typeof currentGpuBezierMorphResource==='function'?currentGpuBezierMorphResource(frameCtx.layerIndex):null;if(rec?.specialSpiralBezierRail===true&&rec?.gpuOnlySpiralEffects===true)return true;}catch(_){}
+    try{const rec=typeof currentGpuBezierMorphResource==='function'?currentGpuBezierMorphResource(frameCtx.layerIndex):null;const liveMorphAuthority=frameCtx.morphFrameActive===true||frameCtx.geometryPlan?.dynamic===true;if(liveMorphAuthority&&rec?.specialSpiralBezierRail===true&&rec?.gpuOnlySpiralEffects===true)return true;}catch(_){}
     return false;
 }
 function spiralGpuEffectsRequested(frameCtx){
@@ -1156,7 +1169,14 @@ function tryOpenGpuCorridorFillLayerScene(frameCtx){
     // renderer and join the same resident Layer Scene.
     const mesh=frameCtx?._corridorNativeFillPreflight||frameCtx?._fillMeshShadow||
         (frameCtx?.geometryPlan?.dynamic===true?getDynamicCorridorFillMesh(frameCtx):FillMeshPreparer.prepareFrame?.(frameCtx));
-    if(!mesh?.nativeComplete||!mesh?.fanTriangleCount)return{handled:false,required:true,reason:'canonical native Fill mesh unavailable'};
+    if(!mesh?.nativeComplete||!mesh?.fanTriangleCount){
+        // A Spiral Morph Corridor may legitimately expose an open retained rail for this
+        // phase. There is then no fillable closed contour. Fill is optional visual content:
+        // skip it for this frame and keep Morph/Base advancing instead of retrying forever.
+        if(frameCtx?.geometryPlan?.dynamic===true&&contract?.spiral===true)
+            return{handled:false,required:false,suppressed:true,reason:'dynamic Spiral Corridor has no closed native Fill contour'};
+        return{handled:false,required:true,reason:'canonical native Fill mesh unavailable'};
+    }
     try{FillGPURenderer.isAvailable?.();}catch(_){}
     if(!FillGPURenderer.canEncodeMeshToTexture?.(frameCtx,mesh))return{handled:false,required:true,reason:'native WebGPU Fill pipeline warming/unavailable'};
 
@@ -1164,7 +1184,7 @@ function tryOpenGpuCorridorFillLayerScene(frameCtx){
     // A Fill must JOIN that scene (Glow -> Fill -> Base), not ask for a second scratch scene.
     // Asking getExternalLayerSceneTarget() while one is deferred returns null and used to create
     // the repeated "GPU Layer Scene target unavailable" / render-retry loop seen in «ярко1».
-    const resident=frameCtx._baseStrokeCommitted===true?null:WebGPUStrokeRenderer.getDeferredLayerSceneTexture?.(frameCtx.frameId);
+    const resident=WebGPUStrokeRenderer.getDeferredLayerSceneTexture?.(frameCtx.frameId);
     const target=resident?.texture?resident:WebGPUStrokeRenderer.getExternalLayerSceneTarget?.(frameCtx.frameId);
     if(!target?.texture)return{handled:false,required:true,reason:'GPU Layer Scene target unavailable'};
     const rec=FillGPURenderer.encodeCorridorMeshCommandToTexture?.(target.texture,frameCtx,mesh,mainCtx);
@@ -1268,7 +1288,11 @@ function renderLayerBaseGeometryPass(frameCtx) {
         // Corridor Fill is part of the same resident WebGPU Layer Scene as Graffiti/Base.
         // Do not render it to a hidden WebGPU canvas and then drawImage() through Canvas2D.
         const corridorFill=state.tunnel?.active===true?tryOpenGpuCorridorFillLayerScene(frameCtx):null;
-        if(corridorFill?.handled){
+        if(corridorFill?.suppressed){
+            fillHandled=true;
+            renderBackendTelemetry.mark('fill','gpu','dynamic Spiral Corridor Fill skipped: no closed topology');
+            noteFillRuntime(frameCtx,{handled:true,stage:'corridor-no-closed-fill',backend:'none',reason:corridorFill.reason||'no closed native Fill contour'});
+        }else if(corridorFill?.handled){
             fillHandled=true;fillMaskValidationStats.gpuSuppression++;geometryContractStats.gpuFill++;geometryContractStats.nativeMeshFill++;
             renderBackendTelemetry.mark('fill','gpu','native WebGPU Corridor Fill Layer Scene');
             noteFillRuntime(frameCtx,{handled:true,stage:'corridor-layer-scene',backend:'webgpu-native-corridor-scene',reason:''});
@@ -1569,6 +1593,7 @@ function renderLayerOutlinePass(frameCtx) {
 function renderLayerProfilePass(frameCtx) {
     const effect=frameCtx.effectsPlan?.profile;
     if(!effect?.enabled)return;
+    const gpuBackendAllowed=typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed();
     const strictSpiralProfileGpu=isStrictSpiralWebGPUFrame(frameCtx);
     const layer=frameCtx.layer,visibleInstances=frameCtx.visibleInstances,baseAlpha=Math.max(0,Math.min(1,Number(frameCtx.lineAlpha??frameCtx.baseAlpha)||0));
     const markerCoreInset=(effect.application==='stroke'&&frameCtx.effectsPlan?.outline?.enabled===true)?Math.max(0,Number(frameCtx.effectsPlan.outline.coreInset)||0):0;
@@ -1601,7 +1626,7 @@ function renderLayerProfilePass(frameCtx) {
     // v514: plain topology-Morph Graffiti is expanded procedurally from the shared GPU
     // point stream. The command buffer contains Morph compute -> ribbon draw, so no CPU path,
     // side arrays, triangle mesh, or dynamic vertex upload exists on the fast path.
-    if(effect.application==='graffiti'&&effect.prepared?.gpuMorphNative===true){
+    if(gpuBackendAllowed&&effect.application==='graffiti'&&effect.prepared?.gpuMorphNative===true){
         if(frameCtx.frame?.gpuLayerSceneDeferred){
             const scene=WebGPUStrokeRenderer.getDeferredLayerSceneTexture(frameCtx.frameId);let rec=null;
             if(scene?.texture){
@@ -1651,7 +1676,7 @@ function renderLayerProfilePass(frameCtx) {
     // v433: Graffiti is GPU-only. If FrameGraph is unavailable or another legacy pass
     // forced materialization, draw the same vector ribbon into an independent transparent
     // WebGPU overlay instead of falling back to Canvas2D.
-    if(effect.application==='graffiti'&&effect.prepared?.gpuRibbonEligible===true){
+    if(gpuBackendAllowed&&effect.application==='graffiti'&&effect.prepared?.gpuRibbonEligible===true){
         mainCtx.save();applyLayerFrameEffectTransform(mainCtx,frameCtx);
         const g=frameCtx.effectsPlan?.glow;if(g?.enabled===true){const glowOpts={radiusPx:Math.max(.5,(Number(g.amount)||0)*.55*frameCtx.frame.dpr),alphaScale:Math.max(0,Number(g.compositeAlpha)||0),composite:'source-over'};const grec=effect.tunnelActive
             ? WebGPUGraffitiRibbonRenderer.drawCorridorGlowToOverlay?.(effect.prepared,layer,mainCtx,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,glowOpts)
@@ -1684,7 +1709,7 @@ function renderLayerProfilePass(frameCtx) {
 
     // v327: slash/square profile markers are GPU-instanced both normally and in Corridor.
     // Marker positions are canonical; Corridor uploads only copy transform/alpha records.
-    if(effect.application==='stroke'&&effect.prepared?.type!=='round'){
+    if(gpuBackendAllowed&&effect.application==='stroke'&&effect.prepared?.type!=='round'){
         if(WebGPUProfileMarkerRenderer.isReady()){
             mainCtx.save();applyLayerFrameEffectTransform(mainCtx,frameCtx);
             let ok=false;
@@ -1693,7 +1718,7 @@ function renderLayerProfilePass(frameCtx) {
             mainCtx.restore();if(ok){renderBackendTelemetry.mark('profile','gpu','GPU profile markers');noteProfileGpuSuccess('dash',effect.tunnelActive?'marker corridor draw':'marker draw','webgpu');return;}const st=WebGPUProfileMarkerRenderer.status?.()||{};noteProfileGpuFailure('dash',effect.tunnelActive?'marker corridor draw':'marker draw',st.lastError||st.diagnostic?.reason||(st.available?'GPU marker render returned false':'GPU marker renderer unavailable'),{renderer:st});
         }else{const st=WebGPUProfileMarkerRenderer.status?.()||{};noteProfileGpuFailure('dash','marker ready',st.lastError||st.diagnostic?.reason||(st.initializing?'GPU marker pipeline warming':'GPU marker renderer unavailable'),{renderer:st});}
     }
-    if(effect.application==='graffiti'){const rs=WebGPUGraffitiRibbonRenderer.status?.()||{},ms=WebGPUGraffitiMorphRenderer.status?.()||{};noteProfileGpuFailure('graffiti','profile exhausted',rs.lastError||ms.lastError||'no eligible Graffiti GPU renderer handled this frame',{ribbon:rs,morph:ms});renderBackendTelemetry.mark('profile','gpu','GPU-only Graffiti: no Canvas fallback');return;}
+    if(gpuBackendAllowed&&effect.application==='graffiti'){const rs=WebGPUGraffitiRibbonRenderer.status?.()||{},ms=WebGPUGraffitiMorphRenderer.status?.()||{};noteProfileGpuFailure('graffiti','profile exhausted',rs.lastError||ms.lastError||'no eligible Graffiti GPU renderer handled this frame',{ribbon:rs,morph:ms});renderBackendTelemetry.mark('profile','gpu','GPU-only Graffiti: no Canvas fallback');return;}
     if(strictSpiralProfileGpu){renderBackendTelemetry.mark('profile','gpu','Spiral line-profile GPU-only warmup; Canvas fallback forbidden');somataGpuContractError('SPIRAL_PROFILE_GPU_UNAVAILABLE',frameCtx,{profile:effect?.application||null});try{requestMainCanvasRender?.();}catch(_){}return;}
     renderBackendTelemetry.mark('profile','canvas','Canvas line-profile fallback',true);
     for(let pi=0;pi<visibleInstances.copies.length;pi++){
@@ -1744,9 +1769,14 @@ window.__spiroV408DynamicCanonicalPathProbe=()=>{const st=WebGPUCanonicalPathSto
 
 function renderLayerLampPass(frameCtx) {
     const effect=frameCtx.effectsPlan?.lamps;
+    let forceCpuLamps=typeof somataCpuBackendForced==='function'&&somataCpuBackendForced();
     if(!effect?.enabled||!effect.instances?.copies?.length)return;
-    const strictSpiralGpu=isStrictSpiralWebGPUFrame(frameCtx);
-    if(strictSpiralGpu&&LampGPURenderer.isWebGPUReady?.()!==true){renderBackendTelemetry.mark('lamps','gpu','Spiral Full WebGPU lamp renderer unavailable');somataGpuContractError('SPIRAL_LAMPS_GPU_UNAVAILABLE',frameCtx,{lamp:LampGPURenderer.status?.()||null});return;}
+    let strictSpiralGpu=isStrictSpiralWebGPUFrame(frameCtx);
+    if(strictSpiralGpu&&LampGPURenderer.isWebGPUReady?.()!==true){
+        const degraded=typeof somataGpuFeatureWaitOrFallback==='function'&&somataGpuFeatureWaitOrFallback('lamps','lamp-renderer-warming',{stage:'render',lamp:LampGPURenderer.status?.()||null},650,frameCtx,false);
+        strictSpiralGpu=isStrictSpiralWebGPUFrame(frameCtx);forceCpuLamps=typeof somataCpuBackendForced==='function'&&somataCpuBackendForced();
+        if(strictSpiralGpu&&!degraded){renderBackendTelemetry.mark('lamps','gpu','Spiral Full WebGPU lamp renderer unavailable');somataGpuContractError('SPIRAL_LAMPS_GPU_UNAVAILABLE',frameCtx,{lamp:LampGPURenderer.status?.()||null});return;}
+    }
     for(const set of effect.sets){
         if(!set?.points?.length||set.alphaBase<=.001)continue;
         const drawPlan={
@@ -1775,14 +1805,18 @@ function renderLayerLampPass(frameCtx) {
             }
             // Spiral 6.8 is GPU-only: never replace the exact Bézier-derived Arc with a
             // CPU materialized path merely because a WebGPU resource is still warming.
-            if(isStrictSpiralWebGPUFrame(frameCtx)){renderBackendTelemetry.mark('lamps','gpu','Spiral lamps GPU-only warmup');somataGpuContractError('SPIRAL_LAMP_NATIVE_QUEUE_FAILED',frameCtx,{nativeKind});continue;}
-            // Non-Spiral compatibility keeps the historical fail-open path.
+            if(isStrictSpiralWebGPUFrame(frameCtx)){
+                const degraded=typeof somataGpuFeatureWaitOrFallback==='function'&&somataGpuFeatureWaitOrFallback('lamps','native-lamp-queue-warming',{stage:'native-queue',nativeKind},650,frameCtx,false);
+                forceCpuLamps=typeof somataCpuBackendForced==='function'&&somataCpuBackendForced();
+                if(isStrictSpiralWebGPUFrame(frameCtx)&&!degraded){renderBackendTelemetry.mark('lamps','gpu','Spiral lamps GPU-only warmup');somataGpuContractError('SPIRAL_LAMP_NATIVE_QUEUE_FAILED',frameCtx,{nativeKind});continue;}
+            }
+            // Non-Spiral / runtime-degraded compatibility keeps the historical fail-open path.
             if(arcNative){const lampT=frameCtx.blueMorphProvider?.geometryT||0,rawPaths=getLayerFrameAuxiliaryPaths(frameCtx);const fallback=withLampConfig(drawPlan.config,()=>collectMorphLampPoints(frameCtx.layerIndex,lampT,260,rawPaths,null));set.gpuLampNative=false;set.gpuPrepared=null;set.points=fallback;if(!fallback?.length)continue;visualPlan=prepareVisual();}
             else{set.gpuLampNative=false;set.points=set.gpuPrepared?.attachmentPoints||set.points;set.gpuPrepared=null;if(!set.points?.length)continue;visualPlan=prepareVisual();}
         }
         if(!visualPlan?.items?.length)continue;
         // v325 — WebGPU Corridor lamps are expanded on the GPU as lampCount × copyCount.
-        if(effect.tunnelActive&&LampGPURenderer.queueCorridorVisualPlan(mainCtx,visualPlan,set.alphaBase,drawPlan,effect.instances.copies,effect.instances.alphas,frameCtx)){renderBackendTelemetry.mark('lamps','gpu','GPU Corridor lamps');continue;}
+        if(!forceCpuLamps&&effect.tunnelActive&&LampGPURenderer.queueCorridorVisualPlan(mainCtx,visualPlan,set.alphaBase,drawPlan,effect.instances.copies,effect.instances.alphas,frameCtx)){renderBackendTelemetry.mark('lamps','gpu','GPU Corridor lamps');continue;}
         const cssBase=Math.abs(Number(frameCtx.combinedScale)||1)*Math.max(.001,Number(drawPlan.zoom)||1);
         for(let li=0;li<effect.instances.copies.length;li++){
             const copy=effect.instances.copies[li],copyAlpha=Math.max(0,Math.min(1,Number(effect.instances.alphas?.[li]??1))),effectiveAlpha=set.alphaBase*copyAlpha;
@@ -1792,10 +1826,15 @@ function renderLayerLampPass(frameCtx) {
             if(effectiveAlpha<=.001)continue;
             drawPlan.cssTransformScale=effect.tunnelActive?Math.max(.000001,Math.abs(Number(copy.scale)||0)*cssBase):cssBase;
             mainCtx.save();if(effect.tunnelActive){applyMotionTunnelLag(mainCtx,copy,frameCtx.layer);mainCtx.scale(copy.scale,copy.scale);}applyLayerFrameEffectTransform(mainCtx,frameCtx);
-            const queuedGL=LampGPURenderer.queueVisualPlan(mainCtx,visualPlan,effectiveAlpha,drawPlan);
+            const queuedGL=!forceCpuLamps&&LampGPURenderer.queueVisualPlan(mainCtx,visualPlan,effectiveAlpha,drawPlan);
             if(!queuedGL){
-                const gpuRequested=drawPlan.config?.webgl!==false&&drawPlan.config?.rasterized!==true;
-                if(isStrictSpiralWebGPUFrame(frameCtx)){renderBackendTelemetry.mark('lamps','gpu','Spiral lamps GPU-only warmup');somataGpuContractError('SPIRAL_LAMP_GPU_QUEUE_FAILED',frameCtx,{copyIndex:li});}
+                const gpuRequested=!forceCpuLamps&&drawPlan.config?.webgl!==false&&drawPlan.config?.rasterized!==true;
+                if(isStrictSpiralWebGPUFrame(frameCtx)){
+                    const degraded=typeof somataGpuFeatureWaitOrFallback==='function'&&somataGpuFeatureWaitOrFallback('lamps','lamp-queue-warming',{stage:'queue',copyIndex:li},650,frameCtx,false);
+                    forceCpuLamps=typeof somataCpuBackendForced==='function'&&somataCpuBackendForced();
+                    if(isStrictSpiralWebGPUFrame(frameCtx)&&!degraded){renderBackendTelemetry.mark('lamps','gpu','Spiral lamps GPU-only warmup');somataGpuContractError('SPIRAL_LAMP_GPU_QUEUE_FAILED',frameCtx,{copyIndex:li});}
+                    else{renderBackendTelemetry.mark('lamps','canvas','CPU lamp fallback after bounded GPU wait',true);drawLampVisualPlan(mainCtx,visualPlan,effectiveAlpha,drawPlan);}
+                }
                 else if(gpuRequested){
                     renderBackendTelemetry.mark('lamps','gpu','GPU lamps unavailable; Canvas fallback blocked');
                     somataGpuDiagnosticError('lamps','queue',`GPU lamp queue failed for copy ${li}`,frameCtx,{copyIndex:li,lamp:LampGPURenderer.status?.()||null});
@@ -2542,7 +2581,8 @@ function resolveLayerOutlineEffectProvider(frameCtx,plan){
     if(plan.graffiti){
         // v514: try the resident topology-Morph source before touching the CPU path accessor.
         // Unsupported nib/variation/geometry modes keep the historical exact preparation.
-        const nativePrepared=typeof prepareGpuMorphGraffitiFrame==='function'?prepareGpuMorphGraffitiFrame(frameCtx):null;
+        const gpuBackendAllowed=typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed();
+        const nativePrepared=gpuBackendAllowed&&typeof prepareGpuMorphGraffitiFrame==='function'?prepareGpuMorphGraffitiFrame(frameCtx):null;
         if(nativePrepared){plan.gpuMorphNative=true;plan.paths=null;plan.profilePrepared=nativePrepared;}
         else if(isStrictSpiralWebGPUFrame(frameCtx)){plan.enabled=false;try{requestMainCanvasRender?.();}catch(_){ }return plan;}
         else{plan.paths=getLayerFrameAuxiliaryPaths(frameCtx);if(plan.paths?.length)plan.profilePrepared=prepareLayerFrameProfileData(frameCtx);}
@@ -2579,7 +2619,8 @@ function resolveLayerProfileEffectProvider(frameCtx,plan){
     plan.tunnelActive=state.tunnel.active===true;
     if(!plan.enabled)return plan;
     if(plan.application==='graffiti'){
-        const nativePrepared=typeof prepareGpuMorphGraffitiFrame==='function'?prepareGpuMorphGraffitiFrame(frameCtx):null;
+        const gpuBackendAllowed=typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed();
+        const nativePrepared=gpuBackendAllowed&&typeof prepareGpuMorphGraffitiFrame==='function'?prepareGpuMorphGraffitiFrame(frameCtx):null;
         if(nativePrepared){plan.gpuMorphNative=true;plan.paths=null;plan.prepared=nativePrepared;}
         else if(isStrictSpiralWebGPUFrame(frameCtx)){plan.enabled=false;try{requestMainCanvasRender?.();}catch(_){ }return plan;}
     }else if(isStrictSpiralWebGPUFrame(frameCtx)){
@@ -2602,12 +2643,13 @@ function resolveLayerSweepEffectProvider(frameCtx,plan){
     if(!plan.enabled)return plan;
     // v516: Exact Lightning gets first access to the shared GPU Arc before any CPU path accessor.
     // Unsupported placement/clip semantics fall through to the historical exact preparation.
-    const lightningGpuData=typeof prepareGpuMorphArcLightningFrame==='function'?prepareGpuMorphArcLightningFrame(frameCtx,cfg):null;
+    const gpuBackendAllowed=typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed();
+    const lightningGpuData=gpuBackendAllowed&&typeof prepareGpuMorphArcLightningFrame==='function'?prepareGpuMorphArcLightningFrame(frameCtx,cfg):null;
     if(lightningGpuData){plan.paths=null;plan.frameData=lightningGpuData;plan.gpuMorphArcLightning=lightningGpuData.gpuMorphArcLightning===true;const lv=lightningGpuData.lightningVector,vis=typeof getLightningVisualSettings==='function'?getLightningVisualSettings(cfg,frameCtx.layerIndex):null;plan.footprint=Math.max(1,Number(vis?.glowSize)||(Number(cfg.lightningGlow)||0)*Math.max(0,Number(cfg.lightningGlowMultiplier)||1),Number(lv?.boltW)||Number(frameCtx.strokeWidth)||1.5);return plan;}
     // v512: whole/perPath Glint can consume the exact shared GPU Morph Arc resource directly.
     // Do this BEFORE getLayerFrameAuxiliaryPaths(), otherwise merely enabling Sweep forces an
     // O(N) CPU Morph path + arc walk even though the renderer never needs those objects.
-    const gpuData=typeof prepareGpuMorphArcSweepFrame==='function'?prepareGpuMorphArcSweepFrame(frameCtx,cfg):null;
+    const gpuData=gpuBackendAllowed&&typeof prepareGpuMorphArcSweepFrame==='function'?prepareGpuMorphArcSweepFrame(frameCtx,cfg):null;
     if(gpuData){plan.paths=null;plan.frameData=gpuData;plan.gpuMorphArc=gpuData.gpuMorphArc===true;const sweepCfg=gpuData.cfg||cfg;plan.footprint=Math.max(.5,Number(gpuData.sweepW)||Number(frameCtx.strokeWidth)||1.5,(Number(sweepCfg?.glow)||0)*.55*Math.max(0,Number(sweepCfg?.glowMultiplier)||1));return plan;}
     // 6.8 strict Spiral: an effect warmup/ineligible GPU branch must never trigger the lazy
     // CPU Morph path accessor. That accessor materializes a sampled rail and was the source of
@@ -2646,6 +2688,8 @@ function resolveLayerWebEffectProvider(frameCtx,plan){
     // A supported ultra-polygon Morph therefore keeps Web completely off the CPU geometry path.
     const nativeData=typeof prepareGpuMorphWebFrame==='function'?prepareGpuMorphWebFrame(frameCtx):null;
     if(nativeData){plan.frameData=nativeData;plan.paths=null;plan.gpuMorphWebNative=true;plan.enabled=true;}
+    // prepareGpuMorphWebFrame may intentionally degrade the complete strict scene to the CPU
+    // reference backend after a bounded native warm-up. Re-evaluate strictness AFTER prepare.
     else if(isStrictSpiralWebGPUFrame(frameCtx)){plan.enabled=false;try{requestMainCanvasRender?.();}catch(_){ }return plan;}
     else{plan.frameData=prepareLayerFrameWebData(frameCtx);plan.paths=plan.frameData?.paths||getLayerFrameAuxiliaryPaths(frameCtx);plan.enabled=plan.frameData?.enabled===true&&Boolean(plan.paths?.length);}
     if(plan.enabled)plan.footprint=Math.max(.03,Number(plan.frameData?.width)||.6)*2.4;
@@ -2702,11 +2746,12 @@ function resolveLayerLampEffectProvider(frameCtx,plan){
         const alpha=frameCtx.baseAlpha*((frameCtx.forcedLampMorph||followsMorph)?1:.95);
         // v520: topology-Morph Lamps ask the identity/Arc bridge BEFORE any CPU Morph path accessor.
         // Key uses phase-resident identity; Arbitrary uses contour fractions + Exact Arc.
-        const strictSpiralGpu=isStrictSpiralWebGPUFrame(frameCtx),gpuLampPrepared=(followsMorph||strictSpiralGpu)&&allowed&&typeof prepareGpuMorphLampFrame==='function'?prepareGpuMorphLampFrame(frameCtx):null;
+        const strictSpiralGpuBefore=isStrictSpiralWebGPUFrame(frameCtx),gpuLampPrepared=(followsMorph||strictSpiralGpuBefore)&&allowed&&typeof prepareGpuMorphLampFrame==='function'?prepareGpuMorphLampFrame(frameCtx):null;
         if(gpuLampPrepared){pushGpuLampEffectSet(plan,layer,gpuLampPrepared,alpha,plan.baseConfig);}
         else{
-            // Strict Spiral never materializes CPU lamp geometry. Static and Morph Spiral both
-            // use the shared retained cubic → GPU Arc resource; a warmup frame is simply skipped.
+            // Native preparation may degrade a stalled strict scene to the CPU reference backend.
+            // Re-evaluate strictness here so the same frame can materialize the exact CPU carrier.
+            const strictSpiralGpu=isStrictSpiralWebGPUFrame(frameCtx);
             if(strictSpiralGpu){plan.enabled=false;somataGpuContractError('SPIRAL_LAMP_ARC_RESOURCE_UNAVAILABLE',frameCtx,{arc:window.__spiroGpuMorphArcStatus?.()||null,lampBridge:window.__spiroGpuMorphLampBridgeStatus?.()||null,lamp:window.__spiroLampGPUStatus?.()||null,authority:(()=>{try{const r=typeof currentGpuBezierResourceForFrame==='function'?currentGpuBezierResourceForFrame(frameCtx):null;return r?{layerIndex:r.layerIndex,ready:r.ready===true,static:r.staticSpiralBezierRail===true,special:r.specialSpiralBezierRail===true,cubicCount:Number(r.cubicCount)||0,segmentCount:Number(r.segmentCount)||0,phaseSerial:Number(r.phaseSerial)||0}:null;}catch(_){return null;}})(),arcDecision:window.__spiroGpuMorphArcStatus?.()?.lastDecision||null});try{requestMainCanvasRender?.();}catch(_){ }return plan;}
             // Green project Morph already owns stable lamp coordinates. Do not materialize its
             // hundreds of interpolated contour points again just to feed Lamps.
@@ -2783,15 +2828,22 @@ window.__spiroEffectsPlanSnapshot = (layerIndex=0) => {
     const f=renderRuntime.frame;
     const ctx=prepareMainLayerFrame(f,Math.max(0,Math.floor(Number(layerIndex)||0)));
     if(!ctx)return null;
-    const e=ctx.effectsPlan||{};
+    const e=ctx.effectsPlan||{},geometryContract=typeof getLayerGeometryContract==='function'?getLayerGeometryContract(ctx):null;
     const out={
         layerId:ctx.layer?.id||null,
+        base:Boolean(ctx.lineDisplayEnabled&&ctx.lineProfileStrokeOnly!==true),
+        fill:Boolean(geometryContract?.fillRequested),
+        corridor:Boolean(geometryContract?.corridor),
+        geometryCircles:Boolean(ctx.layer?.geometryCircles?.enabled===true&&ctx.layer?.visible!==false),
+        spiral:Boolean(ctx.layer?.spiralEnabled===true&&ctx.layer?.visible!==false),
+        motionRotation:Boolean(ctx.layer?.motionRotation?.enabled===true&&ctx.layer?.visible!==false),
         glow:Boolean(e.glow?.enabled),
         outline:Boolean(e.outline?.enabled),
         profile:Boolean(e.profile?.enabled),
         profileType:e.profile?.application||'stroke',
         motion:Boolean(e.motion?.enabled),
         sprite:Boolean(e.sprite?.enabled),
+        particles:Boolean(typeof normalizeParticleConfig==='function'&&normalizeParticleConfig(ctx.layer?.particles)?.enabled===true&&ctx.layer?.visible!==false),
         sweep:Boolean(e.sweep?.enabled),
         sweepType:e.sweep?.cfg?.effectType||null,
         web:Boolean(e.web?.enabled),
@@ -2799,7 +2851,7 @@ window.__spiroEffectsPlanSnapshot = (layerIndex=0) => {
         lampSets:e.lamps?.sets?.length||0,
         lampInstances:e.lamps?.instances?.copies?.length||0
     };
-    ctx.drawLayerGeometry=null;ctx.drawLayerInstances=null;ctx.frameVectorMaster=null;
+    ctx.drawLayerGeometry=null;ctx.drawLayerInstances=null;ctx.frameVectorMaster=null;ctx._geometryContract=null;
     resetMainLayerGeometryPlan(ctx.geometryPlan);resetLayerEffectsPlan(ctx.effectsPlan);ctx.prepared=false;
     return out;
 };
@@ -2833,7 +2885,7 @@ window.__somataSpiral68Audit = (layerIndex=0) => {
     const backend=typeof __spiroRenderBackendStatus==='function'?__spiroRenderBackendStatus():null,cpuMorph=typeof __spiroMorphCpuFallbackStatus==='function'?__spiroMorphCpuFallbackStatus():null;
     const mixedBackendObserved=Boolean(strict&&(backend?.mixedMaterialization===true||backend?.sceneCanvasTouched===true||Object.values(backend?.features||{}).some(v=>v?.backend==='canvas'||v?.backend==='mixed')));
     const strictViolation=Boolean(strict&&(!rec?.ready||!rec?.bezierVisualRail||!rec?.gpuOnlySpiralEffects||Object.values(contracts).some(c=>c.canvasFallback||!c.gpu||!c.bezier)||mixedBackendObserved));
-    return{version:'7.3.7',iteration:16,layerIndex:li,strictSpiralGpu:strict,endpointSpiral,retainedBezier:Boolean(rec?.ready&&rec?.bezierVisualRail),specialMorphBezier:Boolean(rec?.specialSpiralBezierRail),gpuOnlyEffects:Boolean(rec?.gpuOnlySpiralEffects),cubicCount:Number(rec?.cubicCount)||0,arcBezierDerived:Boolean(arc?.table?.gpuBezierDerived),arcMetric:'gauss3-cubic',arcLocalInverse:'endpoint-speed-analytic',arcSegments:Number(arc?.segmentCount)||0,arcSubdiv:Number(arc?.subdiv||rec?.arcSubdiv||rec?.bezierSubdiv)||0,minimalTurnEndpointExact:true,minimalTurnPathContinuousFallback:true,authoredCornerFlags:true,orderedGpuPrerequisites:true,sharedCurrentCubicProducer:true,arcReusesOrderedBaseCubics:true,strictExceptionFallbackBlocked:true,strictNoGpuCanvasRoundTrip:true,strictGraphNoCpuWarmup:true,strictNativeFillNoCpuShadow:true,perFrameStrictPresentationLatch:true,baseMorphClockIndependentOfOptionalEffectWarmup:true,retainedSpiralSkipsDenseCpuTopology:true,optionalArcWebWarmupDoesNotGateMorphClock:true,fullGpuPrewarmGatesMorphClock:true,webNeverGatesMorphClock:true,webStaleCornerStateRebuild:true,webRendererAwaitableWarmup:true,lampArcFrameAuthoritativeRail:true,freezeLightSharesLampFrameAuthority:true,phaseCircleLampArcPreclockGate:true,fullGpuFaultRingBounded:true,effectBenchmarkConsoleProfiler:true,corridorDepthAlphaNeutralized:false,corridorVisibilityFadeOnly:false,corridorCenterShadeAdjustable:true,corridorCenterShadeGpuCull:true,canvasFallbackForbidden:true,fastGpuForbidden:true,visualBezierSubdiv:12,arcEffectSubdiv:8,webCornerCandidateCompaction:true,morphFrameLayerVersionedSync:true,orderedGlowBaseCurrentCubicReuse:true,minimalTurnArcMetricCache:true,bezierSweepUniformPooling:true,graffitiCorridorHiddenCarrierGlow:true,graffitiBaseCarrierStillSuppressed:true,graffitiHiddenCarrierOwnsGpuRoot:true,graffitiHiddenCarrierStaticCorridorMaster:true,graffitiMorphGlowUsesRetainedBezier:true,graffitiContourGlowGpuMask:true,graffitiThinCarrierGlowRemoved:true,gpuFallbackConsoleDiagnostics:true,spiralMorphSharedExplicitRenderLayout:true,v701FreezeLightFeedback:true,v701LampArcBindGroupComplete:true,staticDirectCubicResource:true,staticBaseRetainedBezierWebGPU:true,unifiedSpiralGpuSubdiv:12,exactMorphLampBoundaries:true,strictFinalCanvasPresentationBlocked:true,strictMorphCpuPathFirewall:true,minimalTurnRetainedBezierPairing:true,minimalTurnCoherentOuterTurnGuard:true,strictBaseIndependentOfEffectReadiness:true,strictEffectsOnlyGpuSceneRoot:true,strictPresentationKeepsLastGpuFrame:false,strictCentralMaterializationFirewall:true,strictLateCanvasOverlayComposite:true,strictLastLayerAvoidsGpuReadback:true,strictLateCanvasVignetteBlocked:true,strictTopologylessFillCannotBlockBase:true,strictEntryPreservesPreviousFrame:false,strictEntryPrewarmsGpu:true,iter21RollbackBaseline:true,iter22OffscreenViewportFix:true,iter23InternalBatchDecoupledFromExternalScene:true,iter23SchedulerWatchdog:true,iter23ConsoleReport:true,iter25GpuInitRetry:true,iter25InternalSceneIndependentOfFinalInit:true,iter25SpiralTrace:true,iter26StaticBaseDedicatedBezier:true,iter28CorridorOuterScopeStats:true,iter28DeterministicMorphStop:true,iter28IdleBezierPipelineWarmup:true,iter29BezierCapacityComparisonFixed:true,iter29PersistentCorridorBezierRail:true,iter29BezierReleaseAndMutableReuse:true,iter30GpuReadinessRepaint:true,iter30SpiralGestureArcPrewarm:true,iter31WgslReservedIdentifiersPurged:true,iter32ProfilePresetPreservesSpiralMode:true,iter32OpenSpiralIntegrityGuard:true,iter33ProfileSpaceSplineBeforeSpiralMap:true,iter33ExplicitGpuCompositeLayouts:true,iter33MorphArcMutableFinalize:true,iter34MappedProfileControls:true,iter34ExternalImageTextureUsage:true,iter35FrozenProfileCarrier:true,iter35WgslValidationFixes:true,iter36StaticSpiralInternalBezierBatch:true,iter36DedicatedBezierReservedForMorph:false,strictStaticCorridorDedicatedBezier:true,spiralLampKeyAuthoredOnly:true,spiralLampCornerExactBoundary:true,spiralLampArcAuthorityAwareCache:true,genericLineLayerMode:true,crossFamilySpiralPathCartesianTransport:true,strictSpiralResidentSceneJoin:true,strictSpiralWebUnderBaseOrdered:true,webIndirectActiveCornerGuard:true,webCornersAuthoredAngularFallback:true,web67NeighbourCornerDepth:true,webCorridorCrosslinksNative:true,webCorridorCrosslinksDepthStencilCompatible:true,splineProfileModeAuthoritative:true,spiralSplineIntermediateTangentRepair:true,projectDefaultModes67Parity:true,projectDefaultModesPostCommitActivation:true,projectDefaultCorridorBeforeMorph:true,projectCommitQuiescesRuntime:true,projectDefaultPostPaintVerifyOnly:true,tunnelActiveRuntimeOnly:true,tunnelActiveNotSerialized:true,strictSpiralResidentRootRecordAuthority:true,lightningGlowGpuMaskBlur:true,lightningGlowStencilBlur:true,iter37PolygonProfileBezierGeneralization:true,iter38StorageBufferLimitNegotiation:true,iter39NullOverrideSpiralTransform:true,iter39PolygonProfileBezierGeneralization:true,v69MorphMaxCoverageUnion:true,v69PeriodicBezierClosure:true,v69MorphLayerSceneIsolation:true,v69StaticCornerZeroInertia:true,v69ViewportWorkspaceGestures:true,v69SweepCoreGlowBlendModes:true,v69LightningPreflashCoreOnTop:true,v69WebLogicalBoundaryCorners:true,v69SmoothFilletCollisionHandoff:true,v69StrictCarrierIntegrityGuard:true,v69UnboundedMicroStrikes:true,v69StaticSpiralLampContract:true,corridorStrictCarrierIndependent:true,corridorNativeFillPreflightSceneRoot:true,corridorResidentGlowFillBase:true,dynamicCorridorFillSharesMorphRail:true,dynamicCorridorFillNoCanvasMask:true,dynamicFillGpuBufferResident:true,corridorGpuBridgeEffectsCanStayResident:true,circleSlideSkipsDenseGenericTopology:true,chaosCircleDirectWithoutDenseEndpoints:true,webHaloCoreFusedMrt:true,webAnalyticCoverageNoMsaa:true,webSingleCompositePerLayerScene:true,webLegacyAndMorphGpuPathsFused:true,spiralCanonicalFastVisualRail:true,spiralFastRailDerivedAfterPeriodicClosure:true,webMasterThreadGeometryCompute:true,webPerVertexArcSamplingRemoved:true,webCorridorReusesMasterGeometry:true,blueSpiralExtraGeometryUsesBezier:true,strictOutlineRequiresCommittedBase:true,noFrameWideMissingBaseAbort:true,minimalTurnCoherentGuardDegrees:22.5,strictProfileMarkersGpuArc:true,strictProfileNoCpuShadow:true,mixedBackendObserved,cpuMorphPathBlocks:Number(cpuMorph?.strictSpiralBlocks)||0,mixedCanvasFallbackAllowed:!strict,strictViolation,contracts,statuses,backend};
+    return{version:'7.3.9',iteration:17,layerIndex:li,strictSpiralGpu:strict,endpointSpiral,retainedBezier:Boolean(rec?.ready&&rec?.bezierVisualRail),specialMorphBezier:Boolean(rec?.specialSpiralBezierRail),gpuOnlyEffects:Boolean(rec?.gpuOnlySpiralEffects),cubicCount:Number(rec?.cubicCount)||0,arcBezierDerived:Boolean(arc?.table?.gpuBezierDerived),arcMetric:'gauss3-cubic',arcLocalInverse:'endpoint-speed-analytic',arcSegments:Number(arc?.segmentCount)||0,arcSubdiv:Number(arc?.subdiv||rec?.arcSubdiv||rec?.bezierSubdiv)||0,minimalTurnEndpointExact:true,minimalTurnPathContinuousFallback:true,authoredCornerFlags:true,orderedGpuPrerequisites:true,sharedCurrentCubicProducer:true,arcReusesOrderedBaseCubics:true,strictExceptionFallbackBlocked:true,strictNoGpuCanvasRoundTrip:true,strictGraphNoCpuWarmup:true,strictNativeFillNoCpuShadow:true,perFrameStrictPresentationLatch:true,baseMorphClockIndependentOfOptionalEffectWarmup:true,retainedSpiralSkipsDenseCpuTopology:true,optionalArcWebWarmupDoesNotGateMorphClock:true,fullGpuPrewarmGatesMorphClock:true,webNeverGatesMorphClock:true,webStaleCornerStateRebuild:true,webRendererAwaitableWarmup:true,lampArcFrameAuthoritativeRail:true,freezeLightSharesLampFrameAuthority:true,phaseCircleLampArcPreclockGate:true,fullGpuFaultRingBounded:true,effectBenchmarkConsoleProfiler:true,corridorDepthAlphaNeutralized:false,corridorVisibilityFadeOnly:false,corridorCenterShadeAdjustable:true,corridorCenterShadeGpuCull:true,canvasFallbackForbidden:true,fastGpuForbidden:true,visualBezierSubdiv:12,arcEffectSubdiv:8,webCornerCandidateCompaction:true,morphFrameLayerVersionedSync:true,orderedGlowBaseCurrentCubicReuse:true,minimalTurnArcMetricCache:true,bezierSweepUniformPooling:true,graffitiCorridorHiddenCarrierGlow:true,graffitiBaseCarrierStillSuppressed:true,graffitiHiddenCarrierOwnsGpuRoot:true,graffitiHiddenCarrierStaticCorridorMaster:true,graffitiMorphGlowUsesRetainedBezier:true,graffitiContourGlowGpuMask:true,graffitiThinCarrierGlowRemoved:true,gpuFallbackConsoleDiagnostics:true,spiralMorphSharedExplicitRenderLayout:true,v701FreezeLightFeedback:true,v701LampArcBindGroupComplete:true,staticDirectCubicResource:true,staticBaseRetainedBezierWebGPU:true,unifiedSpiralGpuSubdiv:12,exactMorphLampBoundaries:true,strictFinalCanvasPresentationBlocked:true,strictMorphCpuPathFirewall:true,minimalTurnRetainedBezierPairing:true,minimalTurnCoherentOuterTurnGuard:true,strictBaseIndependentOfEffectReadiness:true,strictEffectsOnlyGpuSceneRoot:true,strictPresentationKeepsLastGpuFrame:false,strictCentralMaterializationFirewall:true,strictLateCanvasOverlayComposite:true,strictLastLayerAvoidsGpuReadback:true,strictLateCanvasVignetteBlocked:true,strictTopologylessFillCannotBlockBase:true,strictEntryPreservesPreviousFrame:false,strictEntryPrewarmsGpu:true,iter21RollbackBaseline:true,iter22OffscreenViewportFix:true,iter23InternalBatchDecoupledFromExternalScene:true,iter23SchedulerWatchdog:true,iter23ConsoleReport:true,iter25GpuInitRetry:true,iter25InternalSceneIndependentOfFinalInit:true,iter25SpiralTrace:true,iter26StaticBaseDedicatedBezier:true,iter28CorridorOuterScopeStats:true,iter28DeterministicMorphStop:true,iter28IdleBezierPipelineWarmup:true,iter29BezierCapacityComparisonFixed:true,iter29PersistentCorridorBezierRail:true,iter29BezierReleaseAndMutableReuse:true,iter30GpuReadinessRepaint:true,iter30SpiralGestureArcPrewarm:true,iter31WgslReservedIdentifiersPurged:true,iter32ProfilePresetPreservesSpiralMode:true,iter32OpenSpiralIntegrityGuard:true,iter33ProfileSpaceSplineBeforeSpiralMap:true,iter33ExplicitGpuCompositeLayouts:true,iter33MorphArcMutableFinalize:true,iter34MappedProfileControls:true,iter34ExternalImageTextureUsage:true,iter35FrozenProfileCarrier:true,iter35WgslValidationFixes:true,iter36StaticSpiralInternalBezierBatch:true,iter36DedicatedBezierReservedForMorph:false,strictStaticCorridorDedicatedBezier:true,spiralLampKeyAuthoredOnly:true,spiralLampCornerExactBoundary:true,spiralLampArcAuthorityAwareCache:true,genericLineLayerMode:true,crossFamilySpiralPathCartesianTransport:true,strictSpiralResidentSceneJoin:true,strictSpiralWebUnderBaseOrdered:true,webIndirectActiveCornerGuard:true,webCornersAuthoredAngularFallback:true,web67NeighbourCornerDepth:true,webAuthoredCornerFractionsOnly:true,webCornerExactCubicTangents:true,webPeriodicSelfIntersectionUsesNeighbourSpan:true,webCorridorCrosslinksNative:true,webCorridorCrosslinksDepthStencilCompatible:true,splineProfileModeAuthoritative:true,spiralTopologyTechnicalCutTangentRepair:true,spiralTangentRepairPreservesAuthoredCorners:true,strictSpiralStaleMorphResourceNotStaticAuthority:true,projectDefaultModes67Parity:true,projectDefaultModesPostCommitActivation:true,projectDefaultCorridorBeforeMorph:true,projectCommitQuiescesRuntime:true,projectDefaultPostPaintVerifyOnly:true,tunnelActiveRuntimeOnly:true,tunnelActiveNotSerialized:true,strictSpiralResidentRootRecordAuthority:true,lightningGlowGpuMaskBlur:true,lightningGlowStencilBlur:true,iter37PolygonProfileBezierGeneralization:true,iter38StorageBufferLimitNegotiation:true,iter39NullOverrideSpiralTransform:true,iter39PolygonProfileBezierGeneralization:true,v69MorphMaxCoverageUnion:true,v69PeriodicBezierClosure:true,v69MorphLayerSceneIsolation:true,v69StaticCornerZeroInertia:true,v69ViewportWorkspaceGestures:true,v69SweepCoreGlowBlendModes:true,v69LightningPreflashCoreOnTop:true,v69WebLogicalBoundaryCorners:true,v69SmoothFilletCollisionHandoff:true,v69StrictCarrierIntegrityGuard:true,v69UnboundedMicroStrikes:true,v69StaticSpiralLampContract:true,corridorStrictCarrierIndependent:true,corridorNativeFillPreflightSceneRoot:true,corridorResidentGlowFillBase:true,dynamicCorridorFillSharesMorphRail:true,dynamicCorridorFillNoCanvasMask:true,dynamicFillGpuBufferResident:true,corridorGpuBridgeEffectsCanStayResident:true,circleSlideSkipsDenseGenericTopology:true,chaosCircleDirectWithoutDenseEndpoints:true,webHaloCoreFusedMrt:true,webAnalyticCoverageNoMsaa:true,webSingleCompositePerLayerScene:true,webLegacyAndMorphGpuPathsFused:true,spiralCanonicalFastVisualRail:true,spiralFastRailDerivedAfterPeriodicClosure:true,webMasterThreadGeometryCompute:true,webPerVertexArcSamplingRemoved:true,webCorridorReusesMasterGeometry:true,blueSpiralExtraGeometryUsesBezier:true,strictOutlineRequiresCommittedBase:true,noFrameWideMissingBaseAbort:true,minimalTurnCoherentGuardDegrees:22.5,strictProfileMarkersGpuArc:true,strictProfileNoCpuShadow:true,mixedBackendObserved,cpuMorphPathBlocks:Number(cpuMorph?.strictSpiralBlocks)||0,mixedCanvasFallbackAllowed:!strict,strictViolation,contracts,statuses,backend};
 };
 window.__somataSpiral69Audit = (...args)=>window.__somataSpiral68Audit?.(...args);
 window.__somataSpiral70Audit = (...args)=>window.__somataSpiral68Audit?.(...args);
@@ -2902,7 +2954,7 @@ function renderPreparedMainLayer(frameCtx) {
 
         try{preflightLayerPathFxReplacement(frameCtx);}catch(err){frameCtx._pathFxReplacementCommitted=false;frameCtx._pathFxPrequeuedSprite=false;frameCtx._pathFxPrequeuedMotion=false;try{spiroPassIsolationNoteFailure?.('pathFxPreflight',err,frameCtx);}catch(_){}}
         try{prepareLayerStrokeWebGPUBatch(frameCtx);}catch(err){frameCtx._webgpuStrokeBatch=null;frameCtx._webgpuFillPrepared=null;try{spiroPassIsolationNoteFailure?.('strokeBatch',err,frameCtx);}catch(_){}}
-        // Somata 7.3.7 — establish the strict retained-Spiral scratch root BEFORE the
+        // Somata 7.3.9 — establish the strict retained-Spiral scratch root BEFORE the
         // multi-layer ordering gate. Fill/Web/Corridor are consumers of that root and must not
         // make canJoin=false merely because the scratch has not been opened yet.
         try{ensureStrictSpiralEffectLayerSceneRoot(frameCtx);}catch(err){try{spiroPassIsolationNoteFailure?.('strictSpiralRootPreflight',err,frameCtx);}catch(_){}}
@@ -3050,7 +3102,7 @@ function renderMainViewportEffects(renderFrame) {
     // v321: when the final WebGPU compositor is ready it evaluates the same vignette
     // in its full-screen shader. Keep Canvas2D as the exact fallback if the GPU pass is
     // unavailable or a project-background morph currently owns the background layers.
-    renderFrame.gpuFinalVignetteDeferred = WebGPUFinalCompositeRenderer.canDeferVignette(renderFrame);
+    renderFrame.gpuFinalVignetteDeferred = (typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed())&&WebGPUFinalCompositeRenderer.canDeferVignette(renderFrame);
     // Strict Spiral never rasterises a late vignette into mainCanvas. If Final is warming,
     // retain the previous valid GPU frame and retry rather than doing CPU work that cannot be
     // presented under the no-mixed-backend contract.
@@ -3114,9 +3166,16 @@ function finishMainRenderFrame(renderStartedAt, renderFrame) {
     if(renderFrame?.strictSpiralGpuPresentRequired===true&&renderBackendTelemetry.canvasTouched?.()===true&&!strictLateCanvasOverlay){
         somataGpuContractError('STRICT_SPIRAL_CANVAS_PATH_TOUCHED',renderFrame,{backend:window.__spiroRenderBackendStatus?.()||null});
     }
+    const gpuBackendAllowed=(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed());
     let finalGpuPresented=false;
-    try { finalGpuPresented=WebGPUFinalCompositeRenderer.render(renderFrame); } catch (err) { somataGpuContractError('FINAL_GPU_RENDER_EXCEPTION',renderFrame,{error:String(err?.stack||err)});finalGpuPresented=false; }
-    if(!finalGpuPresented){
+    if(gpuBackendAllowed){
+        try { finalGpuPresented=WebGPUFinalCompositeRenderer.render(renderFrame); } catch (err) { somataGpuContractError('FINAL_GPU_RENDER_EXCEPTION',renderFrame,{error:String(err?.stack||err)});finalGpuPresented=false; }
+    }
+    if(!gpuBackendAllowed){
+        renderBackendTelemetry.mark('final','canvas','CPU backend final');
+        renderFrame.gpuLayerSceneDeferred=false;renderFrame.gpuLampsDeferred=false;renderFrame.gpuFinalVignetteDeferred=false;renderFrame.gpuMainSceneEmpty=false;
+        try { syncSceneBlendCanvasFromMain(); } catch (_) {}
+    }else if(!finalGpuPresented){
         const strictSpiralPresent=renderFrame?.strictSpiralGpuPresentRequired===true;
         if(strictSpiralPresent){
             // 6.8 iter16: the NO-MIXED-BACKEND rule covers the FINAL presentation too. Earlier
@@ -3159,8 +3218,10 @@ function finishMainRenderFrame(renderStartedAt, renderFrame) {
     // Same browser frame, but after the main GPU queue submission.  These canvases are DOM
     // overlays, so their late command encoding does not change composition order; it only lets
     // them consume already-committed shared Morph/Arc buffers.
-    try { if(typeof flushPathFxFrameQueue==='function')flushPathFxFrameQueue(); } catch (_) {}
-    try { if(typeof flushParticleFrameQueue==='function')flushParticleFrameQueue(); } catch (_) {}
+    if(gpuBackendAllowed){
+        try { if(typeof flushPathFxFrameQueue==='function')flushPathFxFrameQueue(); } catch (_) {}
+        try { if(typeof flushParticleFrameQueue==='function')flushParticleFrameQueue(); } catch (_) {}
+    }
     finishLampAdaptiveFrame();
     endFrameGeometryRuntime();
     renderRuntime.end();
@@ -3249,7 +3310,7 @@ window.__somataReport=()=>{
     const frame=renderRuntime?.frame||null;
     const spiral=Boolean(layer&&typeof isSpiralLayer==='function'&&isSpiralLayer(layer));
     const report={
-        version:'7.3.7',boot:window.__spiroAppBootComplete===true,now:Number(performance.now().toFixed(1)),
+        version:'7.3.9',boot:window.__spiroAppBootComplete===true,now:Number(performance.now().toFixed(1)),
         scheduler,
         layer:layer?{id:layer.id||null,visible:layer.visible!==false,spiral,lineVisible:typeof getLayerLineVisible==='function'?getLayerLineVisible(layer):null,opacity:Number(layer.opacity),fill:layer.fill===true,profileMode:layer.profileMode||null,splineRenderMode:layer.splineRenderMode||null}:null,
         frame:frame?{id:Number(frame.id)||0,strictSpiralGpuPresentRequired:frame.strictSpiralGpuPresentRequired===true,gpuLayerSceneDeferred:frame.gpuLayerSceneDeferred===true,gpuMainSceneEmpty:frame.gpuMainSceneEmpty===true,gpuMainCanvasHasContent:frame.gpuMainCanvasHasContent===true,gpuFrameSceneLayers:Number(frame.gpuFrameSceneLayers)||0,renderLayerCount:Number(frame.renderLayerCount)||0}:null,
@@ -3284,7 +3345,7 @@ window.__somataSpiralTrace=()=>{
     try{canonical=layer&&typeof getCanonicalLayerGeometry==='function'?getCanonicalLayerGeometry(layer):null;}catch(err){canonical={error:String(err?.message||err)};}
     const paths=Array.isArray(canonical?.paths)?canonical.paths:[];
     const pointCount=paths.reduce((n,p)=>n+(Array.isArray(p?.points)?p.points.length:0),0);
-    const out={version:'7.3.7',uiMode,mode,layer:authored,morph,canonical:canonical?{geometryKey:canonical.geometryKey||canonical.key||null,pathCount:paths.length,pointCount,closedPathCount:paths.filter(p=>p?.closed===true).length,openPathCount:paths.filter(p=>p?.closed!==true).length,spiralMetaClosedPoints:paths.reduce((n,p)=>n+(p?.points||[]).filter(q=>q?.__spiralClosed===true).length,0),error:canonical.error||null}:null,scene:{internal:{...somataSpiralSceneDiag.internal},base:{...somataSpiralSceneDiag.base}},webgpu:{hub:window.__spiroWebGPUHubStatus?.()||null,stroke:window.__spiroWebGPUStatus?.()||null,staticBezier:window.__spiroStaticSpiralBezierStatus?.()||null,bezier:window.__somataSpiralBezierMorphStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,profileArc:window.__spiroProfileArcMarkerStatus?.()||null,final:window.__spiroFinalGPUStatus?.()||null}};
+    const out={version:'7.3.9',uiMode,mode,layer:authored,morph,canonical:canonical?{geometryKey:canonical.geometryKey||canonical.key||null,pathCount:paths.length,pointCount,closedPathCount:paths.filter(p=>p?.closed===true).length,openPathCount:paths.filter(p=>p?.closed!==true).length,spiralMetaClosedPoints:paths.reduce((n,p)=>n+(p?.points||[]).filter(q=>q?.__spiralClosed===true).length,0),error:canonical.error||null}:null,scene:{internal:{...somataSpiralSceneDiag.internal},base:{...somataSpiralSceneDiag.base}},webgpu:{hub:window.__spiroWebGPUHubStatus?.()||null,stroke:window.__spiroWebGPUStatus?.()||null,staticBezier:window.__spiroStaticSpiralBezierStatus?.()||null,bezier:window.__somataSpiralBezierMorphStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,profileArc:window.__spiroProfileArcMarkerStatus?.()||null,final:window.__spiroFinalGPUStatus?.()||null}};
     console.log('[Somata Spiral trace]',out);return out;
 };
 
@@ -3301,7 +3362,11 @@ function renderMainCanvas() {
         __pt=renderPassProfiler.begin();renderMainLayers(renderFrame);renderPassProfiler.end('layersTotal',__pt);
         // v295: composite WebGL lamps before viewport masking. The vignette is a
         // final screen-space mask and must affect bright GL lamps just like geometry.
-        __pt=renderPassProfiler.begin();const deferGpuLamps=WebGPUFinalCompositeRenderer.canDeferLamps(renderFrame);LampGPURenderer.flush({deferComposite:deferGpuLamps});renderFrame.gpuLampsDeferred=LampGPURenderer.hasDeferredComposite();renderPassProfiler.end('lampGPU',__pt);
+        __pt=renderPassProfiler.begin();
+        if(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed()){
+            const deferGpuLamps=WebGPUFinalCompositeRenderer.canDeferLamps(renderFrame);LampGPURenderer.flush({deferComposite:deferGpuLamps});renderFrame.gpuLampsDeferred=LampGPURenderer.hasDeferredComposite();
+        }else renderFrame.gpuLampsDeferred=false;
+        renderPassProfiler.end('lampGPU',__pt);
         __pt=renderPassProfiler.begin();renderMainViewportEffects(renderFrame);renderPassProfiler.end('viewport',__pt);
     } catch (err) {
         recoverMainRenderError(err, renderFrame);

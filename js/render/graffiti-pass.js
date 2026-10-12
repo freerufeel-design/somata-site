@@ -43,7 +43,7 @@ function gpuMorphGraffitiIneligibleReason(frameCtx,requireReady=true){
 }
 function canUseGpuMorphGraffitiFrame(frameCtx,requireReady=true){return gpuMorphGraffitiIneligibleReason(frameCtx,requireReady)==='';}
 function prepareGpuMorphGraffitiFrame(frameCtx){
-    if(!frameCtx)return null;graffitiGpuMorphBridgeStats.requests++;
+    if(!frameCtx||(typeof somataGpuBackendAllowed==='function'&&!somataGpuBackendAllowed()))return null;graffitiGpuMorphBridgeStats.requests++;
     const fid=Number(frameCtx.frameId)||Number(frameGeometryRuntime?.frameId)||0;
     if(frameCtx._gpuMorphGraffitiPreparedFrame===fid)return frameCtx._gpuMorphGraffitiPrepared||null;
     frameCtx._gpuMorphGraffitiPreparedFrame=fid;frameCtx._gpuMorphGraffitiPrepared=null;

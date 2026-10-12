@@ -6,7 +6,7 @@ const sweepGpuArcBridgeStats={requests:0,hits:0,fallbacks:0,cpuPathBuildsAvoided
 
 const lightningGpuArcBridgeStats={requests:0,hits:0,fallbacks:0,cpuPathBuildsAvoided:0,cpuExactRailBuildsAvoided:0,cpuPieceBuildsAvoided:0,lastReason:'not-requested'};
 
-function spiralSweepGpuStrict(frameCtx){if(typeof isStrictSpiralWebGPUFrame==='function')return isStrictSpiralWebGPUFrame(frameCtx);const spiral=l=>Boolean(l&&typeof isSpiralLayer==='function'&&isSpiralLayer(l));return Boolean(state?.fourierMode!==true&&(spiral(frameCtx?.layer)||spiral(frameCtx?.geometryPlan?.sourceLayer)||spiral(frameCtx?.geometryPlan?.targetLayer)));}
+function spiralSweepGpuStrict(frameCtx){if(typeof somataCpuBackendForced==='function'&&somataCpuBackendForced())return false;if(typeof isStrictSpiralWebGPUFrame==='function')return isStrictSpiralWebGPUFrame(frameCtx);const spiral=l=>Boolean(l&&typeof isSpiralLayer==='function'&&isSpiralLayer(l));return Boolean(state?.fourierMode!==true&&(spiral(frameCtx?.layer)||spiral(frameCtx?.geometryPlan?.sourceLayer)||spiral(frameCtx?.geometryPlan?.targetLayer)));}
 
 
 function prepareSharedTopologySpectralBezier(frameCtx,cfg,now,lightning=false,cycleProgress=0){
@@ -38,11 +38,18 @@ function gpuMorphArcLightningIneligibleReason(frameCtx,cfg,requireReady=true){
     return'';
 }
 function canUseGpuMorphArcLightningFrame(frameCtx,cfg,requireReady=true){return gpuMorphArcLightningIneligibleReason(frameCtx,cfg,requireReady)==='';}
+function gpuOptionalFeatureWait(frameCtx,feature,reason,detail=null,timeoutMs=650){
+    const transient=/warm|wait|unavailable|not[- ]?ready|resource/i.test(String(reason||''));
+    if(typeof somataGpuFeatureWaitOrFallback==='function')return somataGpuFeatureWaitOrFallback(feature,reason,detail,timeoutMs,frameCtx,!transient);
+    return false;
+}
+function gpuOptionalFeatureReady(frameCtx,feature){try{somataGpuFeatureReady?.(feature,frameCtx);}catch(_){}return true;}
 function prepareGpuMorphArcLightningFrame(frameCtx,cfg){
+    if(typeof somataGpuBackendAllowed==='function'&&!somataGpuBackendAllowed())return null;
     lightningGpuArcBridgeStats.requests++;
     try{WebGPULightningArcRenderer?.warmup?.();warmupGpuMorphArcResource?.();}catch(_){}
-    const reason=gpuMorphArcLightningIneligibleReason(frameCtx,cfg,true);if(reason){lightningGpuArcBridgeStats.fallbacks++;lightningGpuArcBridgeStats.lastReason=reason;return null;}
-    const table=typeof getGpuMorphArcTableForFrame==='function'?getGpuMorphArcTableForFrame(frameCtx):null;if(!table?.gpuArcResident){lightningGpuArcBridgeStats.fallbacks++;lightningGpuArcBridgeStats.lastReason=__spiroGpuMorphArcStatus?.().lastDecision?.reason||'gpu-arc-unavailable';return null;}
+    const reason=gpuMorphArcLightningIneligibleReason(frameCtx,cfg,true);if(reason){lightningGpuArcBridgeStats.fallbacks++;lightningGpuArcBridgeStats.lastReason=reason;gpuOptionalFeatureWait(frameCtx,'lightning',reason,{precision:cfg?.lightningPrecision||'exact',mode:cfg?.lightningMode||'perPath'},650);return null;}
+    const table=typeof getGpuMorphArcTableForFrame==='function'?getGpuMorphArcTableForFrame(frameCtx):null;if(!table?.gpuArcResident){const arcReason=__spiroGpuMorphArcStatus?.().lastDecision?.reason||'gpu-arc-unavailable';lightningGpuArcBridgeStats.fallbacks++;lightningGpuArcBridgeStats.lastReason=arcReason;gpuOptionalFeatureWait(frameCtx,'lightning',arcReason,{stage:'arc-table'},650);return null;}
     const layer=frameCtx.layer,idx=frameCtx.layerIndex,now=frameCtx.now||performance.now(),mode=['perSegment','everyNth','perPath','whole'].includes(cfg.lightningMode)?cfg.lightningMode:'perPath';
     const modeCode=mode==='perSegment'?0:(mode==='everyNth'?1:(mode==='perPath'?2:3)),N=Math.max(2,Math.round(Number(layer?.N)||2)),K=Math.max(1,Math.round(Number(layer?.K)||1)),constructionSegments=Math.max(1,Math.round(N/Math.max(1,gcd(N,K))));
     // Advance the Lightning clock BEFORE freezing cycle-dependent random placement. The legacy
@@ -50,16 +57,16 @@ function prepareGpuMorphArcLightningFrame(frameCtx,cfg){
     const lightningPhase=getLightningMotionPhase(now,cfg,idx),cycle=Math.max(0,Math.round(Number(cfg.lightningCycleCount)||0));
     const frac=Math.max(.01,Math.min(1,audioApplyNumeric('lightning.segment',Number(cfg.lightningSegmentPercent)||100,idx)/100)),nth=Math.max(2,Math.min(24,Math.round(Number(cfg.lightningEveryN)||2)));
     const prepared={now,paths:null,layer,visible:null,pieces:null,exactRanges:null,strikePath:null,gpuArcResident:true,gpuMorphArcLightning:true,table,cfg,lightningSelection:{mode,modeCode,frac,nth,cycle,random:cfg.lightningRandomPosition===true,constructionSegments}};
-    const lightningVector=prepareLightningVectorFrame(layer,lightningPhase,prepared,idx,cfg);if(!lightningVector){lightningGpuArcBridgeStats.fallbacks++;lightningGpuArcBridgeStats.lastReason='vector-style-unavailable';return null;}
+    const lightningVector=prepareLightningVectorFrame(layer,lightningPhase,prepared,idx,cfg);if(!lightningVector){lightningGpuArcBridgeStats.fallbacks++;lightningGpuArcBridgeStats.lastReason='vector-style-unavailable';gpuOptionalFeatureWait(frameCtx,'lightning','vector-style-unavailable',{stage:'style'},0);return null;}
     const data=frameCtx.sweepData||(frameCtx.sweepData={});data.cfg=cfg;data.layerIndex=idx;data.paths=null;data.now=now;data.phase=0;data.lightningPhase=lightningPhase;data.lightningVector=lightningVector;data.vectorPath=null;data.sweepW=0;data.glintVisual=null;data.canonicalGPU=false;data.gpuMorphArc=false;data.gpuMorphArcLightning=true;data.prepared=prepared;data.lightningSpectralPrepared=null;data.lightningSpectralCfg=null;data.lightningSpectralVisual=null;data.lightningSpectralW=0;
     if(lightningVector.stage==='precharge'&&normalizeSweepFlashMode(cfg.flashMode)==='spectral'){
-        WebGPUBezierSweepRenderer?.warmup?.();if(!WebGPUBezierSweepRenderer?.isReady?.()){lightningGpuArcBridgeStats.fallbacks++;lightningGpuArcBridgeStats.lastReason='spectral-bezier-warming';return null;}
+        WebGPUBezierSweepRenderer?.warmup?.();if(!WebGPUBezierSweepRenderer?.isReady?.()){lightningGpuArcBridgeStats.fallbacks++;lightningGpuArcBridgeStats.lastReason='spectral-bezier-warming';gpuOptionalFeatureWait(frameCtx,'lightning','spectral-bezier-warming',{stage:'spectral-precharge'},650);return null;}
         const spectralPrepared=prepareSharedTopologySpectralBezier(frameCtx,cfg,now,true,lightningVector.prechargeT);
         if(spectralPrepared){const spectralCfg={...cfg,effectType:'glint',flashType:'spectral',glintPrecision:'spectral',_lightningPreflashBlend:false,_lightningPreflashCoreOnTop:true,color:cfg.color||'#ffffff'};data.lightningSpectralPrepared=spectralPrepared;data.lightningSpectralCfg=spectralCfg;data.lightningSpectralW=lightningVector.prechargeWidth;data.lightningSpectralVisual={glowSize:lightningVector.prechargeGlow,strength:lightningVector.prechargeGlowIntensity,brightness:lightningVector.prechargeBrightness,softness:lightningVector.prechargeSoftness,opacity:lightningVector.flashOpacity};data.gpuMorphArcLightning=false;}
     }
-    frameCtx.sweepPrepared=data;frameCtx.sweepPreparedReady=true;lightningGpuArcBridgeStats.hits++;lightningGpuArcBridgeStats.cpuPathBuildsAvoided++;lightningGpuArcBridgeStats.cpuExactRailBuildsAvoided++;lightningGpuArcBridgeStats.cpuPieceBuildsAvoided++;lightningGpuArcBridgeStats.lastReason=data.lightningSpectralPrepared?'gpu-retained-cubic-spectral-preflash':`gpu-arc-${mode}`;return data;
+    frameCtx.sweepPrepared=data;frameCtx.sweepPreparedReady=true;gpuOptionalFeatureReady(frameCtx,'lightning');lightningGpuArcBridgeStats.hits++;lightningGpuArcBridgeStats.cpuPathBuildsAvoided++;lightningGpuArcBridgeStats.cpuExactRailBuildsAvoided++;lightningGpuArcBridgeStats.cpuPieceBuildsAvoided++;lightningGpuArcBridgeStats.lastReason=data.lightningSpectralPrepared?'gpu-retained-cubic-spectral-preflash':`gpu-arc-${mode}`;return data;
 }
-window.__spiroLightningGpuArcBridgeStatus=()=>({...lightningGpuArcBridgeStats,contract:'Topology-Morph Lightning perSegment/everyNth/perPath/whole selects arc windows on the resident GPU contour before any CPU Morph path access; exact/simple precision share the same carrier geometry. Across, hidden-base carrier and clipped Corridor retain lazy fallback.'});
+window.__spiroLightningGpuArcBridgeStatus=()=>({...lightningGpuArcBridgeStats,contract:'Topology-Morph Lightning selects arc windows on the authoritative retained cubic/Arc carrier before any CPU Morph path access. Exact precision evaluates six retained Bézier subsegments inside every Arc microsegment; simple precision keeps one lightweight chord. Unsupported or stalled strict-GPU cases degrade the complete scene to the CPU reference renderer instead of disappearing.'});
 
 function canUseGpuMorphArcForSweep(frameCtx,cfg){
     if(!frameCtx||cfg?.enabled!==true||cfg?.effectType==='lightning')return false;
@@ -70,6 +77,7 @@ function canUseGpuMorphArcForSweep(frameCtx,cfg){
     return ['whole','perPath','perSegment','everyNth'].includes(cfg?.mode)&&Boolean(WebGPUCanonicalSweepRenderer?.canUse?.(cfg,state.tunnel?.active===true));
 }
 function prepareGpuMorphArcSweepFrame(frameCtx,cfg){
+    if(typeof somataGpuBackendAllowed==='function'&&!somataGpuBackendAllowed())return null;
     sweepGpuArcBridgeStats.requests++;
     if(!canUseGpuMorphArcForSweep(frameCtx,cfg)){sweepGpuArcBridgeStats.fallbacks++;sweepGpuArcBridgeStats.lastReason='renderer-or-mode';return null;}
     const layer=frameCtx.layer,now=frameCtx.now||performance.now(),phase=getSweepMotionPhase(now,cfg),lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg?.lengthPercent)||18,frameCtx.layerIndex)/100));
@@ -179,7 +187,7 @@ function renderGraffitiProfileSweep(frameCtx,effect,baseAlpha,visibleInstances){
 function renderSweepOnActiveGraffitiOverlay(frameCtx,effect,baseAlpha,visibleInstances){
     const overlay=WebGPUGraffitiRibbonRenderer?.getActiveOverlayTarget?.(frameCtx.frameId);if(!overlay?.texture)return false;const cfg=effect.frameData?.cfg;if(!cfg)return false;let rec=null;
     const encodeLayer=(fn)=>{mainCtx.save();try{applyLayerFrameEffectTransform(mainCtx,frameCtx);return fn();}finally{mainCtx.restore();}};
-    if(effect.frameData?.gpuMorphArcLightning===true){
+    if(gpuBackendAllowed&&effect.frameData?.gpuMorphArcLightning===true){
         const behavior=normalizeLightningBehaviorValue(cfg.lightningBehavior,'inside');rec=encodeLayer(()=>effect.tunnelActive?WebGPULightningArcRenderer.encodeCorridorToLayerScene(overlay.texture,effect.frameData.prepared,effect.frameData.lightningVector,mainCtx,effect.frameData?.lightningVector?.stage==='precharge'?1:baseAlpha,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,behavior):WebGPULightningArcRenderer.encodeToLayerScene(overlay.texture,effect.frameData.prepared,effect.frameData.lightningVector,mainCtx,(effect.frameData?.lightningVector?.stage==='precharge'?1:baseAlpha)*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),behavior,frameCtx));
     }else if(isLightningSpectralPreflash(effect)){
         const alpha=lightningSpectralPreflashAlpha(effect,baseAlpha);rec=encodeLayer(()=>effect.tunnelActive?WebGPUBezierSweepRenderer.encodeToLayerScene(overlay.texture,effect.frameData.lightningSpectralPrepared,mainCtx,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,frameCtx.layer):WebGPUBezierSweepRenderer.encodeToLayerScene(overlay.texture,effect.frameData.lightningSpectralPrepared,mainCtx,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),null,null,frameCtx,effect.footprint,frameCtx.layer));
@@ -208,16 +216,17 @@ function renderLayerSweepPass(frameCtx) {
     if(!effect?.enabled)return;
     const {layer,baseAlpha,visibleInstances}=frameCtx;
     const cfg=effect.frameData?.cfg;
+    const gpuBackendAllowed=typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed();
     // Shared Glint/preflash adopts the exact Graffiti nib profile.  Do this before the generic
     // capsule/line renderers so Marker Angle and nib joins are identical to the carrier.
-    if(isGraffitiSweepCarrier(frameCtx)&&(cfg?.effectType!=='lightning'||effect.frameData?.lightningVector?.stage==='precharge')){
+    if(gpuBackendAllowed&&isGraffitiSweepCarrier(frameCtx)&&(cfg?.effectType!=='lightning'||effect.frameData?.lightningVector?.stage==='precharge')){
         frameCtx._graffitiSweepProfileAttempted=false;if(renderGraffitiProfileSweep(frameCtx,effect,baseAlpha,visibleInstances))return;
         if(frameCtx._graffitiSweepProfileAttempted===true){console.error('[Somata GPU diagnostic] Exact Graffiti-profile Glint/Preflash encode failed; thin-line substitution blocked',{frameId:frameCtx.frameId,layerIndex:frameCtx.layerIndex,effectType:cfg?.effectType,stage:effect.frameData?.lightningVector?.stage||'glint',gpuOnly:true});return;}
         if(WebGPUGraffitiRibbonRenderer?.getActiveOverlayTarget?.(frameCtx.frameId)){console.error('[Somata GPU diagnostic] Graffiti-profile Glint could not be encoded on active GPU overlay',{frameId:frameCtx.frameId,layerIndex:frameCtx.layerIndex,effectType:cfg?.effectType,stage:effect.frameData?.lightningVector?.stage||'glint'});return;}
     }
     // If Graffiti itself is on the transparent WebGPU overlay, every later Lightning/Glint
     // effect must join that same physical target or it would appear underneath it.
-    if(WebGPUGraffitiRibbonRenderer?.getActiveOverlayTarget?.(frameCtx.frameId)){if(renderSweepOnActiveGraffitiOverlay(frameCtx,effect,baseAlpha,visibleInstances))return;console.error('[Somata GPU diagnostic] Sweep could not join active Graffiti WebGPU overlay',{frameId:frameCtx.frameId,layerIndex:frameCtx.layerIndex,effectType:cfg?.effectType});return;}
+    if(gpuBackendAllowed&&WebGPUGraffitiRibbonRenderer?.getActiveOverlayTarget?.(frameCtx.frameId)){if(renderSweepOnActiveGraffitiOverlay(frameCtx,effect,baseAlpha,visibleInstances))return;console.error('[Somata GPU diagnostic] Sweep could not join active Graffiti WebGPU overlay',{frameId:frameCtx.frameId,layerIndex:frameCtx.layerIndex,effectType:cfg?.effectType});return;}
     // v516: Exact topology-Morph Lightning can consume the resident exact GPU Arc directly.
     // The shader evaluates the active range and precharge window; CPU geometry stays asleep.
     if(effect.frameData?.gpuMorphArcLightning===true){
@@ -234,7 +243,10 @@ function renderLayerSweepPass(frameCtx) {
         }
         // Spiral 6.8 is strict WebGPU/Bézier. Never materialize the Morph carrier on CPU
         // merely because the deferred Layer Scene was not available in this pass.
-        if(spiralSweepGpuStrict(frameCtx)){renderBackendTelemetry.mark('sweep','gpu','Spiral Lightning GPU-only warmup');somataGpuContractError?.('SPIRAL_LIGHTNING_GPU_UNAVAILABLE',frameCtx,{stage:'arc'});return;}
+        if(spiralSweepGpuStrict(frameCtx)){
+            const degraded=gpuOptionalFeatureWait(frameCtx,'lightning','lightning-arc-render-wait',{stage:'arc-render',renderer:window.__spiroGpuLightningArcStatus?.()||null},650);
+            if(spiralSweepGpuStrict(frameCtx)&&!degraded){renderBackendTelemetry.mark('sweep','gpu','Spiral Lightning GPU-only warmup');somataGpuContractError?.('SPIRAL_LIGHTNING_GPU_UNAVAILABLE',frameCtx,{stage:'arc'});return;}
+        }
         materializeSweepCpuFallback(frameCtx,effect,'gpu-lightning-arc-render-failed');
     }
     // v392: canonical Glint and every vector Lightning placement mode can remain entirely
@@ -309,18 +321,19 @@ function renderLayerSweepPass(frameCtx) {
         return;
     }
     if(isLightningSpectralPreflash(effect)){
-        const alpha=lightningSpectralPreflashAlpha(effect,baseAlpha);mainCtx.save();applyLayerFrameEffectTransform(mainCtx,frameCtx);
-        const ok=effect.tunnelActive
-            ? WebGPUBezierSweepRenderer.render(effect.frameData.lightningSpectralPrepared,mainCtx,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,frameCtx.layer)
-            : WebGPUBezierSweepRenderer.render(effect.frameData.lightningSpectralPrepared,mainCtx,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),null,null,frameCtx,effect.footprint,frameCtx.layer);
-        mainCtx.restore();if(ok){renderBackendTelemetry.mark('sweep','gpu','spectral Bézier lightning preflash');return;}
+        const alpha=lightningSpectralPreflashAlpha(effect,baseAlpha);let ok=false;
+        if(gpuBackendAllowed){mainCtx.save();applyLayerFrameEffectTransform(mainCtx,frameCtx);
+            ok=effect.tunnelActive
+                ? WebGPUBezierSweepRenderer.render(effect.frameData.lightningSpectralPrepared,mainCtx,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,frameCtx.layer)
+                : WebGPUBezierSweepRenderer.render(effect.frameData.lightningSpectralPrepared,mainCtx,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),null,null,frameCtx,effect.footprint,frameCtx.layer);
+            mainCtx.restore();if(ok){renderBackendTelemetry.mark('sweep','gpu','spectral Bézier lightning preflash');return;}}
         if(spiralSweepGpuStrict(frameCtx)){renderBackendTelemetry.mark('sweep','gpu','Spiral spectral preflash GPU warmup (Canvas fallback disabled)');return;}
         for(let si=0;si<visibleInstances.copies.length;si++){const copy=visibleInstances.copies[si],a=visibleInstances.alphas[si];if(!shouldDrawTunnelEffectIndex('sweep',si,frameCtx,effect.footprint))continue;mainCtx.save();if(effect.tunnelActive){applyMotionTunnelLag(mainCtx,copy,frameCtx.layer);mainCtx.scale(copy.scale,copy.scale);}applyLayerFrameEffectTransform(mainCtx,frameCtx);drawBezierGlintPrepared(mainCtx,effect.frameData.lightningSpectralPrepared,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha*a);mainCtx.restore();}
-        renderBackendTelemetry.mark('sweep','canvas','spectral Bézier lightning preflash warmup',true);return;
+        renderBackendTelemetry.mark('sweep','canvas',gpuBackendAllowed?'spectral Bézier lightning preflash warmup':'CPU spectral Bézier lightning preflash',gpuBackendAllowed);return;
     }
     const lightningBehavior=normalizeLightningBehaviorValue(cfg?.lightningBehavior,'inside');
     const clippedLightning=cfg?.effectType==='lightning' && lightningBehavior!=='symmetric';
-    const glAvailable=SweepGPURenderer.isAvailable();
+    const glAvailable=(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed())&&SweepGPURenderer.isAvailable();
     const lightningStage=effect.frameData?.lightningVector?.stage||'';
     // v422: every Lightning stage, including the moving pre-glow, uses MAX accumulation.
     // OVER made every analytic capsule endpoint brighter than the segment middle, which
@@ -358,18 +371,26 @@ function renderLayerSweepPass(frameCtx) {
         return;
     }
 
-    // High/Chaotic/Spectral glints retain cubic Bézier controls whenever available and evaluate them on WebGPU.
+    // High/Chaotic/Spectral glints retain cubic Bézier controls. CPU reference mode evaluates
+    // the same prepared cubic carrier directly on Canvas and never probes a GPU renderer.
+    if(!gpuBackendAllowed&&cfg?.effectType!=='lightning'&&effect.frameData?.bezierGlintGPU===true){
+        for(let si=0;si<visibleInstances.copies.length;si++){const copy=visibleInstances.copies[si],a=visibleInstances.alphas[si];if(!shouldDrawTunnelEffectIndex('sweep',si,frameCtx,effect.footprint))continue;mainCtx.save();if(effect.tunnelActive){applyMotionTunnelLag(mainCtx,copy,frameCtx.layer);mainCtx.scale(copy.scale,copy.scale);}applyLayerFrameEffectTransform(mainCtx,frameCtx);drawBezierGlintPrepared(mainCtx,effect.frameData.prepared,cfg,effect.frameData.sweepW,effect.frameData.glintVisual,a);mainCtx.restore();}
+        renderBackendTelemetry.mark('sweep','canvas','CPU exact Bézier glint');return;
+    }
     // The halo is additive, then the coloured core is source-overed so it remains visibly
     // above the already rendered figure instead of merely tinting/brightening the base line.
-    if(cfg?.effectType!=='lightning'&&effect.frameData?.bezierGlintGPU===true){
+    if(gpuBackendAllowed&&cfg?.effectType!=='lightning'&&effect.frameData?.bezierGlintGPU===true){
         mainCtx.save();applyLayerFrameEffectTransform(mainCtx,frameCtx);
         const ok=effect.tunnelActive
             ? WebGPUBezierSweepRenderer.render(effect.frameData.prepared,mainCtx,cfg,effect.frameData.sweepW,effect.frameData.glintVisual,1,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,frameCtx.layer)
             : WebGPUBezierSweepRenderer.render(effect.frameData.prepared,mainCtx,cfg,effect.frameData.sweepW,effect.frameData.glintVisual,Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),null,null,frameCtx,effect.footprint,frameCtx.layer);
         mainCtx.restore();
         if(ok){renderBackendTelemetry.mark('sweep','gpu',effect.frameData.prepared?.spectral===true?'spectral Bézier WebGPU glint':(effect.frameData.prepared?.glintType==='chaotic'?'chaotic Bézier WebGPU glint':'precise Bézier WebGPU glint'));return;}
-        if(spiralSweepGpuStrict(frameCtx)){renderBackendTelemetry.mark('sweep','gpu','Spiral Bézier glint GPU warmup (Canvas fallback disabled)');return;}
-        // Non-Spiral compatibility may still use Canvas while WebGPU warms.
+        if(spiralSweepGpuStrict(frameCtx)){
+            const degraded=gpuOptionalFeatureWait(frameCtx,'sweep','bezier-glint-render-wait',{stage:'bezier-glint'},650);
+            if(spiralSweepGpuStrict(frameCtx)&&!degraded){renderBackendTelemetry.mark('sweep','gpu','Spiral Bézier glint GPU warmup (Canvas fallback disabled)');return;}
+        }
+        // Non-Spiral or runtime-degraded compatibility may use Canvas while WebGPU warms.
         for(let si=0;si<visibleInstances.copies.length;si++){
             const copy=visibleInstances.copies[si],a=visibleInstances.alphas[si];if(!shouldDrawTunnelEffectIndex('sweep',si,frameCtx,effect.footprint))continue;
             mainCtx.save();if(effect.tunnelActive){applyMotionTunnelLag(mainCtx,copy,frameCtx.layer);mainCtx.scale(copy.scale,copy.scale);}applyLayerFrameEffectTransform(mainCtx,frameCtx);
@@ -381,7 +402,7 @@ function renderLayerSweepPass(frameCtx) {
     // v328: chaotic whole/perPath glints use the canonical arc-length buffer both normally and
     // in Corridor. Corridor uploads only copy scale/rotation/alpha; segment × copy expansion
     // and moving-window clipping happen in WGSL, so CPU no longer rebuilds sweep pieces per copy.
-    if(cfg?.effectType!=='lightning'&&effect.frameData?.canonicalGPU===true){
+    if(gpuBackendAllowed&&cfg?.effectType!=='lightning'&&effect.frameData?.canonicalGPU===true){
         mainCtx.save();applyLayerFrameEffectTransform(mainCtx,frameCtx);
         const ok=effect.tunnelActive
             ? WebGPUCanonicalSweepRenderer.renderCorridor(effect.frameData.prepared?.table,mainCtx,cfg,effect.frameData.phase,effect.frameData.sweepW,effect.frameData.glintVisual,1,effect.frameData.prepared?.lenFrac,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,frameCtx.layer)
@@ -389,7 +410,10 @@ function renderLayerSweepPass(frameCtx) {
         mainCtx.restore();
         if(ok){renderBackendTelemetry.mark('sweep','gpu',effect.frameData?.gpuMorphArc===true?'shared GPU-arc WebGPU glint':'canonical WebGPU glint');return;}
         // Driver/runtime failure: reconstruct the exact legacy pieces lazily and continue.
-        if(spiralSweepGpuStrict(frameCtx)){renderBackendTelemetry.mark('sweep','gpu','Spiral GPU-only sweep waiting for WebGPU resource');somataGpuContractError?.('SPIRAL_SWEEP_GPU_UNAVAILABLE',frameCtx);return;}
+        if(spiralSweepGpuStrict(frameCtx)){
+            const degraded=gpuOptionalFeatureWait(frameCtx,'sweep','canonical-sweep-render-wait',{stage:'canonical-sweep'},650);
+            if(spiralSweepGpuStrict(frameCtx)&&!degraded){renderBackendTelemetry.mark('sweep','gpu','Spiral GPU-only sweep waiting for WebGPU resource');somataGpuContractError?.('SPIRAL_SWEEP_GPU_UNAVAILABLE',frameCtx);return;}
+        }
         if(effect.frameData?.gpuMorphArc===true)materializeSweepCpuFallback(frameCtx,effect,'direct-gpu-render-failed');
         else {effect.frameData.canonicalGPU=false;effect.frameData.prepared=getPreparedSweepFrame(effect.frameData.paths||effect.paths,layer,effect.frameData.phase,effect.now,cfg,frameCtx.layerIndex);}
     }
@@ -404,8 +428,20 @@ function renderLayerSweepPass(frameCtx) {
         const effectAlpha=cfg?.effectType==='lightning'?(lightningStage==='precharge'?a:baseAlpha*a):a;
         if(glHealthy){
             const handled=queueMovingSweepGlowWebGL(mainCtx,effect.paths,layer,effectAlpha,effect.now,effect.frameData);
-            if(!handled){if(spiralSweepGpuStrict(frameCtx)){mainCtx.restore();SweepGPURenderer.clear();renderBackendTelemetry.mark('sweep','gpu','Spiral sweep GPU-only fallback suppressed');somataGpuContractError?.('SPIRAL_SWEEP_DRAW_FAILED',frameCtx);return;}glHealthy=false;renderBackendTelemetry.mark('sweep','canvas','Canvas sweep fallback',true);drawMovingSweepGlow(mainCtx,effect.paths,layer,effectAlpha,effect.now,effect.frameData,true);}
-        }else {if(spiralSweepGpuStrict(frameCtx)){mainCtx.restore();renderBackendTelemetry.mark('sweep','gpu','Spiral sweep GPU-only fallback suppressed');somataGpuContractError?.('SPIRAL_SWEEP_RENDERER_NOT_READY',frameCtx);return;}renderBackendTelemetry.mark('sweep','canvas','Canvas sweep fallback',true);drawMovingSweepGlow(mainCtx,effect.paths,layer,effectAlpha,effect.now,effect.frameData,true);}
+            if(!handled){
+                if(spiralSweepGpuStrict(frameCtx)){
+                    const degraded=gpuOptionalFeatureWait(frameCtx,cfg?.effectType==='lightning'?'lightning':'sweep','sweep-draw-wait',{stage:'draw'},650);
+                    if(spiralSweepGpuStrict(frameCtx)&&!degraded){mainCtx.restore();SweepGPURenderer.clear();renderBackendTelemetry.mark('sweep','gpu','Spiral sweep GPU-only fallback suppressed');somataGpuContractError?.('SPIRAL_SWEEP_DRAW_FAILED',frameCtx);return;}
+                }
+                glHealthy=false;renderBackendTelemetry.mark('sweep','canvas','Canvas sweep fallback',true);drawMovingSweepGlow(mainCtx,effect.paths,layer,effectAlpha,effect.now,effect.frameData,true);
+            }
+        }else {
+            if(spiralSweepGpuStrict(frameCtx)){
+                const degraded=gpuOptionalFeatureWait(frameCtx,cfg?.effectType==='lightning'?'lightning':'sweep','sweep-renderer-wait',{stage:'renderer'},650);
+                if(spiralSweepGpuStrict(frameCtx)&&!degraded){mainCtx.restore();renderBackendTelemetry.mark('sweep','gpu','Spiral sweep GPU-only fallback suppressed');somataGpuContractError?.('SPIRAL_SWEEP_RENDERER_NOT_READY',frameCtx);return;}
+            }
+            renderBackendTelemetry.mark('sweep','canvas','Canvas sweep fallback',true);drawMovingSweepGlow(mainCtx,effect.paths,layer,effectAlpha,effect.now,effect.frameData,true);
+        }
         mainCtx.restore();
     }
     if(glHealthy){renderBackendTelemetry.mark('sweep','gpu','GPU sweep');}

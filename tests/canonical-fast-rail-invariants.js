@@ -13,10 +13,10 @@ ok(spiral.includes('encodeEffectCubics(rec,enc,currentT)')&&spiral.includes('enc
 ok(spiral.includes('Somata 7.0 Spiral periodic closure')&&spiral.indexOf('encodeEffectCubics(rec,enc,currentT)')<spiral.indexOf('encodeFastRail(rec,enc,currentT)'),'Periodic closure must remain upstream of Fast Rail rasterization');
 ok(spiral.includes('@group(1) @binding(0) var<storage,read> fastRail')&&spiral.includes('let g0=fastRail[ri*2u]')&&!spiral.includes('@group(1) @binding(1) var<storage,read> currentCubics'),'Base/Glow raster must consume only the resident Fast Rail, never bind/re-evaluate canonical cubics per vertex');
 ok(spiral.includes('fastJoinedTangent')&&spiral.includes('railScreenDir'),'Continuous Base must reconstruct shared cross-section tangents from the fast rail instead of creating disconnected capsules');
-ok(spiral.includes("renderCubicLayout=device.createBindGroupLayout({label:'Somata 7.3.7 Spiral Fast Visual Rail raster',entries:[{binding:0")&&spiral.includes('entries:[{binding:0,resource:{buffer:rec.fastRailBuffer}}]'),'Spiral Base/Glow raster layout must collapse to one Fast Rail storage binding');
+ok(spiral.includes("renderCubicLayout=device.createBindGroupLayout({label:'Somata 7.3.9 Spiral Fast Visual Rail raster',entries:[{binding:0")&&spiral.includes('entries:[{binding:0,resource:{buffer:rec.fastRailBuffer}}]'),'Spiral Base/Glow raster layout must collapse to one Fast Rail storage binding');
 ok(corner.includes('retainedCubicPoint(first+lo,t)')&&corner.includes('threadGeometry[w*2u]'),'Web master geometry must still sample exact retained cubics');
 ok(web.includes('threadGeometry[recIndex*2u]')&&!web.includes('retainedCubicPoint(first+lo,t)'),'Web raster must not repeat exact Arc search/evaluation per vertex');
 ok(web.includes("pathLayout=device.createBindGroupLayout({entries:[0,1,2,3].map")&&web.includes('{binding:1,resource:{buffer:rec.threadGeometryBuffer}}')&&web.includes('{binding:2,resource:{buffer:rec.threadCountBuffer}}'),'Web raster bind group must shed stale Arc/corner/cubic storage bindings and keep only mask segments + resident thread geometry/count + compacted corner indices used by native Corridor cross-links');
 ok(pipe.includes('spiralCanonicalFastVisualRail:true')&&pipe.includes('spiralFastRailDerivedAfterPeriodicClosure:true'),'Runtime audit must expose canonical Fast Rail ordering');
-ok(html.includes('<title>Somata 7.3.7</title>')&&html.includes('?v=20261012-v737'),'7.3.7 title/cache epoch missing');
-console.log('Somata 7.3.7 canonical Fast Rail invariants: PASS');
+ok(html.includes('<title>Somata 7.3.20</title>')&&html.includes('?v=20261012-v7320'),'7.3.9 title/cache epoch missing');
+console.log('Somata 7.3.9 canonical Fast Rail invariants: PASS');

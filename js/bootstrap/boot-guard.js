@@ -1,11 +1,11 @@
-/* Somata 7.3.7 boot guard: intentionally inline so it still works when external JS/CSS fails. */
+/* Somata 7.3.9 boot guard: intentionally inline so it still works when external JS/CSS fails. */
 (function(){
     'use strict';
     if(location.hostname&&location.hostname.toLowerCase()==='www.somata.su'){
         location.replace('https://somata.su'+location.pathname+location.search+location.hash);
         return;
     }
-    const BUILD='7.3.7';
+    const BUILD='7.3.9';
     const failures=[];
     let panel=null, list=null;
     window.__somataAssetBuild=BUILD;

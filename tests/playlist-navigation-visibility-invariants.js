@@ -1,0 +1,15 @@
+'use strict';
+const assert=require('assert');
+const fs=require('fs');
+const path=require('path');
+const root=path.resolve(__dirname,'..');
+const read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const app=read('js/legacy/app-c.js');
+const kernel=read('js/geometry/kernel.js');
+const graph=read('js/render/render-graph.js');
+assert(app.includes("stepProjectChooser(e.key==='ArrowRight'?1:-1)"),'Left/Right must navigate playlist projects');
+assert(!app.includes("const delta=e.key==='ArrowRight'?0.5:-0.5"),'Left/Right must not change Morph duration');
+assert(kernel.includes('const fillConfigured=getLayerLineVisible(layer)&&layer.fill===true'),'Shape visibility must suppress Fill without destroying authored Fill state');
+assert(graph.includes("const fill=baseLineVisible&&layer.fill===true")&&graph.includes("spiroGraphAddPass(graph,'glow'") ,'Shape visibility must gate Fill/Glow render roles with Base carrier visibility');
+assert(app.includes("if(mode==='shape'){/* Web visibility is independent from lines. */toggleAllLinesWithMemory();}"),'Shape RMB must use layer-scoped visibility toggle while leaving Web independent');
+console.log('Playlist navigation / geometry visibility invariants: PASS');

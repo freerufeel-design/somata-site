@@ -1,0 +1,13 @@
+'use strict';
+const fs=require('fs'),path=require('path'),assert=require('assert');
+const root=path.join(__dirname,'..');
+const s=fs.readFileSync(path.join(root,'js/core/self-test.js'),'utf8');
+const html=fs.readFileSync(path.join(root,'index.html'),'utf8');
+assert(s.includes('__somataPlaylistBranchCoverageSmokeTest'),'playlist branch coverage API missing');
+assert(s.includes('__somataRepeatToggleSmokeTest'),'repeat toggle API missing');
+for(const token of ['sweep:whole:exact','sweep:whole:simple','spiral:tangential:false:step2','motionRotation:tunnelLag','morph:topology:smooth','minimalMorph:defaultActive','corridor:colorShift'])assert(s.includes(token),`missing branch fixture ${token}`);
+for(const token of ['fill-ui-repeat-8x','glow-ui-repeat-8x','shape-rmb-repeat-8x','web-ui-morph-repeat-6x','backend-repeat-persistence'])assert(s.includes(token),`missing repeat fixture ${token}`);
+assert(s.includes('suite.branchCoverage=await window.__somataPlaylistBranchCoverageSmokeTest'),'release certification must include branch coverage');
+assert(s.includes('suite.repeatToggles=await window.__somataRepeatToggleSmokeTest'),'release certification must include repeated toggles');
+assert(html.includes('<title>Somata 7.3.20</title>')&&html.includes('?v=20261012-v7320'),'7.3.20 build/cache identity missing');
+console.log('Playlist branch / repeated toggle invariants: PASS');

@@ -1,7 +1,7 @@
 // SpiroStar v500 Modular Base
 // Single-rAF scheduler, performance governor, profiler and invalidation
 window.__spiroRegisterModule?.('js/core/scheduler');
-        // Somata 7.3.7 — user-configurable render cap. The default is deliberately 60 FPS so
+        // Somata 7.3.9 — user-configurable render cap. The default is deliberately 60 FPS so
         // high-refresh displays (120/144 Hz) do not automatically double the heavy scene work.
         const FPS_LIMIT_DEFAULT = 60;
         const FPS_LIMIT_MIN = 15;
@@ -53,7 +53,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             // holds and (when Chromium exposes it) Long Tasks. Thresholds are intentionally
             // high enough to ignore normal 60/120 Hz jitter but low enough to catch a visible
             // multi-frame freeze.
-            const MORPH_TASK_NAMES=new Set(['morph','minimalMorph','project-morph']);
+            const MORPH_TASK_NAMES=new Set(['morph','morph-owner','minimalMorph','project-morph']);
             const MORPH_FREEZE_GAP_MS=100;
             const MORPH_FREEZE_WORK_MS=50;
             const MORPH_FREEZE_LONG_TASK_MS=100;
@@ -161,6 +161,11 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                     // Under normal animation the rAF fires long before this guard. Only when no
                     // scheduler tick happened after the invalidation do we recover synchronously.
                     if (frameCount !== armedFrame) { schedule(); return; }
+                    // The browser rAF that failed to arrive is still registered. Cancel its
+                    // stale callback before synchronous recovery; otherwise it can fire later
+                    // beside the newly scheduled rAF and double-advance a Morph boundary.
+                    const staleRaf=raf;
+                    if(staleRaf)try{cancelAnimationFrame(staleRaf);}catch(_){}
                     raf = 0;
                     watchdogRecoveries++;
                     watchdogLastRecoveryAt = performance.now();
@@ -317,6 +322,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 },
                 getFpsLimit() { return fpsLimit; },
                 has(name) { return tasks.has(name); },
+                hasAfterPaint(name) { return afterPaint.has(name); },
                 isMorphActive() { return hasMorphActivity(); },
                 reportMorphFreeze(code,detail={}) { return reportMorphFreeze(code,detail); },
                 freezeStats() { return {count:morphFreezeCount,thresholds:{gapMs:MORPH_FREEZE_GAP_MS,workMs:MORPH_FREEZE_WORK_MS,longTaskMs:MORPH_FREEZE_LONG_TASK_MS},last:morphFreezeHistory.at(-1)||null,history:morphFreezeHistory.slice()}; },

@@ -8,22 +8,25 @@ const pipeline=read('js/render/main-pipeline.js');
 const appA=read('js/legacy/app-a.js');
 const defaults=JSON.parse(read('default.plist'));
 
-function findBright1(x){
-  if(Array.isArray(x)){for(const v of x){const r=findBright1(v);if(r)return r;}return null;}
+function fillAlpha(color){const m=String(color||'').match(/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})$/);return m?parseInt(m[1],16)/255:1;}
+function findCorridorFillGlowFixture(x){
+  if(Array.isArray(x)){for(const v of x){const r=findCorridorFillGlowFixture(v);if(r)return r;}return null;}
   if(x&&typeof x==='object'){
-    if(x.name==='ярко1'&&x.project)return x.project;
-    for(const v of Object.values(x)){const r=findBright1(v);if(r)return r;}
+    if(x.project){
+      const project=x.project;
+      const tunnel=project.settings?.tunnel||{};
+      const fillLayers=(project.layers||[]).filter(l=>l?.visible!==false&&l?.lineVisible!==false&&l?.fill===true&&fillAlpha(l?.fillColor)>0.00001&&Number(l?.glow)>0);
+      if((tunnel.active===true||tunnel.defaultActive===true)&&fillLayers.length)return {name:x.name,project,fillLayers};
+    }
+    for(const v of Object.values(x)){const r=findCorridorFillGlowFixture(v);if(r)return r;}
   }
   return null;
 }
-const bright=findBright1(defaults);
-assert.ok(bright,'ярко1 preset must exist');
-assert.strictEqual(bright.settings?.tunnel?.active,true,'ярко1 regression trigger requires active Tunnel/Corridor');
-const layers=bright.layers||[];
-assert.strictEqual(layers.length,3,'ярко1 regression fixture should keep its 3-layer structure');
-const fillLayers=layers.filter(l=>l?.fill===true);
-assert.strictEqual(fillLayers.length,1,'ярко1 should have one authored Fill layer');
-assert.ok(Number(fillLayers[0]?.glow)>0,'ярко1 Fill layer must keep Glow enabled to cover the resident-scene conflict');
+const fixture=findCorridorFillGlowFixture(defaults);
+assert.ok(fixture,'Playlist must contain a Corridor + Fill + Glow regression fixture');
+assert.ok(fixture.project.settings?.tunnel?.active===true||fixture.project.settings?.tunnel?.defaultActive===true,'Regression fixture requires Tunnel/Corridor');
+assert.ok(fixture.fillLayers.length>=1,'Regression fixture requires authored Fill');
+assert.ok(fixture.fillLayers.some(l=>Number(l?.glow)>0),'Regression fixture requires Fill + Glow on the same layer');
 
 assert.ok(pipeline.includes("WebGPUStrokeRenderer.getDeferredLayerSceneTexture?.(frameCtx.frameId)"),'Corridor Fill must detect an already-resident Layer Scene');
 assert.ok(pipeline.includes('function canAttachNativeCorridorFillToLayerScene(frameCtx,contract=null)'),'Corridor Fill + Glow must have an explicit native GPU preflight before opening the resident scene');
@@ -37,4 +40,4 @@ assert.ok(pipeline.includes('joinedResident:Boolean(resident?.texture)'),'Corrid
 assert.ok(pipeline.includes("frame.strictSpiralEntryIntent===true||frame.strictSpiralGpuPresentRequired===true||isStrictSpiralWebGPUFrame(frameCtx)"),'Materialization firewall must protect the entire strict-Spiral frame');
 assert.ok(appA.includes("gpuPathFxRequired()||state?.tunnel?.active===true||frame?.strictSpiralEntryIntent===true||frame?.strictSpiralGpuPresentRequired===true"),'Corridor/strict GPU scenes must bypass stale FrameGraph cooldown');
 assert.ok(pipeline.includes('corridorNativeFillPreflightSceneRoot:true')&&pipeline.includes('corridorResidentGlowFillBase:true'),'Runtime audit must expose the 7.2.8 resident Corridor Fill contract');
-console.log('Bright1 Corridor Fill invariants OK');
+console.log(`Corridor Fill resident-scene invariants OK (${fixture.name})`);

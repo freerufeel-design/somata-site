@@ -43,7 +43,7 @@ function compileLayerRenderGraph(frameCtx){
     // the render pass later refused to use that Canvas/CPU fallback.  That wasted the first
     // moving frames and could make effects appear one rail behind the visible Spiral.
     const spiralEndpoint=(l)=>Boolean(l&&typeof isSpiralLayer==='function'&&isSpiralLayer(l));
-    const strictSpiral=Boolean(state?.fourierMode!==true&&((typeof isStrictSpiralWebGPUFrame==='function'&&isStrictSpiralWebGPUFrame(frameCtx))||spiralEndpoint(layer)||spiralEndpoint(frameCtx?.geometryPlan?.sourceLayer)||spiralEndpoint(frameCtx?.geometryPlan?.targetLayer)));
+    const strictSpiral=Boolean((typeof somataCpuBackendForced!=='function'||!somataCpuBackendForced())&&state?.fourierMode!==true&&((typeof isStrictSpiralWebGPUFrame==='function'&&isStrictSpiralWebGPUFrame(frameCtx))||spiralEndpoint(layer)||spiralEndpoint(frameCtx?.geometryPlan?.sourceLayer)||spiralEndpoint(frameCtx?.geometryPlan?.targetLayer)));
     const baseLineVisible=getLayerLineVisible?.(layer)!==false;
     const fill=baseLineVisible&&layer.fill===true,glow=(Number(frameCtx.glow)||Number(layer.glow)||0)>0,outline=state?.lineOutline?.enabled===true;
     const application=frameCtx.lineProfileApplication||layer.lineProfileApplication||'stroke';

@@ -7,6 +7,14 @@ window.__spiroRegisterModule?.('js/render/lamp-morph-bridge');
 
 const gpuMorphLampBridgeStats={requests:0,hits:0,fallbacks:0,attachmentsBuilt:0,cpuPathBuildsAvoided:0,cpuArcWalksAvoided:0,lastReason:'not-requested'};
 
+function gpuLampFeatureWait(frameCtx,reason,detail=null,timeoutMs=650){
+    const transient=/warm|wait|unavailable|not[- ]?ready|resource|rail|arc/i.test(String(reason||''));
+    if(typeof somataGpuFeatureWaitOrFallback==='function')return somataGpuFeatureWaitOrFallback('lamps',reason,detail,timeoutMs,frameCtx,!transient);
+    try{requestMainCanvasRender?.();}catch(_){}
+    return false;
+}
+function gpuLampFeatureReady(frameCtx){try{somataGpuFeatureReady?.('lamps',frameCtx);}catch(_){}return true;}
+
 function gpuMorphLampPositionMode(frameCtx){
     const cfg=frameCtx?.layerLampConfig||frameCtx?.effectsPlan?.lamps?.baseConfig||(typeof ensureLayerLampState==='function'?ensureLayerLampState(frameCtx?.layer):null)||state?.lamps||{};
     const mode=cfg?.positionMode||state?.lamps?.positionMode||'key';return mode==='circumference'?'key':mode;
@@ -25,10 +33,10 @@ function gpuMorphArbitraryLampIneligibleReason(frameCtx,requireReady=true){
 }
 function canUseGpuMorphArbitraryLampsFrame(frameCtx,requireReady=true){return gpuMorphArbitraryLampIneligibleReason(frameCtx,requireReady)==='';}
 
-function allocateGpuArbitraryLampCounts(layer,morphRec,t,maxPoints=600){
+function allocateGpuArbitraryLampCounts(layer,morphRec,t,maxPoints=600,lampConfig=null){
     const lengths=morphRec?.cpuEndpointPathLengths,pathCount=Math.max(0,Number(morphRec?.pathCount)||0),layerKey=String(layer?.id||layer?.name||'layer');
     if(!lengths||!pathCount)return[];
-    const density=typeof lampArbitraryDensityFactor==='function'?lampArbitraryDensityFactor():1,candidates=[];
+    const density=typeof lampArbitraryDensityFactor==='function'?lampArbitraryDensityFactor(lampConfig):1,candidates=[];
     for(let pathIndex=0;pathIndex<pathCount;pathIndex++){
         const key=`${layerKey}:path:${pathIndex}`;let base=lampMotionRuntime?.arbitraryPathCounts?.get?.(key);
         if(!Number.isFinite(base)){
@@ -50,7 +58,7 @@ function allocateGpuArbitraryLampCounts(layer,morphRec,t,maxPoints=600){
     return candidates;
 }
 function buildGpuArbitraryLampAttachmentPoints(frameCtx,morphRec,t,maxPoints=600){
-    const layer=frameCtx.layer,layerKey=String(layer?.id||layer?.name||'layer'),out=[],counts=allocateGpuArbitraryLampCounts(layer,morphRec,t,maxPoints);
+    const layer=frameCtx.layer,layerKey=String(layer?.id||layer?.name||'layer'),out=[],counts=allocateGpuArbitraryLampCounts(layer,morphRec,t,maxPoints,frameCtx?.layerLampConfig||frameCtx?.effectsPlan?.lamps?.baseConfig||null);
     for(const c of counts){if(!c.count)continue;const seedKey=`lamp|${layerKey}|path:${c.pathIndex}`,fractions=stableContourLampFractions(seedKey,c.count);for(let i=0;i<fractions.length;i++){
         const f=fractions[i];out.push({x:0,y:0,pathIndex:c.pathIndex,lampAttachFraction:f,lampColorPhase:f,lampId:`arb:${c.pathIndex}:${i}`,lampSeed:lampHash32(`${seedKey}:${i}`)});
     }}
@@ -92,18 +100,25 @@ function gpuMorphSpecialSpiralLampFrame(frameCtx,maxPoints=600){
     if(!ranges||!pathCount)return null;
     const rawT=table.gpuMorphT??frameCtx.blueMorphProvider?.geometryT,t=typeof morphRec.resolveMorphT==='function'?morphRec.resolveMorphT(rawT):Math.max(0,Math.min(1,Number(rawT)||0));
     const layerKey=String(frameCtx?.layer?.id||frameCtx?.layerIndex||'layer');
+    // Allocate Arbitrary density once per frame, not once per path. Besides honoring the
+    // layer config this keeps large multi-arm Spiral morphs O(pathCount), not O(pathCount²).
+    const arbitraryCounts=mode==='arbitrary'?allocateGpuArbitraryLampCounts(frameCtx.layer,morphRec,t,maxPoints,frameCtx?.layerLampConfig||frameCtx?.effectsPlan?.lamps?.baseConfig||null):null;
     // 6.8 — Key/Corners attach to the actual cumulative arc position of retained cubic
     // boundaries. Uniform j/N fractions are wrong as soon as neighbouring cubics have
     // different lengths (the usual case on a spiral), and visibly move lamps off their knots.
     for(let pi=0;pi<pathCount;pi++){
         let fractions=[];
         if(mode==='arbitrary'){
-            const desired=Math.max(2,Math.min(48,Math.round(((Number(morphRec.cpuEndpointPathLengths?.[pi*2])||0)+(Number(morphRec.cpuEndpointPathLengths?.[pi*2+1])||0))/48)||8));
-            fractions=stableContourLampFractions(`spiral|${layerKey}|${pi}`,desired);
-            for(let j=0;j<fractions.length&&points.length<maxPoints;j++){const f=Math.max(0,Math.min(1,Number(fractions[j])||0));points.push({x:0,y:0,pathIndex:pi,lampAttachFraction:f,lampColorPhase:f,lampId:`spiral:${mode}:${pi}:${j}`,lampSeed:lampHash32(`spiral:${layerKey}:${mode}:${pi}:${j}`)});}
+            // Use the SAME density allocation as ordinary Arbitrary lamps. The old
+            // special-Spiral path hard-coded len/48 and therefore ignored both the
+            // Density slider and its multiplier during Spiral Morph.
+            const countRec=arbitraryCounts?.find(c=>c.pathIndex===pi),desired=Math.max(0,Number(countRec?.count)||0);
+            const seedKey=`lamp|${layerKey}|path:${pi}`;
+            fractions=desired>0?stableContourLampFractions(seedKey,desired):[];
+            for(let j=0;j<fractions.length&&points.length<maxPoints;j++){const f=Math.max(0,Math.min(1,Number(fractions[j])||0));points.push({x:0,y:0,pathIndex:pi,lampAttachFraction:f,lampColorPhase:f,lampId:`arb:${pi}:${j}`,lampSeed:lampHash32(`${seedKey}:${j}`)});}
         }else if(mode==='key'){
-            // 7.3.7 — Key identity comes ONLY from authored key markers. Technical
-            // De Casteljau equalization cuts and geometric corner flags are deliberately excluded.
+            // 7.3.20 hf4 — Spiral Key identity is ONLY the two logical path endpoints. Technical
+            // De Casteljau cuts, profile nodes and geometric corner flags are deliberately excluded.
             // The identity fraction can travel during Morph, while the final XY is sampled from
             // the current exact retained-cubic Arc.
             const records=morphRec?.cpuPathLampKeyFractions;
@@ -115,29 +130,24 @@ function gpuMorphSpecialSpiralLampFrame(frameCtx,maxPoints=600){
                 points.push({x:0,y:0,pathIndex:pi,lampAttachFraction:f,lampColorPhase:f,lampId:`spiral:key:${pi}:${j}`,lampSeed:lampHash32(`spiral:${layerKey}:key:${pi}:${j}`)});
             }
         }else{
-            // Corners are different: a lamp must sit on the CURRENT exact retained-knot bend,
-            // not on an interpolation of source/target arc fractions. The common De Casteljau
-            // partition is allowed only as a coordinate system; a boundary becomes a Corner
-            // identity only when authored corner metadata reaches that boundary.
-            const knotRec=morphRec?.cpuPathKnotFractions?.[pi]||{},common=Array.isArray(knotRec.common)?knotRec.common:[];
-            const logicalFirst=Math.max(0,Number(morphRec?.cpuPathSegmentRanges?.[pi*4])||0),logicalCount=Math.max(0,Number(morphRec?.cpuPathSegmentRanges?.[pi*4+1])||0),subdiv=Math.max(1,Number(arcRec?.subdiv)||1),meta=morphRec?.cpuSegmentMeta;
-            const boundaryIsCorner=(j)=>{let corner=false;if(meta&&j<logicalCount)corner=corner||Boolean((meta[(logicalFirst+j)*4+3]>>>0)&0x40000000);if(meta&&j>0)corner=corner||Boolean((meta[(logicalFirst+j-1)*4+3]>>>0)&0x80000000);return corner;};
-            const boundaryCount=Math.min(common.length,logicalCount+1);
-            for(let j=0;j<boundaryCount&&points.length<maxPoints;j++){
-                if(!boundaryIsCorner(j))continue;const f=Math.max(0,Math.min(1,Number(common[j])||0));
-                const p={x:0,y:0,pathIndex:pi,lampAttachFraction:f,lampColorPhase:f,lampId:`spiral:corners:${pi}:${j}`,lampSeed:lampHash32(`spiral:${layerKey}:corners:${pi}:${j}`)};
-                // Lamp WGSL interprets segmentIndex as LOCAL to this path and adds the path's
-                // micro-rail offset itself. Pinning the boundary directly keeps lamps on bends.
-                if(logicalCount>0){if(j>=logicalCount){p.gpuLampArcSegmentIndex=logicalCount*subdiv-1;p.gpuLampArcSegmentT=1;}else{p.gpuLampArcSegmentIndex=j*subdiv;p.gpuLampArcSegmentT=0;}}
-                points.push(p);
+            // «На изломах» is explicitly Key + bends. Key contributes the two logical
+            // segment ends; Corner metadata contributes interior authored bends even when
+            // the visible retained spline/rounding has already smoothed them.
+            const keyFractions=spiralMorphFractionIdentityAtT(morphRec?.cpuPathLampKeyFractions,pi,t,{forceEndpoints:true});
+            const bendFractions=spiralMorphFractionIdentityAtT(morphRec?.cpuPathCornerFractions,pi,t,{forceEndpoints:false});
+            const merged=[...keyFractions,...bendFractions].map(v=>Math.max(0,Math.min(1,Number(v)||0))).sort((a,b)=>a-b);
+            fractions=[];for(const f of merged)if(!fractions.length||Math.abs(f-fractions[fractions.length-1])>1e-6)fractions.push(f);
+            const periodic=Boolean(morphRec?.cpuPathPeriodic?.[pi]>>>0),omitSharedSeam=periodic&&state?.tunnel?.active===true;
+            for(let j=0;j<fractions.length&&points.length<maxPoints;j++){
+                const f=fractions[j];if(omitSharedSeam&&f>=1-1e-7)continue;
+                points.push({x:0,y:0,pathIndex:pi,lampAttachFraction:f,lampColorPhase:f,lampId:`spiral:corners:${pi}:${j}`,lampSeed:lampHash32(`spiral:${layerKey}:corners:${pi}:${j}`)});
             }
         }
         if(points.length>=maxPoints)break;
     }
-    // A smooth Spiral may legitimately have no authored bend markers. In Corners mode that
-    // is an authoritative empty result, not an Arc warmup failure; returning the empty GPU
-    // frame prevents the strict FullGPU contract from reporting a false resource error.
-    if(!points.length&&mode!=='corners')return null;
+    // Corners now always contains the Key endpoints, so an empty special-Spiral result means
+    // no usable Arc population (or density=0 in Arbitrary), not a valid no-corner state.
+    if(!points.length&&mode!=='arbitrary')return null;
     return{gpuLampNative:true,gpuLampNativeKind:'arc',gpuMorphArcTable:table,gpuMorphArcResource:arcRec,gpuMorphResource:morphRec,gpuMorphT:t,frameId:Number(frameCtx.frameId)||0,attachmentPoints:points,attachmentCount:points.length};
 }
 function prepareGpuMorphLampFrame(frameCtx){
@@ -147,22 +157,22 @@ function prepareGpuMorphLampFrame(frameCtx){
         // Iter12: during polygon↔Spiral / Spiral↔Spiral morph there is exactly ONE geometry
         // authority. If its retained cubic rail is still warming, lamps wait; they must never
         // silently bind to the generic topology Morph resource for one frame.
-        if(strictSpiral&&(!authoritative?.ready||authoritative?.specialSpiralBezierRail!==true)){gpuMorphLampBridgeStats.fallbacks++;gpuMorphLampBridgeStats.lastReason='strict-spiral-retained-rail-wait';try{requestMainCanvasRender?.();}catch(_){}return null;}
-        const special=gpuMorphSpecialSpiralLampFrame(frameCtx,600);if(special){gpuMorphLampBridgeStats.hits++;gpuMorphLampBridgeStats.lastReason='spiral-exact-gpu-arc';return special;}
-        if(strictSpiral){gpuMorphLampBridgeStats.fallbacks++;gpuMorphLampBridgeStats.lastReason='strict-spiral-arc-wait';return null;}
+        if(strictSpiral&&(!authoritative?.ready||authoritative?.specialSpiralBezierRail!==true)){gpuMorphLampBridgeStats.fallbacks++;gpuMorphLampBridgeStats.lastReason='strict-spiral-retained-rail-wait';gpuLampFeatureWait(frameCtx,'strict-spiral-retained-rail-wait',{stage:'retained-rail'},650);return null;}
+        const special=gpuMorphSpecialSpiralLampFrame(frameCtx,600);if(special){gpuLampFeatureReady(frameCtx);gpuMorphLampBridgeStats.hits++;gpuMorphLampBridgeStats.lastReason='spiral-exact-gpu-arc';return special;}
+        if(strictSpiral){gpuMorphLampBridgeStats.fallbacks++;gpuMorphLampBridgeStats.lastReason='strict-spiral-arc-wait';gpuLampFeatureWait(frameCtx,'strict-spiral-arc-wait',{stage:'arc'},650);return null;}
         const mode=gpuMorphLampPositionMode(frameCtx);
         if(mode==='key'){
             const cfg=frameCtx?.layerLampConfig||ensureLayerLampState?.(frameCtx?.layer)||state?.lamps||{},motion=cfg?.morphMotionMode||'linear';
             if(motion==='ghost'&&typeof prepareGpuMorphGhostLampFrame==='function'){
-                const ghost=prepareGpuMorphGhostLampFrame(frameCtx,260);if(ghost){gpuMorphLampBridgeStats.hits++;gpuMorphLampBridgeStats.lastReason=`ghost-${ghost.gpuLampNativeKind||'identity'}`;return ghost;}
+                const ghost=prepareGpuMorphGhostLampFrame(frameCtx,260);if(ghost){gpuLampFeatureReady(frameCtx);gpuMorphLampBridgeStats.hits++;gpuMorphLampBridgeStats.lastReason=`ghost-${ghost.gpuLampNativeKind||'identity'}`;return ghost;}
             }
             if(typeof prepareGpuMorphKeyLampFrame==='function'){
-                const key=prepareGpuMorphKeyLampFrame(frameCtx,260);if(key){gpuMorphLampBridgeStats.hits++;gpuMorphLampBridgeStats.lastReason=`key-${key.gpuLampNativeKind||'identity'}`;return key;}
+                const key=prepareGpuMorphKeyLampFrame(frameCtx,260);if(key){gpuLampFeatureReady(frameCtx);gpuMorphLampBridgeStats.hits++;gpuMorphLampBridgeStats.lastReason=`key-${key.gpuLampNativeKind||'identity'}`;return key;}
             }
         }
-        if(mode==='arbitrary')return prepareGpuMorphArbitraryLampFrame(frameCtx,600);
+        if(mode==='arbitrary'){const arb=prepareGpuMorphArbitraryLampFrame(frameCtx,600);if(arb)gpuLampFeatureReady(frameCtx);return arb;}
         if(mode==='corners'&&typeof prepareGpuMorphCornerLampFrame==='function'){
-            const corners=prepareGpuMorphCornerLampFrame(frameCtx,260);if(corners){gpuMorphLampBridgeStats.hits++;gpuMorphLampBridgeStats.lastReason='corners-packed-topology';return corners;}
+            const corners=prepareGpuMorphCornerLampFrame(frameCtx,260);if(corners){gpuLampFeatureReady(frameCtx);gpuMorphLampBridgeStats.hits++;gpuMorphLampBridgeStats.lastReason='corners-packed-topology';return corners;}
         }
         return null;
     }catch(err){

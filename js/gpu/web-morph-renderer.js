@@ -1,4 +1,4 @@
-// Somata 7.3.7 — GPU-native Web Threads with resident master geometry.
+// Somata 7.3.9 — GPU-native Web Threads with resident master geometry.
 // Exact retained-cubic Arc is sampled once in compute (two samples per active thread);
 // bevel/rounding vertices and Corridor copies only rasterize the resident {A,Control,B} record.
 window.__spiroRegisterModule?.('js/gpu/web-morph-renderer');
@@ -130,7 +130,7 @@ fn maskVertex(iid:u32,vid:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool)->MOut{let 
     }catch(err){lastError=String(err?.message||err);stats.failures++;return{handled:false,commandBuffer:null};}}
     function encodeToLayerScene(targetTexture,prepared,ctx,baseAlpha,frameCtx=null){return encode(targetTexture,prepared,ctx,baseAlpha,null,null,frameCtx,1);}
     function encodeCorridorToLayerScene(targetTexture,prepared,ctx,baseAlpha,copies,alphas,frameCtx,footprint=1){return encode(targetTexture,prepared,ctx,baseAlpha,copies,alphas,frameCtx,footprint);}
-    function status(){warmup();return{available:ready,initializing:Boolean(initializing),lastError,generation,...stats,contract:'Somata 7.3.7 keeps retained cubic/periodic Arc as the only Web contour truth, but exact Arc sampling happens once in GPU thread compaction (two samples per active master thread). The resident {A,Control,B} geometry is reused by all 4 raster vertices, all 12 rounding steps and every Corridor copy. Fused Halo+Core remains single-sample and single-composite; no CPU Morph path or Canvas Web geometry.'};}
+    function status(){warmup();return{available:ready,initializing:Boolean(initializing),lastError,generation,...stats,contract:'Somata 7.3.9 keeps retained cubic/periodic Arc as the only Web contour truth, but exact Arc sampling happens once in GPU thread compaction (two samples per active master thread). The resident {A,Control,B} geometry is reused by all 4 raster vertices, all 12 rounding steps and every Corridor copy. Fused Halo+Core remains single-sample and single-composite; no CPU Morph path or Canvas Web geometry.'};}
     return{warmup,ensureReady:()=>initAsync(),isReady:()=>warmup(),canEncode,encodeToLayerScene,encodeCorridorToLayerScene,status};
 })();
 window.__spiroGpuMorphWebStatus=()=>WebGPUWebMorphRenderer.status();

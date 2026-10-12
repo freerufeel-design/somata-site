@@ -10,7 +10,7 @@ const WebGPULightningArcRenderer=(()=>{
     let scratchTexture=null,scratchView=null,stencilTexture=null,stencilView=null,compositeBind=null,width=0,height=0,targetViews=new WeakMap();
     let uniformBuffers=[],uniformBinds=[],uniformCursor=0,pathBinds=new WeakMap(),copyBinds=new WeakMap(),strokeBundleCache=new WeakMap(),bundleObjectIds=new WeakMap(),bundleObjectSerial=0;
     const uniformData=new Float32Array(32);
-    const stats={frames:0,draws:0,strokeDraws:0,uniformBindReuses:0,corridorFrames:0,corridorCopies:0,logicalSegments:0,arcEncodes:0,arcReuses:0,
+    const stats={frames:0,draws:0,strokeDraws:0,uniformBindReuses:0,corridorFrames:0,corridorCopies:0,logicalSegments:0,exactRasterSubsegments:0,arcEncodes:0,arcReuses:0,
         clippedFrames:0,stencilEdges:0,blurredHaloPasses:0,bundleBuilds:0,bundleHits:0,bundleExecutes:0,bundleFallbacks:0,cpuPathBuildsAvoided:0,cpuExactRailBuildsAvoided:0,cpuPieceBuildsAvoided:0,cpuSegmentUploadsAvoided:0,failures:0};
 
     const WGSL=`
@@ -90,21 +90,28 @@ fn retainedPoint(si:u32,microT:f32)->vec2<f32>{
 }
 fn screenPoint(p:vec2<f32>)->vec2<f32>{return vec2<f32>(u.row0.x*p.x+u.row0.y*p.y+u.row0.z,u.row1.x*p.x+u.row1.y*p.y+u.row1.z);}
 fn corner(vid:u32)->vec2<f32>{return array<vec2<f32>,4>(vec2<f32>(-1.0,-1.0),vec2<f32>(1.0,-1.0),vec2<f32>(-1.0,1.0),vec2<f32>(1.0,1.0))[vid%4u];}
-fn makeStrokeVertex(si:u32,vid:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool)->VOut{
-    let q=segments[si*2u+1u];var p0=retainedPoint(si,0.0);var p1=retainedPoint(si,1.0);var ca=1.0;var copyScale=1.0;
+fn makeStrokeVertex(si:u32,ri:u32,rs:u32,vid:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool)->VOut{
+    let q=segments[si*2u+1u];let div=max(1u,rs);let f0=f32(ri)/f32(div);let f1=f32(ri+1u)/f32(div);
+    // Exact mode does not draw the Arc-table microsegment as one straight chord. It samples
+    // the authoritative retained cubic several times inside that microsegment, so the visible
+    // flash follows the same Bézier carrier as Base/Glow. Simple mode keeps div=1.
+    var p0=retainedPoint(si,f0);var p1=retainedPoint(si,f1);var ca=1.0;var copyScale=1.0;
     if(useCopy){p0=vec2<f32>(c0.x*p0.x+c0.y*p0.y,c1.x*p0.x+c1.y*p0.y);p1=vec2<f32>(c0.x*p1.x+c0.y*p1.y,c1.x*p1.x+c1.y*p1.y);ca=c0.z;copyScale=max(0.000001,abs(c1.z));}
     let a=screenPoint(p0);let b=screenPoint(p1);let delta=b-a;let len=max(length(delta),0.0001);let dir=delta/len;let n=vec2<f32>(-dir.y,dir.x);
-    let hw=max(0.18,u.style.x*copyScale);let gr=max(0.0,u.style.y*copyScale);let pad=hw+gr+3.0;let pathIndex=segmentMeta[si].z;let sourceLen=max(0.000001,q.y);
+    let hw=max(0.18,u.style.x*copyScale);let gr=max(0.0,u.style.y*copyScale);let pad=hw+gr+3.0;let pathIndex=segmentMeta[si].z;
+    let parentLen=max(0.000001,q.y);let sourceLen=max(0.000001,parentLen/f32(div));let sourceStart=q.x+parentLen*f0;
     // Conservative vertex-stage cull: inactive ultra-polygon segments never reach rasterization.
     // Keep one halo/cap radius in source-arc units so selected boundaries remain exact.
-    let near=nearestActiveDelta(q.x+sourceLen*0.5,pathIndex,q.z,max(0.000001,q.w));let padSource=pad*(sourceLen/len);let activeCandidate=near<=sourceLen*0.5+padSource;
+    let near=nearestActiveDelta(sourceStart+sourceLen*0.5,pathIndex,q.z,max(0.000001,q.w));let padSource=pad*(sourceLen/len);let activeCandidate=near<=sourceLen*0.5+padSource;
     let c=corner(vid);let tx=(c.x+1.0)*0.5;let lx=mix(-pad,len+pad,tx);let ly=c.y*pad;let p=a+dir*lx+n*ly;
     var o:VOut;if(activeCandidate){o.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);}else{o.position=vec4<f32>(-3.0,-3.0,0.0,1.0);}
-    o.local=vec2<f32>(lx,ly);o.screenLen=len;o.sourceStart=q.x;o.sourceLen=sourceLen;o.pathStart=q.z;o.pathTotal=max(0.000001,q.w);o.pathIndex=pathIndex;o.halfWidth=hw;o.glowRadius=gr;o.copyAlpha=select(0.0,ca,activeCandidate);return o;
+    o.local=vec2<f32>(lx,ly);o.screenLen=len;o.sourceStart=sourceStart;o.sourceLen=sourceLen;o.pathStart=q.z;o.pathTotal=max(0.000001,q.w);o.pathIndex=pathIndex;o.halfWidth=hw;o.glowRadius=gr;o.copyAlpha=select(0.0,ca,activeCandidate);return o;
 }
-@vertex fn vs(@builtin(vertex_index) vid:u32,@builtin(instance_index) iid:u32)->VOut{return makeStrokeVertex(iid,vid,vec4<f32>(0.0),vec4<f32>(0.0),false);}
+@vertex fn vs(@builtin(vertex_index) vid:u32,@builtin(instance_index) iid:u32)->VOut{
+    let rs=max(1u,u32(u.color.w+0.5));let si=iid/rs;let ri=iid%rs;return makeStrokeVertex(si,ri,rs,vid,vec4<f32>(0.0),vec4<f32>(0.0),false);
+}
 @vertex fn vsCorridor(@builtin(vertex_index) vid:u32,@builtin(instance_index) iid:u32)->VOut{
-    let segCount=max(1u,u32(u.extra.x+0.5));let ci=iid/segCount;let si=iid%segCount;return makeStrokeVertex(si,vid,copyData[ci*2u],copyData[ci*2u+1u],true);
+    let segCount=max(1u,u32(u.extra.x+0.5));let rs=max(1u,u32(u.color.w+0.5));let perCopy=segCount*rs;let ci=iid/perCopy;let unit=iid%perCopy;let si=unit/rs;let ri=unit%rs;return makeStrokeVertex(si,ri,rs,vid,copyData[ci*2u],copyData[ci*2u+1u],true);
 }
 @fragment fn fs(v:VOut)->@location(0) vec4<f32>{
     if(v.copyAlpha<=0.00001){discard;}let sourceX=v.sourceStart+(v.local.x/v.screenLen)*v.sourceLen;let da=nearestActiveDelta(sourceX,v.pathIndex,v.pathStart,v.pathTotal);let along=da*(v.screenLen/v.sourceLen);let d=length(vec2<f32>(along,v.local.y));
@@ -158,9 +165,11 @@ struct V{@builtin(position) p:vec4<f32>};
     function ensureSize(){if(!ready||!device)return false;const w=Math.max(1,mainCanvas.width|0),h=Math.max(1,mainCanvas.height|0);if(w===width&&h===height&&scratchTexture&&stencilTexture)return true;destroySize();width=w;height=h;scratchTexture=device.createTexture({label:'SpiroStar Lightning Arc scratch',size:[w,h,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});scratchView=scratchTexture.createView();stencilTexture=device.createTexture({label:'SpiroStar Lightning Arc stencil',size:[w,h,1],format:'depth24plus-stencil8',usage:GPUTextureUsage.RENDER_ATTACHMENT});stencilView=stencilTexture.createView();compositeBind=device.createBindGroup({layout:compositeLayout,entries:[{binding:0,resource:scratchView}]});return true;}
     function pathBind(table){const arcRec=table?._gpuMorphArcResource;if(!arcRec?.ready)return null;let bg=pathBinds.get(arcRec);if(bg)return bg;const morph=arcRec.morphRec;if(!morph?.cubicBuffer)return null;bg=device.createBindGroup({layout:pathLayout,entries:[{binding:0,resource:{buffer:arcRec.segmentBuffer}},{binding:1,resource:{buffer:arcRec.segmentMetaBuffer}},{binding:2,resource:{buffer:morph.pathRangeBuffer}},{binding:3,resource:{buffer:arcRec.metaBuffer}},{binding:4,resource:{buffer:morph.cubicBuffer}}]});pathBinds.set(arcRec,bg);return bg;}
     function copyBind(buffer){let bg=copyBinds.get(buffer);if(bg)return bg;bg=device.createBindGroup({layout:copyLayout,entries:[{binding:0,resource:{buffer}}]});copyBinds.set(buffer,bg);return bg;}
+    const EXACT_BEZIER_RASTER_SUBDIV=6;
+    function lightningRasterSubdiv(prepared){return String(prepared?.cfg?.lightningPrecision||'exact').toLowerCase()==='simple'?1:EXACT_BEZIER_RASTER_SUBDIV;}
     function fillUniform(ctx,prepared,style,copyMode=false){
         const tr=ctx?.getTransform?.();if(!tr)return null;const cfg=prepared.cfg,sel=prepared.lightningSelection||{},rgb=GPUColorCache.rgb(style.color),sx=Math.hypot(Number(tr.a)||0,Number(tr.b)||0),sy=Math.hypot(Number(tr.c)||0,Number(tr.d)||0),screenScale=Math.sqrt(Math.max(1e-12,sx*sy));
-        uniformData.fill(0);uniformData[0]=width;uniformData[1]=height;uniformData[4]=tr.a;uniformData[5]=tr.c;uniformData[6]=tr.e;uniformData[8]=tr.b;uniformData[9]=tr.d;uniformData[10]=tr.f;uniformData[12]=rgb[0];uniformData[13]=rgb[1];uniformData[14]=rgb[2];uniformData[15]=1;
+        uniformData.fill(0);uniformData[0]=width;uniformData[1]=height;uniformData[4]=tr.a;uniformData[5]=tr.c;uniformData[6]=tr.e;uniformData[8]=tr.b;uniformData[9]=tr.d;uniformData[10]=tr.f;uniformData[12]=rgb[0];uniformData[13]=rgb[1];uniformData[14]=rgb[2];uniformData[15]=lightningRasterSubdiv(prepared);
         uniformData[16]=Math.max(.18,Math.abs(Number(style.width)||1)*screenScale*.5);uniformData[17]=Math.max(0,Number(style.glowRadius)||0)*screenScale;uniformData[18]=Math.max(0,Math.min(8,Number(style.coreAlpha)||0));uniformData[19]=Math.max(0,Math.min(32,Number(style.glowAlpha)||0));
         uniformData[20]=Number(sel.modeCode)||0;uniformData[21]=Math.max(.01,Math.min(1,Number(sel.frac)||1));uniformData[22]=sel.random?1:0;uniformData[23]=Math.max(0,Number(sel.cycle)||0);
         uniformData[24]=Math.max(1,Number(sel.constructionSegments)||1);uniformData[25]=Math.max(1,Number(sel.nth)||1);uniformData[26]=Math.max(.01,Math.min(1,Number(style.flashFrac)||1));uniformData[27]=Math.max(0,Math.min(1,Number(style.travel)||0));
@@ -207,10 +216,10 @@ struct V{@builtin(position) p:vec4<f32>};
             const hadCommitted=arcRec.hasCommittedData&&arcRec.lastCommittedT===prepared.table.gpuMorphT;const arcReady=typeof spiroGpuPrepareArcForLayerScene==='function'?spiroGpuPrepareArcForLayerScene(frameCtx,prepared.table,encoder):(typeof encodeGpuMorphArcTable==='function'&&encodeGpuMorphArcTable(prepared.table,encoder));if(!arcReady)throw new Error('GPU Morph Arc encode failed');if(hadCommitted||frameCtx?.frame?.gpuLayerSceneDeferred)stats.arcReuses++;else stats.arcEncodes++;
             const pbg=pathBind(prepared.table);if(!pbg)throw new Error('Lightning Arc path bind unavailable');let copyBg=null,copyCount=1;
             if(Array.isArray(copies)&&copies.length){const shared=WebGPUCorridorCopyStore.acquire(device,generation,frameCtx,copies,alphas,'sweep',footprint,frameCtx?.layer);if(!shared?.buffer||!shared.k)return{handled:true,commandBuffer:null};copyCount=shared.k;copyBg=copyBind(shared.buffer);stats.corridorFrames++;stats.corridorCopies+=copyCount;}
-            const instances=arcRec.segmentCount*copyCount,haloStyles=styles.filter(s=>Number(s.glowAlpha)>0&&!(Number(s.coreAlpha)>0)),coreStyles=styles.filter(s=>Number(s.coreAlpha)>0);let targetView=targetViews.get(targetTexture);if(!targetView){targetView=targetTexture.createView();targetViews.set(targetTexture,targetView);}const clipped=behavior==='inside'||behavior==='outside';let pass;
+            const rasterSubdiv=lightningRasterSubdiv(prepared),instances=arcRec.segmentCount*rasterSubdiv*copyCount,haloStyles=styles.filter(s=>Number(s.glowAlpha)>0&&!(Number(s.coreAlpha)>0)),coreStyles=styles.filter(s=>Number(s.coreAlpha)>0);let targetView=targetViews.get(targetTexture);if(!targetView){targetView=targetTexture.createView();targetViews.set(targetTexture,targetView);}const clipped=behavior==='inside'||behavior==='outside';let pass;
             if(clipped){const maskUniform=fillUniform(ctx,prepared,{width:1,color:'#ffffff',coreAlpha:0,glowRadius:0,glowAlpha:0,flashFrac:1,travel:0},false);pass=encoder.beginRenderPass({colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}],depthStencilAttachment:{view:stencilView,depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'discard',stencilClearValue:0,stencilLoadOp:'clear',stencilStoreOp:'store'}});pass.setPipeline(maskPipeline);pass.setBindGroup(0,maskUniform.bind);pass.setBindGroup(1,pbg);pass.draw(3,arcRec.segmentCount);pass.end();stats.clippedFrames++;stats.stencilEdges+=arcRec.segmentCount;}
             const drawAnalyticGroup=(group,core)=>{if(!group.length)return;pass=encoder.beginRenderPass({colorAttachments:[{view:scratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});for(const style of group){const ub=fillUniform(ctx,prepared,style,Boolean(copyBg));if(!ub)continue;const bundled=strokeBundle(arcRec,pbg,copyBg,ub,instances);if(bundled){pass.executeBundles(bundled.list);stats.bundleExecutes++;}else{pass.setPipeline(copyBg?strokeCorridorPipeline:strokePipeline);pass.setBindGroup(0,ub.bind);pass.setBindGroup(1,pbg);if(copyBg)pass.setBindGroup(2,copyBg);pass.draw(4,instances);}stats.strokeDraws++;}pass.end();const desc={colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}]};if(clipped)desc.depthStencilAttachment={view:stencilView,depthLoadOp:'load',depthStoreOp:'discard',stencilLoadOp:'load',stencilStoreOp:'discard'};pass=encoder.beginRenderPass(desc);if(clipped)pass.setStencilReference(behavior==='inside'?1:0);const blendMode=core?sweepCoreBlendMode(prepared.cfg):sweepGlowBlendMode(prepared.cfg),pipelines=clipped?compositeStencilPipelines:compositePipelines;pass.setPipeline(pipelines[blendMode]||pipelines.normal);pass.setBindGroup(0,compositeBind);pass.draw(3);pass.end();};
-            // Somata 7.3.7 — large analytic per-microsegment halos create the radial support
+            // Somata 7.3.9 — large analytic per-microsegment halos create the radial support
             // wedges visible on curved Spiral lightning.  For symmetric Lightning, rasterize
             // only the exact narrow strike into a GPU mask and generate Glow by separable blur.
             // The retained cubic/Arc still selects the strike; only halo construction changes.
@@ -229,13 +238,13 @@ struct V{@builtin(position) p:vec4<f32>};
                 }
             };
             drawBlurredHaloGroup(haloStyles);drawAnalyticGroup(coreStyles,true);
-            stats.frames++;stats.draws++;stats.logicalSegments+=arcRec.segmentCount*copyCount*styles.length;stats.cpuPathBuildsAvoided++;stats.cpuExactRailBuildsAvoided++;stats.cpuPieceBuildsAvoided++;stats.cpuSegmentUploadsAvoided+=arcRec.segmentCount;
+            stats.frames++;stats.draws++;stats.logicalSegments+=arcRec.segmentCount*copyCount*styles.length;stats.exactRasterSubsegments+=arcRec.segmentCount*rasterSubdiv*copyCount*styles.length;stats.cpuPathBuildsAvoided++;stats.cpuExactRailBuildsAvoided++;stats.cpuPieceBuildsAvoided++;stats.cpuSegmentUploadsAvoided+=arcRec.segmentCount;
             return{handled:true,commandBuffer:encoder.finish(),onSubmitted:()=>noteGpuMorphArcTableSubmitted?.(prepared.table)};
         }catch(err){lastError=String(err?.message||err);stats.failures++;return{handled:false,commandBuffer:null,reason:lastError};}
     }
     function encodeToLayerScene(targetTexture,prepared,frame,ctx,baseAlpha,behavior='symmetric',frameCtx=null){return encode(targetTexture,prepared,frame,ctx,baseAlpha,behavior,null,null,frameCtx,1);}
     function encodeCorridorToLayerScene(targetTexture,prepared,frame,ctx,baseAlpha,copies,alphas,frameCtx,footprint=1,behavior='symmetric'){return encode(targetTexture,prepared,frame,ctx,baseAlpha,behavior,copies,alphas,frameCtx,footprint);}
-    function status(){warmup();return{available:ready,generation,lastError,width,height,...stats,contract:'Topology/Spiral Morph Lightning uses the shared resident GPU Arc and retained cubic Bézier carrier. Core keeps exact retained-Arc raster; symmetric Glow is generated from the exact strike mask by separable GPU blur (independent blend mode), eliminating microsegment support wedges. Precharge flash is composited as Glow. No CPU geometry or Canvas carrier is rebuilt.'};}
+    function status(){warmup();return{available:ready,generation,lastError,width,height,exactBezierRasterSubdiv:EXACT_BEZIER_RASTER_SUBDIV,...stats,contract:'Topology/Spiral Morph Lightning uses the shared resident GPU Arc and authoritative retained cubic Bézier carrier. Exact precision sub-samples every Arc microsegment directly on the retained cubic (6x); simple precision keeps the lightweight chord path. Symmetric Glow is generated from the strike mask by separable GPU blur. No CPU geometry or Canvas carrier is rebuilt.'};}
     return{warmup,isReady:()=>warmup()&&Boolean(typeof WebGPUGraffitiContourGlow!=='undefined'&&WebGPUGraffitiContourGlow.isReady?.()),encodeToLayerScene,encodeCorridorToLayerScene,status};
 })();
 window.__spiroGpuLightningArcStatus=()=>WebGPULightningArcRenderer.status();

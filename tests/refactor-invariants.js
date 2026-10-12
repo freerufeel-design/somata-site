@@ -124,7 +124,7 @@ testScriptManifest();
   assert.ok(pipe.includes('function canUseGpuSpiralBezierFrameScene(frameCtx)'),'Direct Spiral Frame Scene eligibility missing');
   assert.ok(pipe.includes('const spiralBezierGpuNative=')&&pipe.includes('topologyGpuLazy||greenProjectGpuNative||spiralBezierGpuNative'),'GPU-native Spiral Morph must skip per-frame Canvas vector-master recording');
   assert.ok(pipe.includes('function resolveGpuSpiralBezierSceneRoute(frameCtx')&&pipe.includes('deferFrameScene:route.deferFrameScene'),'Spiral renderer must preserve direct Frame Scene residency through the unified scene-route contract');
-  assert.ok(spiral.includes("const SUBDIV=12"),'Spiral GPU cubic subdivision budget must keep the rev3 high-curvature quality floor');
+  assert.ok(spiral.includes("const SUBDIV=12"),'Spiral GPU cubic subdivision budget must keep the original 12-step topology-morph visual budget');
   assert.ok(spiral.includes('equalizeCubicRailsByArc')&&spiral.includes('splitRailAtFractions')&&spiral.includes('cubicSubsegment'),'Spiral 6.8 endpoint normalization must use a common arc partition with exact De Casteljau cubic subdivision');
   assert.ok(spiral.includes("deferExternalFrameScene?.(cmd,frameCtx.frameId,'spiral-bezier-morph')"),'Spiral command buffers must be able to target the global Frame Scene directly');
   assert.ok(appC.includes('spiralRotationCompensationAnchorRadius')&&appC.includes('radius>anchor.radius'),'Rotation compensation must select the largest visible Spiral layer');
@@ -255,7 +255,7 @@ console.log('SpiroStar refactor invariants: PASS');
 {
   const app=read('js/legacy/app-a.js');
   const html=read('index.html');
-  assert.ok(html.includes('<title>Somata 7.3.7</title>'),'Somata 7.2.8 title missing');
+  assert.ok(html.includes('<title>Somata 7.3.20</title>'),'Somata 7.2.8 title missing');
   assert.ok(app.includes('function buildSmoothSpiralBezierSegments('),'Smooth Spiral cubic source builder missing');
   assert.ok(app.includes("ctx.__spiroNativeBezierSpiral === true"),'Smooth Spiral must gate the native Bézier recording path');
   assert.ok(app.includes('__recordVariableWidthBezierSpiral(segments,baseWidth)'),'Recorder-side compact Bézier command path missing');
@@ -440,7 +440,7 @@ console.log('SpiroStar refactor invariants: PASS');
     'Native Fill renderer must consume the current canonical fan plan and encode Corridor copies into the Layer Scene');
   assert.ok(pipe.includes("'corridor-native-fill'")&&pipe.includes('Canvas fallback blocked; waiting for native WebGPU Fill'),
     'Corridor Fill must wait diagnostically for WebGPU instead of falling through to Canvas');
-  assert.ok(pipe.includes("const gpuRequested=drawPlan.config?.webgl!==false&&drawPlan.config?.rasterized!==true")&&pipe.includes("'GPU lamps unavailable; Canvas fallback blocked'"),
+  assert.ok(pipe.includes("const gpuRequested=!forceCpuLamps&&drawPlan.config?.webgl!==false&&drawPlan.config?.rasterized!==true")&&pipe.includes("'GPU lamps unavailable; Canvas fallback blocked'"),
     'Requested GPU lamps must not silently fall back to Canvas');
   assert.ok(!pipe.includes("renderBackendTelemetry.mark('lamps','canvas','Canvas lamp fallback'"),
     'Historical Canvas lamp fallback must remain removed from GPU-requested lamp rendering');

@@ -11,4 +11,4 @@ assert(scheduler.includes("FPS_LIMIT_STORAGE_KEY = 'spirostar.fpsLimit'"),'FPS l
 assert(scheduler.includes('if (tickNow + 0.5 < nextFrameDueAt)'),'Single-rAF scheduler must gate heavy work before animation tasks and paint');
 assert(scheduler.includes('do { nextFrameDueAt += frameIntervalMs; } while'),'FPS gate must use a rolling due-time rather than fixed refresh-frame divisors');
 assert(scheduler.includes('setFpsLimit(value)')&&scheduler.includes('fpsGateSkips'),'Scheduler diagnostics must expose the active cap/gate');
-console.log('Somata 7.3.7 FPS limit invariants: PASS');
+console.log('Somata 7.3.9 FPS limit invariants: PASS');

@@ -535,7 +535,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             const next = Boolean(enabled);
             const wasActive = tunnel.active === true;
             const silent = options?.silent === true;
-            // 7.3.7 — active is runtime-only. Project activation may silently quiesce the
+            // 7.3.9 — active is runtime-only. Project activation may silently quiesce the
             // previous Corridor before committing a new project, then start the target Corridor
             // BEFORE Blue Morph prepares its strict-Spiral GPU phase resources.
             tunnel.active = next;
@@ -1344,7 +1344,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             tangentRow?.classList.toggle('spiral-setting-disabled', spiralModeActive && !spiralClosed);
             seamRow?.classList.toggle('spiral-setting-disabled', spiralModeActive && !spiralClosed);
 
-            // 7.3.7 — Uniform / Segmented is a generic line overlap policy, not a Spiral
+            // 7.3.9 — Uniform / Segmented is a generic line overlap policy, not a Spiral
             // geometry type. Keep the historical spiralLineType field only as an import/export
             // alias so older projects retain the same appearance.
             const lineLayerMode=(layer.lineLayerMode??layer.spiralLineType)==='segmented'?'segmented':'uniform';
@@ -1847,6 +1847,10 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
         let activeStopMorphing = () => {};
         let activeStartMorphing = () => {};
         let activeRebaseMorphing = () => {};
+        // 7.3.9 — active=true is not sufficient ownership. If the scheduler task is lost
+        // after a boundary/backend handoff, recover the task without restarting/re-randomizing
+        // the Morph phase. This is deliberately separate from activeStartMorphing().
+        let activeEnsureFullMorphSchedulerOwnership = () => false;
         // Iter27 — a sidebar edit can fire one or more legacy rebase calls from the
         // target handler before the event has finished committing the authored value.
         // Keep those calls deferred until the event is complete so the OLD blue frame
@@ -4276,18 +4280,19 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 const parsed = Number(value);
                 const v = Math.max(min, Math.min(max, Number.isFinite(parsed) ? parsed : 0));
                 layer.glow = v;
+                if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,['glow'],'ui-glow');
                 range.value = String(v);
                 if (number) number.value = formatDisplayNumber(v, 1);
                 document.getElementById('valGlow').textContent = formatDisplayNumber(v, 1) + 'px';
                 requestMainCanvasRender();
             };
             document.getElementById('paramGlow').addEventListener('input', (e) => setGlow(e.target.value));
-            const setGlowMultiplier=(value)=>{const layer=getActiveLayer();if(!layer)return;const v=Number(value);layer.glowMultiplier=Number.isFinite(v)?Math.max(0,v):1;const el=document.getElementById('paramGlowMultiplier');if(el&&document.activeElement!==el)el.value=layer.glowMultiplier;requestMainCanvasRender();};
+            const setGlowMultiplier=(value)=>{const layer=getActiveLayer();if(!layer)return;const v=Number(value);layer.glowMultiplier=Number.isFinite(v)?Math.max(0,v):1;if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,['glowMultiplier'],'ui-glow-multiplier');const el=document.getElementById('paramGlowMultiplier');if(el&&document.activeElement!==el)el.value=layer.glowMultiplier;requestMainCanvasRender();};
             document.getElementById('paramGlowMultiplier')?.addEventListener('input',e=>setGlowMultiplier(e.target.value));
             document.getElementById('paramGlowMultiplier')?.addEventListener('change',e=>setGlowMultiplier(e.target.value));
             const syncGlowIntensityUI=()=>{const layer=getActiveLayer();if(!layer)return;const t=document.getElementById('valGlowIntensity');if(t)t.textContent=`${Math.round(Number(layer.glowIntensity)||0)}% × ${formatDisplayNumber(getLayerGlowIntensityMultiplier(layer),2)}`;requestMainCanvasRender();};
-            document.getElementById('paramGlowIntensity')?.addEventListener('input',(e)=>{const layer=getActiveLayer();if(!layer)return;layer.glowIntensity=Math.max(0,Math.min(200,Number(e.target.value)||0));syncGlowIntensityUI();});
-            const setGlowIntensityMultiplier=(value)=>{const layer=getActiveLayer();if(!layer)return;const v=Number(value);layer.glowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;const el=document.getElementById('paramGlowIntensityMultiplier');if(el&&document.activeElement!==el)el.value=layer.glowIntensityMultiplier;syncGlowIntensityUI();};
+            document.getElementById('paramGlowIntensity')?.addEventListener('input',(e)=>{const layer=getActiveLayer();if(!layer)return;layer.glowIntensity=Math.max(0,Math.min(200,Number(e.target.value)||0));if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,['glowIntensity'],'ui-glow-intensity');syncGlowIntensityUI();});
+            const setGlowIntensityMultiplier=(value)=>{const layer=getActiveLayer();if(!layer)return;const v=Number(value);layer.glowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,['glowIntensityMultiplier'],'ui-glow-intensity-multiplier');const el=document.getElementById('paramGlowIntensityMultiplier');if(el&&document.activeElement!==el)el.value=layer.glowIntensityMultiplier;syncGlowIntensityUI();};
             document.getElementById('paramGlowIntensityMultiplier')?.addEventListener('input',e=>setGlowIntensityMultiplier(e.target.value));
             document.getElementById('paramGlowIntensityMultiplier')?.addEventListener('change',e=>setGlowIntensityMultiplier(e.target.value));
             document.getElementById('numGlow')?.addEventListener('change', (e) => setGlow(e.target.value));
@@ -4306,6 +4311,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                         layer.fillColor = setFillOpacityPercent(layer.fillColor || layer.strokeColor, DEFAULT_FILL_OPACITY_PERCENT, layer.strokeColor || '#4f46e5');
                     }
                     if(layer.fill&&getLayerFillMatchStroke(layer))syncLayerFillColorToStroke(layer);
+                    if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,['fill','fillColor'],'ui-fill-enabled');
                     const fillOpacity = getFillOpacityPercent(layer.fillColor);
                     document.getElementById('fillOpacityControl')?.classList.toggle('hidden', !layer.fill);
                     document.getElementById('fillMatchStrokeControl')?.classList.toggle('hidden', !layer.fill);
@@ -4325,6 +4331,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 const layer=getActiveLayer();if(!layer)return;
                 layer.fillMatchStroke=e.target.checked===true;
                 if(layer.fillMatchStroke)syncLayerFillColorToStroke(layer,true);
+                if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,['fillMatchStroke','fillColor'],'ui-fill-match-stroke');
                 const fillColorInput=document.getElementById('paramFillColor');
                 if(fillColorInput){fillColorInput.disabled=layer.fillMatchStroke;fillColorInput.value=colorBaseHex6(layer.fillColor,layer.strokeColor||'#4f46e5');}
                 requestMainCanvasRender();
@@ -4351,6 +4358,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                         const currentOpacity = getFillOpacityPercent(layer.fillColor);
                         layer.fillColor = setFillOpacityPercent(e.target.value, currentOpacity, e.target.value);
                     }
+                    if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,['fillColor'],'ui-fill-color');
                     requestMainCanvasRender();
                 }
             });
@@ -4361,6 +4369,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 const opacity = Math.round(Math.max(0, Math.min(100, Number(e.target.value) || 0)));
                 e.target.value = opacity;
                 layer.fillColor = setFillOpacityPercent(getLayerFillMatchStroke(layer)?layer.strokeColor:(layer.fillColor || layer.strokeColor), opacity, layer.strokeColor || '#4f46e5');
+                if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,['fillColor'],'ui-fill-opacity');
                 const value = document.getElementById('valFillOpacity');
                 if (value) value.textContent = formatDisplayNumber(opacity, 0) + '%';
                 requestMainCanvasRender();
@@ -4763,6 +4772,11 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                         : stripNearDuplicateProfilePoints(
                             getCardinalSplinePoints(raw, 0.5, previewSegments)
                         );
+                    // A phase-boundary handoff can already be the exact sampled grid that
+                    // was visible at t=1. Re-sampling an equal-size grid by arc length moves
+                    // its vertices slightly and creates the characteristic one-frame Spiral
+                    // "jump" at the next t>0 frame. Preserve that exact endpoint grid.
+                    if (alreadySampledSpline && curve.length === desired) return curve.map(p => ({...p}));
                     return resampleOpenPolylineExact(curve, desired);
                 }
 
@@ -4784,11 +4798,35 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 return stripNearDuplicateProfilePoints(points);
             };
 
-            const pairCompactMorphProfiles = (sourceNodes, sourceMode, targetNodes, targetMode) => {
+            const pairCompactMorphProfiles = (sourceNodes, sourceMode, targetNodes, targetMode, sourceAlreadySampled = false, targetAlreadySampled = false, preserveSourceGrid = false) => {
                 const sourceLoop = sourceMode === 'spline' && profileHasBacktrackingX(cloneProfileNodes(sourceNodes));
                 const targetLoop = targetMode === 'spline' && profileHasBacktrackingX(cloneProfileNodes(targetNodes));
-                let a = compactMorphProfileNodes(sourceNodes, sourceMode);
-                let b = compactMorphProfileNodes(targetNodes, targetMode);
+                let a = compactMorphProfileNodes(sourceNodes, sourceMode, sourceAlreadySampled);
+                let b = compactMorphProfileNodes(targetNodes, targetMode, targetAlreadySampled);
+
+                // 7.3.20 Spiral continuity: after a completed phase, `a` is the exact sampled
+                // grid that was visible on the previous t=1 frame. It is therefore immutable.
+                // Re-pairing that grid against a newly chosen target used to resample/densify
+                // the SOURCE itself (for example 6 -> 12 points), so the first t>0 frame of the
+                // next phase jumped even though the boundary frame at t=0 was correct. Keep the
+                // source byte-for-byte/geometrically identical and adapt only the new target.
+                if (preserveSourceGrid && a.length >= 2) {
+                    const count = Math.min(MORPH_PROFILE_MAX_POINTS, Math.max(2, a.length));
+                    if (targetLoop) {
+                        // Match target arc phases to the already-visible source grid. This keeps
+                        // correspondence stable without moving a single source point.
+                        const fractions = polylineArcFractions(a);
+                        b = sampleOpenPolylineAtFractions(b, fractions);
+                    } else {
+                        // Preserve authored corners of non-loop targets while matching the exact
+                        // source count. Densification inserts points only on the target rail.
+                        b = densifyProfilePreservingCorners(b, count);
+                        if (b.length !== count) b = resampleOpenPolylineExact(b, count);
+                    }
+                    if (b.length !== count) b = resampleOpenPolylineExact(b, count);
+                    return { source:a.map(p => ({...p})), target:b };
+                }
+
                 const splineGrid = (sourceMode === 'spline' || targetMode === 'spline') ? getMorphSplinePointCount() : 2;
                 const count = Math.min(MORPH_PROFILE_MAX_POINTS, Math.max(2, a.length, b.length, splineGrid));
 
@@ -6199,17 +6237,45 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 } else {
                     runtimeState.morph.sourceFillIndices = [];
                 }
-                runtimeState.morph.sourceProfiles = state.layers.map(layer => ({
-                    mode: layer.profileMode || 'segments',
-                    // Render nodes are compact. rawNodes preserve the exact authored profile
-                    // for cycle commits, editing and project saves.
-                    nodes: compactMorphProfileNodes(
-                        layer.profileNodes,
-                        layer.profileMode || 'segments',
-                        isPreSampledSplineLayer(layer)
-                    ),
-                    rawNodes: (layer.profileNodes || []).map(p => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 }))
-                }));
+                // Boundary continuity contract: the previous phase's *visible paired*
+                // target grid is the exact source of the next phase. Canonical layer data keeps
+                // the authored/raw profile for editing and saves, but using that raw profile as
+                // the next render source changes the sampling grid and causes a visible Spiral
+                // snap on the first moving frame. Consume the one-phase handoff exactly once.
+                const phaseProfileHandoff = Array.isArray(runtimeState.morph.phaseSourceProfileHandoff)
+                    ? runtimeState.morph.phaseSourceProfileHandoff : [];
+                runtimeState.morph.phaseSourceProfileHandoff = null;
+                runtimeState.morph.sourceProfiles = state.layers.map((layer, idx) => {
+                    const hand = phaseProfileHandoff[idx];
+                    const mode = hand?.mode || layer.profileMode || 'segments';
+                    if (Array.isArray(hand?.nodes) && hand.nodes.length >= 2) {
+                        const exact = hand.nodes.map(p => ({ x:Number(p.x)||0, y:Number(p.y)||0 }));
+                        return {
+                            mode,
+                            nodes: exact.map(p => ({...p})),
+                            // For the pairing operation the handoff itself, not canonical raw
+                            // nodes, is the source authority. It is already sampled for spline.
+                            rawNodes: exact.map(p => ({...p})),
+                            phaseHandoff: true,
+                            alreadySampled: mode === 'spline',
+                            lampLogicalCornerFlags:Array.isArray(hand?.lampLogicalCornerFlags)?hand.lampLogicalCornerFlags.map(Boolean):[]
+                        };
+                    }
+                    return {
+                        mode,
+                        // Render nodes are compact. rawNodes preserve the exact authored profile
+                        // for cycle commits, editing and project saves.
+                        nodes: compactMorphProfileNodes(
+                            layer.profileNodes,
+                            mode,
+                            isPreSampledSplineLayer(layer)
+                        ),
+                        rawNodes: (layer.profileNodes || []).map(p => ({ x: Number(p.x) || 0, y: Number(p.y) || 0 })),
+                        phaseHandoff: false,
+                        alreadySampled: isPreSampledSplineLayer(layer),
+                        lampLogicalCornerFlags:[]
+                    };
+                });
                 runtimeState.morph.sourceVisuals = state.layers.map(layer => ({
                     N: Number(layer.N) || 4,
                     K: Number(layer.K) || 1,
@@ -6298,6 +6364,14 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 runtimeState.morph.targetColorHsl = runtimeState.morph.targetVisuals.map(v => rgbToHsl(...Object.values(hexToRgb(v.strokeColor || '#000000'))));
                 runtimeState.morph.sourceFillColorHsl = runtimeState.morph.sourceVisuals.map(v => rgbToHsl(...Object.values(hexToRgb(colorBaseHex6(v.fillColor, v.strokeColor || '#000000')))));
                 runtimeState.morph.targetFillColorHsl = runtimeState.morph.targetVisuals.map(v => rgbToHsl(...Object.values(hexToRgb(colorBaseHex6(v.fillColor, v.strokeColor || '#000000')))));
+                const lampLogicalCornerFlagsForMorphGrid=(sampled,raw,mode)=>{
+                    const pts=Array.isArray(sampled)?sampled:[],authored=Array.isArray(raw)?raw:[];
+                    if(mode!=='spline'||pts.length<2||authored.length<3)return pts.map(()=>false);
+                    try{
+                        const bends=segmentProfileCornerFlags(authored);
+                        return nearestSpiralProfileLogicalCornerFlags(pts,authored,bends);
+                    }catch(_){return pts.map(()=>false);}
+                };
                 runtimeState.morph.targetProfiles = runtimeState.morph.targetVisuals.map((v, idx) => {
                     const source = runtimeState.morph.sourceProfiles[idx] || { mode:'segments', rawNodes:[{x:0,y:0},{x:1,y:0}] };
                     const targetRaw = (v.rawNodes || v.nodes || []).map(p => ({ x:Number(p.x)||0, y:Number(p.y)||0 }));
@@ -6305,14 +6379,21 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                         source.rawNodes || source.nodes,
                         source.mode || 'segments',
                         targetRaw,
-                        v.mode || 'segments'
+                        v.mode || 'segments',
+                        source.alreadySampled === true,
+                        false,
+                        source.phaseHandoff === true
                     );
                     // Replace the source grid too so point i always corresponds to point i.
                     source.nodes = paired.source.map(p => ({...p}));
+                    if(!(source.phaseHandoff===true&&Array.isArray(source.lampLogicalCornerFlags)&&source.lampLogicalCornerFlags.length===source.nodes.length))
+                        source.lampLogicalCornerFlags=lampLogicalCornerFlagsForMorphGrid(source.nodes,source.rawNodes||source.nodes,source.mode||'segments');
+                    const targetNodes=paired.target.map(p => ({...p}));
                     return {
                         mode: v.mode,
                         rawNodes: targetRaw,
-                        nodes: paired.target.map(p => ({...p}))
+                        nodes: targetNodes,
+                        lampLogicalCornerFlags:lampLogicalCornerFlagsForMorphGrid(targetNodes,targetRaw,v.mode||'segments')
                     };
                 });
 
@@ -6321,21 +6402,30 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 // were allocated per layer on every canvas paint, adding avoidable GC
                 // pressure exactly when loop profiles already have the most points.
                 runtimeState.morph.renderSourceLayers = state.layers.map((layer, idx) => {
+                    const sourceNodes=runtimeState.morph.sourceProfiles[idx]?.nodes || layer.profileNodes || [];
                     const snap = {
                         ...layer,
                         ...(runtimeState.morph.sourceVisuals[idx] || {}),
                         profileMode: runtimeState.morph.sourceProfiles[idx]?.mode || layer.profileMode || 'segments',
-                        profileNodes: runtimeState.morph.sourceProfiles[idx]?.nodes || layer.profileNodes
+                        // 7.3.20: render snapshots must never alias the authoritative paired
+                        // Morph grid. Some geometry helpers legitimately densify/normalize a
+                        // layer.profileNodes array in place. Sharing that array let a target
+                        // profile silently change 6 -> 12 points during the phase, so the next
+                        // Spiral boundary could start from a different grid. Detach once here.
+                        profileNodes: sourceNodes.map(p=>({x:Number(p?.x)||0,y:Number(p?.y)||0})),
+                        __lampLogicalCornerFlags:(runtimeState.morph.sourceProfiles[idx]?.lampLogicalCornerFlags||[]).map(Boolean)
                     };
                     setPreSampledSplineLayer(snap, snap.profileMode === 'spline');
                     return snap;
                 });
                 runtimeState.morph.renderTargetLayers = state.layers.map((layer, idx) => {
+                    const targetNodes=runtimeState.morph.targetProfiles[idx]?.nodes || layer.profileNodes || [];
                     const snap = {
                         ...layer,
                         ...(runtimeState.morph.targetVisuals[idx] || {}),
                         profileMode: runtimeState.morph.targetProfiles[idx]?.mode || layer.profileMode || 'segments',
-                        profileNodes: runtimeState.morph.targetProfiles[idx]?.nodes || layer.profileNodes
+                        profileNodes: targetNodes.map(p=>({x:Number(p?.x)||0,y:Number(p?.y)||0})),
+                        __lampLogicalCornerFlags:(runtimeState.morph.targetProfiles[idx]?.lampLogicalCornerFlags||[]).map(Boolean)
                     };
                     setPreSampledSplineLayer(snap, snap.profileMode === 'spline');
                     return snap;
@@ -6370,7 +6460,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 // renderer/effects, but previously cost hundreds of sampled points per endpoint
                 // and a second pairing/interpolation plan at every phase boundary.
                 const usesRetainedGpuSpiralLayer = (idx) => Boolean(
-                    mixedBackendSpiralBezierMode && globalThis.navigator?.gpu && state?.fourierMode!==true &&
+                    mixedBackendSpiralBezierMode && (typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed()) && state?.fourierMode!==true &&
                     (runtimeState.morph.renderSourceLayers?.[idx]?.spiralEnabled===true ||
                      runtimeState.morph.renderTargetLayers?.[idx]?.spiralEnabled===true)
                 );
@@ -6381,7 +6471,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                     // Neither consumes sourceGeometry/targetGeometry from the generic builder.
                     runtimeState.morph.sourceGeometry = [];
                     runtimeState.morph.targetGeometry = [];
-                    if (circleAngularMode && typeof prepareGpuSpiralBezierMorphResources==='function' && Boolean(globalThis.navigator?.gpu)) {
+                    if (circleAngularMode && typeof prepareGpuSpiralBezierMorphResources==='function' && (typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed())) {
                         try{WebGPUSpiralBezierMorphRenderer?.warmup?.();}catch(_){}
                         const prepSerial=(Math.max(0,Number(runtimeState.morph.gpuPhasePrepareSerial)||0)+1)>>>0;
                         runtimeState.morph.gpuPhasePrepareSerial=prepSerial;
@@ -6405,12 +6495,11 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                             const lampPhaseLayers=retainedPhaseLayers.filter(li=>{
                                 try{return getLayerLampsEnabled?.(state.layers[li])===true;}catch(_){return false;}
                             });
-                            if(lampPhaseLayers.length){
-                                if(typeof LampGPURenderer?.ensureWebGPUReady!=='function'||await LampGPURenderer.ensureWebGPUReady()!==true)
-                                    throw new Error(`Phase-circle WebGPU Lamp renderer unavailable: ${String(window.__spiroLampGPUStatus?.()?.webgpu?.lastError||'not-ready')}`);
-                                if(typeof ensureGpuMorphArcPipelines!=='function'||await ensureGpuMorphArcPipelines()!==true)
-                                    throw new Error(`Phase-circle Exact Arc pipelines unavailable: ${String(window.__spiroGpuMorphArcStatus?.()?.lastError||'not-ready')}`);
-                            }
+                            // Lamps/Exact Arc are optional consumers of the retained rail.
+                            // They must never gate the Morph clock: on first use (especially on
+                            // mobile/driver-cold starts) shader compilation can take long enough
+                            // to make projects such as "Искры" look completely dead. Build the
+                            // canonical Spiral rail first; optional consumers join asynchronously.
                             const built=await prepareGpuSpiralBezierMorphResources();
                             if(retainedPhaseLayers.length&&!built)throw new Error('Phase-circle retained Spiral phase build returned no resources');
                             for(const li of retainedPhaseLayers){
@@ -6418,13 +6507,8 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                                 if(!rec?.ready||rec?.specialSpiralBezierRail!==true||Number(rec.phaseSerial)!==prepSerial)
                                     throw new Error(`Phase-circle retained Spiral rail unavailable/stale for layer ${li}`);
                             }
-                            if(lampPhaseLayers.length){
-                                for(const li of lampPhaseLayers){
-                                    const rail=WebGPUSpiralBezierMorphRenderer?.getResource?.(li),arc=typeof getGpuMorphArcResource==='function'?getGpuMorphArcResource(li):null;
-                                    if(!arc?.ready||arc.morphRec!==rail||Number(rail?.phaseSerial)!==prepSerial)
-                                        throw new Error(`Phase-circle Lamp Arc resource unavailable/stale for layer ${li}`);
-                                }
-                            }
+                            // Arc/Lamp readiness is intentionally not validated here. Their
+                            // render passes will join once the matching phase Arc exists.
 
                             // Core scene warmup is also non-blocking here. The base rail is the
                             // only resource whose successful phase build is required before t>0.
@@ -6446,9 +6530,10 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                             // resources from the already resident special Spiral rail and request
                             // another frame so the effects can attach without restarting motion.
                             const optionalReady=[];
-                            // Exact Arc is already a clock-gated prerequisite when Spiral lamps
-                            // are enabled. Otherwise keep it opportunistic for Web/Sweep/etc.
-                            try{if(!lampPhaseLayers.length&&typeof ensureGpuMorphArcPipelines==='function')optionalReady.push(Promise.resolve(ensureGpuMorphArcPipelines()));}catch(_){}
+                            // Exact Arc/Lamps always warm opportunistically. Geometry motion
+                            // already has its authoritative retained rail and may advance.
+                            try{if(typeof ensureGpuMorphArcPipelines==='function')optionalReady.push(Promise.resolve(ensureGpuMorphArcPipelines()));}catch(_){}
+                            try{if(lampPhaseLayers.length&&typeof LampGPURenderer?.ensureWebGPUReady==='function')optionalReady.push(Promise.resolve(LampGPURenderer.ensureWebGPUReady()));}catch(_){}
                             try{if(typeof ensureGpuWebCornerPipelines==='function')optionalReady.push(Promise.resolve(ensureGpuWebCornerPipelines()));}catch(_){}
                             try{if(typeof ensureGpuGraffitiSamplePipeline==='function')optionalReady.push(Promise.resolve(ensureGpuGraffitiSamplePipeline()));}catch(_){}
                             if(optionalReady.length){
@@ -6485,9 +6570,20 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                         }).catch(err=>{
                             if(!runtimeState.morph.active||runtimeState.morph.gpuPhasePrepareSerial!==prepSerial)return;
                             runtimeState.morph.gpuPhasePreparePromise=null;
-                            runtimeState.morph.gpuPhasePreparing=true; // fail closed; never advance on stale/partial phase resources.
                             const detail={error:String(err?.stack||err),phaseSerial:prepSerial,lamp:window.__spiroLampGPUStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,spiral:window.__somataSpiralBezierMorphStatus?.()||null};
-                            try{somataGpuContractError?.('PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.3.7 FullGPU] PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',detail);}
+                            // GPU is a priority, not a correctness dependency. A failed retained
+                            // Spiral prewarm used to leave gpuPhasePreparing=true forever, which
+                            // is exactly the "Мозголом/Искры не заводятся" failure mode. Degrade
+                            // atomically to the complete CPU reference backend and restart the
+                            // phase clock from its exact source frame.
+                            let degraded=false;
+                            try{degraded=window.__somataDegradeGpuBackend?.('PHASE_CIRCLE_GPU_PREWARM_FAILED',detail)===true;}catch(_){}
+                            runtimeState.morph.gpuPhasePreparing=false;
+                            runtimeState.morph.gpuPhaseHandoffT=0;
+                            runtimeState.morph.progress=0;runtimeState.morph.geometryT=0;runtimeState.morph.geometryBlend=0;
+                            runtimeState.morph.cycleStart=performance.now();
+                            try{somataGpuContractError?.('PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',null,{...detail,degradedToCpu:degraded});}catch(_){console.error('[Somata GPU] PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',detail);}
+                            try{requestMainCanvasRender?.();}catch(_){}
                         });
                         // animateMorph() holds the exact stable source while gpuPhasePreparing.
                         runtimeState.morph.cycleStart=performance.now();
@@ -6602,7 +6698,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 // Keep the exact t=0 source frame on screen until the immutable phase resource is
                 // ready, then start the wall-clock phase from zero.  Unsupported WebGPU keeps the
                 // legacy compatibility path and starts immediately.
-                const canGateGpuPhase=typeof prepareSharedGpuMorphPathResources==='function'&&Boolean(globalThis.navigator?.gpu);
+                const canGateGpuPhase=typeof prepareSharedGpuMorphPathResources==='function'&&(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed());
                 if(canGateGpuPhase){
                     const prepSerial=(Math.max(0,Number(runtimeState.morph.gpuPhasePrepareSerial)||0)+1)>>>0;
                     runtimeState.morph.gpuPhasePrepareSerial=prepSerial;
@@ -6652,7 +6748,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                                 return true;
                             }).catch(err=>{
                                 const detail={error:String(err?.stack||err),phaseSerial:prepSerial,web:WebGPUWebMorphRenderer?.status?.()||null,corner:window.__spiroGpuWebCornerStatus?.()||null};
-                                try{somataGpuContractError?.('MORPH_WEB_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.3.7 FullGPU] MORPH_WEB_FULL_GPU_PREWARM_FAILED',detail);}
+                                try{somataGpuContractError?.('MORPH_WEB_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.3.9 FullGPU] MORPH_WEB_FULL_GPU_PREWARM_FAILED',detail);}
                                 // Crucial: Web failure does not mutate gpuPhasePreparing.
                                 // Geometry continues at the authoritative current Morph time.
                             });
@@ -6672,7 +6768,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                         runtimeState.morph.gpuPhasePreparePromise=null;
                         runtimeState.morph.gpuPhasePreparing=true; // fail closed: no fallback clock.
                         const detail={error:String(err?.stack||err),phaseSerial:prepSerial};
-                        try{somataGpuContractError?.('MORPH_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.3.7 FullGPU] MORPH_FULL_GPU_PREWARM_FAILED',detail);}
+                        try{somataGpuContractError?.('MORPH_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.3.9 FullGPU] MORPH_FULL_GPU_PREWARM_FAILED',detail);}
                     });
                     runtimeState.morph.cycleStart=performance.now();
                 }else{
@@ -6990,6 +7086,18 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             };
 
             const commitFullMorphTargetAtBoundary = () => {
+                // Preserve the exact profile grid that was visible at t=1. The canonical
+                // project state below intentionally commits raw authored nodes, but the next
+                // Morph phase must start from this paired render grid or Spiral profiles can
+                // visibly snap when their point count/sampling changes at the boundary.
+                runtimeState.morph.phaseSourceProfileHandoff = (runtimeState.morph.targetProfiles || []).map((target, idx) => {
+                    const nodes = Array.isArray(target?.nodes) ? target.nodes : [];
+                    return nodes.length >= 2 ? {
+                        mode: target?.mode || state.layers[idx]?.profileMode || 'segments',
+                        nodes: nodes.map(p => ({ x:Number(p.x)||0, y:Number(p.y)||0 })),
+                        lampLogicalCornerFlags:Array.isArray(target?.lampLogicalCornerFlags)?target.lampLogicalCornerFlags.map(Boolean):[]
+                    } : null;
+                });
                 // The completed phase becomes the next canonical stable point.  Accumulate
                 // its full visual rotation BEFORE source/target snapshots are replaced, so
                 // canvas compensation remains continuous across phase boundaries.
@@ -7021,19 +7129,41 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                     }
                     if (state.morph.options.bySize) layer.radius = visual.radius;
                     if (state.morph.options.byRotation && !isAudioRotationOverrideActive()) layer.rotation = visual.rotation;
-                    if (isSpiralLayerMorphEnabled()) {
+                    // The t=1 frame is the authority for every Spiral field that affects
+                    // geometry. Corridor/phaseCircle can animate spiralStep together with K
+                    // even when bySpiralLayers/bySpiralOrder are disabled. Previously the
+                    // visible target reached (for example) step=4, linked=false, but the next
+                    // phase was prepared from canonical step=1, linked=true. That changed the
+                    // orbit point count on the first frame after wrap and produced the visible
+                    // Spiral “jump”. Commit the exact resolved target whenever this phase used
+                    // Spiral topology OR Corridor step morphing; never reconstruct it from K.
+                    const sourceSpiralVisual = runtimeState.morph.sourceVisuals?.[idx] || null;
+                    const commitResolvedSpiral = isSpiralLayerMorphEnabled() ||
+                        (spiralMorphUsesCorridorPhase() && (
+                            sourceSpiralVisual?.spiralEnabled === true ||
+                            visual?.spiralEnabled === true ||
+                            isSpiralLayer(layer)
+                        ));
+                    if (commitResolvedSpiral) {
                         layer.spiralEnabled = visual.spiralEnabled === true;
                         layer.spiralOrder = normalizeSpiralOrder(visual.spiralOrder, true);
-                        layer.spiralStep=normalizeSpiralStep(visual.spiralStep ?? visual.K ?? layer.K ?? 1,visual);
-                        layer.spiralStepLinked=visual.spiralStepLinked!==false;
+                        layer.spiralStep = normalizeSpiralStep(visual.spiralStep ?? visual.K ?? layer.K ?? 1, visual);
+                        layer.spiralStepLinked = visual.spiralStepLinked !== false;
+                        layer.spiralClosed = visual.spiralClosed !== false;
+                        layer.spiralTangential = visual.spiralTangential === true;
+                        layer.spiralRoundSeams = visual.spiralRoundSeams !== false;
                         // closedLoop belongs to the Spiral topology transition as well as to
-                        // profile-shape morphing. Commit it unconditionally at the phase
-                        // boundary so a Spiral -> polygon target cannot inherit an open seam.
+                        // profile-shape morphing. Commit it at the boundary so the next source
+                        // produces exactly the same topology as the just-painted t=1 frame.
                         layer.closedLoop = layer.spiralEnabled ? false : (visual.closedLoop !== false);
-                    } else if (isSpiralLayer(layer)) layer.closedLoop = false;
-                    layer.spiralClosed = visual.spiralClosed !== false;
-                    layer.spiralTangential = visual.spiralTangential === true || layer.spiralTangential === true;
-                    layer.spiralRoundSeams = visual.spiralRoundSeams !== false && layer.spiralRoundSeams !== false;
+                    } else {
+                        if (isSpiralLayer(layer)) layer.closedLoop = false;
+                        // These fields are not interpolated by this phase, but copying the target
+                        // exactly prevents sticky true/false state from the old OR/AND merge.
+                        layer.spiralClosed = visual.spiralClosed !== false;
+                        layer.spiralTangential = visual.spiralTangential === true;
+                        layer.spiralRoundSeams = visual.spiralRoundSeams !== false;
+                    }
                     if (state.morph.options.byColor || state.morph.morphGlobalHueOffset===true) layer.strokeColor = visual.strokeColor;
                     if (state.morph.options.byStrokeWidth) layer.strokeWidth = visual.strokeWidth;
                     // Glow remains canonical/manual during Morph.
@@ -7335,10 +7465,16 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 // which could make Stop look frozen.  Bump the serial before parking resources
                 // so every pending async completion becomes a no-op immediately.
                 animationScheduler.remove('morph');
+                animationScheduler.remove('morph-owner');
                 animationScheduler.remove('morph-arm');
+                // Invalidate the independent start-arm timeout as well. A stale timeout from a
+                // previous project/run must never resurrect Morph after Stop or after ownership
+                // has moved to another project.
+                runtimeState.morph.startArmSerial=(Math.max(0,Number(runtimeState.morph.startArmSerial)||0)+1)>>>0;
                 runtimeState.morph.gpuPhasePrepareSerial=(Math.max(0,Number(runtimeState.morph.gpuPhasePrepareSerial)||0)+1)>>>0;
                 runtimeState.morph.gpuPhasePreparing=false;
                 runtimeState.morph.gpuPhasePreparePromise=null;
+                runtimeState.morph.phaseSourceProfileHandoff=null;
                 SpiroMorphController?.invalidateBluePhase?.('user-stop-stable-rollback');
                 try{parkGpuSpiralBezierMorphResources?.('stop-stable-rollback');}catch(_){}
                 runtimeState.morph.exactStartPending = false;
@@ -7751,6 +7887,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             activePauseFullMorphForProjectOrange = () => {
                 if (!runtimeState.morph.active) return false;
                 const result=SpiroMorphController.pauseBlueForOrange(performance.now());
+                if(runtimeState.morph.paused===true) animationScheduler.remove('morph-owner');
                 const morphBtn = document.getElementById('btnMorph');
                 morphBtn?.classList.add('paused');
                 if (morphBtn) morphBtn.title = result.manualPause
@@ -7779,6 +7916,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 morphBtn?.classList.remove('paused');
                 if (morphBtn) morphBtn.title = 'Остановить морфинг профилей';
                 animationScheduler.add('morph', animateMorph);
+                armBlueMorphOwnerGuard();
                 requestMainCanvasRender();
                 return true;
             };
@@ -7786,6 +7924,21 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             const toggleMinimalMorphing = () => {
                 if (runtimeState.minimalMorph.active) stopMinimalMorphing(!runtimeState.morph.active);
                 else startMinimalMorphing(true);
+            };
+
+            // Independent scheduler ownership guard. It owns no geometry: if the main Morph
+            // task disappears after a boundary/error, it reattaches animateMorph to the existing
+            // phase instead of re-running Start and generating a new target.
+            const blueMorphOwnerGuard = () => {
+                const rt=runtimeState.morph;
+                if(!rt?.active || rt.paused===true || rt.pausedByOrangeProject===true) return false;
+                if(animationScheduler.has('morph') || animationScheduler.hasAfterPaint?.('morph-arm')===true) return true;
+                activeEnsureFullMorphSchedulerOwnership('morph-owner-guard');
+                return rt.active===true && rt.paused!==true && rt.pausedByOrangeProject!==true;
+            };
+            const armBlueMorphOwnerGuard = () => {
+                if(runtimeState.morph?.active===true && runtimeState.morph?.paused!==true && runtimeState.morph?.pausedByOrangeProject!==true)
+                    animationScheduler.add('morph-owner', blueMorphOwnerGuard);
             };
 
             const startMorphing = () => {
@@ -7845,6 +7998,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 runtimeState.morph.progress=0;runtimeState.morph.geometryT=0;runtimeState.morph.geometryBlend=0;
                 try{invalidateGpuSpiralBezierMorphResources?.('new-morph-run');}catch(_){}
                 runtimeState.morph.active = true;
+                armBlueMorphOwnerGuard();
                 runtimeState.morph.orbitCopyMemory = [];
                 runtimeState.morph.paused = false;
                 runtimeState.morph.pausedByGreenProject = false;
@@ -7873,9 +8027,18 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 prepareMorphCycle(performance.now());
                 // Paint one exact static frame while the prepared random target remains hidden.
                 // Only after that scheduler-owned paint do we arm the continuous morph task.
+                //
+                // 7.3.20 startup recovery: afterNextPaint is still the preferred ownership handoff,
+                // but browser/driver scheduling can occasionally postpone that paint long enough for
+                // a default-active project to look dead. Keep an independent bounded timer. If no
+                // actual paint consumes morph-arm within 180 ms, install the SAME animateMorph task
+                // without generating a new target. The first eventual rAF will therefore advance the
+                // already-prepared phase instead of requiring a second user action.
+                const startArmSerial=(Math.max(0,Number(runtimeState.morph.startArmSerial)||0)+1)>>>0;
+                runtimeState.morph.startArmSerial=startArmSerial;
                 requestMainCanvasRender();
                 animationScheduler.afterNextPaint('morph-arm', (frameNow) => {
-                    if (!runtimeState.morph.active) return;
+                    if (!runtimeState.morph.active || runtimeState.morph.startArmSerial!==startArmSerial) return;
                     runtimeState.morph.exactStartPending = false;
                     if (runtimeState.minimalMorph.active && runtimeState.minimalMorph.transitioning) {
                         activePauseFullMorphForProjectOrange();
@@ -7886,9 +8049,38 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                     runtimeState.morph.geometryT = 0;
                     runtimeState.morph.geometryBlend = 0;
                     animationScheduler.add('morph', animateMorph);
+                    armBlueMorphOwnerGuard();
                 });
+                setTimeout(() => {
+                    const rt=runtimeState.morph;
+                    if(!rt?.active || rt.startArmSerial!==startArmSerial || rt.paused===true || rt.pausedByOrangeProject===true) return;
+                    if(animationScheduler.has('morph')) return;
+                    // A delayed morph-arm callback would otherwise reset cycleStart after motion
+                    // has already begun. Remove it before taking ownership through the timeout.
+                    if(animationScheduler.hasAfterPaint?.('morph-arm')===true) animationScheduler.remove('morph-arm');
+                    rt.exactStartPending=false;
+                    if(!(Number(rt.cycleStart)>0)) rt.cycleStart=performance.now();
+                    animationScheduler.add('morph',animateMorph);
+                    armBlueMorphOwnerGuard();
+                    requestMainCanvasRender();
+                    try{window.__somataLastMorphOwnershipRecovery={reason:'morph-start-arm-timeout',at:performance.now(),projectId:state.playlistCurrentProjectId||null};}catch(_){}
+                },180);
             };
             activeStartMorphing = startMorphing;
+            activeEnsureFullMorphSchedulerOwnership = (reason = 'ownership-verify') => {
+                const rt = runtimeState.morph;
+                if (!rt?.active || rt.paused === true || rt.pausedByOrangeProject === true) return false;
+                if (animationScheduler.has('morph') || animationScheduler.hasAfterPaint?.('morph-arm')===true) return true;
+                // A legitimate first-frame arm is normally consumed before the project-default
+                // verifier. If it vanished, continue from the current canonical phase rather than
+                // calling startMorphing(), which would refuse active=true and leave Morph frozen.
+                rt.exactStartPending = false;
+                if (!(Number(rt.cycleStart) > 0)) rt.cycleStart = performance.now();
+                animationScheduler.add('morph', animateMorph);
+                requestMainCanvasRender();
+                try { window.__somataLastMorphOwnershipRecovery = { reason:String(reason||'ownership-verify'), at:performance.now(), projectId:state.playlistCurrentProjectId||null }; } catch (_) {}
+                return true;
+            };
 
             const pauseMorphPlayback = () => {
                 const now = performance.now();
@@ -7908,6 +8100,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 if (runtimeState.morph.active && !runtimeState.morph.paused) {
                     runtimeState.morph.paused = true;
                     animationScheduler.remove('morph');
+                    animationScheduler.remove('morph-owner');
                     runtimeState.morph.pauseStartedAt = now;
                     state.morphPlayback.lastType = 'full';
                     const btn = document.getElementById('btnMorph');
@@ -7946,6 +8139,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                     btn?.classList.remove('paused');
                     btn && (btn.title = 'Остановить морфинг профилей');
                     animationScheduler.add('morph', animateMorph);
+                    armBlueMorphOwnerGuard();
                     requestMainCanvasRender();
                     return true;
                 }
@@ -9175,13 +9369,95 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 const enabled=e.target.checked===true;
                 state.lamps.freezeLight=enabled;
                 for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeLight=enabled;}
-                if(!enabled)try{LampGPURenderer?.resetFreezeLight?.();}catch(_){}
+                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampFreezeTailSec')?.addEventListener('input',e=>{
                 const sec=Math.max(.05,Math.min(30,Number(e.target.value)||1.5));
                 state.lamps.freezeTailSec=sec;
                 for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeTailSec=sec;}
+                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}
+                syncLampSettingsUI();requestMainCanvasRender();
+            });
+            document.getElementById('lampFreezeHardness')?.addEventListener('input',e=>{
+                const value=Math.max(0,Math.min(100,Number(e.target.value)||0));
+                state.lamps.freezeHardness=value;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeHardness=value;}
+                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}
+                syncLampSettingsUI();requestMainCanvasRender();
+            });
+            document.getElementById('lampFreezeColorMode')?.addEventListener('change',e=>{
+                const value=['lamp','line','fixed','hue'].includes(e.target.value)?e.target.value:'lamp';
+                state.lamps.freezeColorMode=value;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeColorMode=value;}
+                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}
+                syncLampSettingsUI();requestMainCanvasRender();
+            });
+            document.getElementById('lampFreezeColor')?.addEventListener('input',e=>{
+                const value=String(e.target.value||'#00ffcc');state.lamps.freezeColor=value;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeColor=value;}
+                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}requestMainCanvasRender();
+            });
+            const applyFreezeHueDegrees=raw=>{
+                const value=Math.max(0,Math.min(180,Number(raw)||0));state.lamps.freezeHueDegrees=value;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeHueDegrees=value;}
+                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}syncLampSettingsUI();requestMainCanvasRender();
+            };
+            document.getElementById('lampFreezeHueDegrees')?.addEventListener('input',e=>applyFreezeHueDegrees(e.target.value));
+            document.getElementById('lampFreezeHueDegreesNumber')?.addEventListener('change',e=>applyFreezeHueDegrees(e.target.value));
+            document.getElementById('lampFreezeChromatic')?.addEventListener('change',e=>{
+                const value=e.target.checked===true;state.lamps.freezeChromatic=value;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeChromatic=value;}
+                syncLampSettingsUI();requestMainCanvasRender();
+            });
+            document.getElementById('lampFreezeChromaticColor')?.addEventListener('input',e=>{
+                const value=String(e.target.value||'#22d3ee');state.lamps.freezeChromaticColor=value;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeChromaticColor=value;}
+                requestMainCanvasRender();
+            });
+            document.getElementById('lampFreezeRain')?.addEventListener('change',e=>{
+                const enabled=e.target.checked===true;
+                state.lamps.freezeRain=enabled;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeRain=enabled;}
+                try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
+                syncLampSettingsUI();requestMainCanvasRender();
+            });
+            const applyFreezeRainDegrees=raw=>{
+                const parsed=Number(raw);if(!Number.isFinite(parsed))return;
+                const value=((parsed%360)+360)%360;
+                state.lamps.freezeRainDirectionVersion=2;state.lamps.freezeRainDegrees=value;
+                for(const layer of state.layers){ensureLayerEffectState(layer);const cfg=ensureLayerLampState(layer);cfg.freezeRainDirectionVersion=2;cfg.freezeRainDegrees=value;}
+                try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
+                syncLampSettingsUI();requestMainCanvasRender();
+            };
+            document.getElementById('lampFreezeRainDegrees')?.addEventListener('input',e=>applyFreezeRainDegrees(e.target.value));
+            document.getElementById('lampFreezeRainDegreesNumber')?.addEventListener('change',e=>applyFreezeRainDegrees(e.target.value));
+            document.getElementById('lampFreezeRainSource')?.addEventListener('change',e=>{
+                const value=e.target.value==='lamp'?'lamp':'core';
+                state.lamps.freezeRainSource=value;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeRainSource=value;}
+                try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
+                syncLampSettingsUI();requestMainCanvasRender();
+            });
+            document.getElementById('lampFreezeRainSpeed')?.addEventListener('input',e=>{
+                const value=Math.max(0,Math.min(100,Number(e.target.value)||0));
+                state.lamps.freezeRainSpeed=value;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeRainSpeed=value;}
+                try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
+                syncLampSettingsUI();requestMainCanvasRender();
+            });
+            document.getElementById('lampFreezeRainTailSec')?.addEventListener('input',e=>{
+                const sec=Math.max(.05,Math.min(30,Number(e.target.value)||1.5));
+                state.lamps.freezeRainTailSec=sec;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeRainTailSec=sec;}
+                try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
+                syncLampSettingsUI();requestMainCanvasRender();
+            });
+            document.getElementById('lampFreezeRainHardness')?.addEventListener('input',e=>{
+                const value=Math.max(0,Math.min(100,Number(e.target.value)||0));
+                state.lamps.freezeRainHardness=value;
+                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeRainHardness=value;}
+                try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampCornerInertia')?.addEventListener('input',e=>{
@@ -9491,7 +9767,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             activeStopMinimalMorphing();
             activeStopMorphing();
             state.lamps = {
-                positionMode:'key', colorMode:'line', matchLineColor:true, rainbow:false, color:'#ffe600', webgl:true, rasterized:false, hd:false, freezeLight:false, freezeTailSec:1.5,
+                positionMode:'key', colorMode:'line', matchLineColor:true, rainbow:false, color:'#ffe600', webgl:true, rasterized:false, hd:false, freezeLight:false, freezeTailSec:1.5, freezeHardness:50, freezeColorMode:'lamp', freezeColor:'#00ffcc', freezeHueDegrees:45, freezeChromatic:false, freezeChromaticColor:'#22d3ee', freezeRain:false, freezeRainDirectionVersion:2, freezeRainDegrees:180, freezeRainSource:'core', freezeRainSpeed:50, freezeRainTailSec:1.5, freezeRainHardness:50,
                 brightness:100, radius:50, radiusMultiplier:1, softness:100, softnessMultiplier:1,
                 blendMode:'lighter', type:'whiteCore', density:100, densityMultiplier:1,
                 scatter:0, scatterMultiplier:1, sizeVariation:0, sizeVariationMultiplier:1,
@@ -11000,7 +11276,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
         function applyProjectDefaultModeIntent(intent, reason='project-activate') {
             const wantsOrange=intent?.orange===true,wantsBlue=intent?.blue===true,wantsTunnel=intent?.tunnel===true;
 
-            // 7.3.7: Corridor is part of the geometry contract, so it MUST reach its target
+            // 7.3.9: Corridor is part of the geometry contract, so it MUST reach its target
             // state before activeStartMorphing() calls prepareMorphCycle(). Otherwise a project
             // with both defaults enabled can prepare a non-Corridor Spiral phase and then flip
             // Corridor on underneath the resident resources, leaving Blue held in GPU prepare
@@ -11052,7 +11328,10 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 if(serial!==projectDefaultActivationSerial)return;
                 if(intent.tunnel===true&&!animationScheduler.has('tunnel'))setTunnelMode(true);
                 if(intent.tunnel!==true&&animationScheduler.has('tunnel'))setTunnelMode(false);
-                if(intent.blue===true&&!runtimeState.morph.active)activeStartMorphing();
+                if(intent.blue===true){
+                    if(!runtimeState.morph.active)activeStartMorphing();
+                    else activeEnsureFullMorphSchedulerOwnership('project-default-modes-verify');
+                }
                 if(intent.blue!==true&&runtimeState.morph.active&&runtimeState.morph.autoStartedByProject===true)activeStopMorphing(false);
             });
             return first;
@@ -11071,6 +11350,11 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             tunnelActive:state.tunnel?.active===true,
             tunnelTask:animationScheduler.has('tunnel'),
             blueTask:animationScheduler.has('morph'),
+            blueOwnerTask:animationScheduler.has('morph-owner'),
+            blueArmPending:animationScheduler.hasAfterPaint?.('morph-arm')===true,
+            orangeTask:animationScheduler.has('minimalMorph'),
+            orangeArmPending:animationScheduler.hasAfterPaint?.('minimal-morph-arm')===true,
+            defaultsVerifyPending:animationScheduler.hasAfterPaint?.('project-default-modes-verify')===true,
             blueExactStartPending:runtimeState.morph?.exactStartPending===true,
             blueGpuPreparing:runtimeState.morph?.gpuPhasePreparing===true,
             blueSpeedType:state.morph?.speedType||'linear'
@@ -11132,7 +11416,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
         }
 
         function prewarmActiveGreenTransition(pmRt){
-            const canGateGreen=Boolean(globalThis.navigator?.gpu)&&
+            const canGateGreen=(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed())&&
                 typeof WebGPUGreenProjectMorphRenderer!=='undefined'&&
                 typeof WebGPUGreenProjectMorphRenderer.prewarmPlans==='function';
             if(!canGateGreen){
@@ -11605,6 +11889,8 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
             showShortcutToast(`Плейлист: ${state.playlistFileName}`);
         }
 
+        window.__somataLoadPlaylistDocumentForTest=(parsed,fileName='self-test.plist')=>loadPlaylistDocument(parsed,fileName,null);
+
         async function openPlaylist() {
             try{
                 let file,handle=null;
@@ -12030,6 +12316,21 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 if (typeof settings.lamps.hd !== 'boolean') state.lamps.hd = false;
                 state.lamps.freezeLight=settings.lamps.freezeLight===true;
                 state.lamps.freezeTailSec=Math.max(.05,Math.min(30,Number.isFinite(Number(settings.lamps.freezeTailSec))?Number(settings.lamps.freezeTailSec):1.5));
+                state.lamps.freezeHardness=Math.max(0,Math.min(100,Number.isFinite(Number(settings.lamps.freezeHardness))?Number(settings.lamps.freezeHardness):50));
+                state.lamps.freezeColorMode=['lamp','line','fixed','hue'].includes(settings.lamps.freezeColorMode)?settings.lamps.freezeColorMode:'lamp';
+                state.lamps.freezeColor=typeof settings.lamps.freezeColor==='string'?settings.lamps.freezeColor:'#00ffcc';
+                state.lamps.freezeHueDegrees=Math.max(0,Math.min(180,Number.isFinite(Number(settings.lamps.freezeHueDegrees))?Number(settings.lamps.freezeHueDegrees):45));
+                state.lamps.freezeChromatic=settings.lamps.freezeChromatic===true;
+                state.lamps.freezeChromaticColor=typeof settings.lamps.freezeChromaticColor==='string'?settings.lamps.freezeChromaticColor:'#22d3ee';
+                state.lamps.freezeRain=settings.lamps.freezeRain===true;
+                const storedRainDegrees=Number(settings.lamps.freezeRainDegrees);
+                const migratedRainDegrees=(settings.lamps.freezeRainDirectionVersion===2||!Number.isFinite(storedRainDegrees))?storedRainDegrees:storedRainDegrees+90;
+                state.lamps.freezeRainDirectionVersion=2;
+                state.lamps.freezeRainDegrees=((Number.isFinite(migratedRainDegrees)?migratedRainDegrees:180)%360+360)%360;
+                state.lamps.freezeRainSource=settings.lamps.freezeRainSource==='lamp'?'lamp':'core';
+                state.lamps.freezeRainSpeed=Math.max(0,Math.min(100,Number.isFinite(Number(settings.lamps.freezeRainSpeed))?Number(settings.lamps.freezeRainSpeed):50));
+                state.lamps.freezeRainTailSec=Math.max(.05,Math.min(30,Number.isFinite(Number(settings.lamps.freezeRainTailSec))?Number(settings.lamps.freezeRainTailSec):1.5));
+                state.lamps.freezeRainHardness=Math.max(0,Math.min(100,Number.isFinite(Number(settings.lamps.freezeRainHardness))?Number(settings.lamps.freezeRainHardness):50));
                 if (typeof settings.lamps.adaptiveBrightness !== 'boolean') state.lamps.adaptiveBrightness = true;
                 if (typeof settings.lamps.adaptiveAdjustBrightness !== 'boolean') state.lamps.adaptiveAdjustBrightness = false;
                 state.lamps.adaptiveStrength=Math.max(0,Math.min(100,Number(state.lamps.adaptiveStrength??100)));
@@ -14525,21 +14826,100 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
         }
 
 
+        function getNativeAppFullscreenElement() {
+            return document.fullscreenElement || document.webkitFullscreenElement || null;
+        }
+
+        function isIPhoneWebKitFullscreenLimited() {
+            // As of Safari/iOS 26, arbitrary HTML still cannot enter the native
+            // element Fullscreen API on iPhone. All iPhone browsers use WebKit,
+            // so the platform token is the reliable capability boundary here.
+            return /iPhone|iPod/i.test(navigator.userAgent || '');
+        }
+
+        function isPseudoAppFullscreen() {
+            return document.documentElement.classList.contains('app-pseudo-fullscreen');
+        }
+
+        let pseudoFullscreenViewportRaf = 0;
+        function syncPseudoFullscreenViewport() {
+            if (!isPseudoAppFullscreen()) return;
+            const vv = window.visualViewport;
+            const width = Math.max(1, Math.round(Number(vv?.width) || Number(window.innerWidth) || Number(document.documentElement.clientWidth) || 1));
+            const height = Math.max(1, Math.round(Number(vv?.height) || Number(window.innerHeight) || Number(document.documentElement.clientHeight) || 1));
+            document.documentElement.style.setProperty('--somata-viewport-width', `${width}px`);
+            document.documentElement.style.setProperty('--somata-viewport-height', `${height}px`);
+            requestMainCanvasRender();
+        }
+
+        function schedulePseudoFullscreenViewportSync() {
+            if (!isPseudoAppFullscreen() || pseudoFullscreenViewportRaf) return;
+            pseudoFullscreenViewportRaf = requestAnimationFrame(() => {
+                pseudoFullscreenViewportRaf = 0;
+                syncPseudoFullscreenViewport();
+            });
+        }
+
+        function enterPseudoAppFullscreen() {
+            if (isPseudoAppFullscreen()) return;
+            document.documentElement.classList.add('app-pseudo-fullscreen');
+            syncPseudoFullscreenViewport();
+            handleAppFullscreenChange();
+        }
+
+        function exitPseudoAppFullscreen() {
+            if (!isPseudoAppFullscreen()) return;
+            document.documentElement.classList.remove('app-pseudo-fullscreen');
+            document.documentElement.style.removeProperty('--somata-viewport-width');
+            document.documentElement.style.removeProperty('--somata-viewport-height');
+            handleAppFullscreenChange();
+        }
+
         async function toggleAppFullscreen() {
-            try {
-                const active = document.fullscreenElement || document.webkitFullscreenElement;
-                if (active) {
+            const active = getNativeAppFullscreenElement();
+            if (active) {
+                try {
                     if (document.exitFullscreen) await document.exitFullscreen();
                     else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                } catch (_) {}
+                return;
+            }
+            if (isPseudoAppFullscreen()) {
+                exitPseudoAppFullscreen();
+                return;
+            }
+
+            // Native fullscreen is intentionally skipped on iPhone because WebKit
+            // does not expose arbitrary-element fullscreen there. Use the app-owned
+            // presentation mode immediately instead of showing a false error.
+            if (isIPhoneWebKitFullscreenLimited()) {
+                enterPseudoAppFullscreen();
+                return;
+            }
+
+            const target = document.documentElement;
+            try {
+                if (target.requestFullscreen) {
+                    await target.requestFullscreen();
                     return;
                 }
-                const target = document.documentElement;
-                if (target.requestFullscreen) await target.requestFullscreen();
-                else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
-                else showShortcutToast('Полный экран не поддерживается этим браузером');
+                if (target.webkitRequestFullscreen) {
+                    target.webkitRequestFullscreen();
+                    return;
+                }
             } catch (err) {
+                // Touch/mobile browsers that reject the API still get a usable
+                // viewport-filling presentation mode rather than a dead button.
+                if (isMobileAudioEnvironment()) {
+                    enterPseudoAppFullscreen();
+                    return;
+                }
                 showShortcutToast('Не удалось открыть полный экран');
+                return;
             }
+
+            if (isMobileAudioEnvironment()) enterPseudoAppFullscreen();
+            else showShortcutToast('Полный экран не поддерживается этим браузером');
         }
 
         // Desktop mouse: double-click anywhere on the visual workspace toggles native fullscreen.
@@ -14558,6 +14938,11 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
 
         function setupMobileMediaActions() {
             document.getElementById('btnMobileFullscreen')?.addEventListener('click', toggleAppFullscreen);
+            document.getElementById('btnPseudoFullscreenExit')?.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                exitPseudoAppFullscreen();
+            });
             // Mobile mirrors the two desktop audio buttons at the bottom edge.
             // The microphone button opens/toggles the same reactive-audio panel;
             // source selection/start remains inside that panel instead of forcing a prompt.
@@ -14588,12 +14973,13 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
         // The user's previous pan offset is restored after leaving fullscreen.
         let preFullscreenView = null;
         const handleAppFullscreenChange = () => {
-            const active = document.fullscreenElement || document.webkitFullscreenElement;
+            const active = Boolean(getNativeAppFullscreenElement() || isPseudoAppFullscreen());
             if (active) {
                 if (!preFullscreenView) preFullscreenView = { panX: state.panX, panY: state.panY };
                 state.panX = 0;
                 state.panY = 0;
                 document.getElementById('audioReactivePanel')?.classList.add('hidden');
+                document.getElementById('audioRoutingPanel')?.classList.add('hidden');
                 document.getElementById('tunnelSettingsPanel')?.classList.add('hidden');
                 document.getElementById('btnTunnelSettings')?.setAttribute('aria-expanded', 'false');
                 document.getElementById('libraryModal')?.classList.add('hidden');
@@ -14603,11 +14989,15 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 preFullscreenView = null;
             }
 
-            // Wait one frame so native fullscreen dimensions are already applied.
+            // Wait one frame so native/pseudo fullscreen dimensions are applied.
             requestAnimationFrame(() => requestMainCanvasRender());
         };
         document.addEventListener('fullscreenchange', handleAppFullscreenChange);
         document.addEventListener('webkitfullscreenchange', handleAppFullscreenChange);
+        window.addEventListener('resize', schedulePseudoFullscreenViewportSync, { passive:true });
+        window.addEventListener('orientationchange', schedulePseudoFullscreenViewportSync, { passive:true });
+        window.visualViewport?.addEventListener('resize', schedulePseudoFullscreenViewportSync, { passive:true });
+        window.visualViewport?.addEventListener('scroll', schedulePseudoFullscreenViewportSync, { passive:true });
 
         function setupGlobalHotkeys() {
             document.addEventListener('keydown', (e) => {
@@ -14638,14 +15028,8 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 }
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                     e.preventDefault();
-                    const delta=e.key==='ArrowRight'?0.5:-0.5;
-                    state.tapTempo.syncFullMorph=false;
-                    state.morph.intervalSec=Math.max(0.5,Math.min(60,(Number(state.morph.intervalSec)||5)+delta));
-                    const el=document.getElementById('morphInterval'); if(el) el.value=state.morph.intervalSec;
-                    syncTapTimingIndicators();
-                    if (typeof syncMorphIntervalQuickButtons==='function') syncMorphIntervalQuickButtons();
-                    if (typeof rebaseMorphCycle==='function') rebaseMorphCycle();
-                    showShortcutToast(`Цикл: ${state.morph.intervalSec.toFixed(1)} с`);
+                    stepProjectChooser(e.key==='ArrowRight'?1:-1);
+                    return;
                 }
             });
         }
@@ -15620,7 +16004,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 convex:{meshable:convex.meshable,triangles:convex.totalTriangles,status:convex.records[0]?.status},
                 concave:{meshable:concave.meshable,triangles:concave.totalTriangles,status:concave.records[0]?.status},
                 selfIntersecting:{stencilRequired:bow.stencilRequired,status:bow.records[0]?.status},
-                pass:convex.meshable===1&&convex.totalTriangles===2&&concave.meshable===1&&concave.totalTriangles===3&&bow.stencilRequired===1&&bow.records[0]?.status==='winding-stencil',
+                pass:convex.meshable===1&&convex.totalTriangles===4&&concave.meshable===1&&concave.totalTriangles===5&&bow.stencilRequired===1&&bow.complete===true&&bow.records[0]?.status==='stencil-edge-fan',
                 status:FillMeshPreparer.status()
             };
         };
@@ -15889,7 +16273,7 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
                 const mk=points=>({paths:[{closed:true,points}]});const layer={fill:true,rounding:0,profileMode:'segments',splineRenderMode:'smooth',fillRule:'evenodd'};
                 const bow=FillMeshPreparer.prepareStatic(mk([{x:0,y:0},{x:10,y:8},{x:0,y:8},{x:10,y:0}]),layer);
                 const fake={layer,geometryPlan:{kind:'static',dynamic:false,sourceData:bow.drawData},_fillMeshShadow:bow};
-                const selfIntersectionUsesExactMask=bow.stencilRequired===1&&bow.complete===false;
+                const selfIntersectionUsesExactMask=bow.stencilRequired===1&&bow.complete===true&&bow.records[0]?.status==='stencil-edge-fan';
                 return{selectedOnly,masterOn,masterOff,selfIntersectionUsesExactMask,rasterMarkersOff:state.graffitiRasterized!==true,pass:selectedOnly&&masterOn&&masterOff&&selfIntersectionUsesExactMask&&state.graffitiRasterized!==true};
             }finally{state.layers=oldLayers;state.activeLayerId=oldActive;state.masterLayerEdit=oldMaster;layerSelectionRuntime.ids.clear();for(const id of oldSel)layerSelectionRuntime.ids.add(id);}
         };
@@ -16039,18 +16423,32 @@ window.__spiroRegisterModule?.('js/legacy/app-c');
         };
 
         window.__spiroContinuousTangentialSeamGuardProbe=()=>{
-            // A mathematically C1 seam should still be left alone. Construct endpoint
-            // neighbours from one logarithmic/self-similar tangent direction.
-            const delta=.55,scale=1.4,start={x:120,y:20,widthScale:1,__spiralClosed:true,__spiralDelta:delta,__spiralTargetScale:scale,__spiralTangential:true,__spiralRoundSeams:true};
-            const end=transformSpiralCopyPoint(start,delta,scale,1);
-            const eps=.08;
-            const prevStart=transformSpiralCopyPoint(start,delta,scale,-1);
-            // Chord samples chosen from the same self-similar orbit near both endpoints.
-            const p1={x:start.x+(end.x-start.x)*eps,y:start.y+(end.y-start.y)*eps,widthScale:Math.pow(scale,eps),__spiralClosed:true,__spiralDelta:delta,__spiralTargetScale:scale,__spiralTangential:true,__spiralRoundSeams:true};
-            const p2={x:start.x+(end.x-start.x)*(1-eps),y:start.y+(end.y-start.y)*(1-eps),widthScale:Math.pow(scale,1-eps),__spiralClosed:true,__spiralDelta:delta,__spiralTargetScale:scale,__spiralTangential:true,__spiralRoundSeams:true};
-            const src=[start,p1,p2,end];
+            // Regression guard: a coarse tessellation of an exact logarithmic Spiral has a
+            // non-zero CHORD angle at the period seam even though its true derivative is C1.
+            // Rounding must classify the seam from retained mapped derivatives, not chords.
+            const delta=Math.PI/2,scale=1.35,logScale=Math.log(scale),r0=120,span=.25;
+            const src=[0,.25,.5,.75,1].map(u=>{
+                const k=Math.exp(logScale*u),theta=delta*u,r=r0*k;
+                return{x:r*Math.cos(theta),y:r*Math.sin(theta),widthScale:k,__spiralClosed:true,__spiralDelta:delta,__spiralTargetScale:scale,__spiralTangential:true,__spiralRoundSeams:true};
+            });
+            const tangent=p=>({x:logScale*p.x-delta*p.y,y:logScale*p.y+delta*p.x});
+            const t0=tangent(src[0]),t1=tangent(src[src.length-1]);
+            src[0].__spiralBezierOutTx=t0.x*span;src[0].__spiralBezierOutTy=t0.y*span;
+            src[src.length-1].__spiralBezierInTx=t1.x*span;src[src.length-1].__spiralBezierInTy=t1.y*span;
+            const ctx=spiralEndpointTangentContext(src,delta,scale);
+            const chordAngle=ctx?.startIncoming&&ctx?.startOutgoing?spiralTurnAngleDeg(ctx.startIncoming,src[0],ctx.startOutgoing):0;
+            const exactAngle=typeof spiralExactTangentialSeamAngleDeg==='function'?spiralExactTangentialSeamAngleDeg(src,delta,scale):null;
             const out=buildClosedSpiralAutoCloseGeometry(src,.47,true);
-            return{finite:out.every(isFiniteGeometryPoint),hasBridge:out.some(p=>p.__spiralAutoCloseBridgeEnd===true),pass:out.every(isFiniteGeometryPoint)&&!out.some(p=>p.__spiralAutoCloseBridgeEnd===true)};
+            const tags=out.map(p=>p.__spiralClosureFillet).filter(Boolean);
+            return{
+                finite:out.every(isFiniteGeometryPoint),
+                hasBridge:out.some(p=>p.__spiralAutoCloseBridgeEnd===true),
+                chordAngleDeg:chordAngle,
+                exactAngleDeg:exactAngle,
+                periodSeamRounded:tags.includes('period-seam'),
+                samePointCount:out.length===src.length,
+                pass:out.every(isFiniteGeometryPoint)&&!out.some(p=>p.__spiralAutoCloseBridgeEnd===true)&&chordAngle>.75&&Number(exactAngle)<.001&&!tags.includes('period-seam')&&out.length===src.length
+            };
         };
 
         window.__spiroSpiralSeamOffHardGateProbe=()=>{

@@ -10,7 +10,7 @@ const pipeline=read('js/render/main-pipeline.js');
 const overlay=read('js/bootstrap/error-overlay.js');
 const html=read('index.html');
 
-assert.ok(scheduler.includes("MORPH_TASK_NAMES=new Set(['morph','minimalMorph','project-morph'])"),'Freeze diagnostics must cover Blue, Minimal and Project Morph scheduler tasks');
+assert.ok(scheduler.includes("MORPH_TASK_NAMES=new Set(['morph','morph-owner','minimalMorph','project-morph'])"),'Freeze diagnostics must cover Blue, Blue-owner, Minimal and Project Morph scheduler tasks');
 assert.ok(scheduler.includes('MORPH_FREEZE_GAP_MS=100'),'A visible >=100 ms rAF gap must be detected');
 assert.ok(scheduler.includes('MORPH_FREEZE_WORK_MS=50'),'A >=50 ms Morph task/render step must be detected');
 assert.ok(scheduler.includes("reportMorphFreeze('MORPH_RAF_GAP'"),'Scheduler rAF gaps must be reported');
@@ -18,6 +18,7 @@ assert.ok(scheduler.includes("reportMorphFreeze('MORPH_TASK_SLOW'"),'Slow animat
 assert.ok(scheduler.includes("reportMorphFreeze('MORPH_RENDER_SLOW'"),'Slow main-canvas paints must be reported');
 assert.ok(scheduler.includes("reportMorphFreeze('MORPH_AFTER_PAINT_SLOW'"),'Slow Morph boundary/after-paint work must be reported');
 assert.ok(scheduler.includes("reportMorphFreeze('MORPH_SCHEDULER_WATCHDOG'"),'Scheduler watchdog recoveries during Morph must be reported');
+assert.ok(scheduler.includes('const staleRaf=raf')&&scheduler.includes('cancelAnimationFrame(staleRaf)'),'Watchdog recovery must cancel the stale browser rAF before running a synchronous Morph recovery tick');
 assert.ok(scheduler.includes("reportMorphFreeze('MORPH_MAIN_THREAD_LONG_TASK'"),'Browser Long Tasks during Morph must be reported when supported');
 assert.ok(scheduler.includes("console.warn('[Somata Morph Freeze]'"),'Freeze report must emit a dedicated structured warning');
 assert.ok(scheduler.includes('cause,certainty'),'Freeze report must carry an explicit cause and confidence');
@@ -42,7 +43,7 @@ assert.ok(pipeline.includes('window.__somataGpuRuntimeDiagnostics'),'GPU path di
 assert.ok(overlay.includes("startsWith('[Somata Morph Freeze]')"),'In-app console must capture Morph freeze warnings');
 assert.ok(overlay.includes("?'morph.freeze':'gpu.warning'"),'In-app console must label Morph freezes distinctly');
 assert.ok(overlay.includes('screenErrorOverlayCopy'),'Copy-all button must remain available for freeze reports');
-assert.ok(html.includes('js/core/scheduler.js?v=20261012-v737'),'Freeze-diagnostics scheduler must be cache-busted');
-assert.ok(html.includes('js/legacy/app-c.js?v=20261012-v737'),'Morph runtime changes must be cache-busted');
-assert.ok(html.includes('js/render/main-pipeline.js?v=20261012-v737'),'GPU diagnostic timing changes must be cache-busted');
+assert.ok(html.includes('js/core/scheduler.js?v=20261012-v7320-hf5'),'Freeze-diagnostics scheduler hotfix must be cache-busted');
+assert.ok(/js\/legacy\/app-c\.js\?v=20261012-v7320-hf(?:5|6|9|11)/.test(html),'Morph runtime changes must be cache-busted');
+assert.ok(/js\/render\/main-pipeline\.js\?v=20261012-v7320-hf(?:5|7|8)/.test(html),'GPU Fill/Morph hotfix must be cache-busted');
 console.log('Morph freeze diagnostics invariants OK');

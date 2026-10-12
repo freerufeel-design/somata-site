@@ -337,4 +337,4 @@ window.__spiroGraffitiRibbonGPUStatus=()=>WebGPUGraffitiRibbonRenderer.status();
 // 7.0.4 — start FullGPU Graffiti pipeline compilation during application boot so the
 // first authored Graffiti frame does not discover the pipeline lazily inside the render loop.
 // This is prewarm only: no Canvas/WebGL/Fast-GPU renderer is selected if initialization fails.
-try{queueMicrotask(()=>{try{WebGPUGraffitiContourGlow.warmup();WebGPUGraffitiRibbonRenderer.warmup();}catch(_){}});}catch(_){}
+try{queueMicrotask(()=>{try{if(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed()){WebGPUGraffitiContourGlow.warmup();WebGPUGraffitiRibbonRenderer.warmup();}}catch(_){}});}catch(_){}

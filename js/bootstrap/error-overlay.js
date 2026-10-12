@@ -4,7 +4,7 @@
     // Somata in-app error console. It is a bottom dock owned by the page, not a
     // transient text overlay on the canvas. Errors are collected immediately;
     // automatic opening is opt-in and is OFF by default for this console version.
-    const BUILD='20261012-error-console-v737';
+    const BUILD='20261012-error-console-v738';
     const MAX_ENTRIES=160;
     const MAX_TEXT_CHARS=140000;
     const MAX_ENTRY_CHARS=18000;

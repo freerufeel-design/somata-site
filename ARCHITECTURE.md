@@ -1,24 +1,68 @@
-# Somata 7.3.7 — exact Spiral authority with 6.7 Web semantics
+## 7.3.20 release addendum
 
-The retained Bézier rail is still the only strict-Spiral contour authority. 7.3.7 changes how consumers reuse that authority, not what the contour is.
+- Resolved Morph/frame layers are transient and are excluded from the cross-project shared geometry LRU; canonical `state.layers` remain eligible for structural reuse.
+- Resource Stability is a mandatory release gate and rejects scheduler/GPU error growth, published cache-limit violations, and monotonic retained-resource growth.
+- Hardware GPU certification requires a real WebGPU adapter and `hardwareGpuExercised=true`; this container only certifies CPU and GPU-priority fallback behavior.
+
+# Somata 7.3.20 persistence/compositor contract
+
+Somata now treats project persistence and post-Canvas CSS compositing as release-level rendering contracts. `buildProjectData()` → JSON → `applyLoadedProject()` must preserve the authored functional state of every shipped project. Runtime-only Sweep phase/velocity/timestamps are deliberately excluded from equality because they are animation state, not authored effect configuration. Fill alpha is compared at the same integer-percent precision as the UI so legacy `rgba()` values may canonicalize to `#RRGGBBAA` without becoming a false persistence failure.
+
+The final compositor is separately certified because CSS `mix-blend-mode` occurs outside `mainCanvas` pixel storage. `__somataFinalCompositorSmokeTest()` validates direct blend ownership (`mainCanvas.style.mixBlendMode`), scratch blend ownership for partial blends, and reset-to-normal semantics on every project change. This complements pixel-diff, project/effect residency, composition interference, recovery and marathon gates rather than replacing them.
+
+# Somata 7.3.18 architecture note
+
+The release certification now includes a long-session **Playlist Marathon** gate. It treats scheduler ownership as a per-project invariant across repeated playlist cycles: after the normal two-rAF Morph arm barrier, the same project must reacquire the same number of scheduler owners on every re-entry, with no new paint errors, runtime errors or GPU diagnostics. The gate alternates backend preference between cycles and therefore also validates that backend policy is orthogonal to Core/Morph state.
+
+This is deliberately a certification-layer addition rather than a new render path. Core geometry/effect semantics and the CPU/GPU backend split introduced in earlier 7.3.x builds remain unchanged.
+
+# Somata 7.3.17 — renderer backend contract and release gates
+
+## 7.3.17 recovery certification boundary
+
+The renderer architecture remains one canonical geometry/state model with CPU and GPU presentation backends. 7.3.17 adds a release-level recovery contract around that boundary: switching renderer preference while live Morph/Corridor ownership exists must not mutate canonical effect intent, resizing the real main workspace must only rebuild presentation resources, and foreground recovery must invalidate a fresh frame without duplicating scheduler tasks. `__somataRecoverySoakSmokeTest()` validates these rules against seven conflict-heavy shipped projects and is part of `__somataReleaseCertification()`.
+
+
+## Canonical Core and renderer ownership
+
+Project state, canonical geometry, Morph targets/timelines and effect intent are renderer-independent. The CPU and GPU paths consume the same resolved frame/effect plan. Renderer availability must never mutate project intent: a missing GPU Layer Scene is a backend condition, not permission to silently disable Glow, Fill, Base or Morph.
+
+- **CPU reference backend**: Canvas/CPU rendering for deterministic functional smoke tests and devices where acceleration is unavailable or explicitly disabled. Base/Fill/Glow/Lamps/Sweep/Web/Geometry Circles plus dormant Sprite/Moving Line/Particles/Profile branches all have an executable CPU path; CPU mode must not silently skip an enabled effect.
+- **GPU backend**: full WebGPU acceleration with retained resident resources. WebGL2 can still exist inside legacy/local compatibility renderers, but WebGL2 alone is not sufficient to select the global GPU backend because strict Spiral/Corridor require WebGPU ownership.
+- **Auto/GPU priority**: capability selection happens at the backend boundary. If WebGPU is unavailable, correctness wins and the effective backend becomes CPU.
+- **Layer Scene ownership**: Base opens/owns the resident target; Glow/Fill/ordered effects join that target. An already resident target must never be discarded merely because Base has committed.
+
+## Release verification contract
+
+The shipped playlist is an executable fixture. Every release must validate finite project data, effect coverage (Base, Fill, Glow, Lamps, Sweep, Web, Geometry Circles, Spiral, Motion Rotation and Corridor), project default modes and scheduler ownership, then activate every playlist project in the CPU reference backend. Effects that are present in the engine but disabled in the shipped playlist are validated by `__somataSyntheticEffectSmokeTest()`, so playlist coverage and engine coverage remain separate, explicit contracts. Hardware-GPU certification is a separate run on a WebGPU-capable host using the same smoke APIs. The unified entry point is `__somataReleaseCertification()`, which holds one requested backend for the complete run so its reported `effectiveBackend` describes the renderer actually exercised. `hardwareGpuExercised` is true only for a real WebGPU-effective GPU run. File → Settings exposes the same certification through Test CPU / Test GPU controls. Transition stress and user-control contracts are part of the release gate, not optional diagnostics. Somata 7.3.17 keeps playlist-variant pixel checks and temporal soak mandatory and keeps the full project/effect residency matrix and adds a 39-case cross-effect composition-interference gate: Sweep placement modes, Lamps placement/raster/morph branches, Corridor+Fill/Glow and topology-Web are verified explicitly, while six dynamic projects are sampled across time to catch scheduler stalls and stale retained state.
+
+## Versioned UI invalidation and visual reference checks
+
+Retained rendering and Blue Morph may hold derived layer/frame copies. Any user edit that changes an authored visual property must therefore invalidate the canonical layer version family that owns that property. Style edits such as Fill/Glow bump the style serial; effect switches such as Web bump the effect serial; geometry/transform edits use their corresponding families. A DOM control changing a JavaScript field without a version bump is a correctness bug because a live Morph frame can legally keep the older derived value.
+
+Release validation has four complementary gates: per-project residency proves every authored visible effect resolves in every shipped project (forward and reverse re-entry), telemetry proves the expected renderer pass executed, while `__somataVisualEffectSmokeTest()` proves that pass contributes to the final composited Canvas. `__somataCompositionInterferenceSmokeTest()` proves that conflict-heavy multi-effect layers keep each effect visible in the final compositor output, and `__somataUiInvalidationSmokeTest()` then proves the real sidebar control reaches the canonical/versioned contract and, where applicable, the active Blue-Morph resolved frame. This prevents `enabled but invisible`, stale-cache, and stale-Morph-copy regressions from being reported as successful renders.
+
+# Somata 7.3.8 — exact Spiral authority with 6.7 Web semantics
+
+The retained Bézier rail is still the only strict-Spiral contour authority. 7.3.8 changes how consumers reuse that authority, not what the contour is.
 
 ## Web
 
-`Самопересечения` follows the 6.7 depth rule: accepted sharp corners are anchors and thread endpoints walk up to one quarter of the complete visible contour in each direction, scaled by depth/multiplier. Distance lookup uses the modern exact retained-cubic Arc, so periodic Spiral wrapping applies the canonical rotate+scale period transform instead of ordinary polygon modulo.
+`Самопересечения` follows the 6.7 topology-sensitive depth rule. Ordinary closed contours may walk up to one quarter of the complete contour in each direction. Open paths — and the self-similar periodic Spiral, which historically behaved as an open Spiral carrier rather than an ordinary polygon closure — use the distance to neighbouring detected corners instead. Endpoint lookup remains on the modern exact retained-cubic Arc; crossing a periodic Spiral period applies the canonical rotate+scale transform rather than ordinary polygon modulo.
 
-`В углах` also follows the 6.7 contract. After compacting the accepted authored/angular corners, a tiny GPU pass computes the distance to the previous/next **accepted corner** on the same path. This replaces the 7.3.3 microsegment clamp. Closed contours and topology-2 periodic Spiral wrap one canonical period; single-corner/open-edge cases fall back to the adjacent logical-cubic span.
+`В углах` also follows the 6.7 contract, but corner identity is now taken from the original authored profile. `cpuPathCornerFractions` are mapped once onto the exact common retained rail, so technical De Casteljau equalisation cuts can never become authored Web corners. Paths without authored corner markers fall back to angular detection at logical boundaries. The angle itself is measured from exact retained-cubic endpoint tangents, not tiny Arc micro-chords. After compaction, a GPU span pass computes distance to the previous/next **accepted corner** on the same path; periodic Spiral can wrap one canonical period while sampling applies its rotate+scale continuation.
 
 `Самопересечения + коридор` stays native WebGPU. Cross-copy links are emitted from the same compacted canonical corner list with the 64-corner cap. Their render pipeline declares `Depth24PlusStencil8` because it executes in the shared Web pass, but uses `stencilCompare=always` with no stencil writes so the links remain unclipped as in 6.7.
 
 ## Spiral Morph continuity
 
-Endpoint cubics remain exact and rail equalisation still uses De Casteljau only. After current-cubic interpolation and periodic closure, spline-involved Morphs run one canonical G1 tangent-repair compute pass over internal joins of each retained path. The repair preserves knot positions and individual handle lengths while aligning adjacent handle directions. Its strength interpolates from the source profile mode to the target profile mode, so Segment geometry may stay angular while Spline geometry becomes/remaining smooth. Fast Visual Rail and Exact Arc effects both consume the repaired current-cubic buffer.
+Endpoint cubics remain exact and rail equalisation still uses De Casteljau only. After current-cubic interpolation and periodic closure, spline-involved Morphs run one canonical G1 tangent-repair compute pass over internal joins of each retained path. The repair preserves knot positions and individual handle lengths while aligning adjacent handle directions. Its strength interpolates from the source profile mode to the target profile mode, but authored source/target Segment-corner bits explicitly suppress repair at that endpoint. Technical cuts become smooth while intended Segment corners remain angular; Segment↔Spline transitions therefore gain/lose smoothing continuously. Fast Visual Rail and Exact Arc effects both consume the repaired current-cubic buffer.
 
 ## Project default modes
 
 `settings.morph.defaultActive`, `settings.minimalMorph.defaultActive`, and `settings.tunnel.defaultActive` are activation commands owned by the target project. Direct project files, manual playlist selection, and the first project of a newly opened playlist all converge on one post-commit activator. The intent is applied immediately and verified once after the first committed paint, so early scheduler/bootstrap ordering cannot silently drop Morph or Corridor.
 
-Corridor `active` is runtime-only in 7.3.7. Legacy saved `tunnel.active` values are ignored by project merge/serialization; only `defaultActive` controls whether a project starts Corridor. `setTunnelMode(true)` is idempotent and always ensures the single `tunnel` scheduler task exists without resetting an already-running phase. Green project transitions use the same intent semantics but apply them directly at the atomic target commit, before the next Green transition begins.
+Corridor `active` is runtime-only in 7.3.8. Legacy saved `tunnel.active` values are ignored by project merge/serialization; only `defaultActive` controls whether a project starts Corridor. `setTunnelMode(true)` is idempotent and always ensures the single `tunnel` scheduler task exists without resetting an already-running phase. Green project transitions use the same intent semantics but apply them directly at the atomic target commit, before the next Green transition begins.
 
 ## Somata 6.9 — Morph stroke union and periodic Bézier closure
 

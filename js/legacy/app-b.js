@@ -451,7 +451,7 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
             const layerKey=String(layer.id||layerIndex);
             const targets=[];
             for(let pi=0;pi<paths.length;pi++){
-                const path=paths[pi],pts=path?.points||[],flags=path?.cornerFlags||[]; if(pts.length<2)continue;
+                const path=paths[pi],pts=path?.points||[],flags=path?.cornerFlags||[],logicalFlags=path?.lampCornerFlags||[]; if(pts.length<2)continue;
                 const spiralFractions=isSpiralLayer(layer)&&typeof lampVertexArcFractions==='function'?lampVertexArcFractions(path):null;
                 for(let i=0;i<pts.length;i++){
                     if(!path.closed && (i===0||i===pts.length-1))continue;
@@ -459,16 +459,13 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
                     const ax=cur.x-prev.x,ay=cur.y-prev.y,bx=next.x-cur.x,by=next.y-cur.y;
                     const al=Math.hypot(ax,ay),bl=Math.hypot(bx,by); if(al<1e-6||bl<1e-6)continue;
                     const dot=Math.max(-1,Math.min(1,(ax*bx+ay*by)/(al*bl)));
-                    const turn=Math.acos(dot)*180/Math.PI;
-                    // Static and morphing corner modes use the same real bend test.
-                    // cornerFlags are hints, not the sole source of truth; otherwise
-                    // valid polygon bends disappear when morphing is stopped.
-                    if(!flags[i] && turn<9)continue;
-                    // A nearly straight flagged point is already disappearing.  Its
-                    // target intensity falls continuously with the actual bend angle,
-                    // so an unfinished lamp reverses its attack without ever flashing.
+                    const turn=Math.acos(dot)*180/Math.PI,logicalBend=logicalFlags[i]===true;
+                    // «На изломах» owns authored bend identity independently of the final
+                    // visible curve. A spline/fillet may make the local tangent perfectly
+                    // smooth, but it must not erase the lamp that marks that authored bend.
+                    if(!logicalBend&&!flags[i]&&turn<9)continue;
                     const x=Math.max(0,Math.min(1,(turn-2)/16));
-                    const strength=x*x*(3-2*x);
+                    const strength=logicalBend?1:(x*x*(3-2*x));
                     if(strength<=.002)continue;
                     const fraction=spiralFractions?Math.max(0,Math.min(1,Number(spiralFractions[i])||0)):nearestLampFractionOnPath(cur,path).fraction;
                     targets.push({pathIndex:pi,pointIndex:i,fraction,strength});
@@ -1549,6 +1546,33 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
             });
         }
 
+        function collectMorphKeyPointsForCornerMode(layerIndex,t,maxPoints,rawPaths){
+            const base=state.layers?.[layerIndex];if(!base)return[];
+            const motion=getLampEvaluationConfig()?.morphMotionMode||'linear';
+            const srcSpiral=isSpiralLayer(runtimeState.morph.renderSourceLayers?.[layerIndex] || runtimeState.morph.sourceVisuals?.[layerIndex] || base);
+            const dstSpiral=isSpiralLayer(runtimeState.morph.renderTargetLayers?.[layerIndex] || runtimeState.morph.targetVisuals?.[layerIndex] || base);
+            if(srcSpiral||dstSpiral){
+                const out=[],layerKey=String(base?.id||layerIndex),omitSharedSeam=state.tunnel?.active===true&&base?.spiralClosed!==false;
+                for(let pi=0;pi<(rawPaths?.length||0)&&out.length<maxPoints;pi++){
+                    const path=rawPaths[pi],pts=path?.points||[];if(!pts.length)continue;
+                    out.push({...pts[0],pathIndex:pi,vertexIndex:0,lampId:`corner-key:${pi}:0`,lampSeed:lampHash32(`${layerKey}:corner-key:${pi}:0`)});
+                    if(pts.length>1&&!omitSharedSeam&&out.length<maxPoints)out.push({...pts[pts.length-1],pathIndex:pi,vertexIndex:pts.length-1,lampId:`corner-key:${pi}:end`,lampSeed:lampHash32(`${layerKey}:corner-key:${pi}:end`)});
+                }
+                return out;
+            }
+            if(motion==='linear'){
+                const pts=collectTrueLinearKeyLampPoints(layerIndex,t,maxPoints);
+                if(pts?.length)return pts;
+            }
+            if(motion==='ghost'&&rawPaths?.length){
+                const pts=collectLinearGeometryLampPoints(layerIndex,t,maxPoints,rawPaths);
+                if(pts?.length)return pts;
+            }
+            const circleMode=(state.morph.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()));
+            return circleMode
+                ? (isChaosCircleMorphPair(layerIndex)?collectChaosCircleVertexLampPoints(layerIndex,t,maxPoints):collectCircleVertexLampPoints(layerIndex,t,maxPoints))
+                : collectTopologyVertexLampPoints(layerIndex,t,maxPoints);
+        }
         function collectMorphLampPoints(layerIndex, t, maxPoints=260, preparedPaths=null, preparedRoundedPaths=null) {
             let mode=getLampEvaluationConfig()?.positionMode||'key';
             if(mode==='circumference')mode='key'; // legacy project migration
@@ -1591,10 +1615,12 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
                 }
             }
             if(['linear','ghost'].includes(getLampEvaluationConfig()?.morphMotionMode) && mode==='corners' && rawPaths?.length){
+                let keyPoints=collectMorphKeyPointsForCornerMode(layerIndex,t,maxPoints,rawPaths);
                 let exactCorners=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints);
-                if(exactCorners.length){
-                    if(attach) exactCorners=projectLampPointsToCurrentPolygon(exactCorners,attachmentPaths,base,true);
-                    return preserveBlueMorphLampIdentity(layerIndex,exactCorners);
+                let combined=mergeLampKeyAndCornerPoints(keyPoints,exactCorners,maxPoints);
+                if(combined.length){
+                    if(attach) combined=projectLampPointsToCurrentPolygon(combined,attachmentPaths,base,true);
+                    return preserveBlueMorphLampIdentity(layerIndex,combined);
                 }
             }
             if(mode==='arbitrary') return collectArbitraryMorphLampPoints(layerIndex,t,Math.max(600,maxPoints),attachmentPaths); // v308: IDs/fractions are already contour-stable; no straight-line handoff
@@ -1618,8 +1644,11 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
                 }
             }
             if(mode==='corners') {
-                const points=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints);
-                return preserveBlueMorphLampIdentity(layerIndex, attach?projectLampPointsToCurrentPolygon(points,attachmentPaths,base,true):points);
+                const keyPoints=collectMorphKeyPointsForCornerMode(layerIndex,t,maxPoints,rawPaths);
+                const bendPoints=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints);
+                let points=mergeLampKeyAndCornerPoints(keyPoints,bendPoints,maxPoints);
+                if(attach)points=projectLampPointsToCurrentPolygon(points,attachmentPaths,base,true);
+                return preserveBlueMorphLampIdentity(layerIndex,points);
             }
             return [];
         }
@@ -1847,7 +1876,19 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
         const lampHdTileCanvas=document.createElement('canvas');
         lampHdTileCanvas.width=LAMP_HD_MAX_TILE_PX;lampHdTileCanvas.height=LAMP_HD_MAX_TILE_PX;
         const lampHdTileCtx=lampHdTileCanvas.getContext('2d',{alpha:true});
-        const lampHdBudget={frameId:-1,pixels:0};
+        // CPU HD is 2x supersampling on top of the destination resolution. A dozen
+        // large, soft lamps can otherwise request tens of millions of temporary samples in
+        // one frame (the built-in «Радуга» project is exactly that case). Keep HD a quality
+        // enhancement, not a frame-stalling requirement: preflight the whole lamp batch and
+        // fall back uniformly to the exact final-resolution radial gradient when the batch
+        // would exceed the bounded per-frame supersample budget.
+        const LAMP_HD_FRAME_PIXEL_BUDGET_MIN=2_000_000;
+        const LAMP_HD_FRAME_PIXEL_BUDGET_MAX=8_000_000;
+        const lampHdBudget={frameId:-1,pixels:0,overloadBatches:0};
+        function lampHdFramePixelBudget(){
+            const cssArea=Math.max(1,(Number(canvasViewport?.w)||1)*(Number(canvasViewport?.h)||1));
+            return Math.max(LAMP_HD_FRAME_PIXEL_BUDGET_MIN,Math.min(LAMP_HD_FRAME_PIXEL_BUDGET_MAX,Math.round(cssArea*4)));
+        }
         function lampDirectVisualExtent(radius,softness,type,brightnessPercent){
             const r=Math.max(1,Number(radius)||1);
             const soft=Math.max(0,Math.min(150,Number.isFinite(Number(softness))?Number(softness):75));
@@ -1869,6 +1910,36 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
             const p0=inv(0,0),p1=inv(w,0),p2=inv(0,h),p3=inv(w,h);
             return {minX:Math.min(p0.x,p1.x,p2.x,p3.x),maxX:Math.max(p0.x,p1.x,p2.x,p3.x),minY:Math.min(p0.y,p1.y,p2.y,p3.y),maxY:Math.max(p0.y,p1.y,p2.y,p3.y),deviceScale:Math.max(Math.hypot(a,b),Math.hypot(c,d))};
         }
+        function lampHdEstimatedSamplePixels(ctx,radius,softness,type,brightness){
+            const view=lampHdVisibleLocalBounds(ctx);if(!view)return Infinity;
+            const r=Math.max(1,Number(radius)||1);
+            if(r*Math.max(.001,view.deviceScale)<18)return 0;
+            const sampleScale=Math.min(LAMP_HD_MAX_SAMPLE_SCALE,Math.max(2,view.deviceScale*LAMP_HD_SSAA));
+            if(sampleScale<=view.deviceScale*1.08)return 0;
+            const extent=lampDirectVisualExtent(r,softness,type,brightness),side=Math.max(1,extent*2*sampleScale+6);
+            return side*side;
+        }
+        function lampHdVisualBatchAllowed(ctx,items,softness,type){
+            if(!Array.isArray(items)||!items.length)return true;
+            const frameId=renderRuntime?.active?(Number(renderRuntime.frameId)||0):Math.floor(lampVisualNow()/16);
+            if(lampHdBudget.frameId!==frameId){lampHdBudget.frameId=frameId;lampHdBudget.pixels=0;lampHdBudget.overloadBatches=0;}
+            const budget=lampHdFramePixelBudget();let estimate=0;
+            for(const v of items){
+                const rad=Math.max(0,Number(v?.rad)||0);if(rad<=.001)continue;
+                estimate+=lampHdEstimatedSamplePixels(ctx,rad,softness,type,Number(v?.brightness)||0);
+                if(lampHdBudget.pixels+estimate>budget){lampHdBudget.overloadBatches++;return false;}
+            }
+            return true;
+        }
+        function lampHdPointBatchAllowed(ctx,count,radius,softness,type,brightness){
+            count=Math.max(0,Math.floor(Number(count)||0));if(count<=0)return true;
+            const frameId=renderRuntime?.active?(Number(renderRuntime.frameId)||0):Math.floor(lampVisualNow()/16);
+            if(lampHdBudget.frameId!==frameId){lampHdBudget.frameId=frameId;lampHdBudget.pixels=0;lampHdBudget.overloadBatches=0;}
+            const per=lampHdEstimatedSamplePixels(ctx,radius,softness,type,brightness);
+            if(!Number.isFinite(per))return false;
+            if(lampHdBudget.pixels+per*count>lampHdFramePixelBudget()){lampHdBudget.overloadBatches++;return false;}
+            return true;
+        }
         function drawLampHD(ctx,px,py,color,radius,softness,type,brightness){
             if(!lampHdTileCtx||type==='star')return drawLampDirect(ctx,px,py,color,radius,softness,type,brightness);
             const view=lampHdVisibleLocalBounds(ctx);if(!view)return drawLampDirect(ctx,px,py,color,radius,softness,type,brightness);
@@ -1882,10 +1953,10 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
             if(!(maxX>minX&&maxY>minY))return;
             const frameId=renderRuntime?.active?(Number(renderRuntime.frameId)||0):Math.floor(lampVisualNow()/16);
             if(lampHdBudget.frameId!==frameId){lampHdBudget.frameId=frameId;lampHdBudget.pixels=0;}
-            const cssArea=Math.max(1,(Number(canvasViewport?.w)||1)*(Number(canvasViewport?.h)||1));
-            // HD is user-opt-in. Permit one nearly fullscreen large lamp at DPR2->4,
-            // while still bounding total work when many lamps overlap.
-            const pixelBudget=Math.max(4_000_000,Math.min(32_000_000,Math.round(cssArea*18)));
+            // HD remains user-opt-in, but supersampling is bounded to a real-time frame
+            // budget. Larger/more numerous lamps keep the exact direct gradient instead of
+            // blocking the UI while a 20–30Mpx temporary SSAA workload is produced.
+            const pixelBudget=lampHdFramePixelBudget();
             const tileLocal=Math.max(96,Math.min(384,Math.floor((LAMP_HD_MAX_TILE_PX-8)/sampleScale)));
             let requiredPixels=0;
             for(let ty=minY;ty<maxY-1e-9;ty+=tileLocal){const th=Math.min(tileLocal,maxY-ty);for(let tx=minX;tx<maxX-1e-9;tx+=tileLocal){const tw=Math.min(tileLocal,maxX-tx);requiredPixels+=Math.ceil(tw*sampleScale+6)*Math.ceil(th*sampleScale+6);}}
@@ -2064,11 +2135,12 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
             }
             const outerStateIsolated=drawPlan?.outerStateIsolated===true;if(!outerStateIsolated)ctx.save();ctx.globalCompositeOperation=style.blendMode||'lighter';
             const softness=style.effectiveSoftness||0,type=style.type||'whiteCore';
+            const hdBatch=cfg.hd===true&&lampHdVisualBatchAllowed(ctx,items,softness,type);
             for(let i=0;i<items.length;i++){
                 const v=items[i],rad=v.rad;if(rad<=.001)continue;
                 ctx.globalAlpha=Math.max(0,Math.min(1,alpha*v.intensityAlpha));
                 const autoSmallTunnelRaster=lampRasterPolicy.autoSmallTunnelRaster; // v404: no hidden raster fallback when Raster is OFF.
-                if(cfg.hd===true)drawLampHD(ctx,v.px,v.py,v.color,rad,softness,type,v.brightness);
+                if(hdBatch)drawLampHD(ctx,v.px,v.py,v.color,rad,softness,type,v.brightness);
                 else if(cfg.rasterized===true||autoSmallTunnelRaster)drawLampRasterized(ctx,v.px,v.py,v.color,rad,softness,type,v.brightness);
                 else drawLampDirect(ctx,v.px,v.py,v.color,rad,softness,type,v.brightness);
             }
@@ -2098,6 +2170,7 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
             }
             const outerStateIsolated=drawPlan?.outerStateIsolated===true;if(!outerStateIsolated)ctx.save(); ctx.globalCompositeOperation=style.blendMode;
             const total=points.length;
+            const hdPointBatch=cfg.hd===true&&lampHdPointBatchAllowed(ctx,total,baseR,effectiveSoftness,style.type,baseBrightnessPercent);
             for(let i=0;i<total;i++){
                 const p=points[i], audio=getLampAudioMod(i,audioLayerIndex);
                 const level=Math.max(0,Math.min(1,p?.lampLevel===undefined?1:Number(p.lampLevel)||0));
@@ -2134,7 +2207,7 @@ window.__spiroRegisterModule?.('js/legacy/app-b');
                 ctx.globalAlpha=Math.max(0,Math.min(1,alpha*intensityAlpha*presence));
                 if(rad>.001){
                     const autoSmallTunnelRaster=lampRasterPolicy.autoSmallTunnelRaster; // v404: raster lamps are explicit opt-in only.
-                    if(cfg.hd===true){
+                    if(hdPointBatch){
                         drawLampHD(ctx,px,py,color,rad,effectiveSoftness,style.type,effectiveBrightness);
                     }else if(cfg.rasterized===true || autoSmallTunnelRaster){
                         // Explicit raster mode handles every lamp. Automatic corridor
@@ -3579,8 +3652,12 @@ self.onmessage=function(ev){
             const pct=Math.max(0,Math.min(100,Number.isFinite(Number(rawPct))?Number(rawPct):100));
             const rawMult=Number(cfg.lightningRateMultiplier);
             const mult=Number.isFinite(rawMult)?Math.max(0,rawMult):1;
-            // v162: 100% × 1 intentionally runs at one quarter of the former standard lightning strike rate.
-            return (pct/100)*mult*0.25;
+            // 7.3.20: 100% × 1 is the authored sweep cadence. The old v162 extra ×0.25
+            // made a 0.25 Hz project take 16 seconds per lightning cycle; with a long precharge
+            // this made projects such as "Искры" look as if the effect never started.
+            // Percentage/multiplier are already explicit user controls, so do not hide another
+            // quarter-rate scale underneath them.
+            return (pct/100)*mult;
         }
         // v421: Lightning frequency can run from one project-wide synchronized clock.
         // With synchronization OFF every persistent layer keeps the independent v419 clock.
@@ -4426,6 +4503,7 @@ self.onmessage=function(ev){
                 if(owner.web.type!==nextType)changed=true;
                 owner.web.type=nextType;
             }
+            if(changed&&typeof invalidateLayerEffect==='function')invalidateLayerEffect(owner,'web-switch');
             if(changed&&requestRender)requestMainCanvasRender();
             return changed;
         }
@@ -4467,6 +4545,7 @@ self.onmessage=function(ev){
                 const nextVisible=Object.prototype.hasOwnProperty.call(pending,'showWeb')?pending.showWeb===true:wasVisible;
                 const nextType=Object.prototype.hasOwnProperty.call(pending,'type')?(pending.type==='rounding'?'rounding':'bevel'):oldType;
                 layer.showWeb=nextVisible;layer.web.type=nextType;changed=true;
+                if(typeof invalidateLayerEffect==='function')invalidateLayerEffect(layer,'web-switch-boundary');
                 if(!nextVisible)webRuntime.transitionByLayer.delete(id);
                 else if(!wasVisible)webRuntime.transitionByLayer.set(id,{kind:'fadeIn',fromType:nextType,toType:nextType,start:now,duration:180});
                 else if(oldType!==nextType)webRuntime.transitionByLayer.set(id,{kind:'type',fromType:oldType,toType:nextType,start:now,duration:180});
@@ -5129,7 +5208,7 @@ self.onmessage=function(ev){
             {const base=Math.max(1,Number.isFinite(Number(c.radius))?Number(c.radius):50),mult=Math.max(0,Number.isFinite(Number(c.radiusMultiplier))?Number(c.radiusMultiplier):1);if(base>50){const effective=base*mult;if(effective<=0){c.radius=50;c.radiusMultiplier=0;}else{const nextMult=Math.max(1,Math.ceil(effective/50));c.radius=effective/nextMult;c.radiusMultiplier=nextMult;}}else{c.radius=base;c.radiusMultiplier=mult;}}
             const mode=c.colorMode || (c.rainbow?'rainbow':c.matchLineColor?'line':'selected');
             c.colorMode=mode; c.matchLineColor=mode==='line'; c.rainbow=mode==='rainbow';
-            const vals={lampColor:c.color,lampWebGL:c.webgl!==false,lampHD:c.hd===true,lampRasterized:c.rasterized===true,lampFreezeLight:c.freezeLight===true,lampFreezeTailSec:c.freezeTailSec??1.5,lampBrightness:c.brightness,lampRadius:c.radius,lampRadiusMultiplier:c.radiusMultiplier??1,lampSoftness:c.softness,lampSoftnessMultiplier:c.softnessMultiplier??1,lampBlendMode:c.blendMode,lampType:c.type,lampDensity:c.density??100,lampDensityMultiplier:c.densityMultiplier??1,lampScatter:c.scatter??0,lampScatterMultiplier:c.scatterMultiplier??1,lampSizeVariation:c.sizeVariation??0,lampSizeVariationMultiplier:c.sizeVariationMultiplier??1,lampBrightnessVariation:c.brightnessVariation??0,lampBrightnessVariationMultiplier:c.brightnessVariationMultiplier??1,lampAdaptiveBrightness:c.adaptiveBrightness!==false,lampAdaptiveAdjustBrightness:c.adaptiveAdjustBrightness===true,lampAdaptiveStrength:c.adaptiveStrength??100,lampAdaptiveStrengthMultiplier:c.adaptiveStrengthMultiplier??1,lampAdaptiveFadeSec:c.adaptiveFadeSec??1,lampMorphEnabled:c.morphEnabled===true,lampMorphSize:c.morphSize??20,lampMorphBrightness:c.morphBrightness??25,lampMorphInertia:c.morphInertia??50,lampCornerInertiaLinked:c.cornerInertiaLinked!==false,lampCalmMode:c.calmMode===true,lampSnapToContour:withLampConfig(c,()=>isLampContourAttachmentEnabled())};
+            const vals={lampColor:c.color,lampWebGL:c.webgl!==false,lampHD:c.hd===true,lampRasterized:c.rasterized===true,lampFreezeLight:c.freezeLight===true,lampFreezeTailSec:c.freezeTailSec??1.5,lampFreezeHardness:c.freezeHardness??50,lampFreezeColorMode:['lamp','line','fixed','hue'].includes(c.freezeColorMode)?c.freezeColorMode:'lamp',lampFreezeColor:c.freezeColor||'#00ffcc',lampFreezeHueDegrees:c.freezeHueDegrees??45,lampFreezeHueDegreesNumber:c.freezeHueDegrees??45,lampFreezeChromatic:c.freezeChromatic===true,lampFreezeChromaticColor:c.freezeChromaticColor||'#22d3ee',lampFreezeRain:c.freezeRain===true,lampFreezeRainDegrees:c.freezeRainDegrees??180,lampFreezeRainDegreesNumber:c.freezeRainDegrees??180,lampFreezeRainSource:c.freezeRainSource==='lamp'?'lamp':'core',lampFreezeRainSpeed:c.freezeRainSpeed??50,lampFreezeRainTailSec:c.freezeRainTailSec??1.5,lampFreezeRainHardness:c.freezeRainHardness??50,lampBrightness:c.brightness,lampRadius:c.radius,lampRadiusMultiplier:c.radiusMultiplier??1,lampSoftness:c.softness,lampSoftnessMultiplier:c.softnessMultiplier??1,lampBlendMode:c.blendMode,lampType:c.type,lampDensity:c.density??100,lampDensityMultiplier:c.densityMultiplier??1,lampScatter:c.scatter??0,lampScatterMultiplier:c.scatterMultiplier??1,lampSizeVariation:c.sizeVariation??0,lampSizeVariationMultiplier:c.sizeVariationMultiplier??1,lampBrightnessVariation:c.brightnessVariation??0,lampBrightnessVariationMultiplier:c.brightnessVariationMultiplier??1,lampAdaptiveBrightness:c.adaptiveBrightness!==false,lampAdaptiveAdjustBrightness:c.adaptiveAdjustBrightness===true,lampAdaptiveStrength:c.adaptiveStrength??100,lampAdaptiveStrengthMultiplier:c.adaptiveStrengthMultiplier??1,lampAdaptiveFadeSec:c.adaptiveFadeSec??1,lampMorphEnabled:c.morphEnabled===true,lampMorphSize:c.morphSize??20,lampMorphBrightness:c.morphBrightness??25,lampMorphInertia:c.morphInertia??50,lampCornerInertiaLinked:c.cornerInertiaLinked!==false,lampCalmMode:c.calmMode===true,lampSnapToContour:withLampConfig(c,()=>isLampContourAttachmentEnabled())};
             for(const [id,v] of Object.entries(vals)){const el=document.getElementById(id);if(!el)continue;if(el.type==='checkbox')el.checked=!!v;else el.value=v;}
             const glQualityActive=c.webgl!==false;
             const hdQuality=document.getElementById('lampHD'), rasterQuality=document.getElementById('lampRasterized');
@@ -5145,9 +5224,21 @@ self.onmessage=function(ev){
             const set=(id,t)=>{const e=document.getElementById(id);if(e)e.textContent=t;};
             const fmt=n=>Number(n).toFixed(Math.abs(Number(n)%1)>.001?1:0);
             set('lampFreezeTailText',`${formatTimeSeconds(Math.max(.05,Number(c.freezeTailSec??1.5)))} с`);
-            const freezeTailInput=document.getElementById('lampFreezeTailSec'),freezeTailRow=document.getElementById('lampFreezeTailRow');
-            if(freezeTailInput)freezeTailInput.disabled=c.freezeLight!==true;
-            freezeTailRow?.classList.toggle('disabled',c.freezeLight!==true);
+            set('lampFreezeHardnessText',`${Math.round(Math.max(0,Math.min(100,Number(c.freezeHardness??50))))}%`);
+            set('lampFreezeHueText',`±${Math.round(Math.max(0,Math.min(180,Number(c.freezeHueDegrees??45))))}°`);
+            set('lampFreezeRainDegreesText',`${Math.round(((Number(c.freezeRainDegrees??180)%360)+360)%360)}°`);
+            set('lampFreezeRainSpeedText',`${Math.round(Math.max(0,Math.min(100,Number(c.freezeRainSpeed??50))))}%`);
+            set('lampFreezeRainTailText',`${formatTimeSeconds(Math.max(.05,Number(c.freezeRainTailSec??1.5)))} с`);
+            set('lampFreezeRainHardnessText',`${Math.round(Math.max(0,Math.min(100,Number(c.freezeRainHardness??50))))}%`);
+            const freezeOn=c.freezeLight===true,freezeMode=['lamp','line','fixed','hue'].includes(c.freezeColorMode)?c.freezeColorMode:'lamp';
+            document.getElementById('lampFreezeDetails')?.classList.toggle('hidden',!freezeOn);
+            for(const id of ['lampFreezeTailSec','lampFreezeHardness','lampFreezeColorMode','lampFreezeColor','lampFreezeHueDegrees','lampFreezeHueDegreesNumber','lampFreezeChromatic','lampFreezeChromaticColor']){const el=document.getElementById(id);if(el)el.disabled=!freezeOn;}
+            document.getElementById('lampFreezeColorRow')?.classList.toggle('hidden',!freezeOn||freezeMode!=='fixed');
+            document.getElementById('lampFreezeHueRow')?.classList.toggle('hidden',!freezeOn||freezeMode!=='hue');
+            document.getElementById('lampFreezeChromaticColorRow')?.classList.toggle('hidden',!freezeOn||c.freezeChromatic!==true);
+            const rainOn=c.freezeRain===true;
+            document.getElementById('lampFreezeRainDetails')?.classList.toggle('hidden',!rainOn);
+            for(const id of ['lampFreezeRainDegrees','lampFreezeRainDegreesNumber','lampFreezeRainSource','lampFreezeRainSpeed','lampFreezeRainTailSec','lampFreezeRainHardness']){const el=document.getElementById(id);if(el)el.disabled=!rainOn;}
             set('lampBrightnessText',`${Math.round(c.brightness)}%`);
             set('lampRadiusText',`${fmt(c.radius)} px × ${fmt(c.radiusMultiplier??1)}`);
             set('lampSoftnessText',`${Math.round(c.softness)}% × ${fmt(c.softnessMultiplier??1)}`);

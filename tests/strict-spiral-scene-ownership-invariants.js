@@ -19,4 +19,4 @@ assert.ok(lightning.includes('drawBlurredHaloGroup')&&lightning.includes('WebGPU
 assert.ok(graffiti.includes('opts.blendMode')&&graffiti.includes('pipelineModes[blendMode]')&&graffiti.includes('opts.stencilView')&&graffiti.includes('pipelineModesStencil[blendMode]'),'Shared GPU contour blur must preserve Lightning glow blend modes and inside/outside stencil clipping');
 assert.ok(graffiti.includes("stencilLoadOp:'load',stencilStoreOp:'store'"),'Stencil-clipped Lightning Glow must preserve stencil across multiple halo blur composites and the later core pass');
 assert.ok(lightning.includes("return{warmup,isReady:()=>warmup()&&Boolean(typeof WebGPUGraffitiContourGlow")&&lightning.includes("throw new Error('Lightning contour Glow blur warming')"),'Lightning must wait for the GPU blur path instead of falling back to the wedge-producing analytic halo');
-console.log('Somata 7.3.7 strict Spiral scene ownership / Lightning Glow invariants: PASS');
+console.log('Somata 7.3.9 strict Spiral scene ownership / Lightning Glow invariants: PASS');

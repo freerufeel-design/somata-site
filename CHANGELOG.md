@@ -1,3 +1,165 @@
+# Somata 7.3.20
+
+## Hotfix: Tangential Spiral must survive vertex rounding
+
+- Fixed the regression where enabling any non-zero vertex rounding could visibly bend a **Tangential Closed Spiral** at the self-similar period seam.
+- Root cause: seam-kink detection measured the angle between coarse tessellation chords. A logarithmic spiral is curved, so those chords have a non-zero angle even when the true endpoint derivatives are exactly C1; the rounding stage then inserted a false `period-seam` fillet.
+- Continuous Tangential seams are now classified from the retained mapped endpoint derivatives. A genuine derivative mismatch still receives the ordinary seam fillet; only the false chord-angle kink is suppressed.
+- Full endpoint slices preserve mapped derivative metadata while interior clipped points remain freshly interpolated, so the previous high-rounding tail protection is unchanged.
+- Added `spiral-tangential-rounding-invariants.js`: exact Tangential seams are verified at **1%**, **38%**, **100%**, and **200%** rounding, plus a deliberate 20° tangent mismatch proving real kinks are still rounded. Full invariant suite: **45/45 PASS**.
+
+## Hotfix: Closed Spiral high-rounding seam tails
+
+- Fixed hook/tail artifacts at the transition between Closed Spiral periods when vertex rounding is raised past roughly one third (the reported case is **38%**).
+- The rounded seam trims the authored period before rebuilding retained Bézier cubics. The trimmed boundary is now explicitly marked as fillet-owned, so stale C1/C2 handles from the old, longer span cannot overshoot the new endpoint and double back.
+- Applied the same clipped-boundary ownership rule to periodic closure fillets, ordinary closed Spiral seam rounding, and final-space profile fillets.
+- Added `spiral-high-rounding-tail-invariants.js`, which reproduces the pre-fix reversal and verifies forward endpoint derivatives at **34%**, **38%**, and **75%**. Full invariant suite: **44/44 PASS**.
+
+## Hotfix: 0% Spiral rounding / non-tangential seam
+
+- Fixed Closed Spiral rendering when **vertex rounding is exactly 0%** and tangentiality is disabled. The retained cubic finalizer used to force C1 continuity at every self-similar period seam, which bent an otherwise straight segment into a large Bézier arc.
+- Periodic endpoint position remains exact, but the final C2 handle is now rewritten only when the seam is genuinely tangential or an explicit seam fillet was created by rounding.
+- The Morph/WebGPU closure pass now keeps positional periodicity separate from tangent continuity, so dynamic Spiral Morph does not reintroduce the 0% bow.
+- Added `spiral-zero-rounding-seam-invariants.js` covering 0% hard seams, tangential continuous seams, hard auto-close bridges, explicit seam fillets, and the Morph closure policy. Full invariant suite: **43/43 PASS**.
+
+## Spiral/Morph hand-off, Exact Lightning, topology Web and resource-stability fixes
+
+- Fixed Spiral/Circle Slide to consume the current resolved Morph-frame properties; polygon `N` now interpolates continuously instead of snapping at a rounded phase boundary.
+- Blue Morph phase commits now clear stale resolved `frameLayers` atomically so the newly committed rail cannot be combined with old visual properties on the hand-off frame.
+- GPU preparation no longer lets optional Web/Lamps/Exact-Arc consumers hold Morph forever in `gpuPreparing`; failed GPU preparation can quarantine/degrade to the CPU reference path.
+- Exact Lightning now follows retained cubic Bézier geometry by subdividing/evaluating the curve instead of drawing endpoint chords.
+- Added a targeted regression gate for the reported failures: `Мозголом` start/advance, `Искры` start/advance, Spiral boundary continuity across repeated Morph cycles, and visible Exact-Lightning contribution on the retained Bézier carrier.
+- Fixed a real topology-Morph Web regression in `Fucking freak 3`: `buildCurrentCircleMorphPaths()` referenced an out-of-scope `resolved` variable, producing a hidden `ReferenceError` and 0 px Web contribution.
+- Added Resource Stability certification. It exposed shared static geometry LRU growth `25 → 31 → 37`; resolved Morph/frame clones are now excluded from that cross-project LRU and use WeakMap-local lifetime. Final soak is stable at `19 → 19 → 19`.
+- Final CPU gates: **42/42 invariants**, playlist **21/21**, synthetic **10/10**, primary visual **10/10**, variant **13/13**, temporal **6/6**, branch **13/13**, residency **190/190**, composition **39/39**, recovery **7/7**, marathon **42/42**, resource stability **21/21**, persistence **21/21**, compositor **21/21**, UI **3/3**, controls **3/3**, repeat **5/5**, transitions **18/18**.
+- GPU-priority fallback (no WebGPU on this host) re-passed playlist **21/21**, visual **10/10**, residency **190/190**, composition **39/39**, recovery **7/7**, marathon **42/42**, resource stability **21/21**. Hardware WebGPU is not claimed.
+- Build/cache identifiers: 7.3.20 / `20261012-v7320`.
+
+# Somata 7.3.18
+
+## Long-session playlist marathon certification
+
+- Added `__somataPlaylistMarathonSmokeTest()` as a mandatory release gate. It repeatedly traverses all 21 shipped projects in one page session and rejects per-project scheduler-owner drift, new scheduler paint errors, new GPU diagnostics, runtime errors, backend-resolution errors, or default Morph/Corridor ownership loss.
+- The marathon alternates CPU/GPU preference between cycles. A GPU request on a host without WebGPU must resolve to the CPU reference renderer without changing functional results.
+- The pre-integration stress completed **4 cycles / 84 project loads** with identical scheduler owner counts for every project across cycles, zero runtime errors, zero GPU diagnostic errors and zero paint-error growth.
+- The integrated release gate defaults to **2 cycles / 42 project loads** so the in-client Test CPU/Test GPU workflow remains practical.
+- `ярко1` revealed a normal one-rAF Blue/Orange arm hand-off: after project activation, Orange ownership becomes stable on the second rAF. The marathon now waits at least two rAF frames before judging ownership, preventing a false failure while preserving strict leak detection.
+- Final CPU validation on 7.3.18: **39/39 invariants**, playlist **21/21**, synthetic **10/10**, primary visual **10/10**, variant **13/13**, temporal **6/6**, branch **13/13**, project/effect residency **190/190**, composition **39/39**, recovery **7/7**, marathon **42/42**, UI **3/3**, controls **3/3**, repeat **5/5**, transitions **18/18**.
+- GPU-priority fallback on this WebGPU-less host passed playlist **21/21**, visual **10/10**, project/effect residency **190/190**, composition **39/39**, recovery **7/7**, and marathon **42/42** with effective CPU. Hardware WebGPU is still not claimed.
+- No renderer change was required by this stress: 7.3.18 strengthens long-session certification and retains the 7.3.17 rendering/recovery behavior.
+- Build/cache identifiers are 7.3.18 / `20261012-v7318`.
+
+# Somata 7.3.17
+
+## Session recovery / backend hand-off certification
+
+- Added `__somataRecoverySoakSmokeTest()` as a mandatory release gate. It exercises the failure boundaries that can lose live effect ownership even when steady-state rendering is correct: backend hand-off while Morph/Corridor are active, real layout resize/reflow through `ResizeObserver`, and visibility recovery.
+- Recovery fixtures cover `Радуга`, `Мозголом`, `Секс`, `Fucking freak 3`, `Святой`, `Искры`, and `4 Galaxy`, spanning Fill/Glow/Lamps/Sweep/Web/Geometry Circles/Spiral/Rotation/Corridor and Blue/Topology Morph ownership.
+- Every recovery stage must preserve the project's authored Blue/Orange/Corridor ownership, keep the final Canvas non-blank, avoid new scheduler paint errors, avoid scheduler-task growth, and avoid new GPU diagnostics. Requested backend must also recover to the same effective backend after the CPU↔GPU hand-off.
+- The resize probe changes the actual main workspace width, waits for the production `ResizeObserver` path, verifies that the workspace really changed, then restores the original layout and checks that Canvas rendering/ownership survived both transitions.
+- Scheduler error accounting is delta-based, so a historical error from before the self-test does not produce a false recovery failure; only new errors during the gate fail certification.
+- Final CPU validation on 7.3.17: **38/38 invariants**, playlist **21/21**, synthetic **10/10**, primary visual **10/10**, variant **13/13**, temporal **6/6**, branch **13/13**, project/effect residency **190/190**, composition interference **39/39**, recovery **7/7**, UI **3/3**, controls **3/3**, repeat **5/5**, transitions **18/18**.
+- GPU-priority fallback on this WebGPU-less host re-passed playlist **21/21**, primary visual **10/10**, project/effect residency **190/190**, composition interference **39/39**, and recovery **7/7** with effective CPU. Hardware WebGPU is still not claimed.
+- No renderer regression was found by the new recovery stress. Existing Corridor resident-scene ownership, CPU reference backends, Morph-safe invalidation, and complete playlist visual gates remain intact.
+- Build/cache identifiers are 7.3.17 / `20261012-v7317`.
+
+# Somata 7.3.16
+
+## Cross-effect composition interference certification
+
+- Added `__somataCompositionInterferenceSmokeTest()` as a mandatory release gate. It verifies that effects still contribute real final pixels while conflict-heavy combinations are active, rather than proving each effect only in isolation.
+- The gate covers **39/39 A/B contribution checks** across `Секс`, `Радуга`, `цветок`, `Мозголом`, `Fucking freak 3`, `Святая Спираль`, `Искры`, `4 Galaxy`, and `5 Electro`. This includes Corridor+Fill+Glow+Lamps, Sweep+Rotation, Web+Spiral+Geometry Circles, Web+Sweep+Corridor, Spiral+Rotation+Corridor, and no-Base Lamps/Sweep scenes.
+- Web comparisons run on the live resolved Blue-Morph frame; deterministic non-Web comparisons quiesce Morph first so animation time cannot create a false pixel delta.
+- The first implementation reloaded a project for every subcase and was too slow for an in-client release test. The final implementation loads each conflict fixture once, restores the exact layer state in place between A/B checks, invalidates all dependency domains, and restores Corridor ownership transactionally.
+- Final CPU validation on 7.3.16: **37/37 invariants**, playlist **21/21**, synthetic **10/10**, primary visual **10/10**, variant **13/13**, temporal **6/6**, branch **13/13**, project/effect residency **190/190**, composition interference **39/39**, UI **3/3**, controls **3/3**, repeat **5/5**, transitions **18/18**.
+- GPU-priority fallback on this WebGPU-less host re-passed playlist **21/21**, primary visual **10/10**, project/effect residency **190/190**, and composition interference **39/39** with effective CPU. Hardware WebGPU is still not claimed.
+- No renderer change was required by this gate: the 7.3.15 rendering fixes remain intact; 7.3.16 strengthens release certification against compositor-pass interference.
+- Build/cache identifiers are 7.3.16 / `20261012-v7316`.
+
+# Somata 7.3.15
+
+## Full per-project effect residency certification
+
+- Added `__somataProjectEffectResidencySmokeTest()` to validate every visible major effect in every shipped project instead of relying only on representative fixtures.
+- The current playlist contains **95 visible project×effect pairs**; the gate runs all projects forward and then in reverse, producing **190/190 residency checks across 42 loads** and catching stale state after re-entry.
+- Observable Base/Fill/Glow/Lamps/Sweep/Web/Geometry Circles pairs must resolve on their authored layer and leave a renderer pass in that same project; Spiral/Motion Rotation/Corridor are checked through resolved plan/runtime ownership. Every loaded project must also produce a non-blank final Canvas.
+- Corrected release coverage semantics for Fill: `fill=true` with 0% color alpha is a latent/invisible state, not a live Fill request. This matches `getFillOpacityUnit()` / `fillRequested` and avoids rewriting the authored Morph source in `7 Бесконечная спираль`.
+- Repeated backend self-test now distinguishes unavailable browser Storage from a persistence mismatch: persistence is mandatory whenever `localStorage` is readable, while sandboxed opaque origins report `storageVerified=false` instead of a false failure.
+- Final CPU validation: **37/37 invariants**, playlist **21/21**, synthetic **10/10**, primary visual **10/10**, variant **13/13**, temporal **6/6**, branch **13/13**, project/effect residency **190/190**, UI **3/3**, controls **3/3**, repeat **5/5**, transitions **18/18**.
+- GPU-priority fallback on this WebGPU-less host re-passed playlist **21/21**, primary visual **10/10**, and project/effect residency **190/190** with effective CPU. Hardware WebGPU is still not claimed.
+- Build/cache identifiers are 7.3.15 / `20261012-v7315`.
+
+# Somata 7.3.14
+
+## Variant visual certification and temporal soak
+
+- Expanded release certification from the 7.3.12 gate set with **13 branch-specific final-pixel checks**: Lightning `perPath`, `everyNth`, `whole`; Glint `whole`; Lamps key/arbitrary/raster/HD-rainbow/morph branches; Corridor+Fill; Corridor+Glow; and Web inside topology Blue Morph.
+- Added a **6-project temporal soak** for `Радуга`, `Мозголом`, `Святой`, `ярко1`, `Секс`, and `Fucking freak 3`. Dynamic projects must continue changing final Canvas pixels across time while scheduler/runtime ownership remains valid.
+- Corridor+Fill+Glow is now tested as a real composited combination rather than three independent passes. The deterministic fixture is `Секс`, whose Corridor is active while Blue Morph is off by default.
+- Web is now pixel-certified on the second shipped path as well: `Fucking freak 3` exercises three Web layers together with topology Morph, Corridor and Lightning.
+- Sweep and Lamps are certified per actual playlist branch rather than treating one generic successful pass as coverage for all placement/raster modes.
+- Transition ownership stress remains **18/18 PASS**, including Morph/Web/Spiral/Corridor re-entry sequences.
+- Added **13/13 authored branch coverage** for Lightning whole exact/simple, three Spiral tangential/step variants, Motion Rotation cw/ccw/tunnel-lag, circleSlide linear/smooth, topology smooth Morph, Minimal Morph default activation, and Corridor color shift.
+- Added **5/5 repeated-control stress** for backend preference/persistence, Fill ×8, Glow ×8, RMB Shape ×8 inside Corridor, and Web toggling inside active Morph.
+- Source/invariant suite increased to **36/36 PASS**. Browser gates on the release files: playlist static PASS; playlist **21/21**; synthetic **10/10**; primary pixel visual **10/10**; variant pixel visual **13/13**; temporal soak **6/6**; branch coverage **13/13**; UI invalidation **3/3**; controls **3/3**; repeat toggles **5/5**; transitions **18/18**.
+- GPU-priority fallback on this validation host (WebGPU unavailable) repeats playlist **21/21**, synthetic **10/10**, visual **10/10**, variant **13/13**, temporal **6/6**, branch coverage **13/13**, repeat toggles **5/5**, and transitions **18/18** with `effective=cpu`; this is not claimed as hardware-GPU certification. The headless `about:blank` storage restriction was isolated with an origin-equivalent Storage shim for the persistence row.
+- No new renderer defect was found by the added 7.3.14 gates; the release change is stronger verification and regression containment. Existing Corridor resident Layer Scene, Morph-safe invalidation, Geometry Circles cache, CPU Moving Line/Particles, and Auto/GPU/CPU backend fixes are retained.
+- Build/cache identifiers are 7.3.14 / `20261012-v7314`.
+
+# Somata 7.3.12
+
+## In-client release certification and transition/control stress
+
+- Added a unified `__somataReleaseCertification()` runner. One call now executes the static playlist validator, 21-project browser smoke, 10 dormant/synthetic effects, 10 final-pixel visual checks, 3 real UI/Morph invalidation checks, user-control contracts, and cross-project ownership transitions.
+- Added **File → Settings → Test CPU / Test GPU**. The client runs the same release certification itself and reports PASS/FAIL in the UI. GPU tests explicitly distinguish real WebGPU execution from CPU fallback.
+- Added `__somataTransitionStressTest()` with ownership-heavy sequences such as `Мозголом → Секс → Мозголом`, `ярко1 → Радуга → ярко1`, Spiral/Corridor → static → Spiral/Corridor, and Web-heavy → static → Web-heavy. It validates Blue/Orange/Corridor scheduler ownership, effect telemetry, canonical project state where Orange Morph does not intentionally own composition commits, runtime errors, and GPU diagnostic deltas.
+- Added `__somataControlContractSmokeTest()` using real DOM events. It verifies RMB on Shape suppresses **Base + Fill + Glow** without destroying authored Fill/Glow values, ←/→ navigate the playlist, and the File render-backend selector actually applies CPU mode.
+- The transition test explicitly understands Orange Morph semantics: Orange slideshow is allowed to commit a new random composition into canonical layers, so that intentional change is no longer misdiagnosed as project-state leakage.
+- Fixed release-certification backend reporting. The requested backend preference is held for the complete test run, captured before restoration, and reports `hardwareGpuExercised=true` only when the effective backend is genuinely WebGPU.
+- Final source/invariant suite: **34/34 PASS**. Unified CPU certification: **PASS** with 21/21 playlist, 10/10 synthetic, 10/10 visual, 3/3 UI, 3/3 controls and 18/18 transition rows.
+- GPU-priority certification on this host: **PASS**, effective backend **CPU**, explicit reason `WebGPU unavailable; CPU reference backend active`; the same complete suite passes with zero new GPU diagnostics.
+- Existing 7.3.11 fixes remain: pixel-level validation, Web/Fill/Glow Morph-safe invalidation, CPU Moving Line/Particles, Corridor resident Layer Scene ownership, Geometry Circles cache reset, and Auto/GPU/CPU backend policy.
+- Build/cache identifiers are 7.3.12 / `20261012-v7312`.
+
+# Somata 7.3.10
+
+## Complete CPU reference coverage for dormant effects
+
+- Added a real Canvas/CPU renderer for **Moving Line / Line Motion FX**. All three motion modes (`seaRaft`, `jumpRope`, `sinusoid`) use the shared path-FX carrier/phase math; `replaceBase=true` is committed transactionally before the Base pass so CPU and GPU preserve the same effect ownership semantics.
+- Added a real contour-driven Canvas/CPU renderer for **Particles**. `flow`, `cornerFade`, and `spiralZ` now render on the CPU backend instead of reporting `effect skipped`. The renderer reuses the canonical path table and the same deterministic particle phase/scatter model used by the GPU compatibility path.
+- Extended renderer telemetry and effect-plan diagnostics with Particles so functional tests can prove the pass reached a renderer.
+- Added `__somataSyntheticEffectSmokeTest()` for effects that are currently stored disabled in `default.plist`: Moving Line, Sprite, Sprite+Motion, Particles, Stroke Profile, and Graffiti. This prevents a future release from passing only because the playlist does not happen to activate those branches.
+- Browser validation on the release files: 21/21 playlist projects pass in CPU reference mode; 10/10 dormant-effect synthetic cases pass; GPU-priority fallback repeats both matrices successfully on the test host where WebGPU is unavailable.
+- Static/invariant suite is 32/32 PASS.
+- Build/cache identifiers are 7.3.10 / `20261012-v7310`.
+
+# Somata 7.3.9
+
+## CPU/GPU backend contract, playlist verification, Corridor Layer Scene repair
+
+- Added **File → Приоритет рендера → Авто / GPU / CPU**. CPU is the reference Canvas renderer; GPU is a full WebGPU acceleration priority and automatically falls back to CPU when WebGPU is unavailable. WebGL2-only capability does not activate the strict GPU backend, preventing partial Spiral/Corridor failures. GPU capability probing is cached instead of recreating probe contexts during render decisions.
+- Fixed Corridor native Fill ownership: after Base has committed, Fill now joins the already resident Layer Scene instead of requesting a second external target. This removes the `corridor-native-fill — GPU Layer Scene target unavailable` / `corridor-gpu-wait` failure caused by renderer ownership ordering.
+- Added browser self-test/smoke APIs and load them in the production page. The playlist validator covers Base, Fill, Glow, Lamps, Sweep, Web, Geometry Circles, Spiral, Motion Rotation, Corridor, Corridor+Fill+Glow and project default-mode ownership.
+- Added independent CPU functional verification against the shipped `default.plist`: all 21 projects can be activated and rendered without runtime/unhandled errors; saved Blue/Orange/Corridor default states are checked against live scheduler ownership.
+- Added backend telemetry for Geometry Circles so CPU/GPU smoke runs can verify that this effect actually reaches a renderer rather than only being enabled in state.
+- Fixed pooled Geometry Circles frame cache: `_geometryCircleFrameData` is cleared on every LayerFrame acquire, so switching from a project without circles to `Мозголом` can no longer leave the effect silently suppressed.
+- Strengthened the playlist browser smoke to fail when an enabled Base/Fill/Glow/Lamps/Sweep/Web/Geometry Circles pass is not actually observed in render telemetry; Corridor + Fill + Glow is checked as one compositor chain.
+- Updated the stale Fill regression probe to the current linear `stencil-edge-fan` contract, so the production self-test no longer reports a false failure for self-intersecting Fill.
+- Preserved the strict retained-GPU Spiral contract when GPU is available, while CPU preference deliberately bypasses strict GPU ownership so the same canonical project/morph math remains testable without WebGPU.
+- Runtime/build/cache identifiers are 7.3.9 / `20261012-v739`.
+
+# Somata 7.3.8
+
+## Spiral Web corner identity / 6.7 open-path semantics
+
+- Web `В углах` now derives authored corner identity from the original profile's `cpuPathCornerFractions` mapped onto the exact common retained-cubic rail. Technical De Casteljau equalisation cuts are no longer treated as authored Spiral corners.
+- Corner angle classification uses exact retained-cubic endpoint tangents instead of tiny Arc microsegment chords. Paths with authored corner markers use only those identities; paths without authored markers keep the historical angular fallback.
+- `Самопересечения` restores the 6.7 topology distinction: the quarter-perimeter depth rule is used only for ordinary closed contours. Open paths and the self-similar periodic Spiral use neighbour-corner Arc span, while periodic endpoint sampling still applies the modern rotate+scale turn.
+- Spline tangent repair now preserves authored source/target Segment corners. Only technical/internal smooth joins receive G1 handle repair; Segment↔Spline transitions gain/lose smoothing continuously.
+- A retired retained-Spiral Morph resource no longer keeps a later static non-Spiral frame in strict-Spiral ownership. Static Spiral remains strict through the actual authored layer, while stale phase resources cannot cause `SPIRAL_BASE_GPU_UNAVAILABLE` after Morph handoff.
+- No Canvas/CPU strict-Spiral fallback was added. Default FPS remains 60.
+- Runtime/build/cache identifiers are 7.3.8 / `20261012-v738`.
+
 # Somata 7.3.7
 
 ## Spiral shader startup repair
@@ -1083,3 +1245,34 @@
 - Removed parser-blocking inline JavaScript from `<head>` and moved the unchanged boot guard to `js/bootstrap/boot-guard.js`.
 - Moved the existing classic application script manifest into `<head>` with `defer`, preserving its exact execution order while allowing Safari/WebKit to discover and download JS immediately.
 - CSS is discovered before JavaScript. Runtime application modules and hotfix2 rendering/error-console fixes are otherwise unchanged.
+
+## 7.3.20 hotfix 4
+- Lamp `Key`: Spiral path endpoints only; `Corners`: Key + authored bends, including bends hidden by rounding/Smooth spline geometry.
+- Preserve logical spline-bend lamp identity through retained Spiral Morph endpoint snapshots.
+- Fix Arbitrary lamp Density/Multiplier on retained Spiral GPU Morph and remove per-path repeated allocation.
+- Prevent dynamic Spiral Corridor Fill from stalling Morph on an impossible GPU-only fill wait when the current rail is open.
+- Cancel stale rAF before scheduler watchdog recovery.
+- Cache-bust all modified runtime modules with `v7320-hf4`.
+
+## 7.3.20 hotfix 5 — FreezeLight Rain / hardness
+- Added **FreezeLight Rain** as an independent lamp effect below ordinary FreezeLight.
+- Rain settings: direction in degrees (0° right, 90° down), lifetime in seconds, and hardness.
+- Added hardness to ordinary FreezeLight.
+- Hardness 50% is linear; 0% hides historical trail; 100% keeps uniform opacity until the configured hard cutoff; intermediate values curve around the linear profile.
+- Ordinary FreezeLight and Rain use separate age-aware GPU feedback histories and can be enabled together without feeding into each other.
+- Rain history is advected along the selected direction and builds correctly even when enabled on a static scene.
+- Old projects receive backward-compatible defaults; new settings persist with project/layer lamp configs and playlist defaults.
+- Cache-bust changed/hotfixed runtime assets with `v7320-hf5`.
+
+## 7.3.20 hotfix 6 — FreezeLight Rain direction / source / speed
+- Changed Rain angle convention so **180° is down** and made 180° the default.
+- Rain angle slider now snaps by 5° and has an exact manual degree input.
+- Added Rain source selector: **Core** (default) / **Whole lamp**.
+- Added Rain speed: 0% stationary, 50% legacy speed, hyperbolic acceleration toward an instantaneous 100% endpoint.
+- Migrates hotfix-5 stored Rain directions to the new convention.
+
+### 7.3.20 hotfix 11
+- iPhone fullscreen button now falls back to an app-owned full-viewport presentation mode because iPhone Safari does not provide arbitrary-element native Fullscreen API.
+- Presentation mode follows `visualViewport` during toolbar/orientation changes and has a dedicated exit control.
+- Added Apple Home Screen / standalone metadata and `manifest.webmanifest` for browser-chrome-free launch from the Home Screen.
+- Fixed missing `:-webkit-full-screen` workspace sizing on supported WebKit fullscreen devices.

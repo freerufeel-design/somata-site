@@ -3,70 +3,79 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Somata">
+    <meta name="theme-color" content="#090d16">
+    <link rel="manifest" href="manifest.webmanifest?v=20261012-v7320-hf11">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Somata 7.3.7</title>
-    <link rel="stylesheet" href="styles/app.css?v=20261012-v737">
-    <script defer src="js/bootstrap/boot-guard.js?v=20261012-v737"></script>
-    <script defer src="js/bootstrap/error-overlay.js?v=20261012-v737"></script>
-    <script defer src="js/bootstrap/module-registry.js?v=20261012-v737"></script>
-    <script defer src="js/core/palette.js?v=20261012-v737"></script>
-    <script defer src="js/core/state.js?v=20261012-v737"></script>
-    <script defer src="js/core/layer-versions.js?v=20261012-v737"></script>
-    <script defer src="js/ui/profile-presets.js?v=20261012-v737"></script>
-    <script defer src="js/geometry/kernel.js?v=20261012-v737"></script>
-    <script defer src="js/core/render-runtime.js?v=20261012-v737"></script>
-    <script defer src="js/core/scheduler.js?v=20261012-v737"></script>
-    <script defer src="js/core/morph-controller.js?v=20261012-v737"></script>
-    <script defer src="js/effects/motion.js?v=20261012-v737"></script>
-    <script defer src="js/core/defaults-layers.js?v=20261012-v737"></script>
-    <script defer src="js/geometry/spline.js?v=20261012-v737"></script>
-    <script defer src="js/legacy/app-a.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/lamp-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/web-thread-scene-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/graffiti-ribbon-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/canonical-path-store.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/canonical-sweep-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/bezier-sweep-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/path-fx-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/particle-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/geometry/frame-paths.js?v=20261012-v737"></script>
-    <script defer src="js/geometry/canonical.js?v=20261012-v737"></script>
-    <script defer src="js/legacy/app-b.js?v=20261012-v737"></script>
-    <script defer src="js/render/fill-plan.js?v=20261012-v737"></script>
-    <script defer src="js/geometry/morph.js?v=20261012-v737"></script>
-    <script defer src="js/geometry/morph-frame.js?v=20261012-v737"></script>
-    <script defer src="js/geometry/morph-budget.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/morph-path-resource.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/morph-arc-resource.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/profile-arc-marker-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/topology-morph-base-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/spiral-bezier-morph-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/green-project-morph-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/web-corner-resource.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/web-morph-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/lightning-arc-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/graffiti-sample-resource.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/graffiti-morph-renderer.js?v=20261012-v737"></script>
-    <script defer src="js/render/graffiti-pass.js?v=20261012-v737"></script>
-    <script defer src="js/render/web-morph-bridge.js?v=20261012-v737"></script>
-    <script defer src="js/render/pass-isolation.js?v=20261012-v737"></script>
-    <script defer src="js/render/lamp-morph-bridge.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/lamp-topology-resource.js?v=20261012-v737"></script>
-    <script defer src="js/gpu/lamp-ghost-resource.js?v=20261012-v737"></script>
-    <script defer src="js/geometry/lamp-corner-resource.js?v=20261012-v737"></script>
-    <script defer src="js/render/render-graph.js?v=20261012-v737"></script>
-    <script defer src="js/render/gpu-command-scheduler.js?v=20261012-v737"></script>
-    <script defer src="js/render/consumer-demand.js?v=20261012-v737"></script>
-    <script defer src="js/render/path-fx-pass.js?v=20261012-v737"></script>
-    <script defer src="js/render/sweep-pass.js?v=20261012-v737"></script>
-    <script defer src="js/render/particle-pass.js?v=20261012-v737"></script>
-    <script defer src="js/render/web-pass.js?v=20261012-v737"></script>
-    <script defer src="js/render/main-pipeline.js?v=20261012-v737"></script>
-    <script defer src="js/legacy/app-c.js?v=20261012-v737"></script>
+    <title>Somata 7.3.20</title>
+    <link rel="stylesheet" href="styles/app.css?v=20261012-v7320-hf11">
+    <script defer src="js/bootstrap/boot-guard.js?v=20261012-v7320"></script>
+    <script defer src="js/bootstrap/error-overlay.js?v=20261012-v7320"></script>
+    <script defer src="js/bootstrap/module-registry.js?v=20261012-v7320"></script>
+    <script defer src="js/core/palette.js?v=20261012-v7320"></script>
+    <script defer src="js/core/state.js?v=20261012-v7320-hf9"></script>
+    <script defer src="js/core/layer-versions.js?v=20261012-v7320"></script>
+    <script defer src="js/ui/profile-presets.js?v=20261012-v7320"></script>
+    <script defer src="js/geometry/kernel.js?v=20261012-v7320-hf5"></script>
+    <script defer src="js/core/render-runtime.js?v=20261012-v7320"></script>
+    <script defer src="js/core/backend-policy.js?v=20261012-v7320"></script>
+    <script defer src="js/core/scheduler.js?v=20261012-v7320-hf5"></script>
+    <script defer src="js/core/morph-controller.js?v=20261012-v7320"></script>
+    <script defer src="js/effects/motion.js?v=20261012-v7320"></script>
+    <script defer src="js/core/defaults-layers.js?v=20261012-v7320-hf9"></script>
+    <script defer src="js/geometry/spline.js?v=20261012-v7320"></script>
+    <script defer src="js/legacy/app-a.js?v=20261012-v7320-hf5"></script>
+    <script defer src="js/gpu/lamp-renderer.js?v=20261012-v7320-hf9"></script>
+    <script defer src="js/gpu/web-thread-scene-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/graffiti-ribbon-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/canonical-path-store.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/canonical-sweep-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/bezier-sweep-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/path-fx-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/particle-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/geometry/frame-paths.js?v=20261012-v7320-hf5"></script>
+    <script defer src="js/geometry/canonical.js?v=20261012-v7320"></script>
+    <script defer src="js/legacy/app-b.js?v=20261012-v7320-hf10"></script>
+    <script defer src="js/render/fill-plan.js?v=20261012-v7320"></script>
+    <script defer src="js/geometry/morph.js?v=20261012-v7320"></script>
+    <script defer src="js/geometry/morph-frame.js?v=20261012-v7320"></script>
+    <script defer src="js/geometry/morph-budget.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/morph-path-resource.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/morph-arc-resource.js?v=20261012-v7320-hf8"></script>
+    <script defer src="js/gpu/profile-arc-marker-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/topology-morph-base-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/spiral-bezier-morph-renderer.js?v=20261012-v7320-hf8"></script>
+    <script defer src="js/gpu/green-project-morph-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/web-corner-resource.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/web-morph-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/lightning-arc-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/graffiti-sample-resource.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/graffiti-morph-renderer.js?v=20261012-v7320"></script>
+    <script defer src="js/render/graffiti-pass.js?v=20261012-v7320"></script>
+    <script defer src="js/render/web-morph-bridge.js?v=20261012-v7320"></script>
+    <script defer src="js/render/pass-isolation.js?v=20261012-v7320"></script>
+    <script defer src="js/render/lamp-morph-bridge.js?v=20261012-v7320-hf5"></script>
+    <script defer src="js/gpu/lamp-topology-resource.js?v=20261012-v7320"></script>
+    <script defer src="js/gpu/lamp-ghost-resource.js?v=20261012-v7320"></script>
+    <script defer src="js/geometry/lamp-corner-resource.js?v=20261012-v7320"></script>
+    <script defer src="js/render/render-graph.js?v=20261012-v7320"></script>
+    <script defer src="js/render/gpu-command-scheduler.js?v=20261012-v7320"></script>
+    <script defer src="js/render/consumer-demand.js?v=20261012-v7320"></script>
+    <script defer src="js/render/path-fx-pass.js?v=20261012-v7320"></script>
+    <script defer src="js/render/sweep-pass.js?v=20261012-v7320"></script>
+    <script defer src="js/render/particle-pass.js?v=20261012-v7320"></script>
+    <script defer src="js/render/web-pass.js?v=20261012-v7320"></script>
+    <script defer src="js/render/main-pipeline.js?v=20261012-v7320-hf8"></script>
+    <script defer src="js/legacy/app-c.js?v=20261012-v7320-hf11"></script>
+    <script defer src="js/core/self-test.js?v=20261012-v7320"></script>
 </head>
 <body>
+    <button id="btnPseudoFullscreenExit" type="button" title="Выйти из полноэкранного режима" aria-label="Выйти из полноэкранного режима">✕</button>
 
     <header>
         <div class="header-actions">
@@ -622,6 +631,12 @@
                     <div id="fileSettingsBlock" class="file-settings-block hidden">
                         <label class="file-setting-toggle" title="Отображать счётчик FPS поверх рабочей области"><input id="showFpsSetting" type="checkbox" checked><span>Отображать FPS</span></label>
                         <label class="file-setting-toggle" title="Максимальная частота тяжёлой отрисовки Somata. По умолчанию 60 FPS."><span>Ограничение FPS</span><input id="fpsLimitSetting" type="number" min="15" max="240" step="1" value="60" inputmode="numeric" aria-label="Ограничение FPS"></label>
+                        <label class="file-setting-toggle" title="Авто — использует WebGPU, когда доступен, и переходит на CPU, если полного GPU backend нет. GPU — приоритет WebGPU с безопасным CPU fallback. CPU — эталонный Canvas/CPU путь для проверки корректности и устройств с проблемным GPU."><span>Приоритет рендера</span><select id="renderBackendPreference" aria-label="Приоритет рендера"><option value="auto">Авто</option><option value="gpu">GPU</option><option value="cpu">CPU</option></select></label>
+                        <div class="file-self-test" title="Полная самопроверка Somata: каждый проект × видимый основной эффект, дополнительные эффекты, реальные пиксели Canvas, UI-инвалидация, горячие клавиши и переходы между Morph/Corridor/Web/Spiral.">
+                            <span class="file-self-test-title">Самопроверка эффектов</span>
+                            <div class="file-self-test-actions"><button id="btnSelfTestCpu" type="button">Тест CPU</button><button id="btnSelfTestGpu" type="button">Тест GPU</button></div>
+                            <span id="selfTestStatus" class="file-self-test-status" aria-live="polite">Не запускалась</span>
+                        </div>
                         <label class="file-setting-toggle" title="Если включено, новая ошибка автоматически покажет консоль ошибок, сохранив выбранное вами свёрнутое/развёрнутое состояние. По умолчанию выключено."><input id="autoShowErrorConsoleSetting" type="checkbox"><span>Автоматически показывать консоль при ошибке</span></label>
                         <label class="file-setting-toggle"><input id="showPresetChooser" type="checkbox"><span>Отображать пресеты</span></label>
                         <label class="file-setting-toggle"><input id="hideProjectChooser" type="checkbox" checked><span>Отображать проекты</span></label>
@@ -880,10 +895,51 @@
                         </div>
                         <div class="control-row"><span class="hint-text">Смешение</span><select id="lampBlendMode"><option value="lighter" selected>Add / Lighter</option><option value="screen">Screen</option><option value="source-over">Normal</option><option value="color-dodge">Color Dodge</option></select></div>
                     </div>
-                    <label class="display-enable-toggle lamp-compact-toggle" title="Сохраняет прошлые позиции лампочек как затухающий световой хвост. По умолчанию выключено."><input id="lampFreezeLight" type="checkbox"><span>FreezeLight</span></label>
-                    <div id="lampFreezeTailRow" class="control-row lamp-freeze-row disabled" title="Время затухания старых позиций лампочек">
-                        <div class="row-label"><span>Длина хвоста</span><span id="lampFreezeTailText" class="text-mono">1.5 с</span></div>
-                        <input id="lampFreezeTailSec" type="range" min="0.05" max="30" step="0.05" value="1.5" aria-label="Длина хвоста FreezeLight в секундах" disabled>
+                    <div class="lamp-freeze-block" id="lampFreezeBlock">
+                        <label class="display-enable-toggle lamp-compact-toggle lamp-freeze-block-toggle" title="Сохраняет реальные прошлые экранные позиции лампочек как световой хвост. Работает независимо от FreezeLight Rain."><input id="lampFreezeLight" type="checkbox"><span>FreezeLight</span></label>
+                        <div id="lampFreezeDetails" class="lamp-freeze-details hidden">
+                            <div id="lampFreezeTailRow" class="control-row lamp-freeze-row" title="Время жизни обычного светового хвоста">
+                                <div class="row-label"><span>Длина хвоста</span><span id="lampFreezeTailText" class="text-mono">1.5 с</span></div>
+                                <input id="lampFreezeTailSec" type="range" min="0.05" max="30" step="0.05" value="1.5" aria-label="Длина хвоста FreezeLight в секундах">
+                            </div>
+                            <div id="lampFreezeHardnessRow" class="control-row lamp-freeze-row" title="50% — линейное затухание; выше — хвост дольше остаётся плотным; 100% — постоянная прозрачность до конца времени; 0% — след не виден">
+                                <div class="row-label"><span>Жёсткость</span><span id="lampFreezeHardnessText" class="text-mono">50%</span></div>
+                                <input id="lampFreezeHardness" type="range" min="0" max="100" step="1" value="50" aria-label="Жёсткость FreezeLight">
+                            </div>
+                            <div id="lampFreezeColorModeRow" class="control-row lamp-freeze-row" title="Цвет влияет только на хвост; текущая лампа сохраняет свой исходный цвет."><span class="hint-text">Цвет хвоста</span><select id="lampFreezeColorMode"><option value="lamp" selected>Цвет лампочки</option><option value="line">Цвет линии</option><option value="fixed">Заданный цвет</option><option value="hue">Изменение цвета</option></select></div>
+                            <div id="lampFreezeColorRow" class="control-row lamp-freeze-row hidden" title="Заданный цвет хвоста FreezeLight"><span class="hint-text">Заданный цвет</span><input id="lampFreezeColor" type="color" value="#00ffcc"></div>
+                            <div id="lampFreezeHueRow" class="control-row lamp-freeze-row hidden" title="Хвост плавно проходит по оттенкам в диапазоне ± указанного количества градусов; текущая лампа остаётся исходного цвета.">
+                                <div class="row-label"><span>Изменение оттенка</span><span id="lampFreezeHueText" class="text-mono">±45°</span></div>
+                                <div class="lamp-rain-angle-control"><input id="lampFreezeHueDegrees" type="range" min="0" max="180" step="1" value="45" aria-label="Диапазон изменения оттенка FreezeLight"><input id="lampFreezeHueDegreesNumber" type="number" min="0" max="180" step="1" value="45" inputmode="numeric" aria-label="Диапазон изменения оттенка FreezeLight в градусах"><span>°</span></div>
+                            </div>
+                            <label class="display-enable-toggle lamp-compact-toggle lamp-freeze-chromatic-toggle" title="Добавляет цветную кайму с внешней стороны краёв FreezeLight, не изменяя его историю."><input id="lampFreezeChromatic" type="checkbox"><span>Хроматическая аберрация</span></label>
+                            <div id="lampFreezeChromaticColorRow" class="control-row lamp-freeze-row hidden"><span class="hint-text">Цвет аберрации</span><input id="lampFreezeChromaticColor" type="color" value="#22d3ee"></div>
+                        </div>
+                    </div>
+                    <div class="lamp-freeze-block lamp-freeze-rain-block" id="lampFreezeRainBlock">
+                        <label class="display-enable-toggle lamp-compact-toggle lamp-freeze-block-toggle" title="Отдельный световой дождь: старый свет течёт в заданном направлении независимо от обычного FreezeLight."><input id="lampFreezeRain" type="checkbox"><span>FreezeLight Rain</span></label>
+                        <div id="lampFreezeRainDetails" class="lamp-freeze-details hidden">
+                            <div id="lampFreezeRainDegreesRow" class="control-row lamp-freeze-row" title="Направление движения светового дождя: 0° — вверх, 90° — вправо, 180° — вниз, 270° — влево. Ползунок фиксируется через 5°, точное значение можно ввести вручную.">
+                                <div class="row-label"><span>Градусы</span><span id="lampFreezeRainDegreesText" class="text-mono">180°</span></div>
+                                <div class="lamp-rain-angle-control">
+                                    <input id="lampFreezeRainDegrees" type="range" min="0" max="355" step="5" value="180" aria-label="Направление FreezeLight Rain: шаг 5 градусов">
+                                    <input id="lampFreezeRainDegreesNumber" type="number" min="0" max="359" step="1" value="180" inputmode="numeric" aria-label="Точное направление FreezeLight Rain в градусах"><span>°</span>
+                                </div>
+                            </div>
+                            <div id="lampFreezeRainSourceRow" class="control-row lamp-freeze-row" title="Какая часть текущей лампы создаёт дождевой след. Core исключает внешний ореол и выбран по умолчанию."><span class="hint-text">Свечение дождя</span><select id="lampFreezeRainSource"><option value="core" selected>Только core</option><option value="lamp">Вся лампа</option></select></div>
+                            <div id="lampFreezeRainSpeedRow" class="control-row lamp-freeze-row" title="0% — дождь не движется; 50% — прежняя скорость; к 100% скорость гиперболически растёт, 100% — мгновенный перенос за экран.">
+                                <div class="row-label"><span>Скорость дождя</span><span id="lampFreezeRainSpeedText" class="text-mono">50%</span></div>
+                                <input id="lampFreezeRainSpeed" type="range" min="0" max="100" step="1" value="50" aria-label="Скорость FreezeLight Rain">
+                            </div>
+                            <div id="lampFreezeRainTailRow" class="control-row lamp-freeze-row" title="Время жизни светового дождя">
+                                <div class="row-label"><span>Длина дождя</span><span id="lampFreezeRainTailText" class="text-mono">1.5 с</span></div>
+                                <input id="lampFreezeRainTailSec" type="range" min="0.05" max="30" step="0.05" value="1.5" aria-label="Длина FreezeLight Rain в секундах">
+                            </div>
+                            <div id="lampFreezeRainHardnessRow" class="control-row lamp-freeze-row" title="50% — линейное затухание; выше — более ровная прозрачность; 100% — однородный след; 0% — след не виден">
+                                <div class="row-label"><span>Жёсткость дождя</span><span id="lampFreezeRainHardnessText" class="text-mono">50%</span></div>
+                                <input id="lampFreezeRainHardness" type="range" min="0" max="100" step="1" value="50" aria-label="Жёсткость FreezeLight Rain">
+                            </div>
+                        </div>
                     </div>
                     <div class="lamp-bokeh-grid">
                         <div id="lampDensityRow" class="control-row hidden"><div class="row-label"><span>Плотность лампочек</span><span id="lampDensityText" class="text-mono">100% × 1</span></div><div class="lamp-slider-mult"><input id="lampDensity" type="range" min="0" max="200" step="1" value="100"><span class="lamp-mult-label">×</span><input id="lampDensityMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель плотности произвольных лампочек" data-log-multiplier="1"></div></div>
@@ -917,7 +973,7 @@
                             <option value="ring">Световое кольцо</option>
                             <option value="star">Звёздная искра</option>
                         </select>
-                        <div class="lamp-type-preview">Ключевое — конструкционные точки геометрии; «На изломах» — лампы закреплены за своим контуром и набирают яркость с заданной инерцией; «Произвольное» — стабильные случайные координаты внутри каждого отдельного контура без перескоков между контурами. Цветомузыка усиливает яркость и слегка меняет размер.</div>
+                        <div class="lamp-type-preview">Ключевое — только концы обычных/спиральных отрезков; «На изломах» — все ключевые точки плюс изломы конструкции, даже если они визуально скруглены сплайном; «Произвольное» — стабильные случайные координаты внутри каждого отдельного контура без перескоков между контурами. Цветомузыка усиливает яркость и слегка меняет размер.</div>
                     </div>
                 </div>
                 <div class="control-group web-settings-group">

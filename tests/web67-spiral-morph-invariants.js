@@ -25,16 +25,24 @@ assert.ok(corner.includes('r.z!=0u||r.w==2u') && corner.includes('before=anchor+
   'Closed and periodic Spiral corner depth must wrap by one canonical contour period');
 assert.ok(corner.includes('localSpan=max(0.0,cornerState[si].z)') && !corner.includes('min(max(0.0,prevQ.y),max(0.0,q.y))*frac*dm'),
   'Corners depth must not be clamped back to one Arc microsegment');
-assert.ok(corner.includes('total*0.25*frac*dm'),
-  'Self-intersection Web must retain the 6.7 quarter-perimeter depth rule');
+assert.ok(corner.includes('m.cpuPathCornerFractions||[]') && corner.includes('m.cpuPathKnotFractions||[]') && corner.includes('authoredLogical.add(firstLogical+best)'),
+  'Web corner identity must be mapped from authored endpoint corner fractions, not technical equalisation boundaries');
+assert.ok(corner.includes('retainedCubics:array<vec4<f32>>') && corner.includes('let cq0=retainedCubics[logical*2u]') && corner.includes('let pq1=retainedCubics[prevLogical*2u+1u]'),
+  'Web corner angle classification must use exact retained-cubic endpoint tangents');
+assert.ok(corner.includes('indices[slot]=candidates[i]&0x3fffffffu'),
+  'Compacted corner indices must strip candidate metadata bits before Arc consumers read them');
+assert.ok(corner.includes('ordinaryClosed=r.w==1u') && corner.includes('var localMax=select(spanMax,closedSelfMax,!cornerMode&&ordinaryClosed)'),
+  '6.7 quarter-perimeter depth must apply only to ordinary closed contours; open/periodic Spiral must use neighbour-corner span');
 
-// Spline Morph must stay continuous at technical De Casteljau equalisation boundaries.
+// Spiral Morph must stay continuous at technical De Casteljau equalisation boundaries, regardless of profile mode.
 assert.ok(spiral.includes('TANGENT_REPAIR_WGSL') && spiral.includes('segmentMeta[i-1u].z!=segmentMeta[i].z'),
-  'Spline tangent repair must only join adjacent cubics inside the same retained path');
-assert.ok(spiral.includes('strength=clamp(mix(u.phase.y,u.phase.z,t)') && spiral.includes("sourceSpline:srcLayer?.profileMode==='spline'") && spiral.includes("targetSpline:dstLayer?.profileMode==='spline'"),
-  'Intermediate tangent continuity must follow the source/target profile-mode transition');
+  'Topology tangent repair must only join adjacent cubics inside the same retained path');
+assert.ok(spiral.includes('sourceCorner=((pf&0x02000000u)!=0u)||((nf&0x01000000u)!=0u)') && spiral.includes('targetCorner=((pf&0x08000000u)!=0u)||((nf&0x04000000u)!=0u)') && spiral.includes('sourceSmooth=select(1.0,0.0,sourceCorner)') && spiral.includes('targetSmooth=select(1.0,0.0,targetCorner)') && spiral.includes('if(rec.tangentRepairBind&&tangentRepairPipeline&&rec.cubicCount>1)'),
+  'Intermediate tangent repair must repair every non-authored technical cut while preserving authored Segment corners');
 assert.ok(spiral.includes('repairedC2=knot-dir*lin') && spiral.includes('repairedC1=knot+dir*lout') && spiral.includes('tangentRepairDispatches++'),
-  'Spline Morph must repair G1 handles on the canonical current-cubic rail before effects/Fast Rail consume it');
+  'Spiral Morph must repair G1 handles on the canonical current-cubic rail before effects/Fast Rail consume it');
+assert.ok(pipe.includes('const liveMorphAuthority=frameCtx.morphFrameActive===true||frameCtx.geometryPlan?.dynamic===true') && pipe.includes('if(liveMorphAuthority&&rec?.specialSpiralBezierRail===true'),
+  'A retired Morph Spiral resource must not keep a later static non-Spiral frame in strict-Spiral ownership');
 
 // Project default-mode behaviour is intentionally kept at the known-good 6.7 contract.
 assert.ok(app.includes("return projectData?.settings?.morph?.defaultActive === true") && app.includes("return projectData?.settings?.tunnel?.defaultActive === true"),
@@ -54,7 +62,7 @@ assert.ok(brainProject?.settings?.morph?.defaultActive===true && brainProject?.s
 assert.ok(brainProject?.settings?.minimalMorph?.defaultActive===false,
   'Factory Мозголом Orange/default transition state must remain explicit rather than inheriting runtime state');
 
-assert.ok(['web67NeighbourCornerDepth:true','webCorridorCrosslinksDepthStencilCompatible:true','spiralSplineIntermediateTangentRepair:true','projectDefaultModes67Parity:true'].every(x=>pipe.includes(x)),
-  'Runtime audit must expose the 7.3.7 Web/Spiral/default-mode contracts');
+assert.ok(['web67NeighbourCornerDepth:true','webAuthoredCornerFractionsOnly:true','webCornerExactCubicTangents:true','webPeriodicSelfIntersectionUsesNeighbourSpan:true','webCorridorCrosslinksDepthStencilCompatible:true','spiralTopologyTechnicalCutTangentRepair:true','spiralTangentRepairPreservesAuthoredCorners:true','strictSpiralStaleMorphResourceNotStaticAuthority:true','projectDefaultModes67Parity:true'].every(x=>pipe.includes(x)),
+  'Runtime audit must expose the 7.3.9 Web/Spiral/default-mode contracts');
 
-console.log('Somata 7.3.7 Web 6.7 / Spiral Morph invariants: PASS');
+console.log('Somata 7.3.9 Web 6.7 / Spiral Morph invariants: PASS');

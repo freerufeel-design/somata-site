@@ -110,7 +110,12 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             // closed instead of materialising a six-samples-per-cubic shadow contour. This is
             // deliberately visible in diagnostics so unsupported features can be moved to GPU.
             const sl=runtimeState.morph?.renderSourceLayers?.[layerIndex],dl=runtimeState.morph?.renderTargetLayers?.[layerIndex],strictSpiral=state?.fourierMode!==true&&[sl,dl].some(l=>l&&typeof isSpiralLayer==='function'&&isSpiralLayer(l));
-            if(strictSpiral){morphCpuPathDemandRuntime.strictSpiralBlocks++;return noteMorphCpuPathDemand('spiral-gpu-only',purpose,layerIndex,t,[]);}
+            // Strict Spiral is GPU-only only while the effective backend is actually GPU.
+            // If WebGPU fails at runtime and backend-policy degrades to the CPU reference
+            // renderer, materialise the canonical Circle/Spiral paths so Web/Lamps/Sweep and
+            // the base geometry keep working instead of leaving a half-alive frozen project.
+            const cpuReferenceActive = typeof somataCpuBackendForced==='function' && somataCpuBackendForced();
+            if(strictSpiral&&!cpuReferenceActive){morphCpuPathDemandRuntime.strictSpiralBlocks++;return noteMorphCpuPathDemand('spiral-gpu-only',purpose,layerIndex,t,[]);}
             if((state.morph?.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()))){
                 const chaos=typeof isChaosCircleMorphPair==='function'&&isChaosCircleMorphPair(layerIndex);
                 let paths=[];
@@ -130,7 +135,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
         window.__spiroMorphCpuFallbackStatus=()=>({
             ...morphCpuPathDemandRuntime,purposes:{...morphCpuPathDemandRuntime.purposes},
             last:morphCpuPathDemandRuntime.last?{...morphCpuPathDemandRuntime.last}:null,
-            contract:'CPU morph geometry is materialized only through explicit non-Spiral compatibility demand; strict non-Fourier Spiral Morph blocks every CPU-path request and remains retained-cubic/WebGPU-only.'
+            contract:'Strict non-Fourier Spiral Morph is retained-cubic/WebGPU-only while GPU is effective; the CPU reference backend materialises the canonical Circle/Spiral path so runtime GPU failover remains visually complete.'
         });
 
         // v132: reusable transient geometry for Sweep/Web/dynamic Lightning.
@@ -214,6 +219,10 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             ctx.auxiliaryPaths=null;ctx.auxiliaryPathsReady=false;ctx.roundedPaths=null;ctx.roundedPathsReady=false;
             ctx.rawPathTable=null;ctx.rawPathTableReady=false;ctx.roundedPathTable=null;ctx.roundedPathTableReady=false;
             ctx.profilePrepared=null;ctx.profilePreparedReady=false;ctx.sweepPrepared=null;ctx.sweepPreparedReady=false;
+            // 7.3.9: Geometry Circles derive from frame-local auxiliary paths. LayerFrame
+            // contexts are pooled, so a cached null/result from the previous project/frame
+            // must never suppress circles after playlist navigation or a geometry change.
+            ctx._geometryCircleFrameData=undefined;
             ctx.webPrepared=null;ctx.webPreparedReady=false;ctx.lampInstances=null;ctx.lampInstancesReady=false;
             ctx.minimalSourceLayer=null;ctx.minimalTargetLayer=null;ctx.morphFrameActive=false;ctx.lightMorphEnabled=false;ctx.forcedLampMorph=false;ctx.greenLampDisplay=false;
             ctx.lampDisplayEnabled=false;ctx.greenMorphEnabled=false;ctx.greenFadeEnabled=false;ctx.greenFadeT=0;ctx.greenFramePaths=null;ctx.greenSourcePaths=null;ctx.greenTargetPaths=null;ctx.greenSourceLayer=null;ctx.greenTargetLayer=null;
@@ -531,10 +540,13 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             const count=Math.max(8,Math.min(maxPoints,Math.round(table.total/24)));
             return {table,count};
         }
-        function lampArbitraryDensityFactor() {
-            const cfg=getLampEvaluationConfig();
-            const pct=Math.max(0,Math.min(200,Number(cfg.density??100)))/100;
-            const mult=Math.max(0,Math.min(5,Number(cfg.densityMultiplier??1)));
+        function lampArbitraryDensityFactor(explicitConfig=null) {
+            // GPU Morph preparation can run before the legacy withLampConfig() wrapper is
+            // entered. Accept the frame/layer config explicitly so Arbitrary density never
+            // falls back to the actively edited/global lamp config by accident.
+            const cfg=(explicitConfig&&typeof explicitConfig==='object')?explicitConfig:getLampEvaluationConfig();
+            const pct=Math.max(0,Math.min(200,Number(cfg?.density??100)))/100;
+            const mult=Math.max(0,Math.min(5,Number(cfg?.densityMultiplier??1)));
             return Math.max(0,Math.min(5,pct*mult));
         }
         function stableArbitraryLampCount(layer, paths, maxPoints=600) {
@@ -611,6 +623,26 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             const paths=isLampContourAttachmentEnabled() ? buildLampRenderedAttachmentPaths(rawPaths,layer) : rawPaths;
             return collectArbitraryContourLampPoints(layer,paths,maxPoints);
         }
+        function mergeLampKeyAndCornerPoints(keyPoints,cornerPoints,maxPoints=260){
+            const out=[],seen=new Set();
+            const makeKey=(p)=>{
+                const pi=Number.isInteger(p?.pathIndex)?p.pathIndex:-1;
+                const f=Number.isFinite(Number(p?.lampAttachFraction))?Number(p.lampAttachFraction):
+                    (Number.isFinite(Number(p?.lampContourFraction))?Number(p.lampContourFraction):NaN);
+                if(Number.isFinite(f))return `p:${pi}:f:${Math.round(f*1000000)}`;
+                const vi=Number.isInteger(p?.vertexIndex)?p.vertexIndex:null;
+                if(vi!==null)return `p:${pi}:v:${vi}`;
+                return `xy:${Math.round((Number(p?.x)||0)*1000)}:${Math.round((Number(p?.y)||0)*1000)}`;
+            };
+            const add=(p)=>{
+                if(!p||out.length>=maxPoints)return;
+                const k=makeKey(p);if(seen.has(k))return;seen.add(k);out.push(p);
+            };
+            // Key points are authoritative. Corners add only genuinely additional bends.
+            for(const p of keyPoints||[])add(p);
+            for(const p of cornerPoints||[])add(p);
+            return out;
+        }
         function collectStaticLampPoints(layer, prepared=null, maxPoints=240) {
             const mode=getLampEvaluationConfig()?.positionMode||'key';
             if(mode==='arbitrary') return collectArbitraryStaticLampPoints(layer,prepared,Math.max(600,maxPoints));
@@ -619,10 +651,16 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                 const drawData=prepared || getCachedLayerDrawData(layer);
                 const layerIndex=Math.max(0,getRuntimeLayerIndex(layer));
                 const rawPaths=drawData?.paths||[];
-                const points=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints,false);
-                if(!isLampContourAttachmentEnabled()) return points;
-                const visiblePaths=buildLampRenderedAttachmentPaths(rawPaths,layer);
-                return projectLampPointsToCurrentPolygon(points,visiblePaths,layer,true);
+                // «На изломах» is a superset: all Key lamps + every bend marker.
+                // This remains true even when the visible spline/rounding has smoothed
+                // the bend; the bend identity comes from the construction geometry.
+                const keyPoints=buildLampCircumferenceAnchors(layer,drawData,maxPoints);
+                let bendPoints=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints,false);
+                if(isLampContourAttachmentEnabled()){
+                    const visiblePaths=buildLampRenderedAttachmentPaths(rawPaths,layer);
+                    bendPoints=projectLampPointsToCurrentPolygon(bendPoints,visiblePaths,layer,true);
+                }
+                return mergeLampKeyAndCornerPoints(keyPoints,bendPoints,maxPoints);
             }
             return buildLampCircumferenceAnchors(layer,prepared,maxPoints);
         }

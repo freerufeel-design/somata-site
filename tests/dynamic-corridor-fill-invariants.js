@@ -13,6 +13,9 @@ assert.ok(kernel.includes('const dynamicCorridorNative=fillRequested&&dynamic&&c
 assert.ok(fillPlan.includes('function prepareDynamicCommands(frameCtx, commands)')&&fillPlan.includes('dynamicScreenSpace:true'), 'Dynamic Fill must reuse frame-resident command geometry instead of a Canvas mask');
 assert.ok(pipeline.includes('if(contract.dynamicCorridorNative===true)return{mask:null'), 'Dynamic Corridor Fill must never rasterize a Canvas2D mask');
 assert.ok(pipeline.includes('function getDynamicCorridorFillMesh(frameCtx)')&&pipeline.includes('getDynamicTunnelMorphMasterStrokeCommands?.(frameCtx)'), 'Dynamic Fill must share the Corridor Morph master rail');
+
+assert.ok(!kernel.includes('const dynamicCorridorNative=fillRequested&&dynamic&&corridor&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerGeometry)&&!spiralEndpoint'), 'Dynamic Spiral Corridor Fill must not be rejected solely because a Morph endpoint is Spiral');
+assert.ok(pipeline.includes("suppressed:true,reason:'dynamic Spiral Corridor has no closed native Fill contour'")&&pipeline.includes("stage:'corridor-no-closed-fill'"), 'An open dynamic Spiral rail must skip non-existent Fill for that frame instead of entering corridor-gpu-wait');
 assert.ok(pipeline.includes("queueLayerSceneEffectCommand(frameCtx,4,rec.commandBuffer,'corridor-native-fill')"), 'Dynamic Fill must join the resident GPU Layer Scene at Fill ordering phase');
 assert.ok(appA.includes("label:'Somata dynamic Corridor Fill stencil fan'")&&appA.includes('dynamicMeshUploads')&&appA.includes('dynamicMeshReuses'), 'Dynamic Fill must use a persistent grow-only GPU vertex buffer');
 assert.ok(appA.includes('if(mesh?.dynamicScreenSpace===true)')&&appA.includes('ox-(a*ox+c*oy)'), 'Dynamic screen-space Fill must apply tunnel copy transforms around the same origin as Corridor Base');

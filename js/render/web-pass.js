@@ -7,6 +7,14 @@ window.__spiroRegisterModule?.('js/render/web-pass');
 // Corridor copies.  A union clip path preserves the exact v261 inside-contour semantics, so
 // concave contours do not gain threads outside their authored shape.
 const webGpuCorridorStats={frames:0,masterBuilds:0,stableCommandHits:0,stableCommandStores:0,coreDraws:0,haloDraws:0,copies:0,clipUnions:0,fallbacks:0,lastBackend:'none',lastReason:''};
+
+function webGpuOptionalWait(frameCtx,reason,detail=null,timeoutMs=800){
+    const transient=/warm|wait|unavailable|not[- ]?ready|resource|scene|encode/i.test(String(reason||''));
+    if(typeof somataGpuFeatureWaitOrFallback==='function')return somataGpuFeatureWaitOrFallback('web',reason,detail,timeoutMs,frameCtx,!transient);
+    try{requestMainCanvasRender?.();}catch(_){}
+    return false;
+}
+function webGpuOptionalReady(frameCtx){try{somataGpuFeatureReady?.('web',frameCtx);}catch(_){}return true;}
 function getPreparedWebBranches(prepared){
     if(!prepared)return[];
     const out=[];if(prepared.insideEnabled===true)out.push('inside');if(prepared.outsideStraightEnabled===true)out.push('outsideStraight');if(prepared.outsideArcEnabled===true)out.push('outsideArc');
@@ -82,7 +90,7 @@ function compositeWebGPUThreadsWithClip(clipResult){
     }finally{mainCtx.restore();}
 }
 function tryRenderCorridorWebThreadsGPU(frameCtx,effect){
-    if(effect?.tunnelActive!==true||!WebGPUStrokeRenderer.isReady()||!GeometryGPURenderer.isAvailable())return false;
+    if((typeof somataCpuBackendForced==='function'&&somataCpuBackendForced())||effect?.tunnelActive!==true||!WebGPUStrokeRenderer.isReady()||!GeometryGPURenderer.isAvailable())return false;
     const branches=getPreparedWebBranches(effect?.frameData);if(!branches.length)return false;
     // The instanced union clip is exact for the inside branch. Outside parity regions from
     // multiple scaled copies can overlap, so outer branches deliberately use the per-copy
@@ -156,9 +164,12 @@ function renderLayerWebPass(frameCtx) {
         if(frameCtx.frame?.gpuLayerSceneDeferred){
             const scene=WebGPUStrokeRenderer.getDeferredLayerSceneTexture?.(frameCtx.frameId);let rec=null;
             if(scene?.texture){mainCtx.save();applyLayerFrameEffectTransform(mainCtx,frameCtx);rec=effect.tunnelActive===true?WebGPUWebMorphRenderer.encodeCorridorToLayerScene(scene.texture,effect.frameData,mainCtx,baseAlpha,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint):WebGPUWebMorphRenderer.encodeToLayerScene(scene.texture,effect.frameData,mainCtx,baseAlpha*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),frameCtx);mainCtx.restore();}
-            if(rec?.handled){webGpuCorridorStats.lastBackend='webgpu-morph-scene';webGpuCorridorStats.lastReason='';renderBackendTelemetry.mark('web','gpu','shared GPU-topology Web');if(rec.commandBuffer){const phase=strictSpiralGpu?4.5:40;queueLayerSceneEffectCommand(frameCtx,phase,rec.commandBuffer,effect.tunnelActive===true?'web-morph-corridor':'web-morph',rec.onSubmitted);}return;}
+            if(rec?.handled){webGpuOptionalReady(frameCtx);webGpuCorridorStats.lastBackend='webgpu-morph-scene';webGpuCorridorStats.lastReason='';renderBackendTelemetry.mark('web','gpu','shared GPU-topology Web');if(rec.commandBuffer){const phase=strictSpiralGpu?4.5:40;queueLayerSceneEffectCommand(frameCtx,phase,rec.commandBuffer,effect.tunnelActive===true?'web-morph-corridor':'web-morph',rec.onSubmitted);}return;}
         }
-        if(strictSpiralGpu){webGpuCorridorStats.lastBackend='webgpu-wait';webGpuCorridorStats.lastReason='Spiral GPU-only Web resource unavailable';renderBackendTelemetry.mark('web','gpu','Spiral Web GPU-only warmup');somataGpuContractError?.('SPIRAL_WEB_GPU_RESOURCE_UNAVAILABLE',frameCtx,{stage:'morph-native',bridge:window.__spiroGpuMorphWebBridgeStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,corner:window.__spiroGpuWebCornerStatus?.()||null,renderer:window.__spiroGpuMorphWebStatus?.()||null});return;}
+        if(strictSpiralGpu){
+            const degraded=webGpuOptionalWait(frameCtx,'web-native-render-wait',{stage:'morph-native',bridge:window.__spiroGpuMorphWebBridgeStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,corner:window.__spiroGpuWebCornerStatus?.()||null,renderer:window.__spiroGpuMorphWebStatus?.()||null},800);
+            if(isStrictSpiralWebGPUFrame(frameCtx)&&!degraded){webGpuCorridorStats.lastBackend='webgpu-wait';webGpuCorridorStats.lastReason='Spiral GPU-only Web resource unavailable';renderBackendTelemetry.mark('web','gpu','Spiral Web GPU-only warmup');somataGpuContractError?.('SPIRAL_WEB_GPU_RESOURCE_UNAVAILABLE',frameCtx,{stage:'morph-native',bridge:window.__spiroGpuMorphWebBridgeStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,corner:window.__spiroGpuWebCornerStatus?.()||null,renderer:window.__spiroGpuMorphWebStatus?.()||null});return;}
+        }
         materializeGpuMorphWebCpuFallback(frameCtx,effect,'gpu-web-render-failed');if(!effect.frameData?.enabled||!effect.paths?.length)return;
     }
 
@@ -174,16 +185,24 @@ function renderLayerWebPass(frameCtx) {
                 const rec=WebGPUWebThreadSceneRenderer.encodeToLayerScene(scene.texture,commands,clip,haloPx,baseAlpha*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),frameCtx,clipMode);
                 if(!rec?.handled){allHandled=false;break;}if(rec.commandBuffer){queueLayerSceneEffectCommand(frameCtx,40+bi*.01,rec.commandBuffer,`web-${branch}`);queued++;}
             }
-            if(allHandled&&(anyCommands||!(effect.frameData?.corners?.length))){webGpuCorridorStats.lastBackend='webgpu-scene';webGpuCorridorStats.lastReason='';renderBackendTelemetry.mark('web','gpu','deferred GPU web');return;}
+            if(allHandled&&(anyCommands||!(effect.frameData?.corners?.length))){webGpuOptionalReady(frameCtx);webGpuCorridorStats.lastBackend='webgpu-scene';webGpuCorridorStats.lastReason='';renderBackendTelemetry.mark('web','gpu','deferred GPU web');return;}
         }
-        if(strictSpiralGpu){webGpuCorridorStats.lastBackend='webgpu-wait';webGpuCorridorStats.lastReason='Spiral Web stays WebGPU-only';somataGpuContractError?.('SPIRAL_WEB_LAYER_SCENE_ENCODE_FAILED',frameCtx,{branches});return;}
+        if(strictSpiralGpu){
+            const degraded=webGpuOptionalWait(frameCtx,'web-layer-scene-encode-wait',{stage:'layer-scene',branches},800);
+            if(isStrictSpiralWebGPUFrame(frameCtx)&&!degraded){webGpuCorridorStats.lastBackend='webgpu-wait';webGpuCorridorStats.lastReason='Spiral Web stays WebGPU-only';somataGpuContractError?.('SPIRAL_WEB_LAYER_SCENE_ENCODE_FAILED',frameCtx,{branches});return;}
+            materializeGpuMorphWebCpuFallback(frameCtx,effect,'gpu-web-layer-scene-timeout');
+        }
         if(!materializeDeferredLayerScene(frameCtx))return;
     }
 
-    if(strictSpiralGpu){webGpuCorridorStats.lastBackend='webgpu-wait';webGpuCorridorStats.lastReason='No Canvas/WebGL fallback allowed for Spiral Web';renderBackendTelemetry.mark('web','gpu','Spiral Web GPU-only path');somataGpuContractError?.('SPIRAL_WEB_NO_FULL_GPU_PATH',frameCtx,{branches});return;}
+    if(isStrictSpiralWebGPUFrame(frameCtx)){
+        const degraded=webGpuOptionalWait(frameCtx,'web-full-gpu-path-wait',{stage:'final',branches},800);
+        if(isStrictSpiralWebGPUFrame(frameCtx)&&!degraded){webGpuCorridorStats.lastBackend='webgpu-wait';webGpuCorridorStats.lastReason='No Canvas/WebGL fallback allowed for Spiral Web';renderBackendTelemetry.mark('web','gpu','Spiral Web GPU-only path');somataGpuContractError?.('SPIRAL_WEB_NO_FULL_GPU_PATH',frameCtx,{branches});return;}
+        materializeGpuMorphWebCpuFallback(frameCtx,effect,'gpu-web-full-path-timeout');
+    }
     if(tryRenderCorridorWebThreadsGPU(frameCtx,effect)){renderBackendTelemetry.mark('web','gpu','WebGL2 Corridor web (correctness fallback from deferred WebGPU)');if(effect.frameData?.cfg?.placementMode==='selfIntersectionCorridor')renderWebCorridorCrossLinks(frameCtx,effect);return;}
     if(effect.tunnelActive===true&&WebGPUStrokeRenderer.isReady())webGpuCorridorStats.fallbacks++;
-    const glReady=GeometryGPURenderer.isAvailable();let usedGpu=false,usedCanvas=false;
+    const glReady=(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed())&&GeometryGPURenderer.isAvailable();let usedGpu=false,usedCanvas=false;
     for(let wi=0;wi<visibleInstances.copies.length;wi++){
         const copy=visibleInstances.copies[wi],a=visibleInstances.alphas[wi];if(!shouldDrawTunnelEffectIndex('web',wi,frameCtx,effect.footprint))continue;
         mainCtx.save();if(effect.tunnelActive){applyMotionTunnelLag(mainCtx,copy,frameCtx.layer);mainCtx.scale(copy.scale,copy.scale);}applyLayerFrameEffectTransform(mainCtx,frameCtx);

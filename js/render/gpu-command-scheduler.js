@@ -36,7 +36,7 @@ function spiroGpuScheduleLayerSceneCommand(frameCtx,phase,commandBuffer,label='e
 }
 function spiroGpuScheduledTokenMatches(token,frameId,t){return Boolean(token&&token.frameId===frameId&&token.t===t);}
 
-// Schedule resident prerequisites before every visual LayerScene phase. Somata 7.3.7 reserves
+// Schedule resident prerequisites before every visual LayerScene phase. Somata 7.3.9 reserves
 // phases 1/2 for Morph/Arc, then Glow=3, Fill=4, Web-under-Base=4.5, Base=5.
 // Command buffers stay in the SAME ordered queue as consumers; no CPU wait/readback is needed.
 function spiroGpuEnsureMorphPrerequisite(frameCtx,morphRec,t,phase=1){

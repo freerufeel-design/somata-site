@@ -17,7 +17,7 @@ const spiroPassIsolationRuntime={
     forced:new Set(),sessionDisabled:new Set(),failureCounts:new Map(),recent:[]
 };
 function beginSpiroPassIsolationFrame(frameId){spiroPassIsolationRuntime.frameId=Math.max(0,Number(frameId)||0);spiroPassIsolationRuntime.forced.clear();}
-function spiroIsCompatibilityForced(pass){const key=String(pass||'');return spiroPassIsolationRuntime.forced.has(key)||spiroPassIsolationRuntime.sessionDisabled.has(key);}
+function spiroIsCompatibilityForced(pass){const key=String(pass||'');if(typeof somataCpuBackendForced==='function'&&somataCpuBackendForced())return true;return spiroPassIsolationRuntime.forced.has(key)||spiroPassIsolationRuntime.sessionDisabled.has(key);}
 function spiroForceCompatibility(pass,on=true){const key=String(pass||'');if(!key)return false;if(on)spiroPassIsolationRuntime.forced.add(key);else spiroPassIsolationRuntime.forced.delete(key);return true;}
 function spiroPassIsolationNoteFailure(pass,err,frameCtx=null){
     const key=String(pass||'unknown'),now=performance.now(),msg=String(err?.stack||err?.message||err||'unknown error');

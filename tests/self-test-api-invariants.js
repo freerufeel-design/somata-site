@@ -1,0 +1,20 @@
+'use strict';
+const assert=require('assert');
+const fs=require('fs');
+const path=require('path');
+const root=path.resolve(__dirname,'..');
+const read=p=>fs.readFileSync(path.join(root,p),'utf8');
+const html=read('index.html'),self=read('js/core/self-test.js'),appC=read('js/legacy/app-c.js');
+assert(html.includes('js/core/self-test.js?v=20261012-v7320'),'Self-test module must be loaded and cache-busted');
+assert(html.indexOf('js/legacy/app-c.js')<html.indexOf('js/core/self-test.js'),'Self-test must load after playlist/runtime functions');
+assert(self.includes('window.__somataSelfTestPlaylist=')&&self.includes('window.__somataPlaylistSmokeTest=async'),'Static and runtime playlist self-tests must be exposed');
+assert(self.includes('window.__somataSyntheticEffectSmokeTest=async'),'Dormant engine-effect smoke test must be exposed');
+assert(self.includes("options.backend||'cpu'")&&self.includes("window.__somataSetRenderBackend?.(backend)"),'Smoke test must support explicit CPU/GPU backend runs');
+assert(self.includes('await loadPlaylistProjectByIndex(i)')&&self.includes('await twoFrames()'),'Smoke test must load every playlist project and allow it to render');
+assert(self.includes("backend==='cpu'||newGpuErrors===0"),'GPU smoke test must fail on newly reported FullGPU errors');
+assert(self.includes("observablePassFeatures")&&self.includes("render pass was not observed"),'Smoke test must verify execution of observable render passes, not only effect flags');
+assert(self.includes("Corridor + Fill + Glow: missing"),'Smoke test must verify the complete Corridor + Fill + Glow compositor chain');
+
+assert(appC.includes("bow.complete===true&&bow.records[0]?.status==='stencil-edge-fan'"),'Fill regression probe must follow the current linear stencil-edge-fan contract');
+assert(self.includes("'spiral','motionRotation','corridor'"),'Playlist smoke must cover Spiral and Motion Rotation as major effects');
+console.log('Self-test API invariants: PASS');

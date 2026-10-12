@@ -4987,8 +4987,20 @@
   .morph-spiral-rotation-compensation{margin-left:0;}
 }
 
-/* Somata 7.0.1 — FreezeLight lamp trail controls */
+/* Somata 7.3.20 hf9 — FreezeLight blocks */
+.lamp-freeze-block{margin-top:6px;padding:6px 7px;border:1px solid rgba(148,163,184,.18);border-radius:7px;background:rgba(15,23,42,.28);}
+.lamp-freeze-rain-block{margin-top:5px;}
+.lamp-freeze-block-toggle{margin:0!important;padding:0!important;width:100%;}
+.lamp-freeze-rain-toggle{margin:0!important;padding:0!important;width:100%;}
+.lamp-freeze-details{display:grid;gap:5px;margin-top:6px;padding-top:6px;border-top:1px solid rgba(148,163,184,.14);}
+.lamp-freeze-details.hidden{display:none!important;}
+.lamp-freeze-row.hidden{display:none!important;}
 .lamp-freeze-row.disabled{opacity:.46;}
+.lamp-freeze-chromatic-toggle{margin-top:2px!important;}
+.lamp-rain-angle-control{display:grid;grid-template-columns:minmax(0,1fr) 58px auto;gap:5px;align-items:center;}
+.lamp-rain-angle-control input[type="range"]{width:100%;min-width:0;}
+.lamp-rain-angle-control input[type="number"]{width:58px!important;text-align:right;}
+.lamp-rain-angle-control>span{font-size:11px;color:var(--muted,#94a3b8);}
 
 /* Somata 7.0 — on-canvas error console. Created only after the first real error. */
 #screenErrorOverlay{
@@ -5150,3 +5162,143 @@
 }
 #somataErrorCopyToast.is-visible{opacity:1;transform:translate(-50%,0);}
 @media(min-width:761px){#somataErrorCopyToast{display:none!important;}}
+
+/* Somata 7.3.16 — in-client release certification controls. */
+.file-self-test{display:grid;gap:6px;padding:8px 9px;border:1px solid rgba(148,163,184,.22);border-radius:7px;background:rgba(15,23,42,.42)}
+.file-self-test-title{font-size:11px;font-weight:700;color:#e2e8f0}
+.file-self-test-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.file-self-test-actions button{min-width:0;padding:6px 7px;font-size:11px}
+.file-self-test-actions button:disabled{opacity:.55;cursor:wait}
+.file-self-test-status{font-size:10px;line-height:1.35;color:#94a3b8;overflow-wrap:anywhere}
+.file-self-test-status.pass{color:#86efac}
+.file-self-test-status.fail{color:#fca5a5}
+
+/* =========================================================
+   HOTFIX 11 — iPhone presentation/fullscreen compatibility
+   iPhone Safari still does not expose element Fullscreen API for arbitrary
+   HTML.  Somata therefore falls back to an app-owned presentation mode that
+   fills the real VisualViewport.  Home-screen/standalone launch then has no
+   Safari browser chrome and this mode is effectively full-screen.
+   ========================================================= */
+#btnPseudoFullscreenExit {
+    display: none;
+}
+
+html.app-pseudo-fullscreen,
+html.app-pseudo-fullscreen body {
+    width: var(--somata-viewport-width, 100vw) !important;
+    height: var(--somata-viewport-height, 100dvh) !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
+    background: #090d16 !important;
+}
+
+html.app-pseudo-fullscreen body {
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+html.app-pseudo-fullscreen header,
+html.app-pseudo-fullscreen aside,
+html.app-pseudo-fullscreen .sidebar-tool-rail,
+html.app-pseudo-fullscreen .floating-controls,
+html.app-pseudo-fullscreen .info-pill,
+html.app-pseudo-fullscreen .audio-panel,
+html.app-pseudo-fullscreen .audio-routing-panel,
+html.app-pseudo-fullscreen .tunnel-settings-panel,
+html.app-pseudo-fullscreen .tap-settings-panel,
+html.app-pseudo-fullscreen .project-morph-settings-panel,
+html.app-pseudo-fullscreen .library-modal,
+html.app-pseudo-fullscreen .shortcut-toast,
+html.app-pseudo-fullscreen .mobile-controls-toggle,
+html.app-pseudo-fullscreen .mobile-sidebar-close,
+html.app-pseudo-fullscreen .mobile-sidebar-backdrop {
+    display: none !important;
+}
+
+html.app-pseudo-fullscreen .app-container {
+    position: fixed !important;
+    inset: 0 !important;
+    width: var(--somata-viewport-width, 100vw) !important;
+    height: var(--somata-viewport-height, 100dvh) !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    flex: none !important;
+}
+
+html.app-pseudo-fullscreen main#mainContainer {
+    position: fixed !important;
+    inset: 0 !important;
+    width: var(--somata-viewport-width, 100vw) !important;
+    height: var(--somata-viewport-height, 100dvh) !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+html.app-pseudo-fullscreen #mainCanvas {
+    width: var(--somata-viewport-width, 100vw) !important;
+    height: var(--somata-viewport-height, 100dvh) !important;
+}
+
+html.app-pseudo-fullscreen .fps-counter {
+    left: max(10px, env(safe-area-inset-left)) !important;
+    bottom: max(10px, env(safe-area-inset-bottom)) !important;
+}
+
+html.app-pseudo-fullscreen #btnPseudoFullscreenExit {
+    position: fixed;
+    z-index: 2147483000;
+    top: max(8px, env(safe-area-inset-top));
+    right: max(8px, env(safe-area-inset-right));
+    display: inline-flex !important;
+    width: 42px;
+    height: 42px;
+    min-width: 42px;
+    min-height: 42px;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    border: 1px solid rgba(148,163,184,.44);
+    background: rgba(15,23,42,.68);
+    color: #f8fafc;
+    font-size: 20px;
+    line-height: 1;
+    box-shadow: 0 4px 16px rgba(0,0,0,.34);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    touch-action: manipulation;
+}
+
+/* Older/prefixed WebKit fullscreen must receive the same sizing rules as the
+   standards path.  Previously only controls were hidden in this branch. */
+:-webkit-full-screen body {
+    width: 100vw !important;
+    height: 100vh !important;
+    padding: 0 !important;
+}
+:-webkit-full-screen .app-container {
+    width: 100vw !important;
+    height: 100vh !important;
+    flex: none !important;
+}
+:-webkit-full-screen main#mainContainer {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    margin: 0 !important;
+}
+:-webkit-full-screen #mainCanvas {
+    width: 100vw !important;
+    height: 100vh !important;
+}
+:-webkit-full-screen .fps-counter {
+    left: 12px !important;
+    bottom: 12px !important;
+}

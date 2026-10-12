@@ -26,14 +26,14 @@ assert(pipe.includes('frameCtx.lineLayerMode=(layer?.lineLayerMode??layer?.spira
 assert(appA.includes("function commandLineLayerMode(commands)")&&appA.includes("if(commandLineLayerMode(commands)==='segmented')"),'Generic GPU stroke backend must bypass MAX shared-join union for Segmented layering');
 assert(appA.includes("rec.lineRenderMode==='segmented'?pipelineOver")&&appA.includes("blendKind=rec?.lineRenderMode==='segmented'?'over'"),'Segmented Base/Glow/Morph passes must use source-over accumulation');
 
-// Key and Corners are distinct authored identity domains.
-assert(appA.includes('const lampCornerFlags=e.map((p,idx)=>Boolean(spiralLampCornerFlags?')&&!appA.includes('spiralLampCornerFlags?.[Number.isFinite(Number(p?.ptIdx))?Number(p.ptIdx):idx])||Boolean(p.__profileCorner)'),'Spiral Key markers must not absorb geometric/profile corner flags');
+// Key and Corners follow the UI contract: Key = logical ends; Corners = Key + bends.
+assert(appA.includes('Lamp mode «Ключевое» on a Spiral means ONLY the two ends')&&appA.includes("pushPoint(pts[0],0,'start')")&&appA.includes("pushPoint(pts[pts.length-1],pts.length-1,'end')"),'Spiral Key markers must be logical path endpoints only');
 assert(spiral.includes('sourceLampKeyFractions:authoredFlagFractions')&&spiral.includes('sourceCornerFractions:authoredFlagFractions'),'Retained Spiral resource must keep separate Key and Corner metadata');
 assert(spiral.includes('cpuPathLampKeyFractions')&&spiral.includes('cpuPathCornerFractions'),'Morph retained rail must publish separate Key/Corner identity resources');
 assert(arc.includes('cpuPathLampKeyFractions')&&arc.includes('cpuPathCornerFractions'),'Static retained rail must publish separate Key/Corner identity resources');
 assert(bridge.includes("}else if(mode==='key')")&&bridge.includes('const records=morphRec?.cpuPathLampKeyFractions'),'Key lamp mode must use authored Key fractions only');
-assert(bridge.includes('const boundaryIsCorner=(j)=>')&&bridge.includes('gpuLampArcSegmentIndex=j*subdiv'),'Corners must pin directly to exact current retained-cubic boundaries');
-assert(bridge.includes("if(!points.length&&mode!=='corners')return null"),'An authored no-corner Spiral must be an authoritative empty Corners result, not a GPU resource fault');
+assert(bridge.includes('const keyFractions=spiralMorphFractionIdentityAtT(morphRec?.cpuPathLampKeyFractions')&&bridge.includes('const bendFractions=spiralMorphFractionIdentityAtT(morphRec?.cpuPathCornerFractions')&&bridge.includes('const merged=[...keyFractions,...bendFractions]'),'Corners must contain every Key endpoint plus logical bend identities');
+assert(bridge.includes("if(!points.length&&mode!=='arbitrary')return null"),'Key/Corners special-Spiral modes must never accept an empty identity population; Corners always includes Key endpoints');
 
 // Atomic phase swap: same-frame stale/null Arc decisions must not poison Lamps.
 assert(arc.includes('cachedAuthority===currentAuthority')&&arc.includes('currentAuthority=typeof currentGpuBezierResourceForFrame'),'Arc same-frame cache must be authority-aware after retained-rail atomic swap');
@@ -45,4 +45,4 @@ assert(spiral.includes('equalizeCubicRailsByArc')&&spiral.includes('cubicSubsegm
 assert(spiral.includes('crossFamilyCartesianTransport')&&spiral.includes("crossFamily&&(morphType==='phaseCircle'||morphType==='minimalTurn'||morphType==='phase')"),'Spiral↔non-Spiral phase-family Morph must select path-wide Cartesian transport');
 assert(spiral.includes('forceCartesianPath')&&spiral.includes('pathCartesianFallback=forceCartesian||forceCartesianPath'),'Cross-family transport must be chosen once for the whole retained path, preventing saws at technical split boundaries');
 
-console.log('Somata 7.3.7 Spiral lamps / line layering / Morph invariants: PASS');
+console.log('Somata 7.3.9 Spiral lamps / line layering / Morph invariants: PASS');
