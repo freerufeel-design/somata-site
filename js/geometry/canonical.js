@@ -1,6 +1,5 @@
-// SpiroStar v505 — Canonical Geometry boundary.
-// One stable geometry object owns the authored/static path representation for a layer version.
-// Render/effect consumers should derive from this object instead of independently rebuilding paths.
+
+
 window.__spiroRegisterModule?.('js/geometry/canonical');
 
 const canonicalGeometryCache = new WeakMap();
@@ -73,8 +72,7 @@ function computeCanonicalPathSummary(paths, canonical){
 
 function getCanonicalLayerGeometry(layer){
     if(!layer || (typeof layer!=='object'&&typeof layer!=='function'))return null;
-    // Keep the old value-based signature as a compatibility checksum while v504's
-    // versioned invalidation is still being rolled through every legacy editor path.
+
     const geometryKey=typeof layerGeometrySignature==='function'?String(layerGeometrySignature(layer)):'';
     const versions=typeof getLayerVersions==='function'?getLayerVersions(layer):null;
     const geometryVersion=Math.max(0,Number(versions?.geometry)||0);
@@ -88,10 +86,7 @@ function getCanonicalLayerGeometry(layer){
         ? buildLegacyLayerDrawData(layer)
         : (typeof getCachedLayerDrawData==='function'?getCachedLayerDrawData(layer):null);
     const paths=drawData?.paths||[];
-    // v536 — a structurally identical playlist target may arrive as a fresh layer object
-    // while reusing the exact shared drawData/paths built during the hold-phase prewarm.
-    // Carry immutable summary/topology/path-table work across that object boundary instead
-    // of walking every point and rebuilding arc-length tables on the first target frame.
+
     const priorCanonical=(drawData&&typeof drawData==='object')?drawData.canonicalGeometry:null;
     const reusablePrior=priorCanonical&&priorCanonical.geometryKey===geometryKey&&priorCanonical.paths===paths?priorCanonical:null;
     if(!canonical){
@@ -137,11 +132,10 @@ function getCanonicalLayerGeometry(layer){
         contours:canonical.contours,fillContours:canonical.fillContours,fillContourCount:summary.fillContourCount,
         hasClosedFillTopology:summary.hasClosedFillTopology,sourceKind:'canonical',static:true,canonical
     };
-    // Preserve the existing draw-data contract while making the canonical owner discoverable.
+
     if(drawData){
         drawData.canonicalGeometry=canonical;
-        // Keep old maxRadius/pointCount authoritative if some special generator supplied them,
-        // otherwise fill them from the shared summary.
+
         if(!(Number(drawData.maxRadius)>0))drawData.maxRadius=summary.maxRadius;
         if(!(Number(drawData.pointCount)>=0))drawData.pointCount=summary.pointCount;
     }
@@ -177,14 +171,9 @@ function ensureCanonicalPathTable(canonicalOrLayer){
 
 function getCanonicalGeometryForPaths(paths){return paths&&typeof paths==='object'?canonicalGeometryByPaths.get(paths)||null:null;}
 function getCanonicalGeometryForDrawData(drawData){return drawData&&typeof drawData==='object'?canonicalGeometryByDrawData.get(drawData)||drawData.canonicalGeometry||null:null;}
-function getCanonicalLayerDrawData(layer){return getCanonicalLayerGeometry(layer)?.drawData||null;}
 function noteCanonicalGeometryConsumer(name){
     const key=String(name||'unknown');
     canonicalGeometryStats.consumers[key]=(Number(canonicalGeometryStats.consumers[key])||0)+1;
-}
-function invalidateCanonicalLayerGeometry(layer){
-    if(!layer||typeof layer!=='object')return false;
-    return canonicalGeometryCache.delete(layer);
 }
 
 window.__spiroCanonicalGeometryStatus=()=>({

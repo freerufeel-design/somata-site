@@ -1,8 +1,5 @@
-// SpiroStar v521 — packed Corner Lamp resource for topology Morph.
-// Preserve the historical stateful corner identity/inertia machine, but feed it directly from
-// MorphFrame's aligned numeric endpoint arrays. This removes CPU Morph path object materialization,
-// generic path-table construction and duplicate arc walks. The remaining numeric O(N) scan is
-// allocation-light and the stateful visible population stays bounded <=260.
+
+
 window.__spiroRegisterModule?.('js/geometry/lamp-corner-resource');
 
 const GPU_LAMP_CORNER_MAX=260;
@@ -31,12 +28,6 @@ function updateGpuLampCornerPath(path,t){
     for(let i=0;i<count;i++){const j=(i+1)%n,d=Math.hypot(x[j]-x[i],y[j]-y[i]);if(d>1e-6){cum[i]=total;len[i]=d;active[write++]=i;total+=d;}else{cum[i]=total;len[i]=0;}}
     path.activeCount=write;path.total=total;gpuLampCornerRuntime.stats.framePointEvaluations+=n;return path;
 }
-function gpuLampCornerNearestFraction(path,ax,ay){
-    const {n,x,y,cum,len,active,activeCount,total}=path;if(!(total>1e-8)||!activeCount)return 0;let bestD=Infinity,bestDistance=0;
-    // Same segment order and strict '<' tie rule as nearestLampFractionOnPath().
-    for(let ai=0;ai<activeCount;ai++){const i=active[ai],j=(i+1)%n,vx=x[j]-x[i],vy=y[j]-y[i],den=vx*vx+vy*vy,u=den>1e-12?Math.max(0,Math.min(1,((ax-x[i])*vx+(ay-y[i])*vy)/den)):0,qx=x[i]+vx*u,qy=y[i]+vy*u,dx=qx-ax,dy=qy-ay,d=dx*dx+dy*dy;if(d<bestD){bestD=d;bestDistance=cum[i]+len[i]*u;}gpuLampCornerRuntime.stats.nearestSegmentTests++;}
-    return Math.max(0,Math.min(1,bestDistance/total));
-}
 function gpuLampCornerPointAtFraction(path,fraction){
     const {n,closed,x,y,cum,len,active,activeCount,total}=path;if(!(total>1e-8)||n<2||!activeCount)return null;let f=Number(fraction)||0;f=closed?((f%1)+1)%1:Math.max(0,Math.min(1,f));const target=Math.min(total-1e-9,Math.max(0,f*total));let lo=0,hi=activeCount-1;while(lo<hi){const mid=(lo+hi)>>1,i=active[mid];if(cum[i]+len[i]<target)lo=mid+1;else hi=mid;}const i=active[lo],j=(i+1)%n,u=len[i]>1e-12?Math.max(0,Math.min(1,(target-cum[i])/len[i])):0;return{x:x[i]+(x[j]-x[i])*u,y:y[i]+(y[j]-y[i])*u};
 }
@@ -50,8 +41,7 @@ function evaluateGpuLampCornerResource(resource,t,maxPoints=GPU_LAMP_CORNER_MAX,
     for(const target of targets){const path=resource.paths[target.pathIndex],canonical=`${prefix}${target.pathIndex}:${target.pointIndex}`;let key=canonical,e=lampMotionRuntime.corners.get(canonical);
         if(e){used.add(canonical);gpuLampCornerRuntime.stats.canonicalIdentityHits++;}
         else{
-            // Migration is needed only for runtime records created by older builds. Once migrated,
-            // every subsequent frame is an O(1) path+vertex lookup instead of all-pairs rematching.
+
             let best=null,bestCost=Infinity;for(const [oldKey,oldEntry] of existing){if(used.has(oldKey)||oldEntry.pathIndex!==target.pathIndex)continue;let d=Math.abs((Number(oldEntry.targetS??oldEntry.s)||0)-target.fraction);if(path?.closed)d=Math.min(d,1-d);if(d<bestCost){bestCost=d;best=[oldKey,oldEntry];}}
             if(best&&bestCost<.34){const oldKey=best[0];e=best[1];used.add(oldKey);lampMotionRuntime.corners.delete(oldKey);lampMotionRuntime.corners.set(canonical,e);used.add(canonical);gpuLampCornerRuntime.stats.legacyIdentityMigrations++;}
             else{e={pathIndex:target.pathIndex,s:target.fraction,targetS:target.fraction,level:0,last:now,lastSeen:now};lampMotionRuntime.corners.set(canonical,e);used.add(canonical);}

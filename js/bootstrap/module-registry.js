@@ -1,4 +1,4 @@
-// SpiroStar v513 modular loader registry.
+
 window.__spiroModules = window.__spiroModules || Object.create(null);
 window.__spiroV513ModuleOrder = [];
 window.__spiroV5221ModuleOrder = window.__spiroV513ModuleOrder;

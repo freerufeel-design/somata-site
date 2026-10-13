@@ -1,5 +1,5 @@
-// SpiroStar v500 Modular Base
-// Persistent project state and runtime-state boundary
+
+
 window.__spiroRegisterModule?.('js/core/state');
         const state = {
             layers: [],
@@ -30,17 +30,14 @@ window.__spiroRegisterModule?.('js/core/state');
             masterLayerEdit: false,
             sidebarFeatureToggleMemory: {},
             graffitiDefaultActive: false,
-            // v388: raster Graffiti markers are opt-in. The unchecked UI state is authoritative.
-            graffitiRasterized: false,
-            // Temporary master mute used only by the Shape-star right-click. The underlying
-            // showLines preference is never overwritten, so a second right-click restores it exactly.
+
             forceAllLinesHidden: false,
             geometryWebGL: true,
             showLines: true,
             showLamps: false,
             showWeb: false,
             lightningRateSync: true,
-            sweep: { enabled: false, effectType: 'lightning', coreBlendMode:'normal', glowBlendMode:'normal', sharedGlintVersion:1, flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode: 'whole', direction: 'forward', speed: 0.25, speedMultiplier: 1, syncMusic: true, lengthPercent: 18, widthPercent: 75, everyN: 2, color: '#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:true, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', lightningFlashColor:'#ffffff', lightningFlashMode:'moving', lightningSpectralSectorDegrees:45, lightningSpectralAngularSpeed:90, lightningFlashOpacity:100, lightningSegmentPercent:100, lightningFlashLengthPercent:18, lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningWidthPercent:64, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningPreGlowIntensity:50, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase: 0, currentVelocity: 0, lastUpdate: 0, cycleCount:0, raf: 0 },
+            sweep: { enabled: false, effectType: 'lightning', profileShape:'current', coreBlendMode:'normal', glowBlendMode:'normal',  flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode: 'whole', direction: 'forward', speed: 0.25, speedMultiplier: 1, syncMusic: true, lengthPercent: 18, widthPercent: 75, everyN: 2, color: '#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningProfileShape:'current', lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:true, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc',  lightningSegmentPercent:100,  lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningWidthPercent:64, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningPreGlowIntensity:50, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase: 0, currentVelocity: 0, lastUpdate: 0, cycleCount:0, raf: 0 },
             web: { type:'bevel', style:'web', region:'inside', inside:true, outsideStraight:false, outsideArc:false, placementMode:'selfIntersection', oscillating:false, oscillationStrength:10, oscillationStrengthMultiplier:1, oscillationMultiplier:1, angleThreshold:60, width:0.6, widthRelative:false, widthPercent:40, color:'#ffffff', secondaryColor:'#00ffff', sunDegrees:20, distance:20, depthMultiplier:1, spacing:10, angleVariation:6 },
             lineOutline: { enabled: false, color: '#ffffff', width: 1.5, mode:'outer' },
             lamps: {
@@ -50,8 +47,6 @@ window.__spiroRegisterModule?.('js/core/state');
                 rainbow: false,
                 color: '#ffe600',
                 webgl: true,
-                rasterized: false,
-                hd: false,
                 freezeLight: false,
                 freezeTailSec: 1.5,
                 freezeHardness: 50,
@@ -97,8 +92,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 cornerInertiaSec: 0.5,
                 calmMode: true,
                 snapToContour: true,
-                // Legacy aliases are kept in saved projects for backward compatibility.
-                // The UI exposes one setting and both aliases are always synchronized.
+
                 stickToRounding: true,
                 snapToPolygon: true
             },
@@ -153,7 +147,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 speedMultiplier: 1,
                 spacingStrength: 3,
                 spacingMultiplier: 1,
-                centerShadePercent: 60,
+                centerHiddenCopies: 2,
                 colorShiftEnabled: false,
                 colorShiftDegrees: 30,
                 colorShiftCumulative: false,
@@ -282,7 +276,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 targetLayers: [],
                 sourceDrawData: [],
                 targetDrawData: [],
-                // v191: static orange-fade lamp anchors are prepared once per transition.
+
                 sourceLampPoints: [],
                 targetLampPoints: []
             },
@@ -333,9 +327,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 speedType: 'linear',
                 progress: 0,
                 cycleStart: 0,
-                // v118: while true, the canvas deliberately renders the untouched
-                // current layer state for one frame before Morphing takes control.
-                // This guarantees that pressing Start never changes the picture.
+
                 exactStartPending: false,
                 transitionMs: 5000,
                 sourceProfiles: [],
@@ -430,19 +422,6 @@ window.__spiroRegisterModule?.('js/core/state');
             }
         };
 
-
-        // v207 — Architecture Phase 13: Blue/Orange/Green runtime fields have no compatibility accessors.
-        // v205 — Architecture Phase 11: persistent configuration vs live runtime state.
-        //
-        // Historical versions kept animation progress, prepared geometry, WebAudio nodes,
-        // tap-analysis buffers and project-transition snapshots inside `state` beside values
-        // that are actually part of a saved project.  That made it dangerously easy for a
-        // serializer/reset/load path to capture or overwrite live animation state.
-        //
-        // Runtime values now live physically in `runtimeState`. Blue/Orange/Green no longer
-        // expose compatibility accessors at all: their configuration objects are physically
-        // free of live animation fields. A smaller accessor bridge remains only for subsystems
-        // that have not yet completed migration (Tunnel/TAP/Audio/MorphPlayback).
         const runtimeState = {
             interaction: {},
             fileSession: {},
@@ -548,9 +527,6 @@ window.__spiroRegisterModule?.('js/core/state');
             return value;
         }
 
-        // Phase 13 removes the compatibility facade from the three morph systems.
-        // Their live fields now exist ONLY in runtimeState.  Tunnel/TAP/Audio and the
-        // tiny morphPlayback bridge keep accessors temporarily until their own migration.
         const RUNTIME_ACCESSOR_SECTIONS = new Set(['tunnel','tapTempo','audioReactive','morphPlayback']);
 
         function migrateRuntimeFields(sectionName, compatAccessor = false) {
@@ -601,8 +577,7 @@ window.__spiroRegisterModule?.('js/core/state');
             if (!section || typeof section !== 'object') return section;
             const runtimeKeys = new Set(STATE_RUNTIME_FIELDS[sectionName] || []);
             const incoming = nextValue && typeof nextValue === 'object' ? nextValue : {};
-            // Remove only persistent/configuration keys. Runtime accessors are non-enumerable
-            // and therefore survive the replacement intact.
+
             for (const key of Object.keys(section)) delete section[key];
             for (const [key, value] of Object.entries(incoming)) {
                 if (runtimeKeys.has(key)) runtimeState[sectionName][key] = value;

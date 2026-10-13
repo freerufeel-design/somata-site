@@ -1,6 +1,5 @@
-// SpiroStar v515 — GPU-native topology-Morph Graffiti renderer
-// Direct mode expands resident Morph points. Sampled mode consumes exact GPU Arc and a bounded
-// bounded GPU-resident 3px / 8..220 arc view for pinched + all variation modes.
+
+
 window.__spiroRegisterModule?.('js/gpu/graffiti-morph-renderer');
 
 const WebGPUGraffitiMorphRenderer=(()=>{
@@ -69,15 +68,13 @@ fn fixedNibToWorld(v:vec2<f32>)->vec2<f32>{let ca=cos(u.shape.y);let sa=sin(u.sh
 fn nibOffset(tangent:vec2<f32>,side:f32)->vec2<f32>{
     let baseHalf=max(0.225,u.shape.x*u.shape.w*0.5);
     if(u.glow.z<0.5){let d=fixedNibDir(tangent);return fixedNibToWorld(vec2<f32>(-d.y,d.x)*baseHalf*side);}
-    // Relative-angle mode has a rotating nib frame; keep its local support exact per span.
+
     let angle=atan2(tangent.y,tangent.x)+u.shape.y;let ca=cos(angle);let sa=sin(angle);let majorDir=vec2<f32>(ca,sa);let minorDir=vec2<f32>(-sa,ca);let normal=vec2<f32>(-tangent.y,tangent.x);
     let a=baseHalf*u.shape.z;let b=baseHalf;let dm=dot(normal,majorDir);let dn=dot(normal,minorDir);let support=length(vec2<f32>(a*dm,b*dn));if(support<=0.000000001){return vec2<f32>(0.0);}let major=(a*a*dm)/support;let minor=(b*b*dn)/support;return (majorDir*major+minorDir*minor)*side;
 }
 fn ribbonPoint(segmentIndex:u32,t:f32,side:f32)->vec2<f32>{
     let r0=cubics[segmentIndex*2u];let r1=cubics[segmentIndex*2u+1u];let p=cubicPoint(r0.xy,r0.zw,r1.xy,r1.zw,t);let tangent=segmentTangent(segmentIndex,t);
-    // Do not average authored corner tangents: that changed the cross-section at the end of a
-    // straight span and looked exactly like Size/Rotation Variation while both toggles were off.
-    // Each span keeps its own constant nib support; a separate join primitive closes boundaries.
+
     return p+nibOffset(tangent,side);
 }
 fn joinVertex(segmentIndex:u32,jv:u32,copy0:vec4<f32>,copy1:vec4<f32>,useCopy:bool)->Out{
@@ -88,7 +85,7 @@ fn joinVertex(segmentIndex:u32,jv:u32,copy0:vec4<f32>,copy1:vec4<f32>,useCopy:bo
     if(length(d0+d1)<0.000001){return emit(vec2<f32>(0.0),vec3<f32>(1.0,0.0,0.0),vec3<f32>(0.0),0.0,0.0,copy0,copy1,useCopy);}
     let sideSign=select(1.0,-1.0,jv>=6u);let renderSide=select(-1.0,1.0,jv>=6u);let local=jv%6u;
     let inOff=nibOffset(d0,sideSign);let outOff=nibOffset(d1,sideSign);var useMiter=false;var miterOff=vec2<f32>(0.0);
-    // Pointed + absolute angle follows Canvas: miter until miterLimit 2.6, then bevel.
+
     if(u.sampleMode.y<0.5&&u.glow.z<0.5){let n0=vec2<f32>(-fixedNibDir(d0).y,fixedNibDir(d0).x)*sideSign;let n1=vec2<f32>(-fixedNibDir(d1).y,fixedNibDir(d1).x)*sideSign;let mm=n0+n1;let ml=length(mm);if(ml>0.000001){let md=mm/ml;let den=dot(md,n1);if(abs(den)>0.000001){let half=max(0.225,u.shape.x*u.shape.w*0.5);let mlen=half/den;if(abs(mlen)/max(0.000001,half)<=2.6){miterOff=fixedNibToWorld(md*mlen);useMiter=true;}}}}
     var localP=p;var valid=1.0;var bary=vec3<f32>(1.0,0.0,0.0);let mask=vec3<f32>(1.0,0.0,0.0);
     if(useMiter){
@@ -124,9 +121,7 @@ fn focusDistance(t0:f32,focus0:f32)->f32{let f=clamp(focus0,0.001,0.999);let t=c
 fn rotationProgress(t0:f32,focus0:f32)->f32{let f=clamp(focus0,0.001,0.999);let t=clamp(t0,0.0,1.0);if(t<=f){return 0.5*(t/f);}return 0.5+0.5*((t-f)/(1.0-f));}
 fn variationT(pathIndex:u32,localT:f32,p:vec2<f32>)->f32{
     let mode=u.sampleMode.x;let t=clamp(localT,0.0,1.0);
-    // 1=perPath, 2=whole, 3=perSegment, 4=everyNth, 5=across.  Segment/group
-    // cycles are logical authoring cycles supplied by the CPU as one scalar; all geometry
-    // positions still come from the GPU Bézier-derived Arc.
+
     if(mode>1.5&&mode<2.5){let pm=pathMetrics[pathIndex];let total=max(0.000001,arcMeta[0].x);return clamp((pm.x+t*pm.y)/total,0.0,1.0);}
     if(mode>2.5&&mode<4.5){let cycles=max(1.0,u.glow.w);return fract(min(t,0.999999)*cycles);}
     if(mode>4.5){let radius=max(0.000001,u.glow.w);return clamp(0.5+p.x/(2.0*radius),0.0,1.0);}
@@ -189,7 +184,7 @@ fn makeSampledVertex(vid:u32,copy0:vec4<f32>,copy1:vec4<f32>,useCopy:bool)->Out{
             sampledPipelineOver=make(sampledMod,'over',false,true);sampledPipelineBehind=make(sampledMod,'behind',false,true);sampledCorridorPipelineOver=make(sampledMod,'over',true,true);sampledCorridorPipelineBehind=make(sampledMod,'behind',true,true);
             uniformBuffers=Array.from({length:64},(_,i)=>device.createBuffer({label:`SpiroStar Morph Graffiti uniforms ${i}`,size:128,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}));
             uniformBinds=uniformBuffers.map(buffer=>device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer}}]}));
-            uniformCursor=0;pathBinds=new WeakMap();sampledPathBinds=new WeakMap();copyBinds=new WeakMap();ready=true;lastError='';return true;
+            uniformCursor=0;pathBinds=new WeakMap();sampledPathBinds=new WeakMap();copyBinds=new WeakMap();ready=true;lastError='';try{requestMainCanvasRender?.();}catch(_){}return true;
         }catch(err){ready=false;lastError=String(err?.message||err);stats.failures++;return false;}})();initializing=task;try{return await task;}finally{if(initializing===task)initializing=null;}
     }
     function warmup(){
@@ -227,8 +222,7 @@ fn makeSampledVertex(vid:u32,copy0:vec4<f32>,copy1:vec4<f32>,useCopy:bool)->Out{
     function copyBind(buffer){let bg=copyBinds.get(buffer);if(bg)return bg;bg=device.createBindGroup({layout:corridorLayout,entries:[{binding:0,resource:{buffer}}]});copyBinds.set(buffer,bg);return bg;}
     function uniformBind(targetCtx,style,alpha,outerWidth){
         const m=targetCtx?.getTransform?.();if(!m||!uniformBuffers.length)return null;const c=GPUColorCache.rgba(style.color);
-        // Morph Graffiti core stays unexpanded. Its contour Glow rasterizes this same procedural
-        // GPU ribbon to a mask and blurs it in WebGPU, avoiding support-ribbon wedges.
+
         const actualOuter=style.width,coreRatio=1,haloStrength=0;
         uniformData.fill(0);uniformData[0]=mainCanvas.width;uniformData[1]=mainCanvas.height;uniformData[4]=m.a;uniformData[5]=m.c;uniformData[6]=m.e;uniformData[8]=m.b;uniformData[9]=m.d;uniformData[10]=m.f;
         uniformData[12]=c[0];uniformData[13]=c[1];uniformData[14]=c[2];uniformData[15]=Math.max(0,Math.min(1,Number(alpha)||0));

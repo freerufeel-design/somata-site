@@ -1,7 +1,5 @@
-// Somata 7.3.9 — GPU Web corner/thread resource for topology Morph.
-// Exact Morph Arc stays GPU-resident. O(N) corner classification is parallel; first-220
-// compaction uses an order-preserving prefix scan. Active threads are then compacted while their
-// exact {A,Control,B} master geometry is built once for all raster vertices and Corridor copies.
+
+
 window.__spiroRegisterModule?.('js/gpu/web-corner-resource');
 
 const GPU_WEB_MAX_CORNERS=220;
@@ -41,7 +39,7 @@ struct U{
 @group(0) @binding(4) var<storage,read_write> flags:array<u32>;
 @group(0) @binding(5) var<storage,read_write> cornerState:array<vec4<f32>>;
 @group(0) @binding(6) var<uniform> u:U;
-// Candidate bits: 31=authored corner, 30=this path has authored corners, low 30=micro index.
+
 @group(0) @binding(7) var<storage,read> candidates:array<u32>;
 @group(0) @binding(8) var<storage,read> retainedCubics:array<vec4<f32>>;
 fn smooth01(x0:f32)->f32{let x=clamp(x0,0.0,1.0);return x*x*x*(x*(x*6.0-15.0)+10.0);}
@@ -51,26 +49,21 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
     let slot=gid.x;let count=u32(u.count+0.5);if(slot>=count){return;}
     let packedCandidate=candidates[slot];let authored=(packedCandidate&0x80000000u)!=0u;let pathHasAuthored=(packedCandidate&0x40000000u)!=0u;let i=packedCandidate&0x3fffffffu;
     let metaData=segmentMeta[i];let cornerMode=u.depthFrac<0.0;let logicalBoundary=(metaData.w&0x20000000u)!=0u;
-    // 6.7 contract, adapted to the retained-cubic rail: authored profile corners are the
-    // identity source for a path when present. A path with no authored markers falls back
-    // to angular detection. Technical De Casteljau equalisation cuts are never authored.
+
     let cornerCandidate=select(logicalBoundary,authored,pathHasAuthored);let candidate=select(logicalBoundary,cornerCandidate,cornerMode);
     let pi=metaData.z;let r=pathSegmentRanges[pi];let first=r.x;let n=max(1u,r.y);let local=i-first;let topology=r.w;let ordinaryClosed=topology==1u;let subdiv=max(1u,u32(u.subdiv+0.5));let logical=i/subdiv;let firstLogical=first/subdiv;let logicalCount=max(1u,n/subdiv);let localLogical=logical-firstLogical;
-    // Measure the visual turn from exact retained-cubic endpoint tangents, not Arc micro-chords.
-    // Periodic Spiral deliberately keeps the historical open-path corner semantics at its
-    // canonical seam; periodic continuation is handled later by samplePath().
+
     var canMeasure=localLogical>0u||ordinaryClosed;var prevLogical=logical;
     if(localLogical>0u){prevLogical=logical-1u;}else if(ordinaryClosed){prevLogical=firstLogical+logicalCount-1u;}
     let cq0=retainedCubics[logical*2u];let pq1=retainedCubics[prevLogical*2u+1u];let p=cq0.xy;
     var vin=p-pq1.xy;var vout=cq0.zw-p;
-    // Degenerate handles are legal; use the exact Arc chords only as a direction fallback.
+
     let prevG=segments[(select(i,prevLogical*subdiv+(subdiv-1u),canMeasure))*2u];let g=segments[i*2u];
     vin=safeVec(vin,p-prevG.xy);vout=safeVec(vout,g.zw-p);
     let il=length(vin);let ol=length(vout);var arcTarget=0.0;
     if(canMeasure&&candidate&&il>=0.0001&&ol>=0.0001){let dotv=clamp(dot(vin,vout)/(il*ol),-1.0,1.0);let turn=acos(dotv)*57.29577951308232;let cross=vin.x*vout.y-vin.y*vout.x;let sideOk=select(abs(cross)>0.0000001,cross*orientation[pi]>0.0000001,ordinaryClosed);
         if(turn>=u.threshold-u.margin&&sideOk){arcTarget=select(smooth01((turn-(u.threshold-u.margin))/(u.margin*1.5)),1.0,cornerMode);}}
-    // Temporary fallback span; the dedicated span pass replaces it with distance to the
-    // neighbouring DETECTED corners on the canonical exact Arc.
+
     var inSpan=0.0;var outSpan=0.0;
     if(local+subdiv<=n){for(var sj=0u;sj<subdiv;sj=sj+1u){outSpan+=segments[(i+sj)*2u+1u].y;}}
     if(local>=subdiv){for(var sj=0u;sj<subdiv;sj=sj+1u){inSpan+=segments[(i-subdiv+sj)*2u+1u].y;}}
@@ -137,10 +130,6 @@ fn main(){
 }
 `;
 
-// 7.3.9 — restore the 6.7 “В углах” depth contract on the canonical exact Arc.
-// Depth is the distance to the neighbouring DETECTED corners along the complete contour,
-// not the length of one Bézier microsegment (or even one logical cubic). For periodic Spiral,
-// neighbour search wraps one canonical period; samplePath() later applies the rotate+scale turn.
 const GPU_WEB_CORNER_SPAN_WGSL=`
 struct U{
  threshold:f32,margin:f32,nowMs:f32,count:f32,copyCount:f32,spacing:f32,depthFrac:f32,depthMul:f32,
@@ -171,9 +160,7 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
 `;
 
 const GPU_WEB_THREAD_COMPACT_WGSL=`
-// Somata 7.3.9 — compact + build the master Web thread geometry in ONE compute pass.
-// The exact retained-cubic Arc is sampled only twice per active thread here. Raster vertices
-// and Corridor copies consume the resident {A,Control,B} record and never repeat arc search.
+
 struct U{
  threshold:f32,margin:f32,nowMs:f32,count:f32,
  copyCount:f32,spacing:f32,depthFrac:f32,depthMul:f32,
@@ -207,18 +194,15 @@ fn samplePath(pathIndex:u32,localD0:f32)->vec2<f32>{
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid:vec3<u32>){
  let slot=gid.x;if(slot>=21120u){return;}let cornerSlot=slot/96u;let activeCorners=cornerIndices[220u];
-    // Indirect dispatch is workgroup-rounded. Never let surplus lanes consume stale indices.
+
     if(cornerSlot>=activeCorners){return;}let ti=slot%96u;let si=cornerIndices[cornerSlot];let sm=segmentMeta[si];let pi=sm.z;let r=pathSegmentRanges[pi];let q=segments[si*2u+1u];let anchor=segments[si*2u].xy;let localAnchor=q.x-q.z;let total=max(0.000001,q.w);let frac=clamp(abs(u.depthFrac),0.0,1.0);let dm=max(0.0,u.depthMul);let cornerMode=u.depthFrac<0.0;let localSpan=max(0.0,cornerState[si].z);let ordinaryClosed=r.w==1u;let spanMax=min(total*0.499,localSpan*frac*dm);let closedSelfMax=min(total*0.499,total*0.25*frac*dm);var localMax=select(spanMax,closedSelfMax,!cornerMode&&ordinaryClosed);
- // 6.7 semantics: quarter-perimeter belongs only to an ordinary closed contour. Open paths
- // and the self-similar Spiral period use neighbouring-corner span; periodic samplePath()
- // still applies rotate+scale when a thread crosses the canonical period.
+
  if(localMax<1.0){return;}let maxCount=max(1u,min(96u,u32(floor(localMax/max(0.0001,u.spacing)))));if(ti>=maxCount){return;}let growth=clamp(cornerState[si].x,0.0,1.0);let tg=smooth01(growth*f32(maxCount)-f32(ti));if(tg<=0.001){return;}
  let ordinal=si-r.x;let rnd=hashSigned(pi,ordinal,ti,137u);let asym=rnd*u.jitter;let base=min(localMax,u.spacing*f32(ti+1u));var da=max(0.25,min(localMax,base*(1.0+asym*0.55)))*tg;var db=max(0.25,min(localMax,base*(1.0-asym*0.55)))*tg;let wave=sin(u.oscPhase+hashSigned(pi,ordinal,ti,911u)*3.14159265);
  if(u.oscillating>0.5&&u.oscStrength>0.0){let slide=min(0.78,0.035+0.245*u.oscStrength)*wave;da=max(0.25,min(localMax,da*(1.0+slide)));db=max(0.25,min(localMax,db*(1.0-slide)));}
  let a=samplePath(pi,localAnchor-da);let b=samplePath(pi,localAnchor+db);var ctrl=anchor;if(u.oscillating>0.5&&u.oscStrength>0.0){let d=b-a;let dl=max(0.001,length(d));let n=vec2<f32>(-d.y/dl,d.x/dl);let amp=min(144.0,max(0.25,u.spacing*(0.25+1.75*u.oscStrength)));ctrl=anchor+n*amp*wave*tg;}
  let w=atomicAdd(&threadCounter[0],1u);if(w<21120u){threadGeometry[w*2u]=vec4<f32>(a,ctrl);threadGeometry[w*2u+1u]=vec4<f32>(b,1.0,0.0);}
 }`;
-
 
 const GPU_WEB_INDIRECT_WGSL=`
 struct U{threshold:f32,margin:f32,nowMs:f32,count:f32,copyCount:f32,spacing:f32,depthFrac:f32,depthMul:f32};
@@ -229,7 +213,6 @@ fn put(base:u32,instances:u32){indirect[base]=4u;indirect[base+1u]=instances;ind
 @compute @workgroup_size(1)
 fn main(){let n=min(21120u,atomicLoad(&threadCounter[0]));let copies=max(1u,u32(u.copyCount+0.5));put(0u,n);put(4u,n*12u);put(8u,n*copies);put(12u,n*12u*copies);}
 `;
-
 
 function gpuWebCornerAcquireBuffer(size,usage,label){
     const r=globalThis.__somataGpuBufferRecycler;
@@ -271,13 +254,11 @@ async function ensureGpuWebCornerPipelines(){
             cornerSpan:d.createComputePipeline({label:'SpiroStar Web 6.7 corner span',layout:'auto',compute:{module:span,entryPoint:'main'}}),
             threadCompact:d.createComputePipeline({label:'SpiroStar Web active thread compact',layout:'auto',compute:{module:thr,entryPoint:'main'}}),
             indirect:d.createComputePipeline({label:'SpiroStar Web indirect finalize',layout:'auto',compute:{module:ind,entryPoint:'main'}})
-        };gpuWebCornerRuntime.ready=true;gpuWebCornerRuntime.lastError='';return true;
+        };gpuWebCornerRuntime.ready=true;gpuWebCornerRuntime.lastError='';try{requestMainCanvasRender?.();}catch(_){}return true;
     }catch(err){gpuWebCornerRuntime.ready=false;gpuWebCornerRuntime.lastError=String(err?.message||err);return false;}})();gpuWebCornerRuntime.initializing=task;try{return await task;}finally{if(gpuWebCornerRuntime.initializing===task)gpuWebCornerRuntime.initializing=null;}
 }
 function warmupGpuWebCornerResource(){if(gpuWebCornerRuntime.ready)return true;if(!gpuWebCornerRuntime.initializing)void ensureGpuWebCornerPipelines();return false;}
-// Somata 7.2.4 — topology swaps may happen before the frame-wide deferred submit.
-// Retire the previous growth buffer through the shared two-frame/queue-idle recycler; an
-// immediate destroy here caused repeated `used in submit while destroyed` WebGPU faults.
+
 function gpuWebCornerStateFor(morphRec,countOverride=null){
     const d=gpuWebCornerRuntime.device,key=Number(morphRec.layerIndex)||0,count=Math.max(1,Number(countOverride)||morphRec.segmentCount),sig=`${String(morphRec.topologySignature||morphRec.segmentCount)}|bez:${count}|state6`;let st=gpuWebCornerRuntime.layerStates.get(key);
     if(st&&st.generation===gpuWebCornerRuntime.generation&&st.signature===sig&&st.count===count&&st.buffer){gpuWebCornerRuntime.stats.stateReuses++;return st;}
@@ -291,13 +272,9 @@ function gpuWebCountUniform(device,label,count,blocks=0,owned=null){
 function buildGpuWebCornerResource(arcRec){
     if(!arcRec?.ready||!arcRec.morphRec?.ready||!gpuWebCornerRuntime.ready)return null;let hit=gpuWebCornerRuntime.resources.get(arcRec);if(hit?.ready&&hit.generation===gpuWebCornerRuntime.generation){gpuWebCornerRuntime.stats.hits++;return hit;}
     const d=gpuWebCornerRuntime.device,p=gpuWebCornerRuntime.pipelines,m=arcRec.morphRec,segmentCount=arcRec.segmentCount,owned=[];const make=(label,bytes,usage=GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST)=>{const b=d.createBuffer({label,size:Math.max(16,Math.ceil(bytes/16)*16),usage});owned.push(b);return b;};
-    // Somata 7.0: Web corners can only live on retained-cubic boundaries/profile marks.
-    // Build that candidate index once per Arc resource instead of scanning every Bézier
-    // microsegment every frame (typically an 8-12x reduction for Spiral Web classification).
+
     const logicalCount=Math.max(1,Number(arcRec.logicalSegmentCount)||segmentCount),subdiv=Math.max(1,Number(arcRec.subdiv)||1),logicalMeta=m.cpuSegmentMeta||new Uint32Array(logicalCount*4),candidateList=[];
-    // 7.3.9: authored Web corners come from the original profile's Arc fractions, never from
-    // the equalised retained rail. Map those fractions onto the exact common De Casteljau rail
-    // once, and encode authored/path-authored identity in the candidate word without a new buffer.
+
     const authoredLogical=new Set(),pathHasAuthored=new Set(),pathRanges=m.cpuPathSegmentRanges||new Uint32Array((m.pathCount||0)*4),cornerFractions=m.cpuPathCornerFractions||[],knotFractions=m.cpuPathKnotFractions||[];
     for(let pi=0;pi<(m.pathCount||0);pi++){
         const po=pi*4,firstLogical=pathRanges[po]>>>0,n=pathRanges[po+1]>>>0,common=Array.from(knotFractions[pi]?.common||[]),auth=[...(cornerFractions[pi]?.source||[]),...(cornerFractions[pi]?.target||[])];
@@ -308,7 +285,7 @@ function buildGpuWebCornerResource(arcRec){
     let hasAuthoredCornerMarkers=authoredLogical.size>0;
     for(let li=0;li<logicalCount;li++){const pi=logicalMeta[li*4+2]>>>0,first=li*subdiv,authored=authoredLogical.has(li),has=pathHasAuthored.has(pi);candidateList.push((first&0x3fffffff)|(has?0x40000000:0)|(authored?0x80000000:0));}
     const candidateData=new Uint32Array(candidateList),candidateCount=Math.max(1,candidateData.length),candidateIndexBuffer=make(`SpiroStar Web corner candidates L${m.layerIndex}`,candidateCount*4);d.queue.writeBuffer(candidateIndexBuffer,0,candidateData);
-    const orientationBuffer=make(`SpiroStar Web orientation L${m.layerIndex}`,m.pathCount*4),flagsBuffer=make(`SpiroStar Web corner flags L${m.layerIndex}`,candidateCount*4),cornerIndexBuffer=make(`SpiroStar Web corner indices L${m.layerIndex}`,(GPU_WEB_MAX_CORNERS+1)*4),threadGeometryBuffer=make(`Somata 7.3.9 Web master thread geometry L${m.layerIndex}`,GPU_WEB_MAX_THREAD_SLOTS*32),threadCountBuffer=make(`SpiroStar Web thread counter L${m.layerIndex}`,16),threadDispatchBuffer=make(`SpiroStar Web thread compact dispatch L${m.layerIndex}`,16,GPUBufferUsage.STORAGE|GPUBufferUsage.INDIRECT|GPUBufferUsage.COPY_DST),indirectBuffer=make(`SpiroStar Web indirect args L${m.layerIndex}`,64,GPUBufferUsage.STORAGE|GPUBufferUsage.INDIRECT|GPUBufferUsage.COPY_DST),uniformBuffer=make(`SpiroStar Web corner uniforms L${m.layerIndex}`,64,GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST),state=gpuWebCornerStateFor(m,segmentCount);
+    const orientationBuffer=make(`SpiroStar Web orientation L${m.layerIndex}`,m.pathCount*4),flagsBuffer=make(`SpiroStar Web corner flags L${m.layerIndex}`,candidateCount*4),cornerIndexBuffer=make(`SpiroStar Web corner indices L${m.layerIndex}`,(GPU_WEB_MAX_CORNERS+1)*4),threadGeometryBuffer=make(`Somata 7.4.9 Web master thread geometry L${m.layerIndex}`,GPU_WEB_MAX_THREAD_SLOTS*32),threadCountBuffer=make(`SpiroStar Web thread counter L${m.layerIndex}`,16),threadDispatchBuffer=make(`SpiroStar Web thread compact dispatch L${m.layerIndex}`,16,GPUBufferUsage.STORAGE|GPUBufferUsage.INDIRECT|GPUBufferUsage.COPY_DST),indirectBuffer=make(`SpiroStar Web indirect args L${m.layerIndex}`,64,GPUBufferUsage.STORAGE|GPUBufferUsage.INDIRECT|GPUBufferUsage.COPY_DST),uniformBuffer=make(`SpiroStar Web corner uniforms L${m.layerIndex}`,64,GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST),state=gpuWebCornerStateFor(m,segmentCount);
     const areaBind=d.createBindGroup({layout:p.area.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:arcRec.segmentBuffer}},{binding:1,resource:{buffer:arcRec.pathSegmentRangeBuffer}},{binding:2,resource:{buffer:orientationBuffer}}]});
     const classifyBind=d.createBindGroup({layout:p.classify.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:arcRec.segmentBuffer}},{binding:1,resource:{buffer:arcRec.segmentMetaBuffer}},{binding:2,resource:{buffer:arcRec.pathSegmentRangeBuffer}},{binding:3,resource:{buffer:orientationBuffer}},{binding:4,resource:{buffer:flagsBuffer}},{binding:5,resource:{buffer:state.buffer}},{binding:6,resource:{buffer:uniformBuffer}},{binding:7,resource:{buffer:candidateIndexBuffer}},{binding:8,resource:{buffer:m.cubicBuffer}}]});
     const scanLevels=[];let scanCount=candidateCount,input=flagsBuffer,levelIndex=0;
@@ -337,14 +314,10 @@ function encodeGpuWebCornerResource(rec,table,encoder,threshold=60,nowMs=0,spaci
     for(let i=rec.scanLevels.length-2;i>=0;i--){const level=rec.scanLevels[i];pass=encoder.beginComputePass({label:`SpiroStar Web corner prefix offsets L${rec.morphRec.layerIndex}`});pass.setPipeline(gpuWebCornerRuntime.pipelines.cornerAdd);pass.setBindGroup(0,level.addBind);pass.dispatchWorkgroups(Math.ceil(level.count/GPU_WEB_CORNER_WG));pass.end();gpuWebCornerRuntime.stats.cornerScanOffsetDispatches++;gpuWebCornerRuntime.stats.cornerCompactDispatches++;}
     pass=encoder.beginComputePass({label:`SpiroStar Web corner scatter L${rec.morphRec.layerIndex}`});pass.setPipeline(gpuWebCornerRuntime.pipelines.cornerScatter);pass.setBindGroup(0,rec.cornerScatterBind);pass.dispatchWorkgroups(Math.ceil(rec.candidateCount/GPU_WEB_CORNER_WG));pass.end();gpuWebCornerRuntime.stats.cornerScatterDispatches++;gpuWebCornerRuntime.stats.cornerCompactDispatches++;
     pass=encoder.beginComputePass({label:`SpiroStar Web corner finalize L${rec.morphRec.layerIndex}`});pass.setPipeline(gpuWebCornerRuntime.pipelines.cornerFinalize);pass.setBindGroup(0,rec.cornerFinalizeBind);pass.dispatchWorkgroups(1);pass.end();gpuWebCornerRuntime.stats.cornerFinalizeDispatches++;gpuWebCornerRuntime.stats.cornerCompactDispatches++;
-    pass=encoder.beginComputePass({label:`Somata 7.3.9 Web 6.7 corner span L${rec.morphRec.layerIndex}`});pass.setPipeline(gpuWebCornerRuntime.pipelines.cornerSpan);pass.setBindGroup(0,rec.cornerSpanBind);pass.dispatchWorkgroups(Math.ceil(GPU_WEB_MAX_CORNERS/64));pass.end();gpuWebCornerRuntime.stats.cornerSpanDispatches++;
-    pass=encoder.beginComputePass({label:`Somata 7.3.9 Web master thread geometry L${rec.morphRec.layerIndex}`});pass.setPipeline(gpuWebCornerRuntime.pipelines.threadCompact);pass.setBindGroup(0,rec.threadCompactBind);if(typeof pass.dispatchWorkgroupsIndirect!=='function'){pass.end();return false;}pass.dispatchWorkgroupsIndirect(rec.threadDispatchBuffer,0);pass.end();gpuWebCornerRuntime.stats.threadCompactIndirectDispatches++;gpuWebCornerRuntime.stats.threadCompactDispatches++;gpuWebCornerRuntime.stats.threadGeometryBuilds++;
+    pass=encoder.beginComputePass({label:`Somata 7.4.9 Web 6.7 corner span L${rec.morphRec.layerIndex}`});pass.setPipeline(gpuWebCornerRuntime.pipelines.cornerSpan);pass.setBindGroup(0,rec.cornerSpanBind);pass.dispatchWorkgroups(Math.ceil(GPU_WEB_MAX_CORNERS/64));pass.end();gpuWebCornerRuntime.stats.cornerSpanDispatches++;
+    pass=encoder.beginComputePass({label:`Somata 7.4.9 Web master thread geometry L${rec.morphRec.layerIndex}`});pass.setPipeline(gpuWebCornerRuntime.pipelines.threadCompact);pass.setBindGroup(0,rec.threadCompactBind);if(typeof pass.dispatchWorkgroupsIndirect!=='function'){pass.end();return false;}pass.dispatchWorkgroupsIndirect(rec.threadDispatchBuffer,0);pass.end();gpuWebCornerRuntime.stats.threadCompactIndirectDispatches++;gpuWebCornerRuntime.stats.threadCompactDispatches++;gpuWebCornerRuntime.stats.threadGeometryBuilds++;
     pass=encoder.beginComputePass({label:`SpiroStar Web indirect finalize L${rec.morphRec.layerIndex}`});pass.setPipeline(gpuWebCornerRuntime.pipelines.indirect);pass.setBindGroup(0,rec.indirectBind);pass.dispatchWorkgroups(1);pass.end();gpuWebCornerRuntime.stats.indirectFinalizeDispatches++;
     rec.lastFrame=Math.max(0,Number(table.frameId)||0);rec.lastT=(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));gpuWebCornerRuntime.stats.encodes++;gpuWebCornerRuntime.stats.cpuCornerScansAvoided+=rec.segmentCount;gpuWebCornerRuntime.stats.cpuArcSearchesAvoided+=GPU_WEB_MAX_CORNERS;gpuWebCornerRuntime.stats.cpuThreadBuildsAvoided+=GPU_WEB_MAX_THREAD_SLOTS;gpuWebCornerRuntime.stats.exactThreadArcSamples+=2*GPU_WEB_MAX_THREAD_SLOTS;return true;
 }
 function noteGpuWebCornerSubmitted(rec,table){if(!rec?.ready||!table)return false;try{noteGpuMorphArcTableSubmitted?.(table);}catch(_){}gpuWebCornerRuntime.stats.submissions++;return true;}
-window.__spiroGpuWebCornerStatus=()=>({ready:gpuWebCornerRuntime.ready,generation:gpuWebCornerRuntime.generation,lastError:gpuWebCornerRuntime.lastError,maxCorners:GPU_WEB_MAX_CORNERS,maxThreadsPerCorner:GPU_WEB_MAX_THREADS_PER_CORNER,maxThreadSlots:GPU_WEB_MAX_THREAD_SLOTS,stats:{...gpuWebCornerRuntime.stats},contract:'Somata 7.3.9 canonical Web resource: retained-cubic exact Arc remains the truth, while active-thread compaction samples that truth exactly twice per visible thread and stores one resident master {A,Control,B} record. Raster/Corridor copies reuse that record; no per-vertex Arc search.'});
-function canReuseGpuWebCornerStateForMorph(morphRec){
-    if(!morphRec)return false;const key=Number(morphRec.layerIndex)||0,st=gpuWebCornerRuntime.layerStates.get(key);if(!st)return true;
-    const count=Math.max(1,morphRec.segmentCount*Math.max(1,Number(morphRec.arcSubdiv)||Number(morphRec.bezierSubdiv)||Number(window.GPU_TOPOLOGY_BEZIER_SUBDIV)||8)),sig=`${String(morphRec.topologySignature||morphRec.segmentCount)}|bez:${count}|state6`;return st.generation===gpuWebCornerRuntime.generation&&st.signature===sig&&st.count===count;
-}
+window.__spiroGpuWebCornerStatus=()=>({ready:gpuWebCornerRuntime.ready,generation:gpuWebCornerRuntime.generation,lastError:gpuWebCornerRuntime.lastError,maxCorners:GPU_WEB_MAX_CORNERS,maxThreadsPerCorner:GPU_WEB_MAX_THREADS_PER_CORNER,maxThreadSlots:GPU_WEB_MAX_THREAD_SLOTS,stats:{...gpuWebCornerRuntime.stats},contract:'Somata 7.4.9 canonical Web resource: retained-cubic exact Arc remains the truth, while active-thread compaction samples that truth exactly twice per visible thread and stores one resident master {A,Control,B} record. Raster/Corridor copies reuse that record; no per-vertex Arc search.'});

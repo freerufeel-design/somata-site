@@ -1,4 +1,4 @@
-// SpiroStar v519 — isolated Lamp GPU/WebGL backends
+
 window.__spiroRegisterModule?.('js/gpu/lamp-renderer');
 
 const LampWebGLRenderer = (() => {
@@ -84,7 +84,6 @@ void main(){
     float d=length(vQ);
     if(d>=1.0)discard;
 
-    // v261 variables and coefficients. vSoft is allowed up to 1.5 (150%).
     float softRaw=clamp(vSoft,0.0,1.5);
     float soft=min(softRaw,1.0);
     float over=sat(vBright-1.0);              // (brightness-100)/100
@@ -102,14 +101,12 @@ void main(){
     float solidUntil=0.0;
     float bodyCoverage=1.0;
 
-    // softCore / generic body: exact v261 stop semantics:
-    // centre=1, optional opaque plateau, then interpolate to bodyEdge.
     if(vType>=0.5 && vType<1.5){
         float hard=max(over,coreHardness);
         solidUntil=body*hard;
         bodyEdge=max(edgeAlpha,hard);
         bodyCoverage=(d<=solidUntil)?1.0:mix(1.0,bodyEdge,seg(d,solidUntil,body));
-    // solarDark: retain the dark-centre shape while using v261 edge/overdrive positions.
+
     }else if(vType>=1.5 && vType<2.5){
         float darkCore=max(0.06,body*(0.18+0.22*(1.0-soft)));
         float darkA0=0.96-soft*0.16;
@@ -128,7 +125,7 @@ void main(){
             }
         }
         bodyEdge=edgeAlpha;
-    // ring: analytic equivalent of v261 ring stops.
+
     }else if(vType>=2.5 && vType<3.5){
         float inner=body*(0.35-0.12*over);
         float ringStart=max(inner+0.01,body*(0.67-0.18*over));
@@ -140,7 +137,7 @@ void main(){
         float whiteRing=1.0-sat(abs(d-ringStart)/max(0.008,body*0.09));
         rgb=mix(vColor,vec3(1.0),whiteRing*0.75);
         bodyEdge=edgeAlpha;
-    // whiteCore: carry over v261 white hold -> colour body -> soft edge behaviour.
+
     }else if(vType<0.5){
         float whiteCoreFade=(softRaw<=1.0)?1.0:sat(1.0-(softRaw-1.0)/0.5);
         float whiteExtent;
@@ -165,7 +162,7 @@ void main(){
         else whiteMix=1.0-seg(d,whiteHold,max(whiteHold+0.0005,wt));
         whiteMix*=whiteCoreFade;
         rgb=mix(vColor,vec3(1.0),sat(whiteMix));
-    // star radial carrier uses the same selected-body profile as v261.
+
     }else{
         float hard=over;
         solidUntil=body*hard;
@@ -173,10 +170,6 @@ void main(){
         bodyCoverage=(d<=solidUntil)?1.0:mix(1.0,bodyEdge,seg(d,solidUntil,body));
     }
 
-    // v261 halo stops. Crucially, for every value 100% <= brightness < 200%
-    // the body edge blends into a non-zero halo and then fades outward. There is no
-    // hard body cutoff. Only at exactly 200% is the halo removed, and even then the
-    // edge fades from body to transparent over body..body+0.012.
     float coverage;
     if(d<=body){
         coverage=bodyCoverage;
@@ -192,8 +185,6 @@ void main(){
         else coverage=mix(haloMidA,0.0,seg(d,h1,1.0));
     }
 
-    // v261 star rays are vector overlays. Keep an analytic equivalent without changing
-    // the radial brightness law above.
     if(vType>=3.5){
         float rayFall=1.0-smoothstep(0.18,1.0,d);
         float ax=exp(-pow(abs(vQ.x)*34.0,2.0))+exp(-pow(abs(vQ.y)*34.0,2.0));
@@ -205,14 +196,10 @@ void main(){
         rgb=mix(rgb,vec3(1.0),sat(rays));
     }
 
-    // Small derivative AA only at the transparent outer boundary; it does not harden
-    // the physical lamp edge and keeps the v261 soft body/halo interpolation intact.
     coverage*=1.0-smoothstep(1.0-aa,1.0,d);
     coverage=max(0.0,coverage)*clamp(vAlpha,0.0,1.0);
     if(coverage<=0.000002)discard;
-    // Canvas2D-compatible visual accumulation: keep display-space RGB in the float
-    // buffer.  Precision is still float16, so weak gradients no longer quantise per lamp,
-    // but their apparent falloff stays the same as the v261 radial gradient.
+
     vec3 radiance=max(rgb,vec3(0.0))*coverage;
     outColor=vec4(radiance,coverage);
 }`;
@@ -232,9 +219,7 @@ in vec2 vUv;
 layout(location=0) out vec4 outColor;
 void main(){
     vec3 hdr=max(texture(uHdr,vUv).rgb,vec3(0.0));
-    // v261 / Canvas2D lighter semantics: preserve every sub-1.0 gradient value exactly
-    // and clamp only the accumulated over-range energy at final presentation.  The HDR
-    // buffer still prevents 8-bit quantisation while many weak lamps overlap.
+
     vec3 shown=clamp(hdr,0.0,1.0);
     float a=max(max(shown.r,shown.g),shown.b);
     if(a<0.00001){outColor=vec4(0.0);return;}
@@ -346,7 +331,7 @@ void main(){
                 if(cfg?.webgl===false)return false;
                 if(!init()||!available||lost)return false;
                 const blend=cfg?.blendMode||'lighter';
-                // HDR batch is additive. Non-light blend modes keep their exact Canvas2D path.
+
                 return blend==='lighter'||blend==='screen';
             }
             function ensureCapacity(count){
@@ -370,9 +355,7 @@ void main(){
                     const x=Number(v.px)||0,y=Number(v.py)||0;
                     const px=(Number(tr.a)||0)*x+(Number(tr.c)||0)*y+(Number(tr.e)||0);
                     const py=(Number(tr.b)||0)*x+(Number(tr.d)||0)*y+(Number(tr.f)||0);
-                    // v268: use the same gradient radius as v261.  Above 100% only the
-                    // v261 haloScale/haloFade law contracts the halo; the physical body edge
-                    // remains softly blended until the 200% endpoint.
+
                     const vb=Math.max(0,Math.min(200,Number(v.brightness)||0));
                     let outerLocal=lampV261GradientOuterRadius(rad,softness,type,vb);
                     if(type==='star')outerLocal=Math.max(outerLocal,rad*(2.15+.25*(1-Math.min(100,softness)/100))+6);
@@ -418,7 +401,7 @@ void main(){
             }
             function flush(){
                 if(!gl||!available||lost)return false;
-                // Clear the internal presentation surface even on an empty frame.
+
                 gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,width,height);
                 gl.disable(gl.BLEND);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
                 if(instanceCount<=0){lastFlushMode='empty';return true;}
@@ -429,8 +412,6 @@ void main(){
                 drawQueuedInstances();
                 let err=drainGlErrors();
 
-                // Some drivers expose RGBA16F rendering but reject additive float blending.
-                // Retry the SAME frame in WebGL RGBA8 instead of silently losing every lamp.
                 if(err!==gl.NO_ERROR && storageMode==='rgba16f'){
                     lastGlError=err;
                     if(allocateTextureStorage(width,height,'rgba8')){
@@ -443,7 +424,7 @@ void main(){
                 }
                 if(err!==gl.NO_ERROR){
                     lastGlError=err;lastError=`draw error 0x${err.toString(16)}`;lastFlushMode='failed';
-                    // Disable GL for subsequent frames; the normal Canvas2D path then takes over.
+
                     available=false;setUiStatus();
                     gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
                     requestMainCanvasRender();
@@ -465,11 +446,6 @@ void main(){
         })();
         window.__spiroLampWebGLStatus=()=>LampWebGLRenderer.status();
 
-        // v331 — deferred HDR lamp command buffers can be submitted together with final presentation.
-        // v319 — WebGPU HDR lamp backend.  The CPU lamp placement, adaptive exposure,
-        // visual-plan transfer curve and Canvas fallback remain unchanged.  WebGPU only
-        // replaces the instanced RGBA16F accumulation + final tone pass.  One command
-        // encoder contains both passes, and the shared WebGPUDeviceHub owns the device.
         const WebGPULampRenderer = (() => {
             const FLOATS_PER_INSTANCE=11;
             const TYPE_CODE=Object.freeze({whiteCore:0,softCore:1,solarDark:2,ring:3,star:4});
@@ -479,29 +455,22 @@ void main(){
             let lampBindGroup=null,toneBindGroups=[null,null,null],freezeBindGroups=[null,null],rainToneBindGroups=[null,null],rainBindGroups=[null,null],trailCombineBindGroups=[null,null,null,null],rainCurrentCombineBindGroups=[null,null],hdrTexture=null,toneTexture=null,freezeHistoryTextures=[null,null],freezeHistoryViews=[null,null],rainHistoryTextures=[null,null],rainHistoryViews=[null,null],trailCompositeTexture=null,trailCompositeView=null,trailCompositeToneBindGroup=null;
             let attempted=false,initializing=false,ready=false,lost=false,lastError='';
             let width=0,height=0,capacity=0,instanceCount=0,submissions=0,lastFlushMode='none',lastToneValid=false,deferredComposite=false,directSceneFrames=0,fallbackPresentFrames=0,lampFrameSerial=0;
-            // v331 — when final WebGPU presentation is available, finish the lamp encoder into a
-            // GPUCommandBuffer but do not submit it yet. The final compositor submits lamp + final
-            // presentation command buffers together, preserving queue order with one queue.submit().
+
             let deferredCommandBuffer=null,deferredCommandGeneration=0,mergedFrameSubmissions=0,hdrView=null,toneView=null;
             let instanceData=new Float32Array(FLOATS_PER_INSTANCE*512);
             const uniformData=new Float32Array(4),toneUniformData=new Float32Array(8),freezeUniformData=new Float32Array(16),rainUniformData=new Float32Array(16);
             let frameNow=0,freezeHistoryIndex=0,freezeHistoryValid=false,freezeLastRenderAt=0,freezeLastMotionAt=0,rainHistoryIndex=0,rainHistoryValid=false,rainLastRenderAt=0,rainLastMotionAt=0,freezeFrameHash=2166136261>>>0,freezeLastFrameHash=0,freezeDrawCount=0,freezeLastDrawCount=-1,freezeFrames=0,rainFrames=0,freezeResets=0,rainResets=0;
-            // v404 — exact cross-frame payload residency for vector lamps. When a complete
-            // lamp payload is byte-for-byte unchanged, keep using the already populated GPU
-            // buffer instead of rotating to another ring slot and uploading identical data.
+
             let instanceFrameHash=2166136261>>>0,lastInstanceHash=0,lastInstanceCount=0,lastInstanceSnapshot=null,lastInstanceBuffer=null;
             let instanceUploadBytes=0,instanceUploadSkips=0,instanceUploadBytesAvoided=0;
             function lampHashMix(h,v){const q=(Math.fround(Number(v)||0)*1048576)|0;h^=q;return Math.imul(h,16777619)>>>0;}
             function sameLampF32(a,b,count){if(!a||!b||b.length<count)return false;for(let i=0;i<count;i++)if(a[i]!==b[i])return false;return true;}
             function sameLampU32(a,b,count){if(!a||!b||b.length<count)return false;for(let i=0;i<count;i++)if(a[i]!==b[i])return false;return true;}
-            // v325 — Corridor lamps keep one lamp list and one copy-transform list.
-            // The Cartesian product is expanded by @builtin(instance_index) on the GPU,
-            // avoiding O(lamps*copies) CPU packing and uploads.
+
             const CORRIDOR_LAMP_FLOATS=12,CORRIDOR_COPY_FLOATS=8;
             const corridorBatchPool=[];let corridorBatchCount=0,corridorLogicalInstances=0,corridorLampUploads=0,corridorCopyUploads=0,corridorDraws=0,corridorFallbacks=0,corridorSharedCopyReuse=0,corridorSharedCopyAvoidedBytes=0;
             let corridorLampUploadSkips=0,corridorLampUploadBytesAvoided=0,corridorUniformUploads=0,corridorUniformUploadSkips=0;
-            // v519 — bounded Arbitrary-Lamp attachment records. Display-frame xy is resolved from
-            // resident Morph Arc in the vertex shader; style/scatter records stay <=600 on CPU.
+
             const ARC_LAMP_FLOATS=16,arcBatchPool=[];let arcBatchCount=0,arcDraws=0,arcCorridorDraws=0,arcAttachmentUploads=0,arcPrerequisiteFusions=0,arcScheduledReuses=0,topologyDraws=0,topologyCorridorDraws=0;let deferredLocalArcTables=[];
 
             const LAMP_WGSL=`
@@ -551,9 +520,7 @@ struct VSOut {
     let l2=corridorLampData[li*3u+2u];
     let c0=corridorCopyData[ci*2u];
     let c1=corridorCopyData[ci*2u+1u];
-    // v400: c0/c1 are the shared local copy matrix: [a,c,alpha,0] / [b,d,scale,0].
-    // Compose the layer root/frame matrix in WGSL so Lamps can share the same resident
-    // transform storage used by the other Corridor GPU effects.
+
     let f00=u.root0.x*c0.x+u.root0.y*c1.x;
     let f01=u.root0.x*c0.y+u.root0.y*c1.y;
     let f10=u.root0.z*c0.x+u.root0.w*c1.x;
@@ -567,13 +534,11 @@ struct VSOut {
     return o;
 }
 
-
 fn cubicDerivativeArc(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,t:f32)->vec2<f32>{let s=1.0-t;return 3.0*s*s*(c1-p0)+6.0*s*t*(c2-c1)+3.0*t*t*(p3-c2);}
 fn arcCorrectMicroT(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,sub:u32,subdiv:u32,f0:f32)->f32{
     let f=clamp(f0,0.0,1.0);let sd=max(1u,subdiv);let t0=f32(sub)/f32(sd);let t1=f32(sub+1u)/f32(sd);if(f<=0.000001){return t0;}if(f>=0.999999){return t1;}
     let s0=max(0.000001,length(cubicDerivativeArc(p0,c1,c2,p3,t0)));let s1=max(0.000001,length(cubicDerivativeArc(p0,c1,c2,p3,t1)));let dv=s1-s0;let arcTarget=f*max(0.000001,s0+0.5*dv);
-    // Integral of the local linear-speed model has a closed-form inverse. Rationalized root
-    // avoids cancellation and is cheaper than iterative Newton correction in particle/Web loads.
+
     let disc=max(0.000000000001,s0*s0+2.0*dv*arcTarget);let q=clamp((2.0*arcTarget)/max(0.000001,s0+sqrt(disc)),0.0,1.0);return mix(t0,t1,q);
 }
 fn retainedCubicPoint(globalMicro:u32,microT:f32)->vec2<f32>{
@@ -818,9 +783,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             }
             async function ensureReady(){
                 if(ready&&!lost)return true;
-                // initAsync() intentionally returns immediately while another warmup owns init.
-                // Phase-circle Morph needs an awaitable contract, so join that in-flight init
-                // without creating a second device/pipeline build.
+
                 if(initializing){
                     const deadline=performance.now()+5000;
                     while(initializing&&performance.now()<deadline)await new Promise(resolve=>setTimeout(resolve,4));
@@ -899,8 +862,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             function freezeRainTravelPx(dt){
                 const p=freezeRainSpeed()/100,baseSpeed=Math.max(60,Math.min(480,Math.min(width,height)*0.25));
                 if(p<=0)return 0;
-                // Hyperbolic speed law: 50% is the original velocity, 0% is stationary.
-                // At 100% move at least one full canvas diagonal in a frame: visually instant.
+
                 if(p>=1)return Math.hypot(width,height)+Math.max(width,height);
                 return baseSpeed*Math.max(0,Number(dt)||0)*(p/(1-p));
             }
@@ -912,8 +874,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                 const ordinaryHistory=freezeLightEnabled()&&freezeHistoryValid,rainHistory=freezeRainEnabled()&&rainHistoryValid;
                 const ordinary=ordinaryHistory&&t<=freezeLastMotionAt+freezeTailSec()*1000+20;
                 const rain=rainHistory&&t<=rainLastMotionAt+freezeRainTailSec()*1000+20;
-                // Request one last paint even when the deadline has just elapsed, so a 100%
-                // hard trail cannot remain frozen on the canvas after the scheduler retires.
+
                 if(ordinaryHistory||rainHistory)requestMainCanvasRender();
                 return ordinary||rain;
             }
@@ -950,8 +911,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                     batch.lampData[o]=Number(v.px)||0;batch.lampData[o+1]=Number(v.py)||0;batch.lampData[o+2]=outerLocal;batch.lampData[o+3]=body;batch.lampData[o+4]=rgb[0];batch.lampData[o+5]=rgb[1];batch.lampData[o+6]=rgb[2];batch.lampData[o+7]=softness/100;batch.lampData[o+8]=vb/100;batch.lampData[o+9]=typeCode;batch.lampData[o+10]=lampAlpha;batch.lampData[o+11]=0;for(let hi=0;hi<CORRIDOR_LAMP_FLOATS;hi++)lampHash=lampHashMix(lampHash,batch.lampData[o+hi]);lk++;
                 }
                 if(!lk)return true;
-                // v400: keep copy-local lag/scale/alpha in the shared resident 8xf32 buffer.
-                // Root * frameRotation * frameScale is constant for this lamp batch and moves to WGSL.
+
                 const ra=Number(root.a)||0,rb=Number(root.b)||0,rc=Number(root.c)||0,rd=Number(root.d)||0,re=Number(root.e)||0,rf=Number(root.f)||0;
                 const frameRot=frameCtx.hasCombinedRotation?(Number(frameCtx.combinedRotationRad)||0):0,ct=Math.cos(frameRot),sn=Math.sin(frameRot);
                 const frameScale=frameCtx.hasCombinedScale?(Number(frameCtx.combinedScale)||0):1;
@@ -1001,9 +961,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                 batch.uniformF32[10]=Math.max(1,Number(arcRec.subdiv)||1);batch.uniformF32[11]=arcRec.morphRec?.cubicBuffer?1:0;device.queue.writeBuffer(batch.uniformBuffer,0,batch.uniformF32.buffer,0,48);
                 const pipe=corridor?arcCorridorLampPipeline:arcLampPipeline;batch.uniformBindGroup=device.createBindGroup({layout:pipe.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:batch.uniformBuffer}}]});
                 let copyBuffer=null,copyCount=0;if(corridor){const shared=WebGPUCorridorCopyStore.acquireRaw(device,hubGeneration,frameCtx,copies,alphas,'lamp',frameCtx.layer);if(!shared?.buffer||!shared.k)return false;copyBuffer=shared.buffer;copyCount=shared.k;}
-                // The shared Arc WGSL references corridorCopyData behind a runtime branch, so auto-layout
-                // keeps binding(1) even for the non-Corridor entry point. Supply a tiny resident dummy buffer
-                // instead of creating an invalid 4-entry bind group (the browser expects bindings 0,1,2,3,5).
+
                 const entries=[{binding:0,resource:{buffer:lampBuffer}},{binding:1,resource:{buffer:corridor?copyBuffer:dummyStorageBuffer}},{binding:2,resource:{buffer:arcRec.segmentBuffer}},{binding:3,resource:{buffer:arcRec.pathSegmentRangeBuffer}},{binding:5,resource:{buffer:arcRec.morphRec.cubicBuffer}}];
                 const bg=device.createBindGroup({layout:pipe.getBindGroupLayout(1),entries});if(corridor)batch.corridorBindGroup=bg;else batch.storageBindGroup=bg;
                 batch.lampCount=lk;batch.copyCount=corridor?copyCount:1;batch.slot=slot;batch.table=table;batch.kind='arc';batch.arcScheduled=typeof spiroGpuEnsureArcPrerequisite==='function'&&spiroGpuEnsureArcPrerequisite(frameCtx,table);batch.corridor=corridor;
@@ -1141,10 +1099,6 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             return{warmup,ensureReady,isReady:()=>warmup(),beginFrame,canUse,queueVisualPlan,queueCorridorVisualPlan,queueArcVisualPlan,queueTopologyVisualPlan,flush,getCompositeTexture,getDeferredCommandBuffer,markDeferredSubmitted,presentDeferredToMain,hasDeferredComposite,resetFreezeLight,resetFreezeTrail,resetFreezeRain,clear,status};
         })();
 
-        // v325 — stable lamp facade; WebGPU additionally supports two-dimensional Corridor lamp instancing.
-        // v319 — stable lamp facade.  A frame chooses WebGPU only after the backend is fully
-        // ready.  If a WebGPU flush unexpectedly fails, a repaint is requested and the
-        // next frame falls through to the proven WebGL2/Canvas path without hot-path mirroring.
         const LampGPURenderer=(()=>{
             let active='none';
             function beginFrame(w,h,now=performance.now()){
@@ -1163,9 +1117,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             function flush(options={}){
                 if(active!=='webgpu')return LampWebGLRenderer.flush();
                 const ok=WebGPULampRenderer.flush(options);
-                // Device/pipeline failures request a repaint; the next frame immediately falls
-                // through to WebGL2/Canvas.  Avoid mirroring every lamp plan each normal frame,
-                // which would double getTransform() work and allocate recovery records in the hot path.
+
                 if(!ok)active='webgpu-recovering';
                 return ok;
             }

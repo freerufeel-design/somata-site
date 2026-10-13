@@ -1,11 +1,7 @@
-// SpiroStar v508 — Shared GPU Morph Path Resource
-// Persistent source/target endpoint buffers per Morph phase. Display-frame progress is
-// represented by a tiny uniform; the compute path can produce one canonical morphed GPU
-// point stream without materializing CPU {x,y} geometry.
+
+
 window.__spiroRegisterModule?.('js/gpu/morph-path-resource');
 
-// One retained cubic per logical topology edge. Curves are evaluated on GPU; consumers
-// that need arc-length/capsule data may derive a small fixed micro-rail from these cubics.
 const GPU_TOPOLOGY_BEZIER_SUBDIV=8;
 window.GPU_TOPOLOGY_BEZIER_SUBDIV=GPU_TOPOLOGY_BEZIER_SUBDIV;
 
@@ -50,7 +46,7 @@ fn morphMain(@builtin(global_invocation_id) gid:vec3<u32>) {
     let t=frame.t;
     let rotation=b.w*(1.0-t);
     var xy:vec2<f32>;
-    // source.w = 1 for radial/topological interpolation, 0 for Cartesian.
+
     if(a.w>0.5){
         let r=mix(a.x,b.x,t);
         let targetAngle=b.y+rotation;
@@ -66,7 +62,6 @@ fn morphMain(@builtin(global_invocation_id) gid:vec3<u32>) {
     }
     outputPts[i]=vec4<f32>(xy,mix(a.z,b.z,t),0.0);
 }`;
-
 
 const SHARED_GPU_MORPH_CUBIC_WGSL=`
 struct CountU { count:u32, _a:u32, _b:u32, _c:u32, };
@@ -96,16 +91,14 @@ fn cubicMain(@builtin(global_invocation_id) gid:vec3<u32>){
     let prev=points[prevIdx].xy;let next=points[nextIdx].xy;
     let chord=p3-p0;let chordLen=max(length(chord),1e-5);
     let packed=m.w;var hard0=(packed&0x40000000u)!=0u;var hard1=(packed&0x80000000u)!=0u;
-    // Authored corner flags are authoritative. For closed polygonal contours only, infer
-    // clearly discontinuous corners as a safety net. Open rails (notably spirals) stay smooth
-    // unless they explicitly carry a hard-corner flag.
+
     let d0=p0-prev;let d1=next-p3;
     if(closed&&length(d0)>1e-5&&chordLen>1e-5&&dot(normalize(d0),normalize(chord))<0.94){hard0=true;}
     if(closed&&length(d1)>1e-5&&chordLen>1e-5&&dot(normalize(chord),normalize(d1))<0.94){hard1=true;}
     var h0=chord/3.0;var h1=chord/3.0;
     if(!hard0){h0=clampHandle((p3-prev)/6.0,chordLen*0.45);}
     if(!hard1){h1=clampHandle((next-p0)/6.0,chordLen*0.45);}
-    // Preserve genuinely straight rails exactly.
+
     let straight0=length(d0)<1e-5||abs(cross2(d0,chord))<=1e-4*max(1.0,length(d0)*chordLen);
     let straight1=length(d1)<1e-5||abs(cross2(chord,d1))<=1e-4*max(1.0,chordLen*length(d1));
     if(straight0&&straight1){h0=chord/3.0;h1=chord/3.0;}
@@ -140,13 +133,11 @@ function flattenMorphPlanForGpu(plan){
     const target=new Float32Array(pointCount*4);
     const pathRanges=new Uint32Array(pathCount*4);
     const topology=new Float32Array(pathCount*4);
-    // v511: immutable per-phase segment topology. Dynamic frames only update positions
-    // and GPU arc metrics; endpoint/path-index metadata never returns to the CPU hot path.
+
     const segmentMeta=new Uint32Array(segmentCount*4); // aPoint,bPoint,pathIndex,packed key flags
     const pathSegmentRanges=new Uint32Array(pathCount*4); // firstSegment,count,firstPoint,pointCount
     const pathIndexData=new Uint32Array(segmentCount);
-    // v519: endpoint contour lengths are phase metadata only. They let bounded Lamp attachment
-    // populations initialize without materializing a display-frame CPU Morph path.
+
     const endpointPathLengths=new Float32Array(pathCount*2); // source,target
     let pointWrite=0,pathWrite=0,segmentWrite=0;
     for(const rec of records){
@@ -186,12 +177,7 @@ function flattenMorphPlanForGpu(plan){
         endpointPathLengths[pathWrite*2]=sourceLen;endpointPathLengths[pathWrite*2+1]=targetLen;
         for(let si=0;si<localSegments;si++){
             const next=(si+1)%rec.n,mo=segmentWrite*4;
-            // Match buildPathFxTypedTable() exactly. Morph scratch points intentionally carry
-            // only numeric x/y/widthScale, so hard-corner semantics come from the path-level
-            // cornerFlags array rather than endpoint object annotations.
-            // Structural kinks are the union of both endpoints. This prevents the GPU
-            // corner-web from disappearing for half a Morph phase when only the target (or
-            // only the source) carries an authored key corner.
+
             const keyStart=Boolean(sourceCornerFlags?.[si]===true||targetCornerFlags?.[si]===true);
             const keyEnd=Boolean(sourceCornerFlags?.[next]===true||targetCornerFlags?.[next]===true);
             const packed=((pathWrite&0x00ffffff)|(keyStart?0x40000000:0)|(keyEnd?0x80000000:0))>>>0;
@@ -360,8 +346,7 @@ function encodeSharedGpuMorphPath(encoder,layerIndex,t){
     const rec=getSharedGpuMorphPathResource(layerIndex),pipeline=sharedGpuMorphPathRuntime.pipeline;
     if(!rec||!encoder||!pipeline)return null;
     const u=(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(t):Math.max(0,Math.min(1,Number(t)||0)));
-    // Cross-command-buffer reuse is legal only after the earlier encoder was submitted.
-    // This mirrors MorphArcResource and avoids treating merely encoded work as resident.
+
     if(rec.hasCommittedData&&rec.lastCommittedT===u){
         rec.lastT=u;rec.lastDispatchFrame=Number(renderRuntime?.frameId)||0;
         sharedGpuMorphPathRuntime.stats.committedReuseHits++;return rec;
@@ -397,13 +382,6 @@ function dispatchSharedGpuMorphPath(layerIndex,t){
     const encoder=device.createCommandEncoder({label:`SpiroStar Morph compute L${layerIndex}`}),rec=encodeSharedGpuMorphPath(encoder,layerIndex,t);if(!rec)return null;
     device.queue.submit([encoder.finish()]);noteSharedGpuMorphPathSubmitted(rec,t);sharedGpuMorphPathRuntime.stats.dispatches++;return rec;
 }
-function dispatchSharedGpuMorphFrame(entries){
-    const device=sharedGpuMorphPathRuntime.device,pipeline=sharedGpuMorphPathRuntime.pipeline;if(!device||!pipeline||!Array.isArray(entries)||!entries.length)return[];
-    const encoder=device.createCommandEncoder({label:'SpiroStar batched Morph compute frame'}),out=[];
-    for(const item of entries){const rec=encodeSharedGpuMorphPath(encoder,Number(item?.layerIndex)||0,Number(item?.t)||0);if(rec)out.push({rec,t:Number(item?.t)||0});}
-    if(out.length){device.queue.submit([encoder.finish()]);for(const item of out)noteSharedGpuMorphPathSubmitted(item.rec,item.t);sharedGpuMorphPathRuntime.stats.dispatches++;}
-    return out.map(item=>item.rec);
-}
 
 window.__spiroGpuMorphPathStatus=()=>({
     active:sharedGpuMorphPathRuntime.resources.some(r=>r?.ready),
@@ -416,17 +394,3 @@ window.__spiroGpuMorphPathStatus=()=>({
     }:null),
     stats:{...sharedGpuMorphPathRuntime.stats}
 });
-window.__spiroV508GpuMorphProbe=()=>{
-    const status=window.__spiroGpuMorphPathStatus();
-    const cpu=window.__spiroMorphCpuFallbackStatus?.()||null;
-    return{
-        module:true,
-        sharedPhaseResource:Boolean(typeof prepareSharedGpuMorphPathResources==='function'),
-        batchedDispatch:Boolean(typeof dispatchSharedGpuMorphFrame==='function'&&typeof encodeSharedGpuMorphPath==='function'),
-        lazyCpuFallback:Boolean(cpu&&/explicit consumer demand/.test(cpu.contract||'')),
-        circleRouting:Boolean(typeof getCurrentMorphCpuPaths==='function'),
-        webgpuBackend:status.backend,
-        whyGpuMorphUnavailable:status.whyGpuMorphUnavailable,
-        stats:status.stats
-    };
-};

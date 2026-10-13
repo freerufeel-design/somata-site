@@ -1,30 +1,7 @@
-// SpiroStar v500 Modular Base
-// Morph rounding, topology, interpolation and morph geometry
+
+
 window.__spiroRegisterModule?.('js/geometry/morph');
-        // Detect real corners on an (often densely sampled) polyline by the
-        // local turning angle. Straight edges give ~0 turn, so only true
-        // vertices are flagged, and the samples around a single vertex are
-        // reduced to one local-maximum sample. This keeps the corner set
-        // sparse, so the rounding radius can span whole edges instead of
-        // collapsing to zero on a dense grid.
-        // Merge consecutive points closer than minDist (with wrap-around for a
-        // closed path). Collapsing morph anchors would otherwise create
-        // near-zero-length segments that the corner rounding cannot smooth,
-        // leaving the visible spikes.
-        // Unified rounding for morph geometry. Corner-cut rounding fails on
-        // morphs for two reasons: (1) on a densely sampled/interpolated path it
-        // is impossible to reliably tell a real vertex from curvature, so some
-        // corners get rounded and others stay sharp - the "mix of rounding and
-        // straight lines"; (2) when two anchors collapse during an N/K change,
-        // the chord between them shrinks to zero and no corner-cut can span it,
-        // leaving a sharp hairpin - the "spikes".
-        //
-        // Instead we resample the path to a uniform arc-length grid and apply a
-        // triangular-weighted moving average whose window scales with the
-        // rounding amount. On straight runs the average of collinear samples is
-        // the sample itself (edges stay straight); at any turn - gentle or a
-        // collapsing hairpin - the window rounds it by exactly the same rule.
-        // The result is consistent everywhere and can never spike.
+
         function resamplePolylineForMorph(points, sampleCount, closed) {
             const count = closed ? points.length : points.length - 1;
             const sampleN = Math.max(24, sampleCount);
@@ -65,10 +42,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return out;
         }
 
-        // Adaptive vector smoothing: choose the rounding grid from the actual contour
-        // complexity, not from FPS and not simply from the already-dense morph topology.
-        // Simple circles/soft polygons use ~96 samples, loops and stars usually 144–240,
-        // complex multi-turn contours 360–480, and only extreme paths reach 720.
         function adaptiveMorphRoundingSamples(pts, isClosed, amount) {
             const nPts = pts?.length || 0;
             if (nPts < 3) return Math.max(24, nPts);
@@ -124,9 +97,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const out = output || [];
             if (src.length < 2) { out.length = 0; return out; }
             const strength = Math.max(0, Math.min(2, Number(roundingFrac) || 0));
-            // v344 — keep effect carriers (Graffiti/Sweep/Web helpers) on the exact same
-            // >100% geometry as the visible Morph line.  The old helper clipped here to
-            // 1.0, so a 150–200% line could visibly outrun its contour-following effects.
+
             if (strength > 1.000001 && src.length >= 3) src = transformSplineKnotsForRounding(src, Boolean(closed), strength - 1, []);
             const frac = Math.min(1, strength);
 
@@ -151,8 +122,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             let h = Math.round(frac * n * 0.06);
             h = Math.max(1, Math.min(maxHalf, h));
 
-            // Exact v92 triangular kernel. This is now the single geometric source for
-            // the visible Morph line AND all contour-following effects (Graffiti/Sweep).
             const extLen = n + h * 2;
             const needed = extLen + 1;
             const ws = morphRoundWorkspace;
@@ -291,13 +260,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return out;
         }
 
-        // N/K morphing must preserve the topology of the generated orbit.
-        // The previous radial approximation turned the star into a single
-        // polar contour, which cannot represent the actual K-step polyline.
-        // For morphing we therefore sample each generated orbit by its
-        // *topological traversal parameter* (vertex/edge order), not by
-        // cartesian arc length. This keeps corresponding vertices on the
-        // same phase while N and/or K change.
         function ensureReusablePointArray(arr, count) {
             const out = Array.isArray(arr) ? arr : [];
             while (out.length < count) out.push({ x:0, y:0 });
@@ -358,9 +320,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 const closed = Boolean(path.closed);
                 const segments = closed ? points.length : Math.max(1, points.length - 1);
                 target.closed = closed;
-                // v507: preserve render-readiness metadata from the canonical spiral path.
-                // Without this, downstream passes cannot tell that profile rounding/seam
-                // work was already baked before Morph resampling.
+
                 target.spiralProfileRoundingBaked=path.spiralProfileRoundingBaked===true;
                 target.spiralProfileSplineBaked=path.spiralProfileSplineBaked===true;
                 target.spiralContinuityProtected=path.spiralContinuityProtected===true;
@@ -383,11 +343,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 target.rawPoints = copyMorphPointArray(points, target.rawPoints);
                 target.points = resampleMorphTopology(points, sampleCount, closed, target.points);
 
-                // v238: corner metadata belongs to the GEOMETRIC parameter, not to the
-                // old raw point index. Morph topology resampling changes point count, so
-                // copying raw flags verbatim silently loses edge boundaries and turns N
-                // scaled profile splines into one global rounded spline. Reproject every
-                // hard boundary onto the resampled grid used by the actual renderer.
                 const flags = Array.isArray(target.cornerFlags) ? target.cornerFlags : (target.cornerFlags = []);
                 const renderedCount = target.points.length;
                 flags.length = renderedCount;
@@ -404,8 +359,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 }
                 const bridgeFlags = Array.isArray(target.bridgeRoundFlags) ? target.bridgeRoundFlags : (target.bridgeRoundFlags = []);
                 if (!hasBridgePolicy) {
-                    // v247: empty means NO bridge policy.  Do not turn a seamless profile
-                    // into an authoritative full-length array of false values.
+
                     bridgeFlags.length = 0;
                 } else {
                     bridgeFlags.length = renderedCount;
@@ -489,11 +443,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const pairs = [];
             if (src.length !== dst.length) {
                 if (src.length > dst.length) {
-                    // Several source orbits may geometrically merge into one target orbit.
-                    // Keep every source path real, but only ONE pair per target represents
-                    // the continuing target lamp population. The other paths are retiring
-                    // lamp populations and must fade out instead of all piling onto the same
-                    // target lamps.
+
                     const candidatePairs=[];
                     for (let si = 0; si < src.length; si++) {
                         const s = src[si];
@@ -515,9 +465,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     }
                     pairs.push(...candidatePairs);
                 } else {
-                    // One source orbit may split into several targets. Only ONE target pair
-                    // inherits the already-existing source lamp population. Extra target
-                    // paths are genuinely new populations (presence starts at zero).
+
                     const candidatePairs=[];
                     for (let di = 0; di < dst.length; di++) {
                         const d = dst[di];
@@ -560,13 +508,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return pairs;
         }
 
-        // Circle-slide mode: polygon vertices are treated as angular anchors.
-        // Every anchor stays exactly on its source/target circle radius while
-        // N changes. When vertices are removed, neighboring anchors collapse
-        // symmetrically toward the middle of their sector; when vertices are
-        // added, the reverse split happens. K is morphed by continuously
-        // interpolating the endpoint angular phase, so the line topology can
-        // change without any vertex leaving the circumference.
         function buildCircleAnchors(layer) {
             const N = Math.max(2, Math.round(Number(layer.N) || 4));
             const K = Math.max(1, Math.min(Math.floor(N / 2), Math.round(Number(layer.K) || 1)));
@@ -667,11 +608,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             };
 
             if (slideType === 'phase' || slideType === 'minimalSpiral') {
-                // Open Spiral has a real inner/outer endpoint order, so a cyclic vertex
-                // permutation is not allowed here.  `minimalSpiral` keeps that endpoint
-                // correspondence but still uses the shortest signed angular delta below.
-                // This is the Spiral half of Somata 6.7 "Минимальный поворот": the rail
-                // never has to drag a seam around the circle just to reach the target.
+
                 if (ns === nd) { from = srcAngles.slice(); to = dstAngles.slice(); }
                 else if (ns > nd) {
                     from = srcAngles.slice();
@@ -755,11 +692,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     const dp = dst[s % dst.length];
                     let srcAngles = sp.points.map(p => p.angle);
                     let dstAngles = dp.points.map(p => p.angle);
-                    // Somata 6.6: an open spiral has a real seam/start vertex. Rephasing
-                    // the source sequence at every new circle phase is harmless for a closed
-                    // polygon but visibly teleports that seam for a spiral. In phase-based
-                    // Spiral Morph keep both authored endpoint orders exact and let the phase
-                    // mapper collapse/split anchors without cyclically moving either endpoint.
+
                     const preserveSpiralPhaseEndpoints =
                         (sourceLayer?.spiralEnabled===true || targetLayer?.spiralEnabled===true) &&
                         (typeof spiralMorphUsesCorridorPhase!=='function' || spiralMorphUsesCorridorPhase());
@@ -776,10 +709,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     const minimalTurnSpiral = preserveSpiralPhaseEndpoints && minimalTurnMode;
                     const effectiveSlideType = preserveSpiralPhaseEndpoints
                         ? (minimalTurnSpiral ? 'minimalSpiral' : 'phase')
-                        // In Minimal Turn the polygon is allowed to switch to the actual
-                        // minimum-motion closed-loop correspondence even when orbit count changes.
-                        // Reversed traversal is also considered because it is the same closed
-                        // polygon edge set but can eliminate a nearly full-turn vertex journey.
+
                         : (minimalTurnMode && slideType === 'minimal' ? 'minimal' : (orbitTopologyChanges && slideType === 'minimal' ? 'phase' : slideType));
                     const anglePlan = buildCircleSlideAnglePlan(srcAngles, dstAngles, effectiveSlideType);
                     pathPlans.push({
@@ -812,12 +742,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return plan;
         }
 
-
-        // v214 — Circle-slide transform for Chaos Star. The old chaos branch always
-        // fell back to dense topology interpolation, so “Минимальный / Секторный /
-        // По фазе” had no effect. Here the real seeded chaos vertex sequence becomes
-        // the angular anchor sequence and is passed through the same slide planner as
-        // ordinary polygons.
         function chaosCircleMorphPlanKey(sourceLayer, targetLayer, slideType) {
             const keyPart = (l) => [
                 Math.max(2, Math.round(Number(l.N) || 4)),
@@ -865,11 +789,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return plan;
         }
 
-        // Map a normalized profile ([{x in 0..1, y}]) onto a ring of polygon
-        // vertices, exactly like buildOrbitPolylines does for the static
-        // render. Returns an array of { points, closed } sub-paths. A broken
-        // (open) profile only closes when closedLoop is not explicitly false,
-        // so circle-slide morphing honors the "Замыкать края профиля" flag.
         function profileHasLogicalSymmetry(profilePts) {
             if (!Array.isArray(profilePts) || profilePts.length < 3) return false;
             let maxAbs = 0, pos = 0, neg = 0;
@@ -921,9 +840,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
 
             const isFlat = profilePts.every(p => Math.abs(p.y) < 0.001);
             const smoothFlatSpline = isFlat && !spiralEnabled && options.profileMode === 'spline';
-            // v239: only Discrete/segment geometry may take the flat polygon shortcut.
-            // Smooth spline keeps all configured profile samples per construction edge;
-            // at rounding=0 cornerFlags split those samples into N edge-local splines.
+
             if (isFlat && !spiralEnabled && !smoothFlatSpline) return singlePath(P, true, P.map(() => true));
 
             const start = profilePts[0];
@@ -934,12 +851,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const openEdgeOverflow = closedLoop === false && profilePts.some(p => (Number(p?.x) || 0) < -0.001 || (Number(p?.x) || 0) > 1.001);
             const collapseReferenceLength = Math.max(0, Number(options.collapseReferenceLength) || 0);
             const collapseProfile = collapseReferenceLength > 1e-6;
-            // v6.3.1: Circle Slide already receives the single, controller-resolved
-            // Morph clock.  Do not apply a second smoothstep while an edge collapses:
-            // on non-flat/spline profiles (notably playlist project “Multi”) that made
-            // a selected Linear speed visibly accelerate/decelerate even though geometryT
-            // itself was linear.  The collapse safety envelope remains, but its gain is
-            // now linear in the derived edge-length ratio.
+
             const collapse01 = (u) => Math.max(0, Math.min(1, Number(u) || 0));
 
             const mapEdgePoint = (out, p1, ux, uy, nx, ny, segLen, normalAmplitude, prof, j) => {
@@ -986,8 +898,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                         path.points=buildClosedSpiralAutoCloseGeometry(path.rawPoints,spiralRound,roundSeams);
                         path.points=repairSpiralEdgePoints(path.points,rawClosed,P,i,R,spiralOrder,tangential,options.spiralStep||1,options.polygonN||P.length,true);
                     }else{
-                        // Iter32 — Open Spiral gets the same finite/non-collapsed integrity
-                        // contract as static geometry, but never receives a closure bridge.
+
                         path.points=repairSpiralEdgePoints(mappedForClosure,path.points,P,i,R,spiralOrder,tangential,options.spiralStep||1,options.polygonN||P.length,false);
                     }
                     path.closed = false;
@@ -1018,7 +929,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     const normalAmplitude = R * 0.5 * collapseScale;
                     for (let j = 0; j < profLen; j++) mapEdgePoint(path.points[j], p1, ux, uy, nx, ny, segLen, normalAmplitude, profilePts[j], j);
                 }
-                // Preserve the old filter(e => e.length >= 2) behaviour without allocations.
+
                 if (!scratch.openVisible) scratch.openVisible = [];
                 scratch.openVisible.length = 0;
                 for (const path of scratch.openPaths) if (path.points.length >= 2) scratch.openVisible.push(path);
@@ -1028,9 +939,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const perEdge = isBroken ? profLen : Math.max(0, profLen - 1);
             const totalPoints = P.length * perEdge;
             const smoothSplineRenderer = options.profileMode === 'spline';
-            // Only authored segment profiles have intrinsic corners inside one scaled
-            // profile copy.  A sampled spline in Discrete mode is already the curve;
-            // treating every sample as a corner would over-round the entire profile.
+
             const morphProfileCorner = new Array(profLen).fill(false);
             if (options.profileMode === 'segments' && profLen > 2) {
                 for (let j = 1; j < profLen - 1; j++) {
@@ -1060,19 +969,14 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 const normalAmplitude = R * 0.5 * collapseScale;
                 for (let j = 0; j < perEdge; j++) {
                     mapEdgePoint(scratch.polyPoints[outIndex], p1, ux, uy, nx, ny, segLen, normalAmplitude, profilePts[j], j);
-                    // v238: hard edge-local spline boundary. Each base geometry edge owns
-                    // one scaled profile spline. With rounding==0 splinePathForDraw splits
-                    // exactly at these flags, so a straight profile stays a hard polygon.
-                    // For a broken/bridged profile, also split at the explicit edge end so
-                    // the bridge cannot bend the neighbouring profile spline.
+
                     const bridgeBoundary = isBroken && (j === 0 || j === perEdge - 1);
                     if (isBroken) {
                         scratch.polyCornerFlags[outIndex] = smoothSplineRenderer
                             ? bridgeBoundary
                             : (Boolean(morphProfileCorner[j]) || (roundedBridge && bridgeBoundary));
                     } else {
-                        // Seamless profiles meet at j==0. Keep that vertex available to the
-                        // ordinary rounding renderer; authored segment corners remain explicit.
+
                         scratch.polyCornerFlags[outIndex] = (j === 0) || Boolean(morphProfileCorner[j]);
                     }
                     scratch.polyBridgeRoundFlags[outIndex] = roundedBridge && bridgeBoundary;
@@ -1082,14 +986,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             if (outIndex < scratch.polyPoints.length) scratch.polyPoints.length = outIndex;
             scratch.polyCornerFlags.length = outIndex;
             scratch.polyBridgeRoundFlags.length = outIndex;
-            // v247: bridgeRoundFlags are an explicit policy only for a genuinely
-            // broken profile whose edge gaps are bridged.  For a seamless profile an
-            // all-false array is NOT equivalent to "no bridge policy": splinePathForDraw()
-            // interprets a same-length bridge array as authoritative and would therefore
-            // disable every ordinary construction-corner fillet during Morphing.  That
-            // made the exact t=1 frame sharp, then the next phase could start rounded.
-            // Omit the policy entirely for seamless profiles so cornerFlags remain the
-            // source of truth on both sides of a cycle boundary.
+
             return singlePath(
                 scratch.polyPoints,
                 true,
@@ -1124,9 +1021,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return out;
         }
 
-        // Canvas morph rendering lives outside bindInputEvents(), while the UI has its
-        // own local resolveMorphProfileMode helper. v98 accidentally called that local
-        // helper from here, causing ReferenceError and aborting every Morphing paint.
         function resolveMorphProfileModeForRender(sourceMode, targetMode, t = 0) {
             const src = sourceMode || 'segments';
             const dst = targetMode || src;
@@ -1135,12 +1029,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return Number(t) < 0.5 ? src : dst;
         }
 
-        // v231: profile type itself is continuous during Morphing. Previously a mixed
-        // segments<->spline phase was represented by a categorical flag, so one frame
-        // could be a straight polyline and the next a full cubic spline. Keep a scalar
-        // spline weight instead: 0 = exact straight segments, 1 = exact centripetal spline.
-        // At a cycle boundary the previous target and the next source therefore meet at
-        // exactly the same geometry, with no one-frame renderer switch.
         function morphSplineBlend(sourceMode, targetMode, t = 0) {
             const srcSpline = (sourceMode || 'segments') === 'spline';
             const dstSpline = (targetMode || sourceMode || 'segments') === 'spline';
@@ -1157,10 +1045,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
 
         function getMorphClosureTransitionPlan(sourceClosed, targetClosed, t) {
             const u = Math.max(0, Math.min(1, Number(t) || 0));
-            // v527: t has ALREADY passed through the selected Morph speed law. Do not
-            // apply a hidden smoothstep on top of it: that made “Линейный” visibly non-linear
-            // whenever topology opened/closed. We keep the two-stage seam safety contract
-            // for closed -> open, but each stage is parameter-linear in the chosen clock.
+
             if (sourceClosed === true && targetClosed === false) {
                 const prepareEnd = 0.78;
                 const geometryT = u >= prepareEnd ? 1 : Math.max(0,Math.min(1,u / prepareEnd));
@@ -1174,15 +1059,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const plan = getCircleMorphPlan(sourceLayer, targetLayer, slideType);
             if (!plan.pathPlans.length) return;
 
-            // v129: ordinary Circle Morph rounding follows the proven v92 renderer exactly.
-            // In later versions spline pre-smoothing and newer per-path metadata changed the
-            // effective rounding so much that only a small tail of some spline paths moved.
-            // v92 instead rounds every generated intermediate polyline as a whole.
-            // v230: the legacy v92 Circle Slide renderer is intentionally kept only
-            // for angular/segment profiles. A spline must never enter that branch: it
-            // renders intermediate profile samples with lineTo/roundMorphPolyline and
-            // therefore makes a smooth static spline visibly faceted on the first morph
-            // frame. Any transition involving a spline uses the quality path below.
             const smoothSplineRenderer = layer?.profileMode === 'spline' || sourceLayer?.profileMode === 'spline' || targetLayer?.profileMode === 'spline';
             const straightProfileNeedsSmooth = smoothSplineRenderer && (isFlatProfileNodes(sourceLayer?.profileNodes) || isFlatProfileNodes(targetLayer?.profileNodes));
             if (!isSpiralLayer(layer) && sourceLayer.profileMode !== 'spline' && targetLayer.profileMode !== 'spline' && !straightProfileNeedsSmooth) {
@@ -1192,8 +1068,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 const srcClosed = plan.srcClosed;
                 const dstClosed = plan.dstClosed;
                 const closureMix = Math.max(0, Math.min(1, t));
-                // t already carries the selected Morph speed law. Keep the legacy v92
-                // closure blend on that same clock so “Линейный” remains genuinely linear.
+
                 const smoothMix = closureMix;
 
                 let currentPathPlan = null;
@@ -1204,7 +1079,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     if (closeProfile) currentPathPlan.closedScratch = options;
                     else currentPathPlan.openScratch = options;
                     options.collapseReferenceLength = collapseReferenceLength;
-                    // Clear newer geometry options: this branch intentionally reproduces v92.
+
                     delete options.spiralEnabled; delete options.spiralOrder; delete options.spiralTangential; delete options.spiralRoundSeams;
                     delete options.spiralClosed; delete options.roundingFrac; delete options.spiralStep;
                     delete options.polygonN; delete options.profileMode; delete options.splineRenderMode;
@@ -1252,16 +1127,12 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const R = sourceRadius + (targetRadius - sourceRadius) * geometryT;
             const rawProfilePts = interpolateMorphProfile(sourceLayer, targetLayer, geometryT, plan.profileScratch);
             const morphProfileMode = resolveMorphProfileModeForRender(sourceLayer.profileMode, targetLayer.profileMode, geometryT);
-            // Curvature blend follows the full phase progress, not the accelerated
-            // closure geometry clock. This guarantees spline->segments reaches exactly
-            // zero only at the phase boundary instead of flattening early.
+
             const splineBlend = morphSplineBlend(sourceLayer.profileMode, targetLayer.profileMode, t);
             const mixedSplineSegment = isMixedSplineSegmentTransition(sourceLayer.profileMode, targetLayer.profileMode);
             const profilePts = splineBlend > 0
                 ? smoothPreSampledSplinePoints(rawProfilePts) : rawProfilePts;
-            // Rounding is a visual morph parameter. Derive it directly from the captured
-            // source/target snapshots instead of relying on state.layers being mutated first
-            // by the animation tick. This removes a one-frame/stale-rounding dependency.
+
             const sourceRounding = Math.max(0, Math.min(MAX_ROUNDING_PERCENT, Number(sourceLayer.rounding) || 0));
             const targetRounding = Math.max(0, Math.min(MAX_ROUNDING_PERCENT, Number(targetLayer.rounding) || 0));
             const roundingFrac = Math.max(0, Math.min(2, (sourceRounding + (targetRounding - sourceRounding) * geometryT) / 100));
@@ -1276,10 +1147,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 options.collapseReferenceLength = collapseReferenceLength;
                 options.spiralEnabled = isSpiralLayer(layer);
                 options.spiralOrder = getEffectiveSpiralOrder(layer);
-                // Somata 6.6: signed order changes must not hit the static enabled+0
-                // special case (which jumps to +1 direction). Morph handedness and radial
-                // exponent are interpolated independently: opposite winding directions pass
-                // continuously through a radial segment instead of teleporting.
+
                 if (options.spiralEnabled && (sourceLayer?.spiralEnabled===true || targetLayer?.spiralEnabled===true)) {
                     const so=sourceLayer?.spiralEnabled===true?normalizeSpiralOrder(sourceLayer.spiralOrder,false):0;
                     const to=targetLayer?.spiralEnabled===true?normalizeSpiralOrder(targetLayer.spiralOrder,false):0;
@@ -1305,18 +1173,14 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 const isSpiral = options.spiralEnabled === true;
                 const allOpen = roundingFrac <= 0.001 && !state.showRoundingGuides && !isSpiral && polylines.length > 1 && polylines.every(pl => pl?.closed !== true);
                 if (allOpen) {
-                    // Open profiles often contain N independent edge paths. Appending them
-                    // to one Canvas path and stroking once avoids N save/begin/stroke cycles
-                    // per frame, which materially improves FPS while morphing open splines.
+
                     ctx.save();
                     ctx.globalAlpha = alpha * localAlpha;
                     ctx.beginPath();
                     for (const pl of polylines) {
                         if (!pl?.points || pl.points.length < 2) continue;
                         drawMorphConstructionGuide(ctx, pl.points, false, layer, alpha * localAlpha);
-                        // v228: spline Morphing uses the same existing samples as centripetal
-                        // cubic anchors. No additional points are generated. Non-zero Morph
-                        // rounding intentionally keeps the legacy whole-path smoothing.
+
                         drawMorphPathQuality(ctx, pl.points, false, roundingFrac, morphProfileMode, splineBlend, mixedSplineSegment, layer?.splineRenderMode, pl.cornerFlags || [], pl.bridgeRoundFlags || []);
                     }
                     if (!ctx.__suppressStroke) ctx.stroke();
@@ -1332,9 +1196,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                         strokeVariableWidthSpiralPath(ctx, pl.points, roundingFrac, pl.cornerFlags || [], (morphProfileMode === 'spline' || splineBlend > 1e-6));
                     } else {
                         ctx.beginPath();
-                        // v228: true centripetal spline rendering during Morphing, using the
-                        // existing 16/32/64 profile samples. Morph rounding still owns the path
-                        // when enabled so its global geometry semantics remain unchanged.
+
                         drawMorphPathQuality(ctx, pl.points, pl.closed, roundingFrac, morphProfileMode, splineBlend, mixedSplineSegment, layer?.splineRenderMode, pl.cornerFlags || [], pl.bridgeRoundFlags || []);
                         if (!ctx.__suppressFill && layer.fill && pl.closed) fillCanvasGeometry(ctx,layer);
                         if (!ctx.__suppressStroke) ctx.stroke();
@@ -1377,11 +1239,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const dv = runtimeState.morph.targetVisuals[idx] || {};
             Object.assign(srcLayer, sv); Object.assign(dstLayer, dv);
             if (state.morph.options.byFillColor) {
-                // Closed -> open/spiral transitions must never drop the fill in one frame.
-                // The source geometry already cross-fades with (1-t), so keep its fill alive
-                // for the full fade when the destination cannot be filled. For ordinary
-                // closed-to-closed membership changes, retain the midpoint hand-off so the
-                // configured simultaneous-fill layer cap is respected.
+
                 const destinationCanFill = dv.closedLoop !== false && dv.spiralEnabled !== true;
                 if (sv.fill && !dv.fill && destinationCanFill && t >= 0.5) srcLayer.fill = false;
                 if (!sv.fill && dv.fill && t <= 0.5) dstLayer.fill = false;
@@ -1396,8 +1254,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
 
         function interpolateMorphPolarAngle(fromAngle, toAngle, t) {
             let delta = (Number(toAngle) || 0) - (Number(fromAngle) || 0);
-            // In Calm mode no point may travel around the selected reference vertex
-            // by more than two complete turns during a single morph phase.
+
             if (state.morph.mode === 'calm') {
                 const maxDelta = Math.PI * 4;
                 delta = Math.max(-maxDelta, Math.min(maxDelta, delta));
@@ -1414,20 +1271,13 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 pair._referenceVertexCount = pointCount;
                 pair._referenceVertexHint = vertexCount;
                 pair._referenceVertexMode = state.morph.mode;
-                // Choose one of the figure's actual construction vertices, then map that
-                // vertex to the dense morph grid. This keeps the randomized anchor meaningful
-                // instead of picking an arbitrary resampling point along an edge.
+
                 const vertexIndex = Math.floor(Math.random() * vertexCount) % vertexCount;
                 pair._referenceVertexOffset = Math.round(vertexIndex * pointCount / vertexCount) % pointCount;
             }
             return pair._referenceVertexOffset || 0;
         }
 
-        // v228: final Morphing spline quality. Morph profiles may already be sampled
-        // to exactly selected points, but drawing those samples with lineTo leaves
-        // visible chords. Reuse the SAME samples as centripetal cubic anchors; no new
-        // geometry points are generated. Morph rounding keeps its legacy whole-path
-        // smoothing semantics, so it takes precedence whenever rounding is non-zero.
         function drawMorphSplineBlendPath(ctx, rawPoints, closed, blend, cornerFlags = []) {
             let points=(rawPoints||[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y)));
             if(points.length<2)return;
@@ -1455,9 +1305,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 }
             };
 
-            // v238: a mixed Segments<->Spline phase must preserve the same edge-local
-            // spline boundaries as the static renderer. Otherwise a straight profile can
-            // become one global rounded Catmull-Rom for a frame even though rounding=0.
             const activeCorners=[];
             for(let i=0;i<points.length;i++)if(flags[i])activeCorners.push(i);
             if(activeCorners.length){
@@ -1503,18 +1350,14 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const flatProfileSmoothRounding=renderMode==='smooth' && round>0 && isFlatProfileConstructionPath(points,cornerFlags);
 
             if(!splineInvolved && flatProfileSmoothRounding){
-                // Straight-profile special case: Smooth means spline rounding, not the
-                // legacy v220 polyline rounding. This also covers exact morph boundaries
-                // where the semantic target preset is stored as `segments`.
+
                 splinePathForDraw(ctx,points,Boolean(closed),round,cornerFlags||[],bridgeRoundFlags||[]);
                 return;
             }
 
             if(!splineInvolved){
                 if(bridgePolicy){
-                    // v247: a broken profile has an explicit bridge policy.  Use the
-                    // v220 corner fillet renderer so `Прямой` and `Скругление` are not
-                    // collapsed into the same globally-smoothed Morph path.
+
                     roundPolylineForDraw(ctx,points,Boolean(closed),round,cornerFlags||[]);
                 }else{
                     roundMorphPolyline(ctx,points,Boolean(closed),round);
@@ -1523,24 +1366,20 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             }
 
             if(renderMode==='discrete'){
-                // Ordinary Discrete Morphing keeps the established v220 whole-path
-                // smoothing. Broken profiles are the exception: their bridge endpoints
-                // are semantic corners controlled by the left-panel join switch.
+
                 if(bridgePolicy) roundPolylineForDraw(ctx,points,Boolean(closed),round,cornerFlags||[]);
                 else roundMorphPolyline(ctx,points,Boolean(closed),round);
                 return;
             }
 
             if(round>0){
-                // Smooth mode: one continuous spline. Rounding changes the spline knots
-                // themselves (same count) instead of adding a rounded polyline layer.
+
                 splinePathForDraw(ctx,points,Boolean(closed),round,cornerFlags||[],bridgeRoundFlags||[]);
                 return;
             }
 
             if(continuousProfileBlend){
-                // With rounding off, spline <-> hard segments changes curvature continuously
-                // all the way to exact zero by moving cubic handles onto the straight chord.
+
                 drawMorphSplineBlendPath(ctx,points,Boolean(closed),blend,cornerFlags||[]);
                 return;
             }
@@ -1598,10 +1437,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
         function drawMorphGeometry(ctx, layer, sourcePaths, targetPaths, t, alpha = 1, radial = false, sourceProfileMode = null, targetProfileMode = null) {
             const srcProfileMode=sourceProfileMode||layer?.profileMode;
             const dstProfileMode=targetProfileMode||sourceProfileMode||layer?.profileMode;
-            // v507: every direct Morph renderer now shares the same phase interpolation
-            // plan as buildCurrentMorphPaths(). This removes the last duplicate hot path
-            // that still paired contours, rotated targets and unwrapped polar points during
-            // draw. The compatibility renderer receives reusable prepared paths.
+
             if(typeof interpolateMorphForDirectDraw==='function'){
                 const prepared=interpolateMorphForDirectDraw(layer,sourcePaths,targetPaths,t,radial,
                     `draw:${radial?'radial':'cart'}:${srcProfileMode}:${dstProfileMode}`);
@@ -1627,10 +1463,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     const dstPts = dp.points || [];
                     if (!srcPts.length || !dstPts.length) continue;
 
-                    // For a change in sub-orbit count, keep every orbit alive:
-                    // the source/target geometry is rotated around the common
-                    // center so that many paths collapse into one or one path
-                    // fans out into several. No alpha fade is used.
                     let morphDst = dp;
                     if (pair.radialMerge || pair.radialSplit) {
                         const sa = pathReferenceAngle(sp);
@@ -1640,10 +1472,6 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     }
                     const morphDstPts = morphDst.points || [];
 
-                    // Use the same topology-resampled grid for the complete
-                    // cycle, including t=0 and t=1. Switching from raw
-                    // vertices to the dense grid just after the cycle starts
-                    // creates a visible snap when the segment counts differ.
                     const n = Math.max(srcPts.length, morphDstPts.length);
                     const useRadialPath = radial && pathClosed && (pair.radialMerge || pair.radialSplit);
                     const srcPolar = useRadialPath ? unwrapPolarPath(srcPts) : null;
@@ -1673,8 +1501,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     }
                     base = scratch;
                 } else if (sp) {
-                    // Should only occur for an empty side. Keep it visible
-                    // rather than fading it away.
+
                     base = sp.rawPoints || sp.points;
                 } else if (dp) {
                     base = dp.rawPoints || dp.points;
@@ -1689,19 +1516,10 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     strokeVariableWidthSpiralPath(ctx, base, roundingFrac, [], (srcProfileMode === 'spline' || dstProfileMode === 'spline'));
                 } else {
                     ctx.beginPath();
-                    // Uniform-window smoothing rounds the interpolated path
-                    // consistently instead of trying to classify each dense sample
-                    // as corner or edge, which produced the sharp/rounded mix and
-                    // the jagged extra segments.
-                    // v92 behaviour: the entire interpolated morph path is rounded as one
-                    // continuous geometry. Applying rounding only at spline corner metadata
-                    // made the control statistically insignificant on dense morph paths.
+
                     drawMorphPathQuality(ctx, base, pathClosed, roundingFrac, layer?.profileMode, splineBlend, mixedSplineSegment, layer?.splineRenderMode, (sp?.cornerFlags || dp?.cornerFlags || []), (sp?.bridgeRoundFlags || dp?.bridgeRoundFlags || []));
                     if (!ctx.__suppressFill && layer.fill && pathClosed) fillCanvasGeometry(ctx,layer);
-                    // When a closed source morphs into an open destination, the stroke must
-                    // become open, but the fill should fade away ahead of that opening rather
-                    // than vanish on the first frame. Draw a temporary closed fill copy whose
-                    // alpha continuously approaches zero while the actual stroke uses the open path.
+
                     if (!ctx.__suppressFill && layer.fill && !pathClosed && sp?.closed === true && dp && dp.closed !== true) {
                         const outgoingFill = Math.max(0, 1 - Math.max(0, Math.min(1, Number(t) || 0)));
                         if (outgoingFill > 0.00001) {
@@ -1711,8 +1529,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                             drawMorphPathQuality(ctx, base, true, roundingFrac, layer?.profileMode, splineBlend, mixedSplineSegment, layer?.splineRenderMode, (sp?.cornerFlags || dp?.cornerFlags || []), (sp?.bridgeRoundFlags || dp?.bridgeRoundFlags || []));
                             fillCanvasGeometry(ctx,layer);
                             ctx.restore();
-                            // Canvas save/restore does not restore the current path. Rebuild
-                            // the real (open) stroke path after drawing the temporary fill.
+
                             ctx.beginPath();
                             drawMorphPathQuality(ctx, base, pathClosed, roundingFrac, layer?.profileMode, splineBlend, mixedSplineSegment, layer?.splineRenderMode, (sp?.cornerFlags || dp?.cornerFlags || []), (sp?.bridgeRoundFlags || dp?.bridgeRoundFlags || []));
                         }

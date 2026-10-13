@@ -1,14 +1,9 @@
-'use strict';
-const fs=require('fs');
+const cp=require('child_process');
 const path=require('path');
-const {spawnSync}=require('child_process');
-const dir=__dirname;
-const files=fs.readdirSync(dir).filter(f=>f.endsWith('.js')&&f!=='run-all.js').sort();
-let failed=0;
-for(const file of files){
-  process.stdout.write(`\n=== ${file} ===\n`);
-  const r=spawnSync(process.execPath,[path.join(dir,file)],{stdio:'inherit'});
-  if(r.status!==0)failed++;
+const root=__dirname;
+for(const file of ['static-modules.js','contracts.js','browser-preflight.js','runtime-user-actions.js','gpu-effect-scene-routing.js','effects-stability.js','main-control-coverage.js','effect-render-impact.js','stability-soak.js']){
+  console.log(`\n=== ${file} ===`);
+  const r=cp.spawnSync(process.execPath,[path.join(root,file)],{stdio:'inherit'});
+  if(r.status!==0)process.exit(r.status||1);
 }
-console.log(`\nSomata invariant suite: ${files.length-failed}/${files.length} PASS`);
-process.exitCode=failed?1:0;
+console.log('\nALL PREFLIGHT TESTS PASS');

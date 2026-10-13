@@ -1,6 +1,5 @@
-// SpiroStar v534 — GPU-native topology Morph base/glow renderer with retained render bundles.
-// Consumes SharedGpuMorphPath output directly: XY + widthScale stay GPU-resident. This removes
-// the old Spiral exclusion and avoids building an Arc resource merely to draw the base stroke.
+
+
 window.__spiroRegisterModule?.('js/gpu/topology-morph-base-renderer');
 
 const WebGPUTopologyMorphBaseRenderer = (() => {
@@ -148,8 +147,7 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{
         const copies=state.tunnel?.active===true?frameCtx.visibleInstances?.copies:[{scale:1,copyId:0,position:0}],alphas=state.tunnel?.active===true?frameCtx.visibleInstances?.alphas:[1];
         const src=Array.isArray(copies)&&copies.length?copies:[{scale:1}],countMax=src.length;ensureCopyCapacity(countMax);let k=0;
         for(let i=0;i<countMax;i++){
-            // Base geometry must preserve every visible tunnel copy. Effect-specific thinning
-            // (Sweep/Web/Profile) is intentionally NOT reused here.
+
             const ca=Math.max(0,Math.min(1,Number(alphas?.[i]??1)));if(ca<=.0001)continue;
             const copy=src[i]||{},sc=state.tunnel?.active===true?Math.max(.000001,Math.abs(Number(copy.scale)||0)):1;
             const ang=state.tunnel?.active===true&&typeof getMotionTunnelLagRadians==='function'?getMotionTunnelLagRadians(copy,frameCtx.layer):0,cs=Math.cos(ang),sn=Math.sin(ang);
@@ -187,10 +185,7 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{
         }catch(_){stats.bundleFallbacks++;return null;}
     }
     function composite(ctx){ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';ctx.filter='none';ctx.drawImage(canvas,0,0);ctx.restore();}
-    // v531 — fuse Glow + Base for the common no-Fill/no-Web topology Morph case. Geometry
-    // interpolation is encoded once, both analytic strokes are rasterized in one render pass,
-    // and the transparent GPU canvas is composited only once. Scenes that need Fill/Web between
-    // Glow and Base keep the historical split path so ordering remains exact.
+
     function renderGlowAndBase(frameCtx,targetCtx,opts={}){
         if(!isEligible(frameCtx,'glow')||!isEligible(frameCtx,'base')||!ensureSize()){stats.fallbacks++;return false;}
         const rec=typeof getSharedGpuMorphPathResource==='function'?getSharedGpuMorphPathResource(frameCtx.layerIndex):null;

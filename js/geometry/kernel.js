@@ -1,10 +1,7 @@
-// SpiroStar v500 Modular Base
-// Canonical geometry kernel, Fill mesh preparation and geometry contract
+
+
 window.__spiroRegisterModule?.('js/geometry/kernel');
-        // v364 — GeometryKernel v4: canonical contours + canonical segment index.
-        // Closed/open contour identity, bounds, winding diagnostics and Fill eligibility now
-        // come from the same zero-copy topology object used by stroke segment consumers.
-        // Coordinates remain owned by the historical geometry; descriptors only reference them.
+
         const GeometryKernel=(()=>{
             let staticCache=new WeakMap(),commandCache=new WeakMap(),dirtyCommands=new WeakSet();
             let staticBuilds=0,staticHits=0,commandBuilds=0,commandHits=0,commandInvalidations=0,commandRefreshes=0,commandRefreshFallbacks=0,segmentDescriptorsBuilt=0,contourDescriptorsBuilt=0;
@@ -75,19 +72,14 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
                 rec={...summarizePaths(drawData.paths),drawData,static:true};
                 staticCache.set(drawData,rec);staticBuilds++;return rec;
             }
-            // v383 — phase-resident Morph commands keep stable command/subpath/point object
-            // identity for the whole transition.  When the topology hash is unchanged, refresh
-            // the canonical descriptors in-place instead of deleting and reallocating thousands
-            // of segment objects every display frame.  Any degeneracy/invalid value immediately
-            // falls back to the exact full rebuild path below.
+
             function refreshStrokeCommands(commands,meta){
                 if(!meta||commands?.__spiroPhaseResidentRecorder!==true)return null;
                 const topologyHash=Number(commands.__spiroTopologyHash)||0,phaseSerial=Number(commands.__spiroPhaseSerial)||0;
                 if(topologyHash!==Number(meta.topologyHash||0)||phaseSerial!==Number(meta.phaseSerial||0))return null;
                 let logicalSegments=0,contourCount=0;
                 for(const cmd of commands||[])for(const sp of cmd?.subpaths||[]){const pts=sp?.points||[];logicalSegments+=Math.max(0,pts.length-1)+(sp?.closed===true?1:0);contourCount++;}
-                // Reuse is intentionally limited to the common all-valid topology.  A prior or
-                // current degenerate segment can shift the compact valid-segment index, so rebuild.
+
                 if(logicalSegments!==meta.segments?.length||contourCount!==meta.contours?.length||meta.invalidSegments||meta.degenerateSegments||meta.invalidWidths)return null;
                 let totalLength=0,pathCount=0,subpathCount=0,pointCount=0,closedPathCount=0,openPathCount=0,maxWidthRatio=1,sharpJoins=0;
                 let segCursor=0,contourCursor=0,commandIndex=0;
@@ -233,9 +225,7 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
                 if(!frameCtx)return null;
                 const stroke=inspectStrokeCommands(commands);
                 frameCtx._geometryKernelStrokeView=stroke;
-                // Some fallback/order combinations can ask for the geometry contract before
-                // stroke recording. Keep that already-created zero-copy view coherent rather
-                // than allocating/rebuilding a second frame view.
+
                 if(frameCtx._geometryKernelView)frameCtx._geometryKernelView.stroke=stroke;
                 if(frameCtx._geometryContract?.geometry)frameCtx._geometryContract.geometry.stroke=stroke;
                 strokeBindings++;return stroke;
@@ -250,11 +240,7 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
                     view={...inspectStaticDrawData(drawData),dynamic:false,kind:String(plan.kind||'static'),stroke:frameCtx._geometryKernelStrokeView||null,canonical};
                     if(canonical&&typeof noteCanonicalGeometryConsumer==='function')noteCanonicalGeometryConsumer('GeometryKernel.frameView');
                 }else{
-                    // v383: dynamic Fill is exact-Canvas-only by policy, so the geometry
-                    // contract does not need a second full point/contour scan before the
-                    // phase-resident stroke recorder performs its canonical validation.
-                    // If stroke metadata already exists, reuse it; otherwise expose a cheap
-                    // lazy topology view and let bindStrokeCommands attach the authoritative one.
+
                     const stroke=frameCtx._geometryKernelStrokeView||null;
                     if(stroke)view={...stroke,dynamic:true,kind:String(plan.kind||'dynamic'),static:false,stroke};
                     else{view={pathCount:0,pointCount:0,segmentCount:0,closedPathCount:0,openPathCount:0,invalidPointCount:0,variableWidthPointCount:0,contours:EMPTY_CONTOURS,fillContours:EMPTY_CONTOURS,fillContourCount:0,hasClosedFillTopology:false,sourceKind:'dynamic-lazy',dynamic:true,kind:String(plan.kind||'dynamic'),static:false,stroke:null,lazy:true};lazyDynamicViews++;}
@@ -274,12 +260,6 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
         })();
         window.__spiroGeometryKernelStatus=()=>GeometryKernel.status();
 
-        // v508 — Fill preparation moved to js/render/fill-plan.js.
-        // GeometryKernel owns topology only; render planning no longer lives in this module.
-
-        // v360 — Geometry Contract v1. Rendering backends ask one object for topology /
-        // fill policy instead of independently re-deriving Spiral/Morph/fill conditions.
-        // This is deliberately a view over existing geometry, not a second geometry copy.
         const geometryContractStats={built:0,reused:0,canvasExactFill:0,gpuFill:0,nativeMeshFill:0,sceneSplitForFill:0,fillOnlyPasses:0};
         function getLayerGeometryContract(frameCtx){
             if(!frameCtx)return null;
@@ -287,15 +267,10 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             const layer=frameCtx.layer||{},plan=frameCtx.geometryPlan||{},geometry=GeometryKernel.frameView(frameCtx);
             if(plan.dynamic!==true&&geometry?.drawData)GeometryKernel.staticContours(geometry.drawData,'fillPolicy',true);
             const fillAlpha=getFillOpacityUnit(layer.fillColor,DEFAULT_FILL_OPACITY_PERCENT);
-            // v522.9 — Fill follows the layer's ordinary line visibility. Hiding the line is
-            // a visual mute for the shape carrier, so a previously enabled Fill must not remain
-            // as an orphaned polygon. Lightning may still flash independently, but it does not
-            // re-enable Fill while lineVisible=false.
+
             const fillConfigured=getLayerLineVisible(layer)&&layer.fill===true&&fillAlpha>.00001;
             const dynamic=plan.dynamic===true,spiral=isSpiralLayer(layer);
-            // A polygon<->Spiral morph can expose a temporary render layer whose own flag is
-            // still polygonal while one authoritative endpoint already owns the Spiral rail.
-            // Fill policy follows the complete endpoint contract, not that transient visual shell.
+
             const li=Math.max(0,Math.floor(Number(frameCtx.layerIndex)||0));
             const spiralEndpoint=spiral||[
                 frameCtx.sourceLayer,frameCtx.geometryPlan?.sourceLayer,frameCtx.geometryPlan?.targetLayer,
@@ -304,20 +279,11 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             ].some(candidate=>candidate&&isSpiralLayer(candidate));
             const unsupportedFillKind=plan.kind==='orange-fade'||plan.kind==='blue-fade'||plan.kind==='green-fade'||plan.kind==='lightning';
             const hasStaticFillTopology=dynamic?false:(Number(geometry?.fillContourCount)||0)>0&&geometry?.hasClosedFillTopology===true;
-            // Static Fill exists only when the authoritative geometry actually exposes a closed
-            // fill contour. This applies to every static carrier, not just Spiral: requesting Fill
-            // on an open contour can only end in a backend-chain failure. Dynamic Morph keeps its
-            // historical contract because its frame topology may be materialized later in the pass.
+
             const fillHasRenderableTopology=dynamic?true:hasStaticFillTopology;
             const fillRequested=fillConfigured&&fillHasRenderableTopology;
             const corridor=state.tunnel?.active===true;
-            // Somata 7.2.6 — dynamic Corridor Morph has an authoritative frame-resident
-            // command rail.  Fill may consume its closed subpaths directly as a native GPU
-            // stencil fan; dynamic no longer means "Canvas mask required".
-            // Dynamic Corridor already has a frame-resident command rail. Spiral phases are
-            // allowed to TRY the same native stencil preparation; if that rail has no closed
-            // fill contour the render pipeline now skips only Fill for that frame instead of
-            // putting the whole Morph into an endless corridor-gpu-wait loop.
+
             const dynamicCorridorNative=fillRequested&&dynamic&&corridor&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerGeometry);
             const nativeGpuFillEligible=fillRequested&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(!corridor||!tunnelColorShiftIsActive())&&((hasStaticFillTopology&&!dynamic&&!spiralEndpoint)||dynamicCorridorNative);
             const gpuMaskEligible=fillRequested&&hasStaticFillTopology&&!dynamic&&!spiralEndpoint&&!corridor&&!unsupportedFillKind&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerFillInstances);
@@ -345,9 +311,7 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             const contract=getLayerGeometryContract(frameCtx),w=canvas?.width|0,h=canvas?.height|0;
             if(!contract?.gpuMaskEligible){fillMaskValidationStats.rejectedPolicy++;return false;}
             if(w<1||h<1||contract.geometry?.hasClosedFillTopology!==true||(Number(contract.geometry?.fillContourCount)||0)<1||contract.geometry?.invalidPointCount>0){fillMaskValidationStats.rejectedEmpty++;return false;}
-            // No getImageData/readback here. The authoritative decision is topological:
-            // static canonical geometry contains at least one valid closed contour, and
-            // drawLayerFillInstances completed without throwing.
+
             fillMaskValidationStats.accepted++;return true;
         }
         window.__spiroFillValidationStatus=()=>({...fillMaskValidationStats,geometryContract:{...geometryContractStats}});

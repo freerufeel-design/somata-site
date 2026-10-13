@@ -1,9 +1,6 @@
 (function(){
     'use strict';
 
-    // Somata in-app error console. It is a bottom dock owned by the page, not a
-    // transient text overlay on the canvas. Errors are collected immediately;
-    // automatic opening is opt-in and is OFF by default for this console version.
     const BUILD='20261012-error-console-v738';
     const MAX_ENTRIES=160;
     const MAX_TEXT_CHARS=140000;
@@ -34,8 +31,6 @@
         ? console.warn.bind(console)
         : null;
 
-    // A new storage key deliberately makes the shipped default OFF even if an older
-    // experimental build left its previous auto-show key enabled in localStorage.
     try{autoShow=localStorage.getItem(AUTO_SHOW_STORAGE_KEY)==='1';}catch(_){}
 
     function fpsCounter(){return document.getElementById('fpsCounter');}
@@ -103,9 +98,7 @@
     function isExpectedGpuFallback(args){
         try{
             const first=String(args?.[0]??'');
-            // Only known-benign backend telemetry is suppressed. Strict Spiral / FullGPU
-            // diagnostics are intentionally NOT filtered: they can correlate with visible
-            // corruption and must be available in the in-app console for bug reports.
+
             if(first.startsWith('[Somata GPU fallback]'))return true;
             return Array.from(args||[]).some(value=>value&&typeof value==='object'&&value.diagnostic===true&&value.backend==='canvas'&&typeof value.reason==='string'&&/^(?:exact Canvas fill|isolated exact Canvas fill|authoritative static Canvas fill)$/i.test(value.reason.trim()));
         }catch(_){return false;}
@@ -190,8 +183,7 @@
         ensureDock();
         if(!visible){
             render();
-            // Opening from FPS must preserve the user's collapse/expand choice.
-            // A freshly created console starts collapsed and is expanded only manually.
+
             setVisible(true);
             requestAnimationFrame(()=>{if(body&&!collapsed)body.scrollTop=body.scrollHeight;});
         }else setVisible(false);
@@ -224,7 +216,7 @@
         totalChars=0;
         if(output)output.textContent='Ошибок нет.';
         if(countNode)countNode.textContent='0';
-        // Clearing must not erase the user's manual collapsed/expanded preference.
+
         setVisible(false);
         if(clearDevtools){try{nativeConsoleClear?.();}catch(_){}}
         updateFpsErrorState();
@@ -232,8 +224,7 @@
     }
 
     function shieldViewportGestures(node){
-        // The workspace owns wheel zoom / pan. Interaction in this dock must never
-        // leak into mainContainer, including listeners registered later by app-c.js.
+
         const stop=e=>e.stopPropagation();
         ['mousedown','mouseup','click','dblclick','contextmenu','pointerdown','pointerup','pointermove','touchstart','touchmove','touchend'].forEach(type=>{
             node.addEventListener(type,stop,{passive:type.startsWith('touch')});
@@ -305,9 +296,7 @@
             totalChars-=removed.length;
         }
         sequence++;
-        // Hotfix2: diagnostics can contain deep GPU status trees. Do not rewrite the entire
-        // hidden/collapsed <pre> for every warning; entries remain authoritative and are
-        // rendered on demand when the console is actually opened/expanded.
+
         if(autoShow)setVisible(true);
         if(visible&&!collapsed)render();
         else{if(countNode)countNode.textContent=String(entries.length);updateFpsErrorState();}
@@ -323,8 +312,7 @@
 
     if(nativeConsoleError){
         console.error=function(...args){
-            // Keep DevTools useful, but do not promote expected GPU->Canvas backend telemetry
-            // to an application error. Real console.error calls still enter the Somata dock.
+
             nativeConsoleError(...args);
             if(isExpectedGpuFallback(args))return;
             try{push('console.error',formatArgs(args));}catch(_){}
@@ -334,9 +322,7 @@
     if(nativeConsoleWarn){
         console.warn=function(...args){
             nativeConsoleWarn(...args);
-            // Do not mirror every warning. Capture only GPU diagnostics that indicate a
-            // failed strict frame / blocked GPU path, because these can explain visible
-            // Spiral artefacts even when the browser did not throw a WebGPU exception.
+
             if(!isImportantGpuWarning(args))return;
             try{
                 const first=String(args?.[0]??'');
@@ -372,8 +358,6 @@
         updateFpsErrorState();
     }
 
-    // Delegated CAPTURE handlers make FPS toggling survive any later DOM/event rebinding.
-    // This also wins over canvas/workspace handlers installed after this bootstrap script.
     document.addEventListener('click',event=>{
         const fps=event.target?.closest?.('#fpsCounter');
         if(!fps)return;

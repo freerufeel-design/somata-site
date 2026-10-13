@@ -1,6 +1,5 @@
-// SpiroStar v507 — Adaptive Morph Topology Budget
-// One shared source/target sample budget per layer/morph phase.
-// The previous fixed 720-point rail massively over-sampled simple polygons and spirals.
+
+
 window.__spiroRegisterModule?.('js/geometry/morph-budget');
 
 const morphBudgetRuntime={
@@ -40,9 +39,7 @@ function estimateMorphEndpointComplexity(layer,visual,profile){
     const rounding=Math.max(0,Number(visual?.rounding??layer?.rounding)||0);
     let estimate=orbitVertices;
     if(spiral){
-        // v530: choose one immutable quality budget for the complete Morph phase from actual
-        // visual complexity. High-order / large on-screen spirals need a denser rail, while
-        // small low-order spirals keep the cheaper budget. Nothing changes mid-transition.
+
         const profileDetail=Math.max(16,Math.min(144,info.count*(info.smooth?3.5:2.25)));
         const order=Math.max(0,Math.abs(Number(visual?.spiralOrder??layer?.spiralOrder)||0));
         const radius=Math.max(1,Math.abs(Number(visual?.radius??layer?.radius)||220));
@@ -54,17 +51,14 @@ function estimateMorphEndpointComplexity(layer,visual,profile){
         const screenDemand=Math.min(constrained?240:360,screenRadius/(constrained?6.5:4.5));
         estimate=Math.max(profileDetail,info.smooth?96:64,orderDemand,screenDemand);
         if(rounding>0.001)estimate*=1.12;
-        // Dynamic spiral morphing is CPU/GPU bandwidth heavy because both endpoints are
-        // resampled every phase. Phones keep a stable but lower immutable rail; static
-        // spiral rendering is untouched and therefore keeps its original detail.
+
         const spiralCap=constrained?(info.smooth?480:240):(info.smooth?960:480);
         return{estimate:Math.min(spiralCap,Math.ceil(estimate)),spiral:true,smooth:info.smooth,constrained,orbitVertices,profileCount:info.count,spiralOrder:order,screenRadius};
     }
     if(info.flat&&!info.smooth){
         estimate=orbitVertices;
     }else{
-        // Repeated profile detail lives on every polygon edge. The budget is per resulting
-        // orbit path, so scale with vertices-per-orbit rather than global N.
+
         const perEdge=Math.max(1,Math.min(16,info.count-1));
         estimate=orbitVertices*perEdge;
         if(info.smooth)estimate*=1.15;
@@ -83,8 +77,7 @@ function chooseMorphLayerSampleBudget(layer,sourceVisual,targetVisual,sourceProf
     const spiral=a.spiral||b.spiral;
     const smooth=a.smooth||b.smooth;
     const raw=Math.max(a.estimate,b.estimate);
-    // Same budget is used for BOTH endpoints. This preserves stable point correspondence
-    // while avoiding the unconditional 720-point topology of v506 and earlier.
+
     const constrained=spiral&&(a.constrained===true||b.constrained===true);
     const min=spiral?(smooth?144:72):(smooth?96:48);
     const max=spiral?(constrained?(smooth?480:240):(smooth?960:480)):720;

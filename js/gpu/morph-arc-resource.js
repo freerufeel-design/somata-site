@@ -1,7 +1,5 @@
-// SpiroStar v512 — GPU Morph Segment / Arc Resource
-// Exact dynamic segment lengths + cumulative arc coordinates are computed on GPU from
-// retained GPU Bézier Morph rail. Sprite/Moving Line can therefore consume topology Morph
-// without materializing CPU {x,y} paths or walking O(N) segments on the main thread.
+
+
 window.__spiroRegisterModule?.('js/gpu/morph-arc-resource');
 
 const GPU_MORPH_ARC_WORKGROUP=256;
@@ -11,9 +9,6 @@ const gpuMorphArcRuntime={
     stats:{tableRequests:0,frameCacheHits:0,eligibleRequests:0,resourceBuilds:0,resourceHits:0,resourceMisses:0,warmupFallbacks:0,framesEncoded:0,frameDataReuses:0,morphEncodes:0,segmentBuildDispatches:0,scanDispatches:0,scanOffsetDispatches:0,pathMetricDispatches:0,finalizeDispatches:0,cpuPathBuildsAvoided:0,cpuSegmentWalksAvoided:0,deviceResets:0,unsupportedFrames:0,committedSubmissions:0,committedReuseHits:0,encodedButUncommitted:0,orderedCurrentCubicReuses:0},lastDecision:{eligible:false,reason:'not-requested'}
 };
 
-// Somata 6.8: static non-Fourier Spiral effects use the same GPU Bézier→Arc carrier
-// as Spiral Morph. The compact cubic buffer is rebuilt only when the layer geometry
-// revision changes; no per-frame CPU point sampling is involved.
 let staticSpiralBezierResources=new WeakMap();
 const staticSpiralBezierResourceSet=new Set();
 
@@ -30,9 +25,7 @@ fn cubicDerivative(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,t:f32)->v
     let q=1.0-t;return 3.0*q*q*(c1-p0)+6.0*q*t*(c2-c1)+3.0*t*t*(p3-c2);
 }
 fn cubicArcLength3(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,a:f32,b:f32)->f32{
-    // 3-point Gauss-Legendre. Same micro-segment count, substantially better distance metric
-    // than chord length on tight Spiral turns, so lamps/particles/web keep true arc placement
-    // without increasing the retained rail density.
+
     let m=(a+b)*0.5;let h=(b-a)*0.5;let x=0.7745966692414834;
     let v0=length(cubicDerivative(p0,c1,c2,p3,m));
     let v1=length(cubicDerivative(p0,c1,c2,p3,m-h*x));
@@ -147,9 +140,7 @@ async function ensureGpuMorphArcPipelines(){
             path:await compile('SpiroStar Morph Arc path metrics',GPU_MORPH_ARC_PATH_WGSL),
             finalize:await compile('SpiroStar Morph Arc finalize',GPU_MORPH_ARC_FINALIZE_WGSL)
         };gpuMorphArcRuntime.ready=true;gpuMorphArcRuntime.lastError='';
-        // Iter30 — strict Spiral effects/profile may deliberately render nothing while Arc
-        // pipelines compile. Publish readiness by scheduling a fresh frame instead of waiting
-        // for the next random sidebar/animation event.
+
         try{requestMainCanvasRender?.();}catch(_){}
         return true;
     }catch(err){gpuMorphArcRuntime.ready=false;gpuMorphArcRuntime.lastError=String(err?.message||err);return false;}})();
@@ -162,8 +153,7 @@ function buildGpuMorphArcResource(morphRec){
     let hit=gpuMorphArcRuntime.resources.get(morphRec);if(hit?.ready&&hit.generation===gpuMorphArcRuntime.generation){gpuMorphArcRuntime.stats.resourceHits++;return hit;}
     const device=gpuMorphArcRuntime.device,p=gpuMorphArcRuntime.pipelines,logicalSegmentCount=morphRec.segmentCount,subdiv=Math.max(1,Number(morphRec.arcSubdiv)||Number(morphRec.bezierSubdiv)||Number(window.GPU_TOPOLOGY_BEZIER_SUBDIV)||8),n=logicalSegmentCount*subdiv,pathCount=morphRec.pathCount,owned=[];
     const own=(label,bytes,usage)=>{const b=gpuMorphArcBuffer(device,label,bytes,usage);owned.push(b);return b;};
-    // Effects that need distance work on a compact fixed micro-rail derived from the same
-    // retained cubics as the visible topology stroke. No CPU curve sampling happens per frame.
+
     const logicalMeta=morphRec.cpuSegmentMeta||new Uint32Array(logicalSegmentCount*4),logicalPathRanges=morphRec.cpuPathSegmentRanges||new Uint32Array(pathCount*4);
     const expandedMeta=new Uint32Array(n*4),expandedPathIndex=new Uint32Array(n),expandedPathRanges=new Uint32Array(pathCount*4);
     for(let li=0;li<logicalSegmentCount;li++){
@@ -171,8 +161,7 @@ function buildGpuMorphArcResource(morphRec){
         for(let sj=0;sj<subdiv;sj++){
             const mi=li*subdiv+sj,o=mi*4;
             let flags=pi&0x00ffffff;
-            // 6.9 rev3: Web must classify construction corners at retained-cubic boundaries,
-            // not at every tiny Bézier microsegment (whose local turn is intentionally small).
+
             if(sj===0)flags|=0x20000000;
             if(sj===0&&(packed&0x40000000)!==0)flags|=0x40000000;
             if(sj===subdiv-1&&(packed&0x80000000)!==0)flags|=0x80000000;
@@ -181,12 +170,9 @@ function buildGpuMorphArcResource(morphRec){
     }
     const logicalPathDefs=morphRec.cpuPathRanges||null,logicalPeriodic=morphRec.cpuPathPeriodic||null;
     for(let pi=0;pi<pathCount;pi++){const o=pi*4;expandedPathRanges[o]=(logicalPathRanges[o]>>>0)*subdiv;expandedPathRanges[o+1]=(logicalPathRanges[o+1]>>>0)*subdiv;
-        // Arc consumers need only first/count in xy. z is reserved here as the exact closed flag
-        // so open Spiral rails never wrap their first corner to the last segment.
+
         expandedPathRanges[o+2]=logicalPathDefs?((logicalPathDefs[o+2]>>>0)?1:0):(morphRec.allClosed===true?1:0);
-        // w is sampling topology: 0=open, 1=ordinary closed, 2=self-similar Spiral period.
-        // z stays the historical closed boolean for consumers that must not reinterpret
-        // a periodic Spiral as a conventional last->first loop.
+
         expandedPathRanges[o+3]=logicalPeriodic&&logicalPeriodic[pi]?2:(expandedPathRanges[o+2]?1:0);}
     const segmentMetaBuffer=own(`SpiroStar Morph Arc bezier segment metadata L${morphRec.layerIndex}`,expandedMeta.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
     const pathIndexBuffer=own(`SpiroStar Morph Arc bezier path indices L${morphRec.layerIndex}`,expandedPathIndex.byteLength,GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST);
@@ -230,9 +216,7 @@ function getStaticSpiralBezierResource(layerIndex,sharedDevice=null,sharedGenera
     if(old?.ready&&old.generation===gpuMorphArcRuntime.generation&&old.geometryVersion===geometryVersion&&String(old.profileSignature||'')===profileSignature)return old;
     if(old){const arc=gpuMorphArcRuntime.resources.get(old);if(arc){gpuMorphArcDestroy(arc);gpuMorphArcRuntime.resourceSet.delete(arc);gpuMorphArcRuntime.resources.delete(old);}destroyStaticSpiralBezierResource(old);}
     let source=[];try{source=typeof buildOrbitPolylines==='function'?(buildOrbitPolylines(layer)||[]):[];}catch(_){source=[];}if(!source.length)return null;
-    // 6.8 iter12 — static strict Spiral goes source profile -> retained cubics -> GPU directly.
-    // Do not build the six-samples-per-cubic compatibility view merely to read `_bezierSegments`
-    // back out of it; that was needless CPU allocation on every profile invalidation.
+
     const paths=[];let cubicCount=0;const roundBase=Math.max(0,Math.min(2,Number(typeof getRoundingStrength==='function'?getRoundingStrength(layer?.rounding):layer?.rounding)||0));
     for(const path of source){
         const pts=path?.points||[];if(pts.length<2)continue;
@@ -257,8 +241,7 @@ function getStaticSpiralBezierResource(layerIndex,sharedDevice=null,sharedGenera
     const rec={layerIndex:Number(layerIndex)||0,layer,generation:gpuMorphArcRuntime.generation,geometryVersion,profileSignature,ready:true,cubicBuffer:buffer,cubicCount,segmentCount:cubicCount,pathCount:paths.length,pointCount:pointBase,bezierSubdiv:12,arcSubdiv:8,bezierVisualRail:true,cpuCubicWidthScales,staticSpiralBezierRail:true,specialSpiralBezierRail:true,gpuOnlySpiralEffects:true,cpuSegmentMeta,cpuPathSegmentRanges,cpuPathRanges,cpuPathPeriodic,pathRanges:cpuPathRanges,cpuEndpointPathLengths,cpuPathKnotFractions,cpuPathLampKeyFractions,cpuPathCornerFractions,segmentMetaBuffer,pathRangeBuffer,pathSegmentRangeBuffer,allClosed:paths.every(p=>p.closed),resolveMorphT:()=>0,encodeCurrentCubics:()=>true};
     staticSpiralBezierResources.set(layer,rec);staticSpiralBezierResourceSet.add(rec);return rec;
 }
-// Iter32 — inspect the already-built static retained rail without forcing a rebuild.
-// Useful for distinguishing Open-Spiral geometry/resource failures from presentation failures.
+
 window.__spiroStaticSpiralBezierStatus=(layerIndex=null)=>{
     let li=Number.isFinite(Number(layerIndex))?Math.max(0,Math.floor(Number(layerIndex))):-1;
     if(li<0){try{li=Math.max(0,(state?.layers||[]).findIndex(l=>l?.id===state?.activeLayerId));}catch(_){li=0;}}
@@ -272,10 +255,7 @@ function currentGpuBezierMorphResource(layerIndex){
         const hasSpiralEndpoint=Boolean(src?.spiralEnabled===true||dst?.spiralEnabled===true||base?.spiralEnabled===true);
         const specialMode=Boolean(state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild())||(hasSpiralEndpoint&&typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()));
         const o=state?.morph?.options||{},spiralGeometryRequested=Boolean(o.byVertices||o.bySteps||o.byShape||state?.morph?.monoOrbitTransforms||o.byRounding||o.bySize||o.byRotation||o.bySpiralOrder||o.bySpiralLayers);
-        // Somata 6.8 Iter40: every active retained-Bézier Spiral Morph has exactly one visual
-        // carrier: WebGPUSpiralBezierMorphRenderer's retained current-cubic buffer.  Never
-        // substitute the generic topology rail while that resource is warming; doing so makes
-        // lamps/web/lightning/graffiti visibly leave the Spiral for one or more frames.
+
         const strictSpiralMorphRail=Boolean(hasSpiralEndpoint&&specialMode&&spiralGeometryRequested&&state?.fourierMode!==true);
         if(strictSpiralMorphRail){
             const special=typeof WebGPUSpiralBezierMorphRenderer!=='undefined'?WebGPUSpiralBezierMorphRenderer.getResource?.(li):null;
@@ -283,18 +263,14 @@ function currentGpuBezierMorphResource(layerIndex){
             try{WebGPUSpiralBezierMorphRenderer?.warmup?.();}catch(_){ }
             return null;
         }
-        // If Blue Morph only changes visual/style properties, Spiral geometry is static.
-        // Keep effects on the exact static retained cubic instead of declaring them ineligible.
+
         if(hasSpiralEndpoint&&!spiralGeometryRequested&&state?.fourierMode!==true)return getStaticSpiralBezierResource(li);
         const shared=typeof getSharedGpuMorphPathResource==='function'?getSharedGpuMorphPathResource(li):null;if(shared?.ready)return shared;
         return null;
     }
     return getStaticSpiralBezierResource(li);
 }
-// 7.0.10 — frame-authoritative retained Bézier selection.  Effects must consume the
-// exact rail that owns BASE in this display frame, not infer it from global Morph activity.
-// A globally active/preparing/paused Morph can coexist with a static Spiral frame; using
-// runtimeState.morph.active alone made Lamps ask for a Morph rail that did not own the frame.
+
 function currentGpuBezierResourceForFrame(frameCtx){
     if(!frameCtx)return null;
     const li=Number(frameCtx.layerIndex)||0;
@@ -307,8 +283,7 @@ function currentGpuBezierResourceForFrame(frameCtx){
     }
     const layer=frameCtx.layer||state?.layers?.[li]||null;
     if(state?.fourierMode!==true&&layer&&typeof isSpiralLayer==='function'&&isSpiralLayer(layer))return getStaticSpiralBezierResource(li);
-    // During a handoff the temporary render layer can be polygonal while the retained Spiral
-    // rail still owns BASE. Only accept that special rail when this frame actually advertises it.
+
     if(frameCtx.morphFrameActive===true){
         const special=typeof WebGPUSpiralBezierMorphRenderer!=='undefined'?WebGPUSpiralBezierMorphRenderer.getResource?.(li):null;
         if(special?.ready&&special?.bezierVisualRail&&special?.specialSpiralBezierRail)return special;
@@ -324,10 +299,7 @@ function gpuMorphArcIneligibleReason(frameCtx){
     if(!frameCtx?.layer)return'no-frame';
     if(frameCtx.geometryPlan?.kind==='lightning')return'lightning-geometry';
     if(state?.fourierMode===true)return'fourier';
-    // Somata 6.8 iter8: the retained Spiral rail is the geometry authority throughout the
-    // whole polygon<->Spiral handoff. The temporary frame layer/provider may still look like a
-    // polygon for part of the transition; rejecting on that metadata made Lamps/Glint/Web/
-    // Graffiti/Particles disappear exactly while the visible base was already the Spiral rail.
+
     const spiral=l=>Boolean(l&&typeof isSpiralLayer==='function'&&isSpiralLayer(l));
     const strictSpiral=typeof isStrictSpiralWebGPUFrame==='function'?isStrictSpiralWebGPUFrame(frameCtx):Boolean(spiral(frameCtx.layer)||spiral(frameCtx.sourceLayer)||spiral(frameCtx.geometryPlan?.sourceLayer)||spiral(frameCtx.geometryPlan?.targetLayer));
     const shared=currentGpuBezierResourceForFrame(frameCtx);
@@ -342,17 +314,13 @@ function gpuMorphArcIneligibleReason(frameCtx){
     if(!shared?.bezierVisualRail)return'bezier-rail-unavailable';
     return'';
 }
-function isGpuMorphArcEligible(frameCtx){return gpuMorphArcIneligibleReason(frameCtx)==='';}
 function noteGpuMorphArcDecision(frameCtx,eligible,reason,segmentCount=0){
     const d=gpuMorphArcRuntime.lastDecision;d.eligible=eligible===true;d.reason=String(reason||'');d.layerIndex=Number(frameCtx?.layerIndex)||0;d.frameId=Number(frameCtx?.frameId)||Number(frameGeometryRuntime?.frameId)||0;d.segmentCount=Math.max(0,Number(segmentCount)||0);return d;
 }
 function getGpuMorphArcTableForFrame(frameCtx){
     if(!frameCtx)return null;gpuMorphArcRuntime.stats.tableRequests++;
     const fid=Number(frameCtx.frameId)||Number(frameGeometryRuntime?.frameId)||0,currentAuthority=typeof currentGpuBezierResourceForFrame==='function'?currentGpuBezierResourceForFrame(frameCtx):null;
-    // 7.3.9 — an atomic retained-rail swap may happen after an earlier consumer touched this
-    // frame. A same-frame null/table from the previous authority must not poison every later
-    // consumer (Lamps were the visible victim). Reuse only a table that belongs to the CURRENT
-    // authoritative retained cubic resource; otherwise rebuild/rebind in the same frame.
+
     if(frameCtx._gpuMorphArcDecisionFrameId===fid){
         const cached=frameCtx._gpuMorphArcTable||null,cachedAuthority=cached?._gpuMorphArcResource?.morphRec||null;
         if(cached&&cachedAuthority===currentAuthority&&cached?._gpuMorphArcResource?.ready){gpuMorphArcRuntime.stats.frameCacheHits++;return cached;}
@@ -366,30 +334,11 @@ function getGpuMorphArcTableForFrame(frameCtx){
     table.frameId=fid;table.gpuMorphT=t;table.total=1; // non-zero readiness sentinel; exact total lives in gpuArcMetaBuffer.
     frameCtx._gpuMorphArcTable=table;noteGpuMorphArcDecision(frameCtx,true,'gpu-morph-arc',rec.segmentCount);return table;
 }
-function getGpuMorphArcResourceForFrame(frameCtx){
-    const table=getGpuMorphArcTableForFrame(frameCtx);return table?._gpuMorphArcResource||null;
-}
 function encodeGpuMorphArcTable(table,encoder,options=null){
     const rec=table?._gpuMorphArcResource;if(!rec?.ready||!encoder)return false;const frameId=Math.max(0,Number(table.frameId)||0),t=typeof rec.morphRec?.resolveMorphT==='function'?rec.morphRec.resolveMorphT(table.gpuMorphT):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));
-    // v512 correctness contract: only a SUBMITTED resource may be reused across independent
-    // command encoders. v511 marked the resource resident at encode-time; that is unsafe when
-    // another effect owns a different command buffer which may be submitted first. A fused
-    // consumer can still encode compute + draw into one encoder, while cross-consumer reuse is
-    // allowed only after noteGpuMorphArcTableSubmitted().
+
     if(rec.hasCommittedData&&rec.lastCommittedT===t){rec.lastEncodedFrame=frameId;rec.lastEncodedT=t;gpuMorphArcRuntime.stats.frameDataReuses++;gpuMorphArcRuntime.stats.committedReuseHits++;return true;}
-    // Correctness first: an encoded/scheduled write in another command buffer is NOT a safe
-    // dependency. Only a submitted+committed Arc may be reused above. Otherwise encode the exact
-    // current cubic rail in this encoder before building segment/arc data.
-    // Iter9 correctness: a current-cubic write recorded by the Base pass may live in a
-    // different deferred command buffer and is NOT a dependency of this encoder yet. Build the
-    // retained Spiral cubics in this Arc prerequisite itself. The scheduler then queues this one
-    // prerequisite ahead of every Arc consumer, so Lightning/Lamps/Web/Particles all see the same
-    // submitted rail and we still compute it only once for the effect group.
-    // Iter15: if the retained Spiral Base command buffer is already the ordered root producer
-    // of these exact current cubics in the same deferred LayerScene queue, Arc must consume that
-    // buffer instead of dispatching the polar current-cubic compute a second time. WebGPU queue
-    // order is the dependency; no CPU wait/readback is introduced. Independent encoders still
-    // encode their own rail exactly as before.
+
     const reuseOrderedCurrentCubics=options?.reuseOrderedCurrentCubics===true;
     if(reuseOrderedCurrentCubics)gpuMorphArcRuntime.stats.orderedCurrentCubicReuses++;
     else{const railEncoded=typeof rec.morphRec?.encodeCurrentCubics==='function'?rec.morphRec.encodeCurrentCubics(encoder,t):(typeof encodeSharedGpuMorphPath==='function'&&encodeSharedGpuMorphPath(encoder,rec.morphRec.layerIndex,t));if(!railEncoded)return false;gpuMorphArcRuntime.stats.morphEncodes++;}

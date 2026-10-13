@@ -1,17 +1,7 @@
-// SpiroStar v507 — Morph/Spiral Hot Path
-// Per-cycle topology interpolation plans with aligned packed endpoint storage.
-//
-// v506 removed per-frame target rotation objects and polar-object allocation.
-// v507 goes one step further: source/target points are aligned ONCE per phase into
-// contiguous Float64Array payloads. Display frames therefore avoid modulo/index remaps
-// and almost all source/target object-property reads. The reusable object view remains
-// only as the compatibility boundary for legacy/render consumers.
+
+
 window.__spiroRegisterModule?.('js/geometry/morph-frame');
 
-// SpiroStar 5.2 — morph speed contract.
-// Topology/Calm historically feed the selected easing result directly into geometry.
-// Anticipate/Overshoot intentionally leave [0,1]; clamping them here turns several speed
-// presets into near-linear motion. Other morph families retain the conservative [0,1] range.
 function morphInterpolationTForCurrentMode(value){
     const n=Number(value);
     if(!Number.isFinite(n))return 0;
@@ -39,11 +29,6 @@ const morphFramePipelineRuntime = {
     }
 };
 
-function resetMorphFramePipelineStats(){
-    const s=morphFramePipelineRuntime.stats;
-    for(const k of Object.keys(s))s[k]=0;
-    return s;
-}
 
 function invalidateMorphFrameInterpolationPlans(reason='morph-cycle'){
     if(typeof invalidateSharedGpuMorphPathResources==='function')invalidateSharedGpuMorphPathResources(reason);
@@ -106,9 +91,7 @@ function packAlignedMorphEndpoints(rec){
     }
     rec.srcXYZ=srcXYZ;rec.dstXYZ=dstXYZ;rec.srcPolarAligned=srcPolarAligned;rec.dstPolarAligned=dstPolarAligned;
     morphFramePipelineRuntime.stats.alignedPackedPoints+=n;
-    // Each display-frame point previously performed two modulo operations and several
-    // object property reads. Keep explicit counters so perf diagnostics can prove the hot
-    // path is using the aligned phase resource.
+
     morphFramePipelineRuntime.stats.moduloLookupsAvoided+=n*2;
     morphFramePipelineRuntime.stats.endpointObjectReadsAvoided+=n*6;
     return rec;
@@ -218,9 +201,7 @@ function interpolateMorphFramePlan(plan,t,result,stableRounded=false){
             const n=rec.n;
             if(!n)continue;
             const scratch=ensureMorphScratchPoints(rec,n);
-            // Tag the mutable rail with the frame that owns its current numeric contents.
-            // Spiral preprocessing uses this to cache expensive spline tessellation only
-            // within the same display frame while still allowing persistent static caches.
+
             scratch._frameGeometryId=frameGeometryRuntime?.active?frameGeometryRuntime.frameId:0;
             const rotation=rec.rotates?rec.rotationDelta*(1-u):0;
             const c=rec.rotates?Math.cos(rotation):1;
@@ -233,8 +214,7 @@ function interpolateMorphFramePlan(plan,t,result,stableRounded=false){
                     const ar=aPolar[p],aa0=aPolar[p+1];
                     const br=bPolar[p],ba0=bPolar[p+1]+rotation;
                     const rr=ar+(br-ar)*u;
-                    // Inline interpolateMorphPolarAngle(): function-call overhead is visible
-                    // on 100k-point topology morphs. Calm's ±2-turn contract is preserved.
+
                     let ad=ba0-aa0;
                     if(plan.mode==='calm'){const lim=Math.PI*4;if(ad>lim)ad=lim;else if(ad<-lim)ad=-lim;}
                     const aa=aa0+ad*u;
@@ -253,8 +233,7 @@ function interpolateMorphFramePlan(plan,t,result,stableRounded=false){
                 }
                 morphFramePipelineRuntime.stats.cartesianPointUpdates+=n;
             }else{
-                // Defensive compatibility path for plans created by older code in the same
-                // browsing session. A fresh v507 plan always has aligned packed endpoints.
+
                 const srcPts=rec.srcPts,dstPts=rec.dstPts,srcLen=srcPts.length,dstLen=dstPts.length,offset=rec.referenceOffset||0;
                 for(let i=0;i<n;i++){
                     const si=i%srcLen,di=(i+offset)%dstLen,o=scratch[i],a=srcPts[si],b=dstPts[di];
@@ -275,8 +254,7 @@ function interpolateMorphFramePlan(plan,t,result,stableRounded=false){
             item.cornerFlags=stableRounded?[]:(sp?.cornerFlags||dp?.cornerFlags||[]);
             item.bridgeRoundFlags=stableRounded?[]:(sp?.bridgeRoundFlags||dp?.bridgeRoundFlags||[]);
             item._src=sp||null;item._dst=dp||null;
-            // Carry baked Spiral metadata through the frame view. Segment-profile rounding
-            // is already in source/target geometry and must not be recomputed downstream.
+
             item.spiralProfileRoundingBaked=Boolean(sp?.spiralProfileRoundingBaked&&dp?.spiralProfileRoundingBaked);
             item.spiralProfileSplineBaked=Boolean(sp?.spiralProfileSplineBaked&&dp?.spiralProfileSplineBaked);
             item.spiralContinuityProtected=Boolean(sp?.spiralContinuityProtected||dp?.spiralContinuityProtected);
@@ -290,9 +268,6 @@ function interpolateMorphFramePlan(plan,t,result,stableRounded=false){
     return out;
 }
 
-// Compatibility helper for direct drawMorphGeometry() callers. It lets older render
-// paths consume the same prepared phase plan instead of re-running pairMorphPaths(),
-// rotateMorphPath() and polar unwrap logic in their own draw loop.
 function interpolateMorphForDirectDraw(layer,sourcePaths,targetPaths,t,radial=false,variant='direct-draw'){
     const idx=Math.max(-1,Array.isArray(state?.layers)?state.layers.indexOf(layer):-1);
     const plan=getMorphFrameInterpolationPlan(idx,sourcePaths,targetPaths,variant,{forceRadial:Boolean(radial),vertexCountHint:layer?.N});

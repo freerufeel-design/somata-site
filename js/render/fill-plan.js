@@ -1,7 +1,6 @@
-// v508 — Linear Fill Plan.
-// Static fill preparation is O(N): no pairwise self-intersection scan and no ear-clipping.
-// Every closed contour is represented as oriented edge wedges for GPU stencil evaluation.
-// One plan covers the whole layer, so overlapping contours are composited exactly once.
+window.__spiroRegisterModule?.('js/render/fill-plan');
+
+
 var FillMeshPreparer = (() => {
     let cache = new WeakMap();
     let dynamicCache = new WeakMap();
@@ -64,7 +63,6 @@ var FillMeshPreparer = (() => {
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         let totalPoints = 0, rejected = 0;
 
-        // Pass 1: render/clean each contour and compute one layer-wide outside anchor.
         for (const contour of canonical.fillContours || []) {
             contoursSeen++;
             const points = renderedContourPoints(layer, contour);
@@ -86,7 +84,7 @@ var FillMeshPreparer = (() => {
         const validRecords = records.filter(r => r.status === 'stencil-edge-fan');
         if (validRecords.length && Number.isFinite(minX) && Number.isFinite(minY) && Number.isFinite(maxX) && Number.isFinite(maxY)) {
             const span = Math.max(1, maxX - minX, maxY - minY);
-            // One anchor for all contours preserves a single global stencil field.
+
             anchor = { x: minX - span * 2 - 1, y: minY - span * 2 - 1 };
             fanData = new Float32Array(totalPoints * 6);
             let o = 0;
@@ -153,11 +151,6 @@ var FillMeshPreparer = (() => {
             !isSpiralLayer(frameCtx?.layer) && !state.fourierMode && !state.showRoundingGuides);
     }
 
-
-    // Somata 7.2.6 — dynamic Corridor Morph reuses the exact frame-resident stroke command
-    // rail as the authoritative Fill contour source.  No Canvas2D mask is constructed and no
-    // second geometry evaluator runs.  One grow-only Float32Array / mesh object is retained per
-    // logical layer; WebGPUFillMeshRenderer uploads only the active prefix when revision changes.
     function prepareDynamicCommands(frameCtx, commands) {
         const layer = frameCtx?.layer;
         if (!layer || frameCtx?.geometryPlan?.dynamic !== true || !Array.isArray(commands) || !commands.length) return null;

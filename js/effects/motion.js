@@ -1,10 +1,10 @@
-// SpiroStar v500 Modular Base
-// Global/layer motion runtime
+
+
 window.__spiroRegisterModule?.('js/effects/motion');
         const motionRuntime = { lastTime:0, rotationRad:0, layerRotationRad:new Map(), cameraPhase:0, colorPhase:0 };
         function normalizeMotionState(raw=state.motion){
             const m=(raw&&typeof raw==='object')?raw:(state.motion={});
-            // Global rotation fields are retained only as a legacy/template source for old projects.
+
             m.rotationEnabled=m.rotationEnabled===true;
             m.rotationSpeed=Math.max(0,Math.min(180,Number.isFinite(Number(m.rotationSpeed))?Number(m.rotationSpeed):30));
             m.rotationMultiplier=Number.isFinite(Number(m.rotationMultiplier))?Math.max(0,Number(m.rotationMultiplier)):1;
@@ -44,10 +44,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
         }
         function anyLayerRotationEnabled(){return Array.isArray(state.layers)&&state.layers.some(l=>normalizeLayerMotionRotation(l).enabled);}
         function anyMotionEnabled(){const m=normalizeMotionState();return anyLayerRotationEnabled()||m.cameraEnabled||m.colorEnabled;}
-        // v502: Morph activity is a visual-animation concept, not a geometry-cache key.
-        // Full/minimal/project Morph changes canonical geometry. Linear motion (rotation/camera/color)
-        // and GPU Moving Line are treated as another Morph class for temporal effects such as lamp
-        // adaptation, but they MUST NOT invalidate static canonical geometry merely because time advances.
+
         function isGeometryMorphActive(){
             return runtimeState?.morph?.active===true || runtimeState?.minimalMorph?.active===true || runtimeState?.projectMorph?.active===true;
         }
@@ -65,7 +62,6 @@ window.__spiroRegisterModule?.('js/effects/motion');
         }
         function isAnyMorphLikeAnimationActive(){return getMorphActivityState().active;}
         window.__spiroMorphActivity=()=>getMorphActivityState();
-        function allMotionEnabled(){const m=normalizeMotionState();return state.layers.length>0&&state.layers.every(l=>normalizeLayerMotionRotation(l).enabled)&&m.cameraEnabled&&m.colorEnabled;}
         function toggleMotionQuickGroup(){
             const m=normalizeMotionState(),targets=getMotionRotationTargets();if(!targets.length)return false;
             const includeCamera=m.quickToggleCamera===true,includeColor=m.quickToggleColor===true;
@@ -104,13 +100,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
             return angle;
         }
         function applyMotionTunnelLag(ctx,copy,layer){const a=getMotionTunnelLagRadians(copy,layer);if(Math.abs(a)>1e-12)ctx.rotate(a);}
-        // Somata 6.6 — Spiral Morph rotation compensation.  The playback module
-        // prepares a mode-specific visual angular delta for every phase and accumulates
-        // completed phases in a lightweight scalar.  This is deliberately independent
-        // from the generic `byRotation` checkbox: phase/phase-circle Spiral Morph can
-        // rotate the visible rail even when explicit layer.rotation morphing is disabled.
-        // Keeping the accumulator outside the canonical layer snapshots also avoids the
-        // old phase-boundary reset caused by Blue Morph's cheap stable-point rollback.
+
         function getSpiralMorphRotationCompensationRadians(){
             const morph=state?.morph,rt=runtimeState?.morph;
             if(morph?.spiralRotationCompensation!==true||rt?.active!==true||morph?.mode==='fade')return 0;
@@ -147,11 +137,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
         function motionAnimationTick(now){
             const m=normalizeMotionState();if(!anyMotionEnabled()){motionRuntime.lastTime=0;return false;}
             if(!motionRuntime.lastTime)motionRuntime.lastTime=now;
-            // v528 — animation time must not depend on the number of frames that happened to
-            // render.  The old 120 ms clamp silently discarded elapsed time on a heavy frame,
-            // so rotation/camera/palette motion slowed down during a hitch and then appeared to
-            // accelerate when FPS recovered.  Preserve real elapsed time for normal stalls and
-            // only re-anchor after a genuine background-tab/suspend gap.
+
             const rawDt=Math.max(0,(now-motionRuntime.lastTime)/1000);
             const dt=rawDt>1.25?0:rawDt;motionRuntime.lastTime=now;
             const liveIds=new Set();
@@ -190,23 +176,6 @@ window.__spiroRegisterModule?.('js/effects/motion');
             return { w, h, dpr };
         }
 
-        function ensureGlowCanvasSize(w, h, withBlur = false) {
-            if (glowCanvas.width !== w || glowCanvas.height !== h) {
-                glowCanvas.width = w;
-                glowCanvas.height = h;
-            }
-            if (withBlur && (glowBlurCanvas.width !== w || glowBlurCanvas.height !== h)) {
-                glowBlurCanvas.width = w;
-                glowBlurCanvas.height = h;
-            }
-        }
-
-        // VECTOR MASTER CACHE FOR TUNNEL MODE
-        // This is deliberately NOT a raster cache. A dynamic/morphing layer is recorded
-        // once into Path2D draw commands at the largest required tunnel scale. Every
-        // smaller tunnel copy then replays those same vector commands with only a scale
-        // transform, so lines stay resolution-independent while expensive geometry/profile
-        // calculations happen once per layer/frame instead of once per copy.
         function multiplyAffine2D(a, b) {
             return [
                 a[0] * b[0] + a[2] * b[1],
@@ -398,11 +367,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
             if (!nodesChanged && !primitivesChanged) return cached.signature;
 
             let nodeSig = cached?.nodeSig || '';
-            // geometryVersion is an invalidation signal, not part of structural identity.
-            // Project reloads recreate equivalent layer objects with fresh version serials; if
-            // that serial leaks into the shared key, identical geometry accumulates one resident
-            // cache record per reload. Re-sample node coordinates whenever the version changes,
-            // then let the exact structural signature decide whether cross-project reuse is safe.
+
             if (nodesChanged || !cached || cached.geometryVersion !== geometryVersion) {
                 let parts = '';
                 for (let i = 0; i < nodes.length; i++) {
@@ -420,12 +385,6 @@ window.__spiroRegisterModule?.('js/effects/motion');
             return signature;
         }
 
-        // v536 — playlist/project boundaries recreate layer objects. The old WeakMap-only
-        // cache therefore threw away perfectly identical static geometry at every project
-        // switch, even when Green/Fade had just built the target a few seconds earlier.
-        // Keep a small structural LRU keyed by the exact geometry signature + rounding.
-        // Records are immutable for that exact key, so equivalent project clones can reuse
-        // paths/Path2D and (through the shared path identity) downstream GPU resources.
         const sharedLayerDrawDataCache = new Map();
         const SHARED_LAYER_DRAW_CACHE_MAX = 128;
         const sharedLayerDrawDataStats = {hits:0,misses:0,stores:0,evictions:0};
@@ -469,9 +428,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
             const geometryKey = layerGeometrySignature(layer);
             const roundingValue = Number(layer.rounding) || 0;
             const sharedKey = `${geometryKey}|r:${roundingValue}`;
-            // Resolved Morph/frame layers are short-lived clones. They may legitimately change
-            // every phase and must never populate the cross-project static LRU. Their own WeakMap
-            // entry is enough for the current frame/phase; only canonical state.layers are shared.
+
             const sharedEligible=Array.isArray(state?.layers)&&state.layers.includes(layer);
             let cached = layerDrawCache.get(layer);
             if (!cached || cached.geometryKey !== geometryKey || cached.roundingValue !== roundingValue) {
@@ -496,7 +453,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
                 cached = {
                     geometryKey,
                     paths,
-                    // One sqrt per rebuilt layer instead of Math.hypot() for every point.
+
                     maxRadius: Math.max(1, monoradius.targetRadius || Math.sqrt(maxRadiusSq)),
                     monoradiusScale: monoradius.scale || 1,
                     pointCount,
@@ -515,9 +472,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
                 cached.path2ds = null;
                 cached.combinedStrokePath2d = null;
                 if (typeof Path2D !== 'undefined') {
-                    // v117: use the proven v105 rounding path verbatim.  Keeping one
-                    // Path2D per logical contour preserves cornerFlags and close/open
-                    // semantics before the paths are optionally combined for replay.
+
                     const roundingFrac = getRoundingStrength(layer.rounding);
                     cached.path2ds = cached.paths.map(path => {
                         if (!path.points || path.points.length < 2) return null;
@@ -541,8 +496,6 @@ window.__spiroRegisterModule?.('js/effects/motion');
             return cached;
         }
 
-        // v505 — compatibility facade. Static authored geometry is now owned by the
-        // CanonicalGeometry module; legacy callers keep the historical draw-data shape.
         function getCachedLayerDrawData(layer) {
             if (typeof getCanonicalLayerGeometry === 'function') {
                 const canonical = getCanonicalLayerGeometry(layer);
@@ -554,10 +507,3 @@ window.__spiroRegisterModule?.('js/effects/motion');
             return buildLegacyLayerDrawData(layer);
         }
 
-        // GPU-FRIENDLY RASTER CACHE
-        // Canvas2D Path2D tessellation is mainly CPU work. Static layer geometry is
-        // rendered once into a compact local canvas (including glow) and then reused
-        // through drawImage(). Browsers normally composite these cached canvases as GPU
-        // textures, which is much cheaper for tunnel copies and minimal cross-fades.
-        // v116: Web / Sweep are layer-scoped effects. Master is the only mode
-        // that deliberately writes the same effect settings to every layer.

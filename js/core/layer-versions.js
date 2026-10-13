@@ -1,6 +1,5 @@
-// SpiroStar v504 — versioned invalidation and dependency graph.
-// This module owns runtime-only change versions for each authored layer.
-// Versions are deliberately kept outside project serialization.
+
+
 window.__spiroRegisterModule?.('js/core/layer-versions');
 
 const LAYER_VERSION_DOMAINS = Object.freeze(['geometry','style','transform','effect','resource']);
@@ -13,7 +12,7 @@ const LAYER_PROPERTY_DEPENDENCIES = (() => {
         'N','K','customSuborbits','chaosStar','chaosStepMinus','chaosStepPlus','chaosClosures','chaosSeed',
         'closedLoop','lineJoinType','radius','radiusMultiplier','rounding','profileMode','splineRenderMode',
         'profileNodes','profileSplineSegments','profileSplineMix','spiralEnabled','spiralOrder','spiralTangential',
-        'spiralRoundSeams','spiralClosed','spiralStep','spiralStepLinked','spiralRounding'
+        'spiralRoundSeams','spiralClosed','spiralStep','spiralStepLinked','spiralRounding','geometryCircles'
     ]);
     add('transform', [
         'rotation','offsetX','offsetY','scale','motionX','motionY','motionRotation','motionScale'
@@ -77,9 +76,7 @@ function normalizeLayerDirtyDomains(domains){
 }
 
 function expandLayerDirtyDomains(domains){
-    // Geometry invalidates all geometry-derived GPU/effect resources, but does not imply a
-    // visual-style change. Resource/effect versions are bumped so future caches can compare
-    // only their own dependency version instead of knowing which geometry cache to clear.
+
     const set=new Set(normalizeLayerDirtyDomains(domains));
     if(set.has('geometry')){ set.add('resource'); set.add('effect'); }
     return Array.from(set);
@@ -108,33 +105,14 @@ function markLayerDirty(layer,domains,reason='unspecified',property=''){
 function layerPropertyDomain(property){
     const prop=String(property||'');
     if(LAYER_PROPERTY_DEPENDENCIES.has(prop)) return LAYER_PROPERTY_DEPENDENCIES.get(prop);
-    // Nested effect objects keep their top-level semantic domain even before every leaf field
-    // gets an explicit entry in the dependency table.
+
     if(/^(sweep|web|lamp|lightning|sprite|lineSprite|lineMotion|graffiti)/i.test(prop)) return 'effect';
     if(/(color|opacity|glow|width|blend|fill|outline)/i.test(prop)) return 'style';
     if(/(rotation|offset|translate|scale|pan)/i.test(prop)) return 'transform';
     return '';
 }
 
-function invalidateLayerPropertyVersion(layer,property,reason='property-change'){
-    const domain=layerPropertyDomain(property);
-    if(!domain){
-        layerVersionStats.unclassified++;
-        return markLayerDirty(layer,'effect',`${reason}:unclassified`,property);
-    }
-    return markLayerDirty(layer,domain,reason,property);
-}
 
-function invalidateLayerPropertiesVersion(layer,properties,reason='properties-change'){
-    const props=Array.isArray(properties)?properties:[properties];
-    const domains=[];const unknown=[];
-    for(const prop of props){
-        const domain=layerPropertyDomain(prop);
-        if(domain)domains.push(domain);else unknown.push(String(prop||''));
-    }
-    if(unknown.length){layerVersionStats.unclassified+=unknown.length;domains.push('effect');}
-    return markLayerDirty(layer,domains.length?domains:'effect',unknown.length?`${reason}:unclassified`:reason,unknown.join(','));
-}
 
 function getLayerVersions(layer){
     const r=getLayerVersionRecord(layer);
@@ -147,11 +125,6 @@ function getLayerVersionToken(layer,domains=LAYER_VERSION_DOMAINS){
     return normalizeLayerDirtyDomains(domains).map(domain=>`${domain}:${Number(r[domain])||0}`).join('|');
 }
 
-function markAllLayersDirty(domains,reason='all-layers'){
-    const layers=Array.isArray(state?.layers)?state.layers:[];
-    for(const layer of layers)markLayerDirty(layer,domains,reason);
-    return layers.length;
-}
 
 window.__spiroLayerVersions=(layerOrId=null)=>{
     let layer=layerOrId;

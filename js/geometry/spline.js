@@ -1,10 +1,7 @@
-// SpiroStar v500 Modular Base
-// Spline foundation and geometric point helpers
+
+
 window.__spiroRegisterModule?.('js/geometry/spline');
-        // v226: centripetal Catmull–Rom (alpha=0.5) converted to cubic Bézier.
-        // Unlike the old uniform form, tangents account for the spacing between
-        // existing control points, reducing flat spots, kinks and overshoot without
-        // adding any control/sample points.
+
         function centripetalSplineBezierControls(p0, p1, p2, p3, tension = 0.5) {
             const q0={x:Number(p0?.x)||0,y:Number(p0?.y)||0};
             const q1={x:Number(p1?.x)||0,y:Number(p1?.y)||0};
@@ -20,7 +17,7 @@ window.__spiroRegisterModule?.('js/geometry/spline');
             const m2y=d12*((q2.y-q1.y)/d12-(q3.y-q1.y)/d13+(q3.y-q2.y)/d23)*tangentScale;
             let c1={x:q1.x+m1x/3,y:q1.y+m1y/3};
             let c2={x:q2.x-m2x/3,y:q2.y-m2y/3};
-            // Guard only pathological handles; normal centripetal handles are untouched.
+
             const chord=Math.max(1e-9,Math.hypot(q2.x-q1.x,q2.y-q1.y));
             const maxHandle=chord*1.25;
             const clampHandle=(anchor,c)=>{
@@ -46,8 +43,7 @@ window.__spiroRegisterModule?.('js/geometry/spline');
             const res=[];
             for(let i=0;i<src.length-1;i++){
                 const p1=src[i],p2=src[i+1];
-                // Reflected phantom endpoints keep the endpoint tangent natural instead
-                // of flattening it by duplicating the first/last point.
+
                 const p0=i>0?src[i-1]:{x:2*p1.x-p2.x,y:2*p1.y-p2.y};
                 const p3=i+2<src.length?src[i+2]:{x:2*p2.x-p1.x,y:2*p2.y-p1.y};
                 const {c1,c2}=centripetalSplineBezierControls(p0,p1,p2,p3,tension);

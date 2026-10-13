@@ -1,6 +1,5 @@
-// Somata 7.0 — retained cubic Bézier renderer for High/Chaotic/Spectral Glint.
-// CPU retains only true L/Q/C commands (converted to cubic controls); WebGPU evaluates
-// each cubic directly with a small fixed subdivision count. No dense CPU spline cloud.
+
+
 window.__spiroRegisterModule?.('js/gpu/bezier-sweep-renderer');
 
 const WebGPUBezierSweepRenderer=(()=>{
@@ -44,8 +43,7 @@ fn sectorVisible(v:VOut)->bool{
  if(u.flags.x<0.5){return true;}
  let tau=6.28318530718;let progress=clamp(u.sector.z,0.0,1.0);let head=progress*tau;if(head<=0.000001){return false;}
  let span=clamp(u.sector.w,0.000001,tau);let tail=max(0.0,head-span);let s=clamp(v.local.x/max(0.0001,v.segLen),0.0,1.0);let p=mix(v.sourceA,v.sourceB,s)-u.sector.xy;let a=atan2(p.y,p.x);let p0=cubicData[0u].xy-u.sector.xy;let start=atan2(p0.y,p0.x);let dir=select(-1.0,1.0,u.flags.y>=0.0);let raw=select(start-a,a-start,dir>0.0);let rel=raw-floor(raw/tau)*tau;
- // Deliberately no modulo-wrap of [tail, head].  Near the end of a lap the sector
- // shrinks against the seam instead of lighting the already-visited start again.
+
  return rel+0.00001>=tail&&rel<=head+0.00001;
 }
 @fragment fn fsHalo(v:VOut)->@location(0) vec4<f32>{
@@ -77,7 +75,7 @@ struct V{@builtin(position) p:vec4<f32>};
             compositeAddPipeline=compositePipelines.add;compositeOverPipeline=compositePipelines.normal;
             cornerBuffer=device.createBuffer({label:'Somata Bézier Sweep corners',size:32,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(cornerBuffer,0,new Float32Array([-1,-1,1,-1,-1,1,1,1]));
             identityCopyBuffer=device.createBuffer({label:'Somata Bézier Sweep identity copy',size:32,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(identityCopyBuffer,0,new Float32Array([1,0,1,0,0,1,1,0]));identityCopyBind=device.createBindGroup({layout:copyLayout,entries:[{binding:0,resource:{buffer:identityCopyBuffer}}]});
-            ready=true;lastError='';return true;
+            ready=true;lastError='';try{requestMainCanvasRender?.();}catch(_){}return true;
         }catch(err){ready=false;lastError=String(err?.message||err);stats.failures++;return false;}})();initializing=task;try{return await task;}finally{if(initializing===task)initializing=null;}}
     function resetReusableResources(){for(const rec of uniformPairPool){try{rec.haloBuffer?.destroy?.();}catch(_){}try{rec.coreBuffer?.destroy?.();}catch(_){}}uniformPairPool=[];cubicBindCache=new WeakMap();copyBindCache=new WeakMap();}
     function makeUniformPair(){const haloBuffer=device.createBuffer({label:'Somata Bézier Sweep halo uniforms pooled',size:112,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}),coreBuffer=device.createBuffer({label:'Somata Bézier Sweep core uniforms pooled',size:112,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}),rec={generation,inUse:true,haloBuffer,coreBuffer,haloData:new Float32Array(28),coreData:new Float32Array(28),haloBind:device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer:haloBuffer}}]}),coreBind:device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer:coreBuffer}}]})};uniformPairPool.push(rec);stats.uniformPoolBuilds++;return rec;}
@@ -110,10 +108,9 @@ struct V{@builtin(position) p:vec4<f32>};
 
     function render(prepared,ctx,cfg,lineWidth,visual,alpha,copies=null,alphas=null,frameCtx=null,footprint=1,layer=null){
         if(!warmup()||!ensureSize()||!(prepared?.cubicCount||prepared?.gpuCubicCount))return false;let res=null;try{if(prepared.gpuMorphResource){if(typeof prepared.gpuMorphResource.encodeCurrentCubics==='function'){const pre=device.createCommandEncoder({label:'Somata Bézier Glint retained Morph rail prerequisite'});if(!prepared.gpuMorphResource.encodeCurrentCubics(pre,prepared.gpuMorphT))return false;device.queue.submit([pre.finish()]);}else if(typeof dispatchSharedGpuMorphPath==='function')dispatchSharedGpuMorphPath(prepared.gpuMorphResource.layerIndex,prepared.gpuMorphT);}res=resources(prepared,ctx,cfg,lineWidth,visual,alpha,copies,alphas,frameCtx,footprint,layer);if(!res)return false;const drawStage=(kind)=>{const mode=kind==='core'?(sweepCoreBlendMode(cfg)):sweepGlowBlendMode(cfg),enc=device.createCommandEncoder({label:`Somata Bézier Glint ${kind}`});encodeScratch(enc,res,kind);let p=enc.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});// Direct path copies the already-unioned scratch to the hidden presentation canvas with Normal.
-                // The requested blend is applied exactly once by Canvas2D against the real destination below;
-                // applying Multiply/Darken here too would blend against transparent black and erase the effect.
+
                 p.setPipeline(compositePipelines.normal||compositeOverPipeline);p.setBindGroup(0,compositeBind);p.draw(3);p.end();device.queue.submit([enc.finish()]);ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation=sweepBlendCanvasOperation(mode);ctx.filter='none';ctx.drawImage(canvas,0,0);ctx.restore();};drawStage('halo');drawStage('core');device.queue.onSubmittedWorkDone().then(()=>res.destroy()).catch(()=>res.destroy());stats.frames++;stats.directFrames++;stats.cubics+=prepared.cubicCount;stats.gpuSubsegments+=prepared.cubicCount*SUBDIV;return true;}catch(err){res?.destroy?.();lastError=String(err?.message||err);stats.failures++;return false;}}
-    function status(){warmup();return{available:ready,generation,lastError,width,height,subdivisionsPerCubic:SUBDIV,...stats,contract:'Somata 7.0 High/Chaotic/Spectral Glint accepts retained cubic Bézier controls from CPU sources or the shared topology-Morph GPU cubic buffer; GPU evaluates only a small fixed subdivision lattice per cubic. Core/Glow uniform buffers and external cubic/copy bind groups are pooled across frames instead of being recreated per draw. Halo and colored Core composite independently with the selected Glow/Core blend modes; Lightning preflash routes both stages through Glow. Spectral mode performs exactly one cycle-locked, seam-safe angular lap from the contour start; the sector never wraps onto already-visited geometry within the same lap.'};}
+    function status(){warmup();return{available:ready,generation,lastError,width,height,subdivisionsPerCubic:SUBDIV,...stats,contract:'Somata 7.4.9 High/Chaotic/Spectral Glint accepts retained cubic Bézier controls from CPU sources or the shared topology-Morph GPU cubic buffer; GPU evaluates only a small fixed subdivision lattice per cubic. Core/Glow uniform buffers and external cubic/copy bind groups are pooled across frames instead of being recreated per draw. Halo and colored Core composite independently with the selected Glow/Core blend modes; Lightning preflash routes both stages through Glow. Spectral mode performs exactly one cycle-locked, seam-safe angular lap from the contour start; the sector never wraps onto already-visited geometry within the same lap.'};}
     return{warmup,isReady:()=>warmup(),encodeToLayerScene,render,status};
 })();
 window.__spiroBezierSweepStatus=()=>WebGPUBezierSweepRenderer.status();

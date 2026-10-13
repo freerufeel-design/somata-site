@@ -1,9 +1,5 @@
-// SpiroStar v521 — exact Ghost Lamp phase resource for topology Morph.
-// Ghost visibility historically asks for the distance from each moving lamp to the nearest
-// endpoint key every display frame.  On a Cartesian topology phase the moving lamp trajectory
-// is linear, so squared distance to every fixed key differs only by a line in t.  Build the
-// exact lower envelope of those lines ONCE per Morph phase, then evaluate <=260 lamps/frame.
-// No CPU Morph path, no per-frame O(N) nearest-key scan, and no GPU readback are required.
+
+
 window.__spiroRegisterModule?.('js/gpu/lamp-ghost-resource');
 
 const GPU_LAMP_GHOST_MAX=260;
@@ -28,9 +24,7 @@ function gpuLampGhostNearestDistance(point,keys){
     for(const p of keys){const dx=x-(Number(p?.x)||0),dy=y-(Number(p?.y)||0),d=dx*dx+dy*dy;if(d<best)best=d;}
     return Number.isFinite(best)?Math.sqrt(best):Infinity;
 }
-// Lower envelope of squared-distance functions for p(t)=p0+(p1-p0)t.
-// |p(t)-k|^2 has one common quadratic term for all keys; the remaining term is m*t+b.
-// Sorting slopes descending produces an exact monotone lower hull over t.
+
 function buildGpuLampGhostReceiverEnvelope(p0,p1,keys){
     const list=Array.isArray(keys)?keys:[];if(!p0||!p1||!list.length)return[];const vx=(Number(p1.x)||0)-(Number(p0.x)||0),vy=(Number(p1.y)||0)-(Number(p0.y)||0),px=Number(p0.x)||0,py=Number(p0.y)||0,lines=[];
     for(let i=0;i<list.length;i++){const q=list[i],x=Number(q?.x)||0,y=Number(q?.y)||0;lines.push({m:-2*(vx*x+vy*y),b:x*x+y*y-2*(px*x+py*y),x,y,index:i});}
@@ -55,11 +49,9 @@ function gpuMorphGhostLampIneligibleReason(frameCtx){
     if(typeof gpuMorphLampPositionMode==='function'&&gpuMorphLampPositionMode(frameCtx)!=='key')return'not-key-lamps';const cfg=frameCtx.layerLampConfig||ensureLayerLampState?.(frameCtx.layer)||state.lamps||{};if((cfg?.morphMotionMode||'linear')!=='ghost')return'not-ghost-motion';
     if(typeof gpuMorphArcIneligibleReason==='function'){const r=gpuMorphArcIneligibleReason(frameCtx);if(r)return r;}
     const plan=gpuLampGhostPlanForFrame(frameCtx);if(!plan)return'phase-plan-unavailable';const active=plan.records.filter(r=>r?.sp&&r?.dp&&r.n>1);if(!active.length)return'no-phase-paths';
-    // Exact nearest-key envelopes below require a linear current-point trajectory. Radial or
-    // rotating target paths are deliberately left on the historical compatibility collector.
+
     if(active.some(r=>r.useRadial||r.rotates))return'nonlinear-ghost-trajectory';
-    // Anchor-layout validation used to rebuild topology anchors every display-frame merely to
-    // answer RenderGraph eligibility. Cache it for the immutable Morph phase instead.
+
     const layer=frameCtx.layer,serial=Math.max(0,Number(runtimeState?.morph?.lampCycleSerial)||0),planSerial=Number(plan.serial)||0,hit=gpuLampGhostRuntime.eligibility.get(layer);
     if(hit&&hit.serial===serial&&hit.planSerial===planSerial)return hit.reason;
     let reason='';try{const li=frameCtx.layerIndex,base=layer,src=runtimeState.morph.renderSourceLayers?.[li]||{...base,...(runtimeState.morph.sourceVisuals?.[li]||{})},dst=runtimeState.morph.renderTargetLayers?.[li]||{...base,...(runtimeState.morph.targetVisuals?.[li]||{})},anchors=pairMorphPaths(buildTopologyLampAnchorPaths(src),buildTopologyLampAnchorPaths(dst));if(anchors.length!==active.length)reason='profile-layout-needs-compat';}catch(_){reason='anchor-layout-unavailable';}
@@ -96,9 +88,7 @@ function evaluateGpuLampGhostResource(rec,t){
 }
 function prepareGpuMorphGhostLampFrame(frameCtx,maxPoints=GPU_LAMP_GHOST_MAX){
     gpuLampGhostRuntime.stats.requests++;const reason=gpuMorphGhostLampIneligibleReason(frameCtx);if(reason){gpuLampGhostRuntime.stats.fallbacks++;gpuLampGhostRuntime.lastError=reason;return null;}const rec=buildGpuLampGhostResource(frameCtx,maxPoints);if(!rec)return null;void ensureGpuLampGhostBuffer(rec);const t=Math.max(0,Math.min(1,Number(frameCtx.blueMorphProvider?.geometryT)||0));let points=evaluateGpuLampGhostResource(rec,t);
-    // Historical Ghost path dedupes coincident physical lamps before the blue-Morph stable
-    // identity handoff. Keep that exact ordering; topology-native rendering may still refer
-    // to sparse identity indices because the phase buffer owns the full capped population.
+
     if(typeof dedupeLampPoints==='function')points=dedupeLampPoints(points,maxPoints);
     points=preserveBlueMorphLampIdentity(frameCtx.layerIndex,points);if(!points.length)return null;gpuLampGhostRuntime.stats.cpuPathBuildsAvoided++;return{gpuLampNative:true,gpuLampNativeKind:rec.gpuReady?'topology-ghost':'bounded-ghost',gpuLampTopologyResource:rec,gpuMorphT:t,frameId:Number(frameCtx.frameId)||0,attachmentPoints:points,attachmentCount:points.length};
 }

@@ -1,7 +1,5 @@
-// SpiroStar v515 — GPU Graffiti Arc Sampler
-// Reproduces legacy sampleGraffitiRange() for topology Morph without materializing CPU paths.
-// One workgroup owns one contour: exact Morph Arc -> <=221 sampled points + sampled cumulative arc.
-// This bounded representation is shared by pinched and perPath/whole variation Graffiti.
+
+
 window.__spiroRegisterModule?.('js/gpu/graffiti-sample-resource');
 
 const GPU_GRAFFITI_SAMPLE_INTERVALS_MAX=220;
@@ -39,8 +37,7 @@ fn cubicDerivativeArc(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,t:f32)
 fn arcCorrectMicroT(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,sub:u32,subdiv:u32,f0:f32)->f32{
     let f=clamp(f0,0.0,1.0);let sd=max(1u,subdiv);let t0=f32(sub)/f32(sd);let t1=f32(sub+1u)/f32(sd);if(f<=0.000001){return t0;}if(f>=0.999999){return t1;}
     let s0=max(0.000001,length(cubicDerivativeArc(p0,c1,c2,p3,t0)));let s1=max(0.000001,length(cubicDerivativeArc(p0,c1,c2,p3,t1)));let dv=s1-s0;let arcTarget=f*max(0.000001,s0+0.5*dv);
-    // Integral of the local linear-speed model has a closed-form inverse. Rationalized root
-    // avoids cancellation and is cheaper than iterative Newton correction in particle/Web loads.
+
     let disc=max(0.000000000001,s0*s0+2.0*dv*arcTarget);let q=clamp((2.0*arcTarget)/max(0.000001,s0+sqrt(disc)),0.0,1.0);return mix(t0,t1,q);
 }
 fn retainedPoint(globalMicro:u32,microT:f32)->vec2<f32>{

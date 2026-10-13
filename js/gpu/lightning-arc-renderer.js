@@ -1,6 +1,5 @@
-// SpiroStar v516 — exact topology-Morph Lightning directly from shared GPU Arc.
-// CPU owns timing/style only. Active arc windows, random placement and clipping happen on GPU.
-// No CPU Morph path, exact rail, sliced pieces, flattening or per-frame segment upload is required.
+
+
 window.__spiroRegisterModule?.('js/gpu/lightning-arc-renderer');
 
 const WebGPULightningArcRenderer=(()=>{
@@ -81,8 +80,7 @@ fn cubicDerivativeArc(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,t:f32)
 fn arcCorrectMicroT(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,sub:u32,subdiv:u32,f0:f32)->f32{
     let f=clamp(f0,0.0,1.0);let sd=max(1u,subdiv);let t0=f32(sub)/f32(sd);let t1=f32(sub+1u)/f32(sd);if(f<=0.000001){return t0;}if(f>=0.999999){return t1;}
     let s0=max(0.000001,length(cubicDerivativeArc(p0,c1,c2,p3,t0)));let s1=max(0.000001,length(cubicDerivativeArc(p0,c1,c2,p3,t1)));let dv=s1-s0;let arcTarget=f*max(0.000001,s0+0.5*dv);
-    // Integral of the local linear-speed model has a closed-form inverse. Rationalized root
-    // avoids cancellation and is cheaper than iterative Newton correction in particle/Web loads.
+
     let disc=max(0.000000000001,s0*s0+2.0*dv*arcTarget);let q=clamp((2.0*arcTarget)/max(0.000001,s0+sqrt(disc)),0.0,1.0);return mix(t0,t1,q);
 }
 fn retainedPoint(si:u32,microT:f32)->vec2<f32>{
@@ -92,16 +90,13 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{return vec2<f32>(u.row0.x*p.x+u.row0.y*p.
 fn corner(vid:u32)->vec2<f32>{return array<vec2<f32>,4>(vec2<f32>(-1.0,-1.0),vec2<f32>(1.0,-1.0),vec2<f32>(-1.0,1.0),vec2<f32>(1.0,1.0))[vid%4u];}
 fn makeStrokeVertex(si:u32,ri:u32,rs:u32,vid:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool)->VOut{
     let q=segments[si*2u+1u];let div=max(1u,rs);let f0=f32(ri)/f32(div);let f1=f32(ri+1u)/f32(div);
-    // Exact mode does not draw the Arc-table microsegment as one straight chord. It samples
-    // the authoritative retained cubic several times inside that microsegment, so the visible
-    // flash follows the same Bézier carrier as Base/Glow. Simple mode keeps div=1.
+
     var p0=retainedPoint(si,f0);var p1=retainedPoint(si,f1);var ca=1.0;var copyScale=1.0;
     if(useCopy){p0=vec2<f32>(c0.x*p0.x+c0.y*p0.y,c1.x*p0.x+c1.y*p0.y);p1=vec2<f32>(c0.x*p1.x+c0.y*p1.y,c1.x*p1.x+c1.y*p1.y);ca=c0.z;copyScale=max(0.000001,abs(c1.z));}
     let a=screenPoint(p0);let b=screenPoint(p1);let delta=b-a;let len=max(length(delta),0.0001);let dir=delta/len;let n=vec2<f32>(-dir.y,dir.x);
     let hw=max(0.18,u.style.x*copyScale);let gr=max(0.0,u.style.y*copyScale);let pad=hw+gr+3.0;let pathIndex=segmentMeta[si].z;
     let parentLen=max(0.000001,q.y);let sourceLen=max(0.000001,parentLen/f32(div));let sourceStart=q.x+parentLen*f0;
-    // Conservative vertex-stage cull: inactive ultra-polygon segments never reach rasterization.
-    // Keep one halo/cap radius in source-arc units so selected boundaries remain exact.
+
     let near=nearestActiveDelta(sourceStart+sourceLen*0.5,pathIndex,q.z,max(0.000001,q.w));let padSource=pad*(sourceLen/len);let activeCandidate=near<=sourceLen*0.5+padSource;
     let c=corner(vid);let tx=(c.x+1.0)*0.5;let lx=mix(-pad,len+pad,tx);let ly=c.y*pad;let p=a+dir*lx+n*ly;
     var o:VOut;if(activeCandidate){o.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);}else{o.position=vec4<f32>(-3.0,-3.0,0.0,1.0);}
@@ -146,8 +141,7 @@ struct V{@builtin(position) p:vec4<f32>};
             strokePipeline=device.createRenderPipeline({label:'SpiroStar GPU Lightning Arc',layout:device.createPipelineLayout({bindGroupLayouts:[uniformLayout,pathLayout]}),vertex:{module:mod,entryPoint:'vs'},fragment:{module:mod,entryPoint:'fs',targets:[maxTarget]},primitive:{topology:'triangle-strip'}});
             strokeCorridorPipeline=device.createRenderPipeline({label:'SpiroStar GPU Lightning Arc Corridor',layout:device.createPipelineLayout({bindGroupLayouts:[uniformLayout,pathLayout,copyLayout]}),vertex:{module:mod,entryPoint:'vsCorridor'},fragment:{module:mod,entryPoint:'fs',targets:[maxTarget]},primitive:{topology:'triangle-strip'}});
             maskPipeline=device.createRenderPipeline({label:'SpiroStar GPU Lightning Arc parity mask',layout:device.createPipelineLayout({bindGroupLayouts:[uniformLayout,pathLayout]}),vertex:{module:mod,entryPoint:'vsMask'},fragment:{module:mod,entryPoint:'fsMask',targets:[{format,writeMask:0}]},primitive:{topology:'triangle-list'},depthStencil:{format:'depth24plus-stencil8',depthWriteEnabled:false,depthCompare:'always',stencilFront:{compare:'always',failOp:'keep',depthFailOp:'keep',passOp:'invert'},stencilBack:{compare:'always',failOp:'keep',depthFailOp:'keep',passOp:'invert'},stencilReadMask:1,stencilWriteMask:1}});
-            // Iter33: explicit composite BGL. A layout obtained from a pipeline's
-            // default `layout:'auto'` cannot legally be embedded into another PipelineLayout.
+
             compositeLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:'float'}}]});
             const compLayout=device.createPipelineLayout({bindGroupLayouts:[compositeLayout]}),stencilState={format:'depth24plus-stencil8',depthWriteEnabled:false,depthCompare:'always',stencilFront:{compare:'equal',failOp:'keep',depthFailOp:'keep',passOp:'keep'},stencilBack:{compare:'equal',failOp:'keep',depthFailOp:'keep',passOp:'keep'},stencilReadMask:1,stencilWriteMask:0};
             compositePipelines=Object.create(null);compositeStencilPipelines=Object.create(null);
@@ -219,16 +213,11 @@ struct V{@builtin(position) p:vec4<f32>};
             const rasterSubdiv=lightningRasterSubdiv(prepared),instances=arcRec.segmentCount*rasterSubdiv*copyCount,haloStyles=styles.filter(s=>Number(s.glowAlpha)>0&&!(Number(s.coreAlpha)>0)),coreStyles=styles.filter(s=>Number(s.coreAlpha)>0);let targetView=targetViews.get(targetTexture);if(!targetView){targetView=targetTexture.createView();targetViews.set(targetTexture,targetView);}const clipped=behavior==='inside'||behavior==='outside';let pass;
             if(clipped){const maskUniform=fillUniform(ctx,prepared,{width:1,color:'#ffffff',coreAlpha:0,glowRadius:0,glowAlpha:0,flashFrac:1,travel:0},false);pass=encoder.beginRenderPass({colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}],depthStencilAttachment:{view:stencilView,depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'discard',stencilClearValue:0,stencilLoadOp:'clear',stencilStoreOp:'store'}});pass.setPipeline(maskPipeline);pass.setBindGroup(0,maskUniform.bind);pass.setBindGroup(1,pbg);pass.draw(3,arcRec.segmentCount);pass.end();stats.clippedFrames++;stats.stencilEdges+=arcRec.segmentCount;}
             const drawAnalyticGroup=(group,core)=>{if(!group.length)return;pass=encoder.beginRenderPass({colorAttachments:[{view:scratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});for(const style of group){const ub=fillUniform(ctx,prepared,style,Boolean(copyBg));if(!ub)continue;const bundled=strokeBundle(arcRec,pbg,copyBg,ub,instances);if(bundled){pass.executeBundles(bundled.list);stats.bundleExecutes++;}else{pass.setPipeline(copyBg?strokeCorridorPipeline:strokePipeline);pass.setBindGroup(0,ub.bind);pass.setBindGroup(1,pbg);if(copyBg)pass.setBindGroup(2,copyBg);pass.draw(4,instances);}stats.strokeDraws++;}pass.end();const desc={colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}]};if(clipped)desc.depthStencilAttachment={view:stencilView,depthLoadOp:'load',depthStoreOp:'discard',stencilLoadOp:'load',stencilStoreOp:'discard'};pass=encoder.beginRenderPass(desc);if(clipped)pass.setStencilReference(behavior==='inside'?1:0);const blendMode=core?sweepCoreBlendMode(prepared.cfg):sweepGlowBlendMode(prepared.cfg),pipelines=clipped?compositeStencilPipelines:compositePipelines;pass.setPipeline(pipelines[blendMode]||pipelines.normal);pass.setBindGroup(0,compositeBind);pass.draw(3);pass.end();};
-            // Somata 7.3.9 — large analytic per-microsegment halos create the radial support
-            // wedges visible on curved Spiral lightning.  For symmetric Lightning, rasterize
-            // only the exact narrow strike into a GPU mask and generate Glow by separable blur.
-            // The retained cubic/Arc still selects the strike; only halo construction changes.
+
             const drawBlurredHaloGroup=(group)=>{
                 if(!group.length)return;
                 const blurApi=typeof WebGPUGraffitiContourGlow!=='undefined'?WebGPUGraffitiContourGlow:null;
-                // Never fall back to expanded per-microsegment halo geometry: that path is the
-                // source of the triangular/radial wedges on curved Spiral lightning. A warming
-                // blur pipeline rejects this frame and retries GPU-only on the next one.
+
                 if(!blurApi?.isReady?.())throw new Error('Lightning contour Glow blur warming');
                 for(const style of group){
                     const slot=blurApi.acquire?.(width,height);if(!slot)throw new Error('Lightning contour Glow scratch unavailable');

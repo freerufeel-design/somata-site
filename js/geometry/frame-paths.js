@@ -1,28 +1,15 @@
-// SpiroStar v500 Modular Base
-// Frame geometry caches, path-length tables and dynamic path construction
+
+
 window.__spiroRegisterModule?.('js/geometry/frame-paths');
-        // v130: frame-local geometry/path metrics cache. Dynamic morph point arrays
-        // are mutated every display frame, so these caches intentionally live for ONE
-        // renderMainCanvas() call only. Static and dynamic consumers (line helpers,
-        // Graffiti, Sweep, Web and lamps) may safely share the same references inside
-        // that frame without ever freezing motion on the next one.
-        // v193: geometry that belongs to a static cached layer survives across animation frames.
-        // Corridor motion changes only transforms, not these local-space paths, so rebuilding
-        // rounded contours/path tables/Graffiti segmentation every rAF only creates CPU + GC load.
-        // WeakMap ownership means old cached geometry disappears automatically when layer draw data is replaced.
+
         const persistentRoundedPathsCache = new WeakMap();
-        // v328: high-precision Glint tessellation is expensive (Bezier replay at fixed dense
-        // subdivisions) but static layer geometry does not change between animation frames.
-        // Keep the exact dense rail stable so the canonical path table and GPU buffer can hit.
+
         const persistentHighPrecisionGlintCache = new WeakMap();
-        // v419: exact Lightning has its own rendered-rail cache. It replays the same
-        // line path commands at much denser subdivisions instead of reusing the medium rail.
+
         const persistentExactLightningCache = new WeakMap();
         const persistentPathTableCache = new WeakMap();
         const persistentSinglePathTableCache = new WeakMap();
-        // v210: dynamic morph paths change coordinates every frame, but the path-list
-        // object itself is intentionally reused. Reuse the table/segment objects too;
-        // only their numeric fields and point references need refreshing each frame.
+
         const dynamicPathTableReuseCache = new WeakMap();
         const persistentGraffitiPlanCache = new WeakMap();
         const persistentWebClipCache = new WeakMap();
@@ -34,8 +21,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             active:false,
             frameId:0,
             circlePaths:new Map(),
-            // v191: these caches are explicitly cleared at frame start, so reusable Maps
-            // avoid allocating three fresh WeakMap objects at 60 Hz.
+
             pathTables:new Map(),
             singlePathTables:new Map(),
             roundedPaths:new Map(),
@@ -43,19 +29,13 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
         };
         const morphFrameOutputPools = new Map();
         const circleFrameOutputPools = new Map();
-        // v508 repair: Circle/Chaos Circle builders in legacy/app-b still use the old
-        // frame-local cache-key helper. The modular split dropped that helper even though
-        // the callers survived, causing `frameMorphCacheKey is not defined` as soon as
-        // Circle Slide geometry was requested by lamps/effects. circlePaths is cleared at
-        // every beginFrameGeometryRuntime(), so layer+t is sufficient and cannot go stale
-        // across Morph phases.
+
         function frameMorphCacheKey(layerIndex,t){
             const li=Number.isFinite(Number(layerIndex))?Number(layerIndex):-1;
             const tt=Number.isFinite(Number(t))?Number(t):0;
             return `${li}|${tt}`;
         }
-        // v506: direct per-layer frame slots avoid allocating string cache keys (t.toFixed)
-        // on every Morph consumer call. The produced path arrays themselves remain pooled.
+
         const morphFrameFastSlots=[];
         function getMorphFrameFastSlot(layerIndex,variant='canonical'){
             let bucket=morphFrameFastSlots[layerIndex];
@@ -80,11 +60,6 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             return result;
         }
 
-
-        // v508 — one lazy CPU morph accessor for every legacy/Canvas consumer.
-        // Circle Slide intentionally skips dense source/target topology snapshots at phase
-        // setup, so consumers must not reach into sourceGeometry directly or assume that the
-        // generic topology builder is valid for every Morph mode.
         const morphCpuPathDemandRuntime={
             requests:0,topologyRequests:0,circleRequests:0,chaosCircleRequests:0,
             emptyResults:0,pointsMaterialized:0,strictSpiralBlocks:0,purposes:Object.create(null),last:null
@@ -105,23 +80,14 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
         }
         function getCurrentMorphCpuPaths(layerIndex,t,purpose='legacy'){
             if(!runtimeState.morph?.active)return noteMorphCpuPathDemand('topology',purpose,layerIndex,t,[]);
-            // Somata 6.8 iter16 — strict non-Fourier Spiral Morph has ONE geometry authority:
-            // the retained cubic GPU rail. A legacy consumer asking for CPU paths must fail
-            // closed instead of materialising a six-samples-per-cubic shadow contour. This is
-            // deliberately visible in diagnostics so unsupported features can be moved to GPU.
+
             const sl=runtimeState.morph?.renderSourceLayers?.[layerIndex],dl=runtimeState.morph?.renderTargetLayers?.[layerIndex],strictSpiral=state?.fourierMode!==true&&[sl,dl].some(l=>l&&typeof isSpiralLayer==='function'&&isSpiralLayer(l));
-            // Strict Spiral is GPU-only only while the effective backend is actually GPU.
-            // If WebGPU fails at runtime and backend-policy degrades to the CPU reference
-            // renderer, materialise the canonical Circle/Spiral paths so Web/Lamps/Sweep and
-            // the base geometry keep working instead of leaving a half-alive frozen project.
-            const cpuReferenceActive = typeof somataCpuBackendForced==='function' && somataCpuBackendForced();
-            if(strictSpiral&&!cpuReferenceActive){morphCpuPathDemandRuntime.strictSpiralBlocks++;return noteMorphCpuPathDemand('spiral-gpu-only',purpose,layerIndex,t,[]);}
+
+            if(strictSpiral){morphCpuPathDemandRuntime.strictSpiralBlocks++;return noteMorphCpuPathDemand('spiral-gpu-only',purpose,layerIndex,t,[]);}
             if((state.morph?.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()))){
                 const chaos=typeof isChaosCircleMorphPair==='function'&&isChaosCircleMorphPair(layerIndex);
                 let paths=[];
-                // Somata 6.6: phase-circle Spiral base geometry is retained as Bézier endpoints
-                // on WebGPU. Auxiliary consumers (lamps/Web/Sweep) share a compact anchor rail
-                // from that same resource instead of rebuilding profile/circle geometry per rAF.
+
                 if(!chaos&&typeof getGpuSpiralBezierMorphAuxPaths==='function'){
                     const fast=getGpuSpiralBezierMorphAuxPaths(layerIndex,t);
                     if(Array.isArray(fast)&&fast.length)return noteMorphCpuPathDemand('circle',purpose,layerIndex,t,fast);
@@ -135,14 +101,9 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
         window.__spiroMorphCpuFallbackStatus=()=>({
             ...morphCpuPathDemandRuntime,purposes:{...morphCpuPathDemandRuntime.purposes},
             last:morphCpuPathDemandRuntime.last?{...morphCpuPathDemandRuntime.last}:null,
-            contract:'Strict non-Fourier Spiral Morph is retained-cubic/WebGPU-only while GPU is effective; the CPU reference backend materialises the canonical Circle/Spiral path so runtime GPU failover remains visually complete.'
+            contract:'Strict non-Fourier Spiral Morph keeps the retained cubic WebGPU rail authoritative; auxiliary CPU path materialization is blocked.'
         });
 
-        // v132: reusable transient geometry for Sweep/Web/dynamic Lightning.
-        // These buffers are deliberately NOT part of persistent geometry caches: their
-        // lifetime is one immediate effect draw (or one prepared lightning frame), so
-        // they can be overwritten safely without retaining thousands of short-lived
-        // point arrays and {x,y} objects for the garbage collector.
         function createEffectPieceScratch() {
             return { pieces:[], piecePool:[], pieceCursor:0, infos:[], infoPool:[], infoCursor:0 };
         }
@@ -189,10 +150,6 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
         let webCornersPreparedFrame=null;
         const lightningDynamicScratchByLayer=new WeakMap();
 
-        // v133: one reusable effect context per layer/frame. The context owns only
-        // references and derived scalar values; geometry itself remains in the existing
-        // frame-local pools. This prevents Sweep/Web/Graffiti/lamps from independently
-        // resolving the same paths, transforms and audio-derived widths for every tunnel copy.
         const layerFrameEffectContextPool=[];
         function acquireLayerFrameEffectContext(layerIndex){
             let ctx=layerFrameEffectContextPool[layerIndex];
@@ -219,9 +176,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             ctx.auxiliaryPaths=null;ctx.auxiliaryPathsReady=false;ctx.roundedPaths=null;ctx.roundedPathsReady=false;
             ctx.rawPathTable=null;ctx.rawPathTableReady=false;ctx.roundedPathTable=null;ctx.roundedPathTableReady=false;
             ctx.profilePrepared=null;ctx.profilePreparedReady=false;ctx.sweepPrepared=null;ctx.sweepPreparedReady=false;
-            // 7.3.9: Geometry Circles derive from frame-local auxiliary paths. LayerFrame
-            // contexts are pooled, so a cached null/result from the previous project/frame
-            // must never suppress circles after playlist navigation or a geometry change.
+
             ctx._geometryCircleFrameData=undefined;
             ctx.webPrepared=null;ctx.webPreparedReady=false;ctx.lampInstances=null;ctx.lampInstancesReady=false;
             ctx.minimalSourceLayer=null;ctx.minimalTargetLayer=null;ctx.morphFrameActive=false;ctx.lightMorphEnabled=false;ctx.forcedLampMorph=false;ctx.greenLampDisplay=false;
@@ -231,9 +186,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             if(!Array.isArray(ctx.instanceMetrics))ctx.instanceMetrics=[];else ctx.instanceMetrics.length=0;
             resetMainLayerGeometryPlan(ctx.geometryPlan || (ctx.geometryPlan={}));
             resetLayerEffectsPlan(ctx.effectsPlan || (ctx.effectsPlan={}));
-            // v522.4 — commit markers are frame-local. LayerFrame contexts are pooled and reused;
-            // carrying these flags into the next frame suppresses a fresh Canvas stroke/fill after
-            // mainCanvas has already been cleared, producing the exact "Glow only / no static Fill" failure.
+
             ctx._baseStrokeCommitted=false;ctx._baseFillCommitted=false;ctx._fusedMorphBackend='';
             ctx.layerLampConfig=null;ctx.lightningStroke=null;ctx.lineCap='round';ctx.lineJoin='round';ctx.miterLimit=6;ctx.prepared=false;
             return ctx;
@@ -270,11 +223,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             }
             return ctx.rawPathTable;
         }
-        // v509 — GPU-only Path FX carrier table. Sprite and Moving Line never need JS
-        // segment objects: write their canonical 8-float segment payload and packed path/key
-        // metadata directly while walking the visible rail once. The typed arrays are retained
-        // by the LayerFrame context and only grow; static rails keep the same version across
-        // animation frames so WebGPUCanonicalPathStore can skip uploads completely.
+
         const pathFxTypedTableStats={builds:0,staticHits:0,frameHits:0,grows:0,segmentsWritten:0,objectSegmentsAvoided:0};
         function ensurePathFxTypedCapacity(table,needed){
             const current=Math.max(0,Number(table?._capacity)||0);if(current>=needed&&table.gpuSegmentData&&table.gpuPathIndexData)return table;
@@ -302,8 +251,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             table._rangeReadyFrameId=-1;table._rangeReadySegmentCount=-1;table._rangeReadyTotal=-1;
             pathFxTypedTableStats.builds++;pathFxTypedTableStats.segmentsWritten+=write;pathFxTypedTableStats.objectSegmentsAvoided+=write;return table;
         }
-        // v435/v509 — Sprite/Moving Line share one sub-pixel carrier rail. Smooth spline
-        // flattening remains shared, but arc metrics are now typed-only and GPU-ready.
+
         function getLayerFramePathFxTable(ctx){
             if(!ctx)return buildPathLengthTable([]);
             const fid=Number(ctx.frameId)||Number(frameGeometryRuntime.frameId)||0;
@@ -325,9 +273,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             if(!state.tunnel.active)return Math.max(.001,Math.abs(Number(frameCtx?.combinedScale)||1)*Math.max(.001,Number(state.zoom)||1));
             return Math.max(.000001,Math.abs(Number(copy?.scale)||0)*Math.abs(Number(frameCtx?.combinedScale)||1)*Math.max(.001,Number(state.zoom)||1));
         }
-        // v193: do not spend CPU on an effect whose complete local footprint is substantially
-        // below a physical screen pixel. The base geometry still keeps its existing 0.55 px
-        // corridor threshold, so this only removes mathematically sub-pixel decorations.
+
         function shouldDrawTunnelEffectCopy(kind,copy,frameCtx,localFootprint=1){
             if(!state.tunnel.active)return true;
             const screenScale=getTunnelEffectScreenScale(copy,frameCtx);
@@ -349,8 +295,6 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             if(!keep&&Object.prototype.hasOwnProperty.call(effectCullStats,kind))effectCullStats[kind]++;return keep;
         }
 
-        // v328: shared zero-allocation Corridor copy packing for GPU effects. Keep one
-        // definition of scale/rotation/alpha semantics so Sweep/Profile cannot drift apart.
         function packTunnelEffectCopyRecords(target,copies,alphas,frameCtx,kind,footprint=1,layer=null){
             let k=0;const src=Array.isArray(copies)?copies:[];
             for(let i=0;i<src.length;i++){
@@ -424,9 +368,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
 
             let table=null,segs=null,reused=false;
             if(dynamicFrame && list && typeof list==='object'){
-                // v210: dynamic single-path callers commonly pass a fresh [path]
-                // wrapper each frame. The points array is the stable owner and can
-                // safely retain the table object while segment lengths are recomputed.
+
                 const reuseOwner=(list.length===1 && Array.isArray(list[0]?.points)) ? list[0].points : list;
                 table=dynamicPathTableReuseCache.get(reuseOwner)||null;
                 if(table){segs=table.segs;reused=true;}
@@ -435,9 +377,6 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                 table={segs:[],total:0};segs=table.segs;
             }
 
-            // v425: the universal CPU table owns ONLY segment arc length. Path-range lookup
-            // is also lazy now (see ensurePathLengthRanges) because most line/lamp/web callers
-            // never need GPU/per-path metadata at all.
             let total=0,write=0,pathCount=0;
             for(let pi=0;pi<list.length;pi++){
                 const path=list[pi],pts=path?.points||[]; if(pts.length<2) continue;
@@ -459,8 +398,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             }
             segs.length=write;table.total=total;table.segmentCount=write;table.pathCount=pathCount;
             table.dynamicFrame=dynamicFrame;table.frameId=dynamicFrame?frameGeometryRuntime.frameId:0;
-            // Invalidate only the optional derived range view; its backing objects are reused
-            // if/when a Sweep GPU/per-path consumer actually requests them.
+
             table._rangeReadyFrameId=-1;table._rangeReadySegmentCount=-1;table._rangeReadyTotal=-1;
             if(persistentEligible)persistentPathTableCache.set(list,table);
             if(canonicalOwner&&!dynamicFrame){
@@ -515,18 +453,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             target.y=seg.a.y+(seg.b.y-seg.a.y)*u;
             return target;
         }
-        function stableRandomLampFractions(seedKey,count) {
-            const rnd=makeLampPrng(lampHash32(String(seedKey))); const arr=[];
-            // Legacy helper retained for compatibility with older non-contour callers.
-            for(let i=0;i<count;i++) arr.push((i+rnd())/count);
-            for(let i=arr.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));[arr[i],arr[j]]=[arr[j],arr[i]];}
-            return arr;
-        }
-        // v308: arbitrary lamps own a permanent coordinate on ONE contour, just like
-        // key lamps own a construction point.  Never concatenate all paths into one
-        // virtual rail: changing one contour's length would move a fraction across a
-        // path boundary and look like a teleport.  The golden-ratio sequence is prefix
-        // stable, so changing Density adds/removes lamps without moving existing ones.
+
         function stableContourLampFractions(seedKey,count) {
             const seed=lampHash32(String(seedKey));
             const offset=lampSeedUnit(seed,31);
@@ -535,30 +462,12 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             for(let i=0;i<arr.length;i++)arr[i]=(offset+(i+.5)*phi)%1;
             return arr;
         }
-        function arbitraryLampCountForPaths(paths,maxPoints=240) {
-            const table=buildPathLengthTable(paths); if(table.total<=0) return {table,count:0};
-            const count=Math.max(8,Math.min(maxPoints,Math.round(table.total/24)));
-            return {table,count};
-        }
         function lampArbitraryDensityFactor(explicitConfig=null) {
-            // GPU Morph preparation can run before the legacy withLampConfig() wrapper is
-            // entered. Accept the frame/layer config explicitly so Arbitrary density never
-            // falls back to the actively edited/global lamp config by accident.
+
             const cfg=(explicitConfig&&typeof explicitConfig==='object')?explicitConfig:getLampEvaluationConfig();
             const pct=Math.max(0,Math.min(200,Number(cfg?.density??100)))/100;
             const mult=Math.max(0,Math.min(5,Number(cfg?.densityMultiplier??1)));
             return Math.max(0,Math.min(5,pct*mult));
-        }
-        function stableArbitraryLampCount(layer, paths, maxPoints=600) {
-            const key=String(layer?.id||layer?.name||'layer');
-            let baseCount=lampMotionRuntime.arbitraryCounts.get(key);
-            if(!Number.isFinite(baseCount)){
-                baseCount=arbitraryLampCountForPaths(paths,Math.max(240,maxPoints)).count;
-                if(baseCount>0) lampMotionRuntime.arbitraryCounts.set(key,baseCount);
-            }
-            const density=lampArbitraryDensityFactor();
-            if(density<=.0001)return 0;
-            return Math.max(1,Math.min(maxPoints,Math.round((Number(baseCount)||0)*density)));
         }
         function stableArbitraryLampCountForPath(layer,path,pathIndex,maxPoints=600){
             const layerKey=String(layer?.id||layer?.name||'layer');
@@ -583,12 +492,10 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                 candidates.push({pathIndex,path,table,desired,count:0,remainder:0});
             }
             if(!candidates.length||maxPoints<=0)return out;
-            // First reserve one lamp for EVERY contour.  This prevents a long first spiral
-            // branch from consuming the global cap and leaving later branches completely dark.
+
             if(candidates.length<=maxPoints){for(const c of candidates)c.count=1;}
             else{
-                // Extremely pathological path counts: spread the finite budget uniformly
-                // instead of taking only the first N contours.
+
                 for(let i=0;i<maxPoints;i++)candidates[Math.floor(i*candidates.length/maxPoints)].count=1;
             }
             let used=candidates.reduce((n,c)=>n+c.count,0),remain=Math.max(0,maxPoints-used);
@@ -638,7 +545,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                 if(!p||out.length>=maxPoints)return;
                 const k=makeKey(p);if(seen.has(k))return;seen.add(k);out.push(p);
             };
-            // Key points are authoritative. Corners add only genuinely additional bends.
+
             for(const p of keyPoints||[])add(p);
             for(const p of cornerPoints||[])add(p);
             return out;
@@ -651,9 +558,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                 const drawData=prepared || getCachedLayerDrawData(layer);
                 const layerIndex=Math.max(0,getRuntimeLayerIndex(layer));
                 const rawPaths=drawData?.paths||[];
-                // «На изломах» is a superset: all Key lamps + every bend marker.
-                // This remains true even when the visible spline/rounding has smoothed
-                // the bend; the bend identity comes from the construction geometry.
+
                 const keyPoints=buildLampCircumferenceAnchors(layer,drawData,maxPoints);
                 let bendPoints=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints,false);
                 if(isLampContourAttachmentEnabled()){
@@ -664,14 +569,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             }
             return buildLampCircumferenceAnchors(layer,prepared,maxPoints);
         }
-        // Build the exact intermediate topology used by the current morph frame.
-        // Lamp positions are derived from this geometry so they travel with the
-        // virtual construction points instead of taking a detached straight shortcut.
-        // v275 — atomic Smooth-spline rounding for topology morphs.
-        // The v261 local-spline + local-fillet renderer remains the source of truth for
-        // each endpoint.  We sample that FINAL endpoint curve once per morph cycle and
-        // morph the already-rounded rails.  No live layer.profileMode and no source-only
-        // cornerFlags are allowed to redefine fillet topology in the middle of a phase.
+
         const stableSmoothRoundedMorphRailCache={serial:-1,source:[],target:[]};
         function createStableSplineRailSampler(stepsPerCubic=3){
             const points=[];let current=null;
@@ -710,20 +608,12 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             const dstMode=runtimeState.morph.targetProfiles?.[layerIndex]?.mode || srcMode;
             const layer=state.layers?.[layerIndex];
 
-            // Spiral geometry is already an authored, densely sampled variable-width centre rail.
-            // Running it through another smoothing pass creates a spline-of-spline and moves
-            // Lightning/Glint away from the visible carrier.
             const sv=runtimeState.morph.sourceVisuals?.[layerIndex]||{};
             const tv=runtimeState.morph.targetVisuals?.[layerIndex]||{};
             if(sv.spiralEnabled===true||tv.spiralEnabled===true||isSpiralLayer(layer))return false;
 
-            // Orbit-count morphing owns path population/topology. Keep the canonical topology
-            // builder when split/merge semantics are active.
             if(state.morph?.monoOrbitTransforms===true)return false;
 
-            // v534: smooth spline and ordinary rounded-segment morphs both get ONE final
-            // visual rail per endpoint. Before this, segment rounding was reconstructed on
-            // the CPU every display frame and forced several GPU effects onto fallback paths.
             if(srcMode==='spline'&&dstMode==='spline')return true;
             if(srcMode==='segments'&&dstMode==='segments'){
                 const sr=getRoundingStrength(sv.rounding ?? layer?.rounding);
@@ -741,11 +631,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             else
                 roundPolylineForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[]);
             const raw=sampler.points.length>1?sampler.points:pts;
-            // Keep the same deterministic topology budget as the existing morph geometry.
-            // This removes any dependence on how many cubic commands a local fillet happens
-            // to contain while preserving the exact v261 endpoint shape to sub-pixel accuracy.
-            // Preserve enough of the final cubic rail that GPU line rendering is visually
-            // indistinguishable from the Canvas spline, but cap phase upload size.
+
             const count=Math.max(48,Math.min(960,Math.max(pts.length||0,raw.length||0)));
             return {
                 points:resampleMorphTopology(raw,count,Boolean(path.closed),null),
@@ -830,13 +716,6 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             return result;
         }
 
-        // v278: v269-compatible path source for true Linear topology lamps.
-        // v275 introduced an atomic Smooth+Rounded visual-path branch at the very top of
-        // buildCurrentMorphPaths().  The lamp lineage/segment binding from v256-v269 is
-        // intentionally defined in the canonical topology coordinate system.  Feeding the
-        // new visual-path topology into that unchanged lamp code changes segment numbering
-        // underneath stable lamp IDs and causes apparent teleportation.  Keep the new visual
-        // renderer, but allow lamp evaluation to bypass ONLY that visual special-case.
         let canonicalLampMorphPathDepth = 0;
         function buildCurrentMorphPathsForLamps(layerIndex,t){
             canonicalLampMorphPathDepth++;

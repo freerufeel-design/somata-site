@@ -1,6 +1,7 @@
-// SpiroStar v524 — independent contour particles, WebGPU-only raster/animation.
+
 window.__spiroRegisterModule?.('js/gpu/particle-renderer');
 const WebGPUParticleRenderer=(()=>{
+    const liveParticleLayer=frameCtx=>frameCtx?.effectLayer||(typeof getLayerEffectOwner==='function'?getLayerEffectOwner(frameCtx?.layer):(typeof ensureLayerEffectState==='function'?ensureLayerEffectState(frameCtx?.layer):null))||frameCtx?.layer;
     const canvas=document.getElementById('particleGpuOverlayCanvas');
     let device=null,context=null,format='bgra8unorm',pipeline=null,greenBuildPipeline=null,greenScanPipeline=null,greenAddPipeline=null,greenFinalPipeline=null,dummyCubicBuffer=null,ready=false,initializing=false,attempted=false,lost=false,hubGeneration=-1,lastError='';
     let width=0,height=0,frameId=0,frameActive=false,queue=[],lastAttemptAt=0,targetViews=new WeakMap();
@@ -28,8 +29,7 @@ fn cubicDerivativeArc(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,t:f32)
 fn arcCorrectMicroT(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,sub:u32,subdiv:u32,f0:f32)->f32{
     let f=clamp(f0,0.0,1.0);let sd=max(1u,subdiv);let t0=f32(sub)/f32(sd);let t1=f32(sub+1u)/f32(sd);if(f<=0.000001){return t0;}if(f>=0.999999){return t1;}
     let s0=max(0.000001,length(cubicDerivativeArc(p0,c1,c2,p3,t0)));let s1=max(0.000001,length(cubicDerivativeArc(p0,c1,c2,p3,t1)));let dv=s1-s0;let arcTarget=f*max(0.000001,s0+0.5*dv);
-    // Integral of the local linear-speed model has a closed-form inverse. Rationalized root
-    // avoids cancellation and is cheaper than iterative Newton correction in particle/Web loads.
+
     let disc=max(0.000000000001,s0*s0+2.0*dv*arcTarget);let q=clamp((2.0*arcTarget)/max(0.000001,s0+sqrt(disc)),0.0,1.0);return mix(t0,t1,q);
 }
 fn sampleRail(si:u32,t0:f32)->RailSample{
@@ -40,8 +40,7 @@ fn sampleRail(si:u32,t0:f32)->RailSample{
 fn find_segment(dist:f32)->vec4<f32>{
   let n=max(1u,u32(u.v[0].z));
   var lo:u32=0u; var hi:u32=n;
-  // Segment starts are monotonic arc lengths. Binary search keeps particle cost
-  // logarithmic even for dense spline/spiral rails instead of O(N) per instance.
+
   for(var k:u32=0u;k<20u;k=k+1u){
     if(lo>=hi){break;}
     let mid=(lo+hi)/2u; let b=segs[mid*2u+1u];
@@ -94,10 +93,7 @@ struct VO { @builtin(position) pos: vec4<f32>, @location(0) q: vec2<f32>, @locat
   }
   a=clamp(a*i.metaData.z*i.metaData.w,0.0,1.0); if(a<0.004){discard;} return vec4<f32>(rgb*a,a);
 }`;
-    // v529 — Green project Morph particle carrier.
-    // Segment interpolation and arc construction are fully parallel.  The former v528 kernel
-    // used one GPU invocation that serially walked every green-Morph segment; dense spirals
-    // therefore still created a long compute tail even though the CPU was idle.
+
     const GREEN_BUILD_WGSL=`
 struct G { t:f32, parameterT:f32, count:u32, _pad:u32 };
 @group(0) @binding(0) var<uniform> g:G;
@@ -111,8 +107,7 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
   let t=clamp(g.t,0.0,1.0);let pt=clamp(g.parameterT,0.0,1.0);
   let a=mix(s0.xy,s1.xy,t);let z=mix(s0.zw,s1.zw,t);
   let vis=clamp(mix(al.x,al.y,pt)*mix(al.z,al.w,pt),0.0,1.0);
-  // Keep arc distance geometric, not visibility-weighted. Fading a segment must change
-  // particle alpha, not renormalise the whole contour and slide every other particle.
+
   let ln=length(z-a);
   outSeg[i*2u]=vec4<f32>(a,z);
   outSeg[i*2u+1u]=vec4<f32>(0.0,ln,vis,0.0);
@@ -207,8 +202,7 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
         const plan=frameCtx?.greenMorphProvider?.gpuGeometryPlan;if(!plan?.pairs?.length)return null;
         let rec=greenResources.get(plan);if(rec?.generation===hubGeneration){rec.t=Math.max(0,Math.min(1,Number(frameCtx.greenMorphProvider?.progress)||0));rec.parameterT=Math.max(0,Math.min(1,Number(frameCtx.greenMorphProvider?.parameterProgress??rec.t)||0));return rec;}
         if(rec)destroyGreenRec(rec);
-        // Prefer the immutable endpoint buffer already owned by the green base renderer.  If it
-        // is not ready yet, build the identical payload locally as a compatibility fallback.
+
         const sharedEndpoint=(typeof WebGPUGreenProjectMorphRenderer!=='undefined'&&typeof WebGPUGreenProjectMorphRenderer.acquireEndpointResource==='function')?WebGPUGreenProjectMorphRenderer.acquireEndpointResource(plan):null;
         const useShared=Boolean(sharedEndpoint?.buffer&&sharedEndpoint.generation===hubGeneration&&Number(sharedEndpoint.count)>0);
         let count=useShared?Math.max(0,Number(sharedEndpoint.count)||0):0,data=null,sourceBuffer=null;
@@ -254,9 +248,7 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
         while(initializing&&performance.now()-started<Math.max(250,Number(timeoutMs)||3000))await new Promise(resolve=>setTimeout(resolve,0));
         return ready&&!lost;
     }
-    // v535 — build Green particle Arc buffer hierarchies before the Green transition clock.
-    // Compute itself remains frame-driven on GPU; this only removes one-time allocation and
-    // bind-group construction from the first visible moving frame.
+
     async function prewarmGreenPlans(plans){
         if(!globalThis.navigator?.gpu)return false;
         if(!await awaitParticleRendererReady())return false;
@@ -272,22 +264,15 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
     }
     function uniformResource(key){let rec=uniformByKey.get(key);if(rec?.generation===hubGeneration)return rec;if(rec)try{rec.buffer.destroy();}catch(_){}rec={buffer:device.createBuffer({label:`particle uniforms ${key}`,size:176,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}),generation:hubGeneration,bindBySegment:new WeakMap(),bundleBySegment:new WeakMap(),staging:new Float32Array(44)};uniformByKey.set(key,rec);return rec;}
     function gpuParticleSource(frameCtx){
-        // Green advanced/smooth project Morph keeps particles fully GPU-native too. The current
-        // arc is evaluated by a compute pass immediately before the particle render pass.
+
         try{const green=greenSegmentResource(frameCtx);if(green){prepareGreenSegmentResource(green);stats.greenMorphFrames++;stats.greenMorphCpuTablesAvoided++;return green;}}catch(_){}
-        // v528: topology Morph already owns an exact GPU arc/segment buffer. Particles can
-        // consume it directly instead of forcing getLayerFramePathFxTable() to materialize the
-        // same dynamic rail on the CPU every display frame. The compute prerequisite is submitted
-        // once and the particle pass only reads the resident buffers.
+
         try{
             const table=typeof getGpuMorphArcTableForFrame==='function'?getGpuMorphArcTableForFrame(frameCtx):null;
             const arc=table?._gpuMorphArcResource;
             if(table?.gpuArcResident===true&&arc?.ready&&typeof encodeGpuMorphArcTable==='function'){
                 stats.morphArcFrames++;stats.morphArcCpuTablesAvoided++;
-                // v529: do not submit Morph Arc as a prerequisite here.  Keep the exact arc table
-                // with the particle item and encode interpolation + prefix scan into the same
-                // command buffer as the particle render pass.  This removes a queue-submit boundary
-                // from every Blue Morph + Particles frame while preserving strict GPU ordering.
+
                 return{buffer:arc.segmentBuffer,metaBuffer:arc.metaBuffer,identity:arc,count:arc.segmentCount,morphArc:true,morphArcTable:table,cubicBuffer:arc.morphRec?.cubicBuffer||null,bezierSubdiv:Math.max(1,Number(arc.subdiv)||1),exactBezierArc:true};
             }
         }catch(_){}
@@ -306,7 +291,7 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
         return[{copy:null,index:-1,alpha:Math.max(0,Math.min(1,Number(alphas?.[0]??1)||0))}];
     }
     function prepareLayerItem(frameCtx,ctx,requireOverlay=false,copyDesc=null,sharedRec=null){
-        const cfg=normalizeParticleConfig(frameCtx?.layer?.particles);if((requireOverlay&&!frameActive)||!ready||!cfg.enabled||frameCtx?.layer?.visible===false){stats.skipped++;return null;}const rec=sharedRec||gpuParticleSource(frameCtx);if(!rec)return null;
+        const cfg=normalizeParticleConfig(liveParticleLayer(frameCtx)?.particles);if((requireOverlay&&!frameActive)||!ready||!cfg.enabled||frameCtx?.layer?.visible===false){stats.skipped++;return null;}const rec=sharedRec||gpuParticleSource(frameCtx);if(!rec)return null;
         ctx.save();try{if(copyDesc?.copy){applyMotionTunnelLag(ctx,copyDesc.copy,frameCtx.layer);const copyScale=Number(copyDesc.copy.scale);ctx.scale(Number.isFinite(copyScale)?copyScale:1,Number.isFinite(copyScale)?copyScale:1);}applyLayerFrameEffectTransform(ctx,frameCtx);}catch(_){}const tr=ctx.getTransform();ctx.restore();
         const lineColor=copyDesc?.copy&&cfg.colorMode==='line'&&typeof getTunnelCopyColor==='function'?getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor||frameCtx.layer?.strokeColor||'#ffffff',copyDesc.copy,frameCtx.tunnelPaletteProfile):null;
         const colors=effectColors(cfg,frameCtx.layer,lineColor),baseKey=frameCtx.layer?.id||`layer-${frameCtx.layerIndex}`,key=copyDesc?.copy?`${baseKey}|corridor:${copyDesc.index}`:baseKey,ur=uniformResource(key),u=ur.staging,mode={flow:0,cornerFade:1,spiralZ:2}[cfg.mode]??0,style={stardust:0,flame:1,laser:2,feather:3,eye:4,plasma:5}[cfg.style]??0;u.fill(0);stats.uniformAllocationsAvoided++;
@@ -318,7 +303,7 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
         return{bind,bundle,count,greenRec:rec.greenMorph?rec:null,morphArcTable:rec.morphArcTable||null,rec,copyIndex:copyDesc?.index??-1};
     }
     function prepareLayerItems(frameCtx,ctx,requireOverlay=false){
-        const cfg=normalizeParticleConfig(frameCtx?.layer?.particles);if((requireOverlay&&!frameActive)||!ready||!cfg.enabled||frameCtx?.layer?.visible===false){stats.skipped++;return[];}const rec=gpuParticleSource(frameCtx);if(!rec)return[];const items=[];for(const desc of particleCopyDescriptors(frameCtx)){const item=prepareLayerItem(frameCtx,ctx,requireOverlay,desc,rec);if(item)items.push(item);}return items;
+        const cfg=normalizeParticleConfig(liveParticleLayer(frameCtx)?.particles);if((requireOverlay&&!frameActive)||!ready||!cfg.enabled||frameCtx?.layer?.visible===false){stats.skipped++;return[];}const rec=gpuParticleSource(frameCtx);if(!rec)return[];const items=[];for(const desc of particleCopyDescriptors(frameCtx)){const item=prepareLayerItem(frameCtx,ctx,requireOverlay,desc,rec);if(item)items.push(item);}return items;
     }
     function queueLayer(frameCtx,ctx){
         const items=prepareLayerItems(frameCtx,ctx,true);if(!items.length)return false;for(const item of items)queue.push(item);const rec=items[0].rec;lastDecision.reason=items.length>1?'queued-corridor':(rec.greenMorph?'queued-green-gpu-arc':(rec.morphArc?'queued-gpu-morph-arc':'queued'));lastDecision.layerIndex=frameCtx.layerIndex;return true;

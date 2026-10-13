@@ -1,9 +1,7 @@
-// SpiroStar v500 Modular Base
-// Palette definitions and color helpers
+
+
 window.__spiroRegisterModule?.('js/core/palette');
-        // v186 — one playlist-scoped palette studio is the single color source for
-        // random/orange generation and blue Morphing. Palettes are key colors plus a
-        // gradient multiplier and non-destructive color adjustments.
+
         const PLAYLIST_PALETTE_ORDER = ['standard','pastel','acid','rgb','rasta','fire','ice','sex','holy'];
         const GRAFFITI_STANDARD_BRIGHT_COLORS = Object.freeze(['#0088ff','#00ffcc','#ff007f','#39ff14','#ffe600','#ff3300','#ff1493','#bf00ff','#76ff03']);
         const LEGACY_STANDARD_PLAYLIST_COLORS = Object.freeze(['#22d3ee','#3b82f6','#8b5cf6','#ec4899','#f97316','#facc15','#34d399']);
@@ -12,8 +10,7 @@ window.__spiroRegisterModule?.('js/core/palette');
             fire:'Огонь', ice:'Лёд', sex:'Секс', holy:'Святая'
         });
         const FACTORY_PLAYLIST_PALETTE_RECORDS = Object.freeze({
-            // v186: compact key sets. Similar-hue palettes deliberately use fewer keys;
-            // broad-spectrum palettes use more only when distinct spectral regions matter.
+
             standard:Object.freeze({name:'Стандарт',keyColors:GRAFFITI_STANDARD_BRIGHT_COLORS,multiplier:1}),
             pastel:Object.freeze({name:'Пастель',keyColors:Object.freeze(['#a5f3fc','#c4b5fd','#fbcfe8','#fde68a','#99f6e4']),multiplier:1}),
             acid:Object.freeze({name:'Кислотная',keyColors:Object.freeze(['#39ff14','#00fff0','#6366ff','#ff00cc','#fff500','#ff5f00']),multiplier:1}),
@@ -35,11 +32,7 @@ window.__spiroRegisterModule?.('js/core/palette');
             return {id:key,name:f.name,keyColors:[...f.keyColors],multiplier:Math.max(1,Math.min(5,Number(f.multiplier)||1)),saturation:100,brightness:50,contrast:50,active:true,factoryKey:key,exactColors:null};
         }
         function normalizePlaylistPaletteRecord(value,key){
-            // v299: v269's nine factory palettes are compact key sets.  Older project/
-            // playlist formats could store an already-expanded color array and the old
-            // migration then exposed every expanded color as a key.  That makes factory
-            // palettes grow into long strips after loading.  Restore legacy factory data
-            // to the compact v269 definitions; custom palettes keep their legacy colors.
+
             const isFactoryPalette=!!FACTORY_PLAYLIST_PALETTE_RECORDS[key];
             if(Array.isArray(value)){
                 const colors=value.map(normalizePaletteHex).filter(Boolean);
@@ -59,9 +52,7 @@ window.__spiroRegisterModule?.('js/core/palette');
             };
             const keys=Array.isArray(src.keyColors)?src.keyColors.map(normalizePaletteHex).filter(Boolean):[];
             const exact=Array.isArray(src.exactColors)?src.exactColors.map(normalizePaletteHex).filter(Boolean):[];
-            // A legacy expanded record produced by the previous migration has identical
-            // keyColors/exactColors.  Compact only that signature, so genuinely edited
-            // modern factory palettes (exactColors is cleared on edit) stay untouched.
+
             const legacyExpandedFactory=isFactoryPalette&&exact.length>0&&keys.length===exact.length&&keys.every((c,i)=>c===exact[i]);
             const legacyUntouchedStandard=key==='standard'&&keys.length===LEGACY_STANDARD_PLAYLIST_COLORS.length&&keys.every((c,i)=>c===LEGACY_STANDARD_PLAYLIST_COLORS[i]);
             if(keys.length&&!legacyExpandedFactory&&!legacyUntouchedStandard)base.keyColors=keys;
@@ -163,8 +154,7 @@ window.__spiroRegisterModule?.('js/core/palette');
             if(Array.isArray(record?.exactColors)&&record.exactColors.length)base=record.exactColors.map(normalizePaletteHex).filter(Boolean);
             else if(keys.length===1)base=[keys[0]];
             else{
-                // v186 multiplier semantics: 1 = key colors only; 2 = one
-                // interpolated color between every adjacent pair; ... 5 = four.
+
                 const multiplier=Math.max(1,Math.min(5,Math.round(Number(record?.multiplier)||1)));
                 const intermediates=multiplier-1;
                 base=[];
@@ -202,15 +192,11 @@ window.__spiroRegisterModule?.('js/core/palette');
             return context==='blue'?state.morph.lineColorPalette:state.randomOptions.lineColorPalette;
         }
 
-        // v340 — extended rounding range. 0..100% is bit-compatible with v339;
-        // 100..200% adds a second smoothing stage only where it is geometrically safe.
-        // Keeping the compatibility knee at 100% avoids changing existing projects.
         const MAX_ROUNDING_PERCENT = 200;
         function clampRoundingPercent(value) {
             const v=Number(value);
             return Math.max(0,Math.min(MAX_ROUNDING_PERCENT,Number.isFinite(v)?v:0));
         }
         function getRoundingStrength(value) { return clampRoundingPercent(value)/100; }
-        function getBaseRoundingStrength(value) { return Math.min(1,getRoundingStrength(value)); }
         function getExtraRoundingStrength(value) { return Math.max(0,Math.min(1,getRoundingStrength(value)-1)); }
 

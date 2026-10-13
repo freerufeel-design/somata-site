@@ -1,9 +1,5 @@
-// Somata 7.3.9 — canonical retained-cubic Spiral + derived Fast Visual Rail on WebGPU.
-// Endpoint rails are prepared once per Morph phase. Each frame computes the exact current cubics,
-// applies exact periodic position closure plus C1 only for tangential/filleted seams. Internal
-// technical equalisation cuts are repaired to the endpoint-authored tangent topology for every
-// profile mode, then sampled once into the resident 12-step visual rail. Base/Glow/Corridor raster
-// only consume that rail; exact effects keep the canonical cubics.
+
+
 window.__spiroRegisterModule?.('js/gpu/spiral-bezier-morph-renderer');
 
 const WebGPUSpiralBezierMorphRenderer = (() => {
@@ -17,10 +13,6 @@ const WebGPUSpiralBezierMorphRenderer = (() => {
     const uniformBytes=new ArrayBuffer(80),uf=new Float32Array(uniformBytes),uu=new Uint32Array(uniformBytes);
     const TWO_PI=Math.PI*2;
 
-
-    // Effects consume the exact same polar-interpolated retained cubics as the visible Spiral.
-    // This compute pass materializes only 4 control points per logical cubic on GPU; it never
-    // emits a CPU point cloud or a per-frame spline approximation.
     const EFFECT_CUBIC_WGSL=`
 struct U { count:u32, _a:u32, _b:u32, _c:u32, phase:vec4<f32>, };
 @group(0) @binding(0) var<storage,read> endpointData:array<vec4<f32>>;
@@ -37,11 +29,6 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
  currentCubics[i*2u]=vec4<f32>(p0,c1);currentCubics[i*2u+1u]=vec4<f32>(c2,p3);
 }`;
 
-    // 6.9: a Closed Spiral is periodic rather than a conventional p3==p0 loop.
-    // After endpoint cubic interpolation, patch the last P3 of each continuity-protected
-    // path so it is EXACTLY the rotate+scale image of the current first P0. This keeps the
-    // period seam closed for Continuous/Phase/Phase-Circle/Minimal-Turn without changing
-    // Torn, where a temporary discontinuity is explicitly allowed by the mode.
     const CLOSURE_WGSL=`
 struct U { count:u32, _a:u32, _b:u32, _c:u32, phase:vec4<f32>, };
 @group(0) @binding(0) var<storage,read_write> currentCubics:array<vec4<f32>>;
@@ -59,15 +46,6 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
  let last=first+n-1u;var q=currentCubics[last*2u+1u];q.xy=mix(q.xy,expectedC2,clamp(tangentStrength,0.0,1.0));q.zw=mix(q.zw,expectedP3,clamp(positionStrength,0.0,1.0));currentCubics[last*2u+1u]=q;
 }`;
 
-
-    // 7.3.20 hf7 — exact De Casteljau equalisation introduces technical cubic boundaries.
-    // Independently interpolating control points in polar space can create a visible G1 “stair/saw”
-    // at those cuts even when BOTH exact endpoint rails are smooth there. This is not a spline-only
-    // property: an ordinary Segment-profile Spiral is still analytically smooth between authored
-    // profile corners. Repair every INTERNAL non-authored join of the same path. If a join is an
-    // authored corner at only one endpoint, the repair strength fades continuously toward/from that
-    // corner across the morph. True authored Segment corners therefore remain sharp, while purely
-    // technical equalisation cuts can no longer become visible during Topology/Calm morphing.
     const TANGENT_REPAIR_WGSL=`
 struct U { count:u32, _a:u32, _b:u32, _c:u32, phase:vec4<f32>, };
 @group(0) @binding(0) var<storage,read_write> currentCubics:array<vec4<f32>>;
@@ -83,9 +61,6 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
  let repairedC2=knot-dir*lin;let repairedC1=knot+dir*lout;prev.xy=mix(prev.xy,repairedC2,strength);prev.zw=knot;next.xy=knot;next.zw=mix(next.zw,repairedC1,strength);currentCubics[(i-1u)*2u+1u]=prev;currentCubics[i*2u]=next;
 }`;
 
-    // Somata 7.3.9 — 6.7-style fast visual rail derived from the exact retained cubics.
-    // The canonical cubic/periodic rail remains the source of truth. One compute invocation per
-    // visual micro-segment evaluates it once; Base/Glow/Corridor raster only read line endpoints.
     const FAST_RAIL_WGSL=`
 struct U { count:u32, _a:u32, _b:u32, _c:u32, phase:vec4<f32>, };
 @group(0) @binding(0) var<storage,read> endpointData:array<vec4<f32>>;
@@ -135,9 +110,6 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{return vec2<f32>(u.row0.x*p.x+u.row0.y*p.
  let a=clamp(cov*v.alpha*v.color.a,0.0,1.0);if(a<.0001){discard;}return vec4<f32>(v.color.rgb*a,a);
 }
 
-// 6.9 rev4 — continuous base ribbon. The glow entry point above intentionally
-// remains capsule based; only the visible base uses this strip so each GPU
-// subdivision shares an exact cross-section with its neighbour.
 struct UniformOut {
  @builtin(position) position:vec4<f32>, @location(0) edge:f32,
  @location(1) halfWidth:f32, @location(2) alpha:f32, @location(3) color:vec4<f32>,
@@ -171,9 +143,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
     function flushRetired(){retireTimer=0;while(retiredResources.length)destroyResource(retiredResources.pop());}
     function scheduleRetiredFlush(){if(retireTimer)return;const run=()=>flushRetired();if(typeof requestIdleCallback==='function')retireTimer=requestIdleCallback(run,{timeout:800});else retireTimer=setTimeout(run,80);}
     function retireCurrentResources(reason='phase-change'){try{invalidateGpuMorphArcResources?.(`spiral-bezier-${reason}`);}catch(_){}for(const rec of resources.values()){retiredResources.push(rec);stats.retired++;}resources.clear();decision.reason=reason;scheduleRetiredFlush();}
-    // 6.7 phase-handoff fix: build the next phase beside the currently visible one, then
-    // swap the resource map atomically. While the async build is running the old phase stays
-    // drawable at its exact handoff t, so there is no WebGPU -> CPU -> WebGPU flash at a boundary.
+
     function replaceResources(nextResources,reason='phase-swap'){
         try{invalidateGpuMorphArcResources?.(`spiral-bezier-${reason}`);}catch(_){}
         for(const rec of resources.values()){retiredResources.push(rec);stats.retired++;}
@@ -183,29 +153,21 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
         scheduleRetiredFlush();
     }
     function invalidate(reason='phase-change'){retireCurrentResources(reason);}
-    // Stop is intentionally cheap: the last completed canonical phase is already in state.layers.
-    // Keep endpoint/copy buffers resident until the next phase replaces them; destroying dozens of
-    // WebGPU buffers synchronously on the Stop click was a visible main-thread hitch.
+
     function park(reason='stopped'){decision.eligible=false;decision.reason=reason;for(const rec of resources.values()){rec.copyPackedFrameId=-1;rec.auxT=NaN;}return true;}
     function reset(){for(const rec of resources.values())destroyResource(rec);resources.clear();resetStaticVisuals();flushRetired();try{cornerBuffer?.destroy?.();}catch(_){}pipelineMax=null;pipelineOver=null;uniformPipelineMax=null;uniformPipelineOver=null;effectCubicPipeline=null;closurePipeline=null;tangentRepairPipeline=null;fastRailPipeline=null;cornerBuffer=null;renderUniformLayout=null;renderCubicLayout=null;renderCopyLayout=null;renderPipelineLayout=null;width=0;height=0;device=null;ready=false;}
     async function ensureReady(){
         const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration?.():-1;
         if(ready&&device&&gen===generation)return true;if(initializing)return initializing;
         if(ready&&gen!==generation)reset();
-        initializing=(async()=>{try{if(typeof WebGPUDeviceHub==='undefined')throw new Error('WebGPUDeviceHub unavailable');const sh=await WebGPUDeviceHub.acquire();device=sh.device;generation=sh.generation;format=navigator.gpu.getPreferredCanvasFormat();const mod=device.createShaderModule({label:'Somata Spiral Bézier Morph WGSL',code:WGSL}),effectMod=device.createShaderModule({label:'Somata Spiral Bézier shared effect cubics WGSL',code:EFFECT_CUBIC_WGSL}),repairMod=device.createShaderModule({label:'Somata 7.3.20 Spiral topology tangent repair WGSL',code:TANGENT_REPAIR_WGSL}),fastMod=device.createShaderModule({label:'Somata 7.3.9 Spiral Fast Visual Rail WGSL',code:FAST_RAIL_WGSL});if(typeof assertWebGPUShaderModule==='function'){await assertWebGPUShaderModule(mod,'Somata Spiral Bézier Morph WGSL');await assertWebGPUShaderModule(effectMod,'Somata Spiral Bézier shared effect cubics WGSL');await assertWebGPUShaderModule(repairMod,'Somata 7.3.20 Spiral topology tangent repair WGSL');await assertWebGPUShaderModule(fastMod,'Somata 7.3.9 Spiral Fast Visual Rail WGSL');}effectCubicPipeline=device.createComputePipeline({label:'Somata Spiral Bézier shared effect cubics',layout:'auto',compute:{module:effectMod,entryPoint:'main'}});tangentRepairPipeline=device.createComputePipeline({label:'Somata 7.3.20 Spiral topology tangent repair',layout:'auto',compute:{module:repairMod,entryPoint:'main'}});fastRailPipeline=device.createComputePipeline({label:'Somata 7.3.9 Spiral Fast Visual Rail',layout:'auto',compute:{module:fastMod,entryPoint:'main'}});const closureMod=device.createShaderModule({label:'Somata 7.0 Spiral periodic closure WGSL',code:CLOSURE_WGSL});if(typeof assertWebGPUShaderModule==='function')await assertWebGPUShaderModule(closureMod,'Somata 7.0 Spiral periodic closure WGSL');closurePipeline=device.createComputePipeline({label:'Somata 6.9 Spiral periodic closure',layout:'auto',compute:{module:closureMod,entryPoint:'main'}});const blendOver={color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}},blendMax={color:{srcFactor:'one',dstFactor:'one',operation:'max'},alpha:{srcFactor:'one',dstFactor:'one',operation:'max'}};const vertexBuffers=[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}];
-            // 7.0.5: all four Spiral Morph render pipelines share ONE explicit layout.
-            // WebGPU auto-layout objects are pipeline-private; reusing a bind group created
-            // from pipelineMax with uniformPipelineMax is invalid even when the declarations
-            // are structurally identical. Fused Glow+Base switches pipelines inside one pass,
-            // so its bind groups must come from a common explicit GPUBindGroupLayout.
+        initializing=(async()=>{try{if(typeof WebGPUDeviceHub==='undefined')throw new Error('WebGPUDeviceHub unavailable');const sh=await WebGPUDeviceHub.acquire();device=sh.device;generation=sh.generation;format=navigator.gpu.getPreferredCanvasFormat();const mod=device.createShaderModule({label:'Somata Spiral Bézier Morph WGSL',code:WGSL}),effectMod=device.createShaderModule({label:'Somata Spiral Bézier shared effect cubics WGSL',code:EFFECT_CUBIC_WGSL}),repairMod=device.createShaderModule({label:'Somata 7.4.9 Spiral topology tangent repair WGSL',code:TANGENT_REPAIR_WGSL}),fastMod=device.createShaderModule({label:'Somata 7.4.9 Spiral Fast Visual Rail WGSL',code:FAST_RAIL_WGSL});if(typeof assertWebGPUShaderModule==='function'){await assertWebGPUShaderModule(mod,'Somata Spiral Bézier Morph WGSL');await assertWebGPUShaderModule(effectMod,'Somata Spiral Bézier shared effect cubics WGSL');await assertWebGPUShaderModule(repairMod,'Somata 7.4.9 Spiral topology tangent repair WGSL');await assertWebGPUShaderModule(fastMod,'Somata 7.4.9 Spiral Fast Visual Rail WGSL');}effectCubicPipeline=device.createComputePipeline({label:'Somata Spiral Bézier shared effect cubics',layout:'auto',compute:{module:effectMod,entryPoint:'main'}});tangentRepairPipeline=device.createComputePipeline({label:'Somata 7.4.9 Spiral topology tangent repair',layout:'auto',compute:{module:repairMod,entryPoint:'main'}});fastRailPipeline=device.createComputePipeline({label:'Somata 7.4.9 Spiral Fast Visual Rail',layout:'auto',compute:{module:fastMod,entryPoint:'main'}});const closureMod=device.createShaderModule({label:'Somata 7.4.9 Spiral periodic closure WGSL',code:CLOSURE_WGSL});if(typeof assertWebGPUShaderModule==='function')await assertWebGPUShaderModule(closureMod,'Somata 7.4.9 Spiral periodic closure WGSL');closurePipeline=device.createComputePipeline({label:'Somata 7.4.9 Spiral periodic closure',layout:'auto',compute:{module:closureMod,entryPoint:'main'}});const blendOver={color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}},blendMax={color:{srcFactor:'one',dstFactor:'one',operation:'max'},alpha:{srcFactor:'one',dstFactor:'one',operation:'max'}};const vertexBuffers=[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}];
+
             renderUniformLayout=device.createBindGroupLayout({label:'Somata Spiral Morph render uniforms',entries:[{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'uniform'}}]});
-            renderCubicLayout=device.createBindGroupLayout({label:'Somata 7.3.9 Spiral Fast Visual Rail raster',entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
+            renderCubicLayout=device.createBindGroupLayout({label:'Somata 7.4.9 Spiral Fast Visual Rail raster',entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
             renderCopyLayout=device.createBindGroupLayout({label:'Somata Spiral Morph corridor copies',entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
             renderPipelineLayout=device.createPipelineLayout({label:'Somata Spiral Morph shared render layout',bindGroupLayouts:[renderUniformLayout,renderCubicLayout,renderCopyLayout]});
-            const makePipeline=(kind,blend)=>device.createRenderPipeline({label:`Somata 7.0 Spiral Bézier Morph ${kind}`,layout:renderPipelineLayout,vertex:{module:mod,entryPoint:'vs',buffers:vertexBuffers},fragment:{module:mod,entryPoint:'fs',targets:[{format,blend}]},primitive:{topology:'triangle-strip'}});const makeUniformPipeline=(kind,blend)=>device.createRenderPipeline({label:`Somata 7.0 Uniform Spiral Bézier Morph ${kind}`,layout:renderPipelineLayout,vertex:{module:mod,entryPoint:'vsUniform',buffers:vertexBuffers},fragment:{module:mod,entryPoint:'fsUniform',targets:[{format,blend}]},primitive:{topology:'triangle-strip'}});pipelineMax=makePipeline('MAX union',blendMax);pipelineOver=makePipeline('source-over',blendOver);uniformPipelineMax=makeUniformPipeline('MAX union',blendMax);uniformPipelineOver=makeUniformPipeline('source-over',blendOver);cornerBuffer=device.createBuffer({label:'Somata Spiral Bézier corners',size:32,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(cornerBuffer,0,new Float32Array([-1,-1,1,-1,-1,1,1,1]));ready=true;lastError='';
-            // Iter30 — async readiness is itself a render invalidation. A strict Spiral frame
-            // may have intentionally kept the previous GPU presentation while this pipeline was
-            // compiling; without a completion repaint it could stay there until an unrelated UI event.
+            const makePipeline=(kind,blend)=>device.createRenderPipeline({label:`Somata 7.4.9 Spiral Bézier Morph ${kind}`,layout:renderPipelineLayout,vertex:{module:mod,entryPoint:'vs',buffers:vertexBuffers},fragment:{module:mod,entryPoint:'fs',targets:[{format,blend}]},primitive:{topology:'triangle-strip'}});const makeUniformPipeline=(kind,blend)=>device.createRenderPipeline({label:`Somata 7.4.9 Uniform Spiral Bézier Morph ${kind}`,layout:renderPipelineLayout,vertex:{module:mod,entryPoint:'vsUniform',buffers:vertexBuffers},fragment:{module:mod,entryPoint:'fsUniform',targets:[{format,blend}]},primitive:{topology:'triangle-strip'}});pipelineMax=makePipeline('MAX union',blendMax);pipelineOver=makePipeline('source-over',blendOver);uniformPipelineMax=makeUniformPipeline('MAX union',blendMax);uniformPipelineOver=makeUniformPipeline('source-over',blendOver);cornerBuffer=device.createBuffer({label:'Somata Spiral Bézier corners',size:32,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(cornerBuffer,0,new Float32Array([-1,-1,1,-1,-1,1,1,1]));ready=true;lastError='';
+
             try{requestMainCanvasRender?.();}catch(_){}
             return true;}catch(err){lastError=String(err?.message||err);stats.errors++;ready=false;return false;}finally{initializing=null;}})();return initializing;
     }
@@ -240,8 +202,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
     function lerpPoint(a,b,t){return{x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t};}
     function splitCubic(q,t){const p01=lerpPoint(q.p0,q.c1,t),p12=lerpPoint(q.c1,q.c2,t),p23=lerpPoint(q.c2,q.p3,t),p012=lerpPoint(p01,p12,t),p123=lerpPoint(p12,p23,t),p=lerpPoint(p012,p123,t);return[{p0:{...q.p0},c1:p01,c2:p012,p3:p},{p0:p,c1:p123,c2:p23,p3:{...q.p3}}];}
     function cubicSubsegment(q,a,b){a=clamp(a,0,1);b=clamp(b,a,1);let out;if(a<=1e-12&&b>=1-1e-12)out={...q,p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}};else{let left=q;if(b<1-1e-12)left=splitCubic(q,b)[0];out=a<=1e-12?left:splitCubic(left,a/Math.max(1e-12,b))[1];}
-        // Corner identity belongs to authored knots, not to technical De Casteljau cut points.
-        // Preserve it only when the exact subcurve still touches the original endpoint.
+
         out.__profileCorner0=a<=1e-8&&q.__profileCorner0===true;out.__profileCorner1=b>=1-1e-8&&q.__profileCorner1===true;
         return out;}
     function cubicPoint(q,t){const u=1-t,u2=u*u,t2=t*t;return{x:u2*u*q.p0.x+3*u2*t*q.c1.x+3*u*t2*q.c2.x+t2*t*q.p3.x,y:u2*u*q.p0.y+3*u2*t*q.c1.y+3*u*t2*q.c2.y+t2*t*q.p3.y};}
@@ -259,9 +220,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
     function equalizeCubicRailsByArc(srcCubics,dstCubics,sourceMap=null,targetMap=null){const sm=sourceMap||buildRailArcMap(srcCubics),dm=targetMap||buildRailArcMap(dstCubics),fractions=uniqueFractions([0,1,...sm.knots,...dm.knots]);const source=splitRailAtFractions(sm,fractions),target=splitRailAtFractions(dm,fractions);if(source.length!==target.length||!source.length){const count=Math.max(srcCubics.length,dstCubics.length),fallback=(cubics)=>{const map=buildRailArcMap(cubics),f=[];for(let i=0;i<=count;i++)f.push(i/count);return splitRailAtFractions(map,f);};return{source:fallback(srcCubics),target:fallback(dstCubics),fractions:Array.from({length:count+1},(_,i)=>i/count),fallback:true};}return{source,target,fractions,fallback:false};}
     function authoredFlagFractions(path,map,kind='key'){
         const knots=map?.knots||[];
-        // Key lamps on a Spiral are ONLY the ends of the logical Spiral segment.
-        // Interior authored/profile bends belong to Corners. Keep a separate logical
-        // bend channel so rounding/spline smoothing cannot erase those identities.
+
         if(kind==='key')return knots.length>1?[0,1]:[0];
         const logical=path?.lampCornerFlags||[],geometric=path?.cornerFlags||[],out=[];
         for(let i=1;i<knots.length-1;i++)if(logical[i]===true||geometric[i]===true)out.push(Math.max(0,Math.min(1,Number(knots[i])||0)));
@@ -273,12 +232,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
     function polarSequence(cubics){const seq=[];for(let i=0;i<cubics.length;i++){const q=cubics[i];if(i===0)seq.push(q.p0);seq.push(q.c1,q.c2,q.p3);}let prev=null;const out=[];for(const p of seq){let a=Math.atan2(Number(p.y)||0,Number(p.x)||0);if(prev!==null){while(a-prev>Math.PI)a-=TWO_PI;while(a-prev<-Math.PI)a+=TWO_PI;}prev=a;out.push({r:Math.hypot(Number(p.x)||0,Number(p.y)||0),a});}return out;}
     function alignMinimalTurnPolarAngles(sp,dp){
         const n=Math.min(sp.length,dp.length);if(!n)return 0;let scale=0;for(let i=0;i<n;i++)scale=Math.max(scale,sp[i].r,dp[i].r);const radiusEps=Math.max(1e-6,scale*.0015);
-        // Iter9: use ONE integer 2π representative for the whole retained path. Source and
-        // destination sequences are already internally unwrapped by polarSequence(); allowing
-        // C1/C2/endpoints to pick different wrap branches creates a corkscrew during t∈(0,1).
-        // A global 2π shift preserves every destination control point EXACTLY at t=1 while
-        // choosing the least-rotation equivalent path. No post-DP angle clamping is allowed,
-        // because a non-2π clamp changes the actual destination geometry.
+
         let meanNum=0,meanDen=0;
         for(let i=0;i<n;i++){const r=Math.max(sp[i].r,dp[i].r),w=r<=radiusEps?.01:(.08+.92*Math.min(1,r/Math.max(radiusEps,scale*.15)));meanNum+=(sp[i].a-dp[i].a)*w;meanDen+=w;}
         const k0=Math.round((meanNum/Math.max(1e-9,meanDen))/TWO_PI);let bestK=k0,bestCost=Infinity,bestMax=Infinity;
@@ -290,36 +244,14 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
         const n=Math.min(srcCubics.length,dstCubics.length);if(!n)return offset;const sp=polarSequence(srcCubics),dp=polarSequence(dstCubics);
         if(morphType==='minimalTurn')alignMinimalTurnPolarAngles(sp,dp);else{const shift=Math.round((sp[0].a-dp[0].a)/TWO_PI)*TWO_PI;for(const p of dp)p.a+=shift;}
         const at=(arr,i,slot)=>arr[i*3+slot],minimal=morphType==='minimalTurn',forceCartesian=morphType==='continuous'||morphType==='torn';
-        // Iter11: choose the interpolation metric ONCE for the complete retained path. A per-cubic
-        // choice is mathematically invalid: P3 of cubic i and P0 of cubic i+1 are the same knot,
-        // so different interpolation metrics would move that shared knot to two different places.
-        // One path-wide Cartesian fallback preserves C0 continuity and exact endpoints while the
-        // normal case remains the cheaper least-turn polar interpolation.
-        // Iter14: first determine ONE final radius scale, then score every control against it.
-        // The previous one-pass form changed the weight/near-origin threshold as larger controls
-        // were encountered, so the result depended on control ordering and could occasionally
-        // choose polar interpolation for a path whose outer turns visibly spun.
+
         let pathMaxRadius=1e-9;for(let i=0;i<n;i++){const S=[at(sp,i,0),at(sp,i,1),at(sp,i,2),at(sp,i,3)],D=[at(dp,i,0),at(dp,i,1),at(dp,i,2),at(dp,i,3)];for(let k=0;k<4;k++)pathMaxRadius=Math.max(pathMaxRadius,S[k].r,D[k].r);}
         let pathMaxPolarTurn=0,pathNearOriginTurn=0,visibleTurnEnergy=0,visibleTurnWeight=0,outerMaxTurn=0,outerTurnEnergy=0,outerTurnWeight=0,outerSignedTurn=0;for(let i=0;i<n;i++){const S=[at(sp,i,0),at(sp,i,1),at(sp,i,2),at(sp,i,3)],D=[at(dp,i,0),at(dp,i,1),at(dp,i,2),at(dp,i,3)];for(let k=0;k<4;k++){const signed=D[k].a-S[k].a,turn=Math.abs(signed),r=Math.max(S[k].r,D[k].r);pathMaxPolarTurn=Math.max(pathMaxPolarTurn,turn);if(Math.min(S[k].r,D[k].r)<pathMaxRadius*.006)pathNearOriginTurn=Math.max(pathNearOriginTurn,turn);const w=Math.max(.01,r/pathMaxRadius);visibleTurnEnergy+=turn*turn*w;visibleTurnWeight+=w;if(r>=pathMaxRadius*.28){outerMaxTurn=Math.max(outerMaxTurn,turn);outerTurnEnergy+=turn*turn*w;outerSignedTurn+=signed*w;outerTurnWeight+=w;}}}
         const visibleTurnRms=Math.sqrt(visibleTurnEnergy/Math.max(1e-9,visibleTurnWeight)),outerTurnRms=Math.sqrt(outerTurnEnergy/Math.max(1e-9,outerTurnWeight)),coherentOuterTurn=Math.abs(outerSignedTurn/Math.max(1e-9,outerTurnWeight));
-        // Iter15: Minimal Turn is judged by the visible OUTER rail first. Near-centre controls
-        // may have arbitrary polar phase, while the outer turns define perceived spin. Once the
-        // outer rail approaches a large quarter-turn, switch the whole retained path to exact-
-        // endpoint Cartesian cubic interpolation. This keeps shared knots continuous and removes
-        // the remaining 'whole spiral suddenly spins' cases without changing either endpoint.
-        // Iter17: a coherent whole-rail rotation is perceptually much worse than the same RMS
-        // error split between opposite local bends. Minimal Turn therefore switches the complete
-        // retained path to endpoint-exact Cartesian cubic interpolation before a visible outer
-        // quarter-turn can accumulate. This is a path-wide decision, so shared knots remain C0.
-        // Iter18: "Minimal Turn" now treats coherent visible rotation above 22.5° as a
-        // deformation problem rather than a rotation request. Exact endpoint Cartesian cubic
-        // interpolation is cheaper perceptually than letting the whole Spiral orbit swing. Local
-        // bends still keep polar interpolation when their signed turns cancel across the rail.
+
         const coherentSpinGuard=coherentOuterTurn>Math.PI*.125;
         const excessiveVisibleTurn=coherentSpinGuard||(coherentOuterTurn>Math.PI*.15&&outerTurnRms>Math.PI*.10)||(outerMaxTurn>Math.PI*.24&&outerTurnRms>Math.PI*.12)||(pathMaxPolarTurn>Math.PI*.40&&visibleTurnRms>Math.PI*.18);
-        // Angle is ill-conditioned at the centre. A control that nearly collapses to r=0 can
-        // accumulate a visually meaningless large polar phase and whip its neighbouring handle.
-        // Minimal Turn also switches the whole path when a near-origin control has an ill-conditioned large phase.
+
         const pathCartesianFallback=forceCartesian||forceCartesianPath||(minimal&&(pathMaxPolarTurn>Math.PI+1e-5||pathNearOriginTurn>Math.PI*.75||excessiveVisibleTurn));
         for(let i=0;i<n;i++){const s0=at(sp,i,0),s1=at(sp,i,1),s2=at(sp,i,2),s3=at(sp,i,3),d0=at(dp,i,0),d1=at(dp,i,1),d2=at(dp,i,2),d3=at(dp,i,3);const s=srcCubics[i],d=dstCubics[i],o=offset*FLOATS_PER_CUBIC;
             const localMaxPolarTurn=Math.max(Math.abs(d0.a-s0.a),Math.abs(d1.a-s1.a),Math.abs(d2.a-s2.a),Math.abs(d3.a-s3.a));
@@ -333,9 +265,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
     function shortestAngleDelta(a,b){let d=(Number(b)||0)-(Number(a)||0);while(d<=-Math.PI)d+=TWO_PI;while(d>Math.PI)d-=TWO_PI;return d;}
     function minimalTurnPathPairCost(a,b){
         const ap=a?.points||[],bp=b?.points||[];if(!ap.length||!bp.length){const d=shortestAngleDelta(minimalTurnPathReference(a),minimalTurnPathReference(b));return d*d;}
-        // Score the whole visible orbit. Angular error dominates, while a modest logarithmic
-        // radius penalty prevents an inner turn from being matched to a remote outer turn just
-        // because their first polar angle happens to be close. Near-origin angles remain cheap.
+
         const samples=Math.min(11,Math.max(3,Math.min(ap.length,bp.length))),at=(arr,q)=>arr[Math.min(arr.length-1,Math.max(0,Math.round(q*(arr.length-1))))];let cost=0,weight=0,maxR=1;
         for(const p of ap)maxR=Math.max(maxR,Math.hypot(Number(p?.x)||0,Number(p?.y)||0));for(const p of bp)maxR=Math.max(maxR,Math.hypot(Number(p?.x)||0,Number(p?.y)||0));
         for(let k=0;k<samples;k++){const q=samples===1?0:k/(samples-1),pa=at(ap,q),pb=at(bp,q),ar=Math.hypot(Number(pa?.x)||0,Number(pa?.y)||0),br=Math.hypot(Number(pb?.x)||0,Number(pb?.y)||0),visibility=Math.max(ar,br)/maxR,w=Math.max(.025,Math.min(1,visibility)),d=shortestAngleDelta(Math.atan2(Number(pa?.y)||0,Number(pa?.x)||0),Math.atan2(Number(pb?.y)||0,Number(pb?.x)||0)),radial=(ar-br)/maxR;cost+=(d*d*w)+.32*radial*radial;weight+=w+.32;}
@@ -343,9 +273,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
     }
     function minimalTurnRetainedBezierPairCost(a,b,srcLayer,dstLayer,srcMetrics=null,dstMetrics=null){
         try{
-            // Somata 7.0: path-pair search can evaluate the same retained rail O(N) times.
-            // Build its cubic arc map once per endpoint/path for this phase instead of rebuilding
-            // every LUT for every candidate pair (the old hot path was effectively O(N²*cubics)).
+
             const metrics=(path,layer,cache)=>{
                 if(cache?.has(path))return cache.get(path);
                 const cubics=endpointCubics(path,layer),map=cubics.length?buildRailArcMap(cubics):null,rec={cubics,map};
@@ -366,18 +294,13 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
         const pairCost=(a,b)=>minimalTurnRetainedBezierPairCost(a,b,srcLayer,dstLayer,srcMetrics,dstMetrics);
         const attachMetrics=(pairs)=>{for(const pair of pairs||[]){pair._sourceRetainedMetrics=srcMetrics.get(pair.src)||null;pair._targetRetainedMetrics=dstMetrics.get(pair.dst)||null;}return pairs||[];};
         if(!src.length||!dst.length)return[];
-        // Equal orbit populations are one cyclic sequence. Score the ENTIRE retained path for
-        // each possible cyclic shift rather than only its first point; this removes the common
-        // 'one cheap endpoint, huge interior spin' failure when N/K/profile geometry changes.
+
         if(src.length===dst.length&&src.length>1){
             let bestShift=0,bestCost=Infinity;
             for(let shift=0;shift<src.length;shift++){let cost=0;for(let i=0;i<src.length;i++)cost+=pairCost(src[i],dst[(i+shift)%dst.length]);if(cost<bestCost-1e-12){bestCost=cost;bestShift=shift;}}
             return attachMetrics(src.map((sp,i)=>({src:sp,dst:dst[(i+bestShift)%dst.length],sourcePathPresent:true,targetPathPresent:true,minimalTurnPathShift:bestShift,minimalTurnPathCost:bestCost})));
         }
-        // Split/merge phases need the same whole-path metric. The generic pairer uses a single
-        // reference angle and can attach a new/retiring orbit to a distant turn of the spiral.
-        // Preserve its population semantics (one continuing population, extras fade in/out),
-        // but choose every candidate by the full retained path cost.
+
         const pairs=[];
         if(src.length>dst.length){
             const candidates=[];
@@ -397,20 +320,14 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
         if(!(srcLayer.spiralEnabled===true||dstLayer.spiralEnabled===true))return null;if(state?.fourierMode===true)return null;
         const morphType=typeof getSpiralMorphType==='function'?getSpiralMorphType():String(state?.morph?.spiralMorphType||'phaseCircle');
         let srcPaths=buildOrbitPolylines(srcLayer)||[],dstPaths=buildOrbitPolylines(dstLayer)||[];if(!srcPaths.length||!dstPaths.length)return null;const pairs=morphType==='minimalTurn'?pairMinimalTurnSpiralPaths(srcPaths,dstPaths,srcLayer,dstLayer):MorphGeometry.pairMorphPaths(srcPaths,dstPaths);if(!pairs.length)return null;
-        // 6.8: build the two exact endpoint cubic rails FIRST, then only split cubics with
-        // De Casteljau until both endpoints have the same logical cubic count. Splitting is
-        // exact: no point resampling, no spline re-fit, no CPU polyline rail.
+
         const records=[];let cubicCount=0;
         for(let pairIndex=0;pairIndex<pairs.length;pairIndex++){
             const pair=pairs[pairIndex],sourceMetrics=pair._sourceRetainedMetrics||null,targetMetrics=pair._targetRetainedMetrics||null,rawSc=sourceMetrics?.cubics||endpointCubics(pair.src,srcLayer),rawDc=targetMetrics?.cubics||endpointCubics(pair.dst,dstLayer);if(!rawSc.length||!rawDc.length)continue;
-            // Somata 7.0: one endpoint arc map feeds knot fractions, exact rail equalization and
-            // endpoint length metadata. Rev4 rebuilt the same Gauss/LUT map two or three times.
+
             const sourceRawArcMap=sourceMetrics?.map||buildRailArcMap(rawSc),targetRawArcMap=targetMetrics?.map||buildRailArcMap(rawDc),sourceRawKnotFractions=sourceRawArcMap.knots,targetRawKnotFractions=targetRawArcMap.knots;
             const crossFamily=Boolean(srcLayer?.spiralEnabled===true)!==Boolean(dstLayer?.spiralEnabled===true),crossFamilyCartesianTransport=crossFamily&&(morphType==='phaseCircle'||morphType==='minimalTurn'||morphType==='phase');
-            // Keep exact endpoint topology: the union of authored endpoint knots is still split only
-            // with De Casteljau. The visual saw came from applying polar interpolation independently
-            // to those technical pieces while entering/leaving Spiral. A single path-wide Cartesian
-            // transport preserves C0/C1 endpoint intent and never changes either exact endpoint rail.
+
             const eq=equalizeCubicRailsByArc(rawSc,rawDc,sourceRawArcMap,targetRawArcMap),sc=eq.source,dc=eq.target,n=Math.min(sc.length,dc.length);if(!n)continue;
             const sp=cubicRailPoints(sc),dp=cubicRailPoints(dc),sourceClosure=periodicClosureSpec(pair.src,rawSc,srcLayer),targetClosure=periodicClosureSpec(pair.dst,rawDc,dstLayer);records.push({pair,sp,dp,sc:sc.slice(0,n),dc:dc.slice(0,n),count:n,closed:Boolean(pair?.src?.closed&&pair?.dst?.closed),sourceClosure,targetClosure,periodic:Boolean(sourceClosure.periodic&&targetClosure.periodic),sourceRawCubics:rawSc,targetRawCubics:rawDc,sourceRawKnotFractions,targetRawKnotFractions,sourceLampKeyFractions:authoredFlagFractions(pair.src,sourceRawArcMap,'key'),targetLampKeyFractions:authoredFlagFractions(pair.dst,targetRawArcMap,'key'),sourceCornerFractions:authoredFlagFractions(pair.src,sourceRawArcMap,'corner'),targetCornerFractions:authoredFlagFractions(pair.dst,targetRawArcMap,'corner'),sourcePathLength:sourceRawArcMap.total,targetPathLength:targetRawArcMap.total,knotFractions:eq.fractions.slice(0,n+1),arcEqualized:true,crossFamilyCartesianTransport});cubicCount+=n;
         }
@@ -420,12 +337,10 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
             const rec0=records[pi],n=rec0.sc.length,po=pi*4;cpuPathSegmentRanges[po]=seg;cpuPathSegmentRanges[po+1]=n;cpuPathSegmentRanges[po+2]=pointBase;cpuPathSegmentRanges[po+3]=n+1;
             pathRanges[po]=pointBase;pathRanges[po+1]=n+1;pathRanges[po+2]=rec0.closed?1:0;pathRanges[po+3]=pi;
             const co=pi*8,sc0=rec0.sourceClosure||{},dc0=rec0.targetClosure||{};cpuPathClosure[co]=Number(sc0.delta)||0;cpuPathClosure[co+1]=Number(sc0.logScale)||0;cpuPathClosure[co+2]=Number(dc0.delta)||0;cpuPathClosure[co+3]=Number(dc0.logScale)||0;cpuPathClosure[co+4]=sc0.periodic?1:0;cpuPathClosure[co+5]=dc0.periodic?1:0;cpuPathClosure[co+6]=morphType==='torn'||state?.morph?.mode==='fade'?0:1;cpuPathClosure[co+7]=(sc0.tangentProtected?1:0)+(dc0.tangentProtected?2:0);maxEndpointClosureError=Math.max(maxEndpointClosureError,Number(sc0.error)||0,Number(dc0.error)||0);maxEndpointTangentClosureError=Math.max(maxEndpointTangentClosureError,sc0.tangentProtected?(Number(sc0.tangentError)||0):0,dc0.tangentProtected?(Number(dc0.tangentError)||0):0);
-            // Effects need to distinguish a conventional closed contour from a self-similar
-            // Spiral period. Torn/fade intentionally disable the periodic seam while active.
+
             cpuPathPeriodic[pi]=(sc0.periodic&&dc0.periodic&&cpuPathClosure[co+6]>.5)?1:0;
             cpuEndpointPathLengths[pi*2]=Math.max(1e-9,Number(rec0.sourcePathLength)||cubicRailLength(rec0.sc));cpuEndpointPathLengths[pi*2+1]=Math.max(1e-9,Number(rec0.targetPathLength)||cubicRailLength(rec0.dc));
-            // Lamps/corner markers care about authored endpoint knots, not the extra exact
-            // De Casteljau split boundaries introduced only to equalize source/target rails.
+
             cpuPathKnotFractions[pi]={source:rec0.sourceRawKnotFractions||cubicKnotFractions(rec0.sourceRawCubics),target:rec0.targetRawKnotFractions||cubicKnotFractions(rec0.targetRawCubics),common:rec0.knotFractions||cubicKnotFractions(rec0.sc)};
             cpuPathLampKeyFractions[pi]={source:rec0.sourceLampKeyFractions||[0,1],target:rec0.targetLampKeyFractions||[0,1]};
             cpuPathCornerFractions[pi]={source:rec0.sourceCornerFractions||[],target:rec0.targetCornerFractions||[]};
@@ -444,7 +359,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
                 const rec=buildLayerCpuResource(i);if(!rec)continue;
                 rec.buffer=device.createBuffer({label:`Somata Spiral Bézier Morph L${i}`,size:Math.max(96,Math.ceil(rec.data.byteLength/16)*16),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.buffer,0,rec.data.buffer,rec.data.byteOffset,rec.data.byteLength);
                 rec.cubicBuffer=device.createBuffer({label:`Somata Spiral Bézier shared current cubics L${i}`,size:Math.max(32,rec.cubicCount*32),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
-                rec.fastRailBuffer=device.createBuffer({label:`Somata 7.3.9 Spiral Fast Visual Rail L${i}`,size:Math.max(32,rec.cubicCount*SUBDIV*32),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+                rec.fastRailBuffer=device.createBuffer({label:`Somata 7.4.9 Spiral Fast Visual Rail L${i}`,size:Math.max(32,rec.cubicCount*SUBDIV*32),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
                 rec.cubicUniformBuffer=device.createBuffer({label:`Somata Spiral Bézier shared cubic phase L${i}`,size:32,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
                 rec.bind=device.createBindGroup({layout:renderCubicLayout,entries:[{binding:0,resource:{buffer:rec.fastRailBuffer}}]});
                 rec.cubicBind=device.createBindGroup({layout:effectCubicPipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:rec.buffer}},{binding:1,resource:{buffer:rec.cubicBuffer}},{binding:2,resource:{buffer:rec.cubicUniformBuffer}}]});
@@ -452,7 +367,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
                 rec.pathRangeBuffer=device.createBuffer({label:`Somata Spiral Bézier effect path ranges L${i}`,size:Math.max(16,rec.pathRanges.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.pathRangeBuffer,0,rec.pathRanges);
                 rec.segmentMetaBuffer=device.createBuffer({label:`Somata Spiral Bézier effect segment metadata L${i}`,size:Math.max(16,rec.cpuSegmentMeta.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.segmentMetaBuffer,0,rec.cpuSegmentMeta);
                 rec.pathSegmentRangeBuffer=device.createBuffer({label:`Somata Spiral Bézier effect segment ranges L${i}`,size:Math.max(16,rec.cpuPathSegmentRanges.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.pathSegmentRangeBuffer,0,rec.cpuPathSegmentRanges);
-                rec.pathClosureBuffer=device.createBuffer({label:`Somata 7.0 Spiral periodic closure L${i}`,size:Math.max(32,rec.cpuPathClosure.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.pathClosureBuffer,0,rec.cpuPathClosure);
+                rec.pathClosureBuffer=device.createBuffer({label:`Somata 7.4.9 Spiral periodic closure L${i}`,size:Math.max(32,rec.cpuPathClosure.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.pathClosureBuffer,0,rec.cpuPathClosure);
                 rec.closureBind=device.createBindGroup({layout:closurePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:rec.cubicBuffer}},{binding:1,resource:{buffer:rec.pathSegmentRangeBuffer}},{binding:2,resource:{buffer:rec.pathClosureBuffer}},{binding:3,resource:{buffer:rec.cubicUniformBuffer}}]});
                 rec.tangentRepairBind=device.createBindGroup({layout:tangentRepairPipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:rec.cubicBuffer}},{binding:1,resource:{buffer:rec.segmentMetaBuffer}},{binding:2,resource:{buffer:rec.cubicUniformBuffer}}]});
                 rec.uniformBase=device.createBuffer({label:`Somata Spiral Bézier Morph base uniforms L${i}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});rec.uniformGlow=device.createBuffer({label:`Somata Spiral Bézier Morph glow uniforms L${i}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
@@ -466,10 +381,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
             lastError=String(err?.message||err);stats.errors++;return 0;
         }
     }
-    // Iter26 — static Spiral Base now consumes the exact same retained cubic buffer that
-    // Spiral effects/Arc already use. The morph raster pipeline only needs two extra pieces:
-    // constant width/presence metadata and the normal per-frame copy/uniform bindings.
-    // No Canvas recorder, point re-sampling or hidden WebGPU canvas participates in this path.
+
     function getStaticVisualResource(frameCtx){
         if(!frameCtx||frameCtx.morphFrameActive||typeof isSpiralLayer!=='function'||!isSpiralLayer(frameCtx.layer))return null;
         if(!ready||!device)return null;
@@ -486,10 +398,10 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
             device.queue.writeBuffer(metaBuffer,0,meta);
             const uniformBase=device.createBuffer({label:`Somata static Spiral base uniforms L${key}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
             const uniformGlow=device.createBuffer({label:`Somata static Spiral glow uniforms L${key}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
-            const fastRailBuffer=device.createBuffer({label:`Somata 7.3.9 static Spiral Fast Visual Rail L${key}`,size:Math.max(32,source.cubicCount*SUBDIV*32),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
-            const fastUniformBuffer=device.createBuffer({label:`Somata 7.3.9 static Spiral Fast Rail uniform L${key}`,size:32,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});const fastRaw=new ArrayBuffer(32),fastU32=new Uint32Array(fastRaw),fastF32=new Float32Array(fastRaw);fastU32[0]=source.cubicCount>>>0;fastF32[4]=0;device.queue.writeBuffer(fastUniformBuffer,0,fastRaw);
+            const fastRailBuffer=device.createBuffer({label:`Somata 7.4.9 static Spiral Fast Visual Rail L${key}`,size:Math.max(32,source.cubicCount*SUBDIV*32),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+            const fastUniformBuffer=device.createBuffer({label:`Somata 7.4.9 static Spiral Fast Rail uniform L${key}`,size:32,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});const fastRaw=new ArrayBuffer(32),fastU32=new Uint32Array(fastRaw),fastF32=new Float32Array(fastRaw);fastU32[0]=source.cubicCount>>>0;fastF32[4]=0;device.queue.writeBuffer(fastUniformBuffer,0,fastRaw);
             const fastRailBind=device.createBindGroup({layout:fastRailPipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:metaBuffer}},{binding:1,resource:{buffer:source.cubicBuffer}},{binding:2,resource:{buffer:fastRailBuffer}},{binding:3,resource:{buffer:fastUniformBuffer}}]});
-            {const enc=device.createCommandEncoder({label:`Somata 7.3.9 static Spiral Fast Rail L${key}`});const pass=enc.beginComputePass({label:`Somata 7.3.9 static Spiral Fast Rail L${key}`});pass.setPipeline(fastRailPipeline);pass.setBindGroup(0,fastRailBind);pass.dispatchWorkgroups(Math.ceil(source.cubicCount*SUBDIV/128));pass.end();device.queue.submit([enc.finish()]);stats.fastRailDispatches++;stats.fastRailSegments+=source.cubicCount*SUBDIV;}
+            {const enc=device.createCommandEncoder({label:`Somata 7.4.9 static Spiral Fast Rail L${key}`});const pass=enc.beginComputePass({label:`Somata 7.4.9 static Spiral Fast Rail L${key}`});pass.setPipeline(fastRailPipeline);pass.setBindGroup(0,fastRailBind);pass.dispatchWorkgroups(Math.ceil(source.cubicCount*SUBDIV/128));pass.end();device.queue.submit([enc.finish()]);stats.fastRailDispatches++;stats.fastRailSegments+=source.cubicCount*SUBDIV;}
             const rec={source,generation,layerIndex:key,phaseSerial:0,staticVisual:true,ready:true,cubicCount:source.cubicCount,pathCount:source.pathCount||0,cubicBuffer:source.cubicBuffer,metaBuffer,fastRailBuffer,fastUniformBuffer,fastRailBind,bind:device.createBindGroup({layout:renderCubicLayout,entries:[{binding:0,resource:{buffer:fastRailBuffer}}]}),uniformBase,uniformGlow,uniformBaseBind:device.createBindGroup({layout:renderUniformLayout,entries:[{binding:0,resource:{buffer:uniformBase}}]}),uniformGlowBind:device.createBindGroup({layout:renderUniformLayout,entries:[{binding:0,resource:{buffer:uniformGlow}}]}),copyBuffer:null,copyBind:null,copyCapacity:0,copyData:new Float32Array(0),copyPackedFrameId:-1,copyPackedCount:0,copyPackedMultiColor:false,currentCubicsRootProducerFrameId:-1,currentCubicsRootProducerT:0,fastRailRootProducerFrameId:-1,fastRailRootProducerT:0};
             staticVisualResources.set(key,rec);stats.staticVisualBuilds++;stats.uploads+=meta.byteLength;return rec;
         }catch(err){lastError=String(err?.message||err);stats.errors++;return null;}
@@ -501,14 +413,14 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
         const tt=resolveEffectT(rec,t),raw=rec.cubicUniformStaging||(rec.cubicUniformStaging=new ArrayBuffer(32)),u32=rec.cubicUniformU32||(rec.cubicUniformU32=new Uint32Array(raw)),f32=rec.cubicUniformF32||(rec.cubicUniformF32=new Float32Array(raw));
         u32[0]=rec.cubicCount>>>0;f32[4]=tt;f32[5]=rec.sourceSpline===true?1:0;f32[6]=rec.targetSpline===true?1:0;device.queue.writeBuffer(rec.cubicUniformBuffer,0,raw);
         let pass=encoder.beginComputePass({label:`Somata Spiral shared effect cubics L${rec.layerIndex}`});pass.setPipeline(effectCubicPipeline);pass.setBindGroup(0,rec.cubicBind);pass.dispatchWorkgroups(Math.ceil(rec.cubicCount/128));pass.end();
-        if(rec.closureBind&&closurePipeline&&rec.pathCount>0){pass=encoder.beginComputePass({label:`Somata 7.0 Spiral periodic closure L${rec.layerIndex}`});pass.setPipeline(closurePipeline);pass.setBindGroup(0,rec.closureBind);pass.dispatchWorkgroups(Math.ceil(rec.pathCount/64));pass.end();}
-        if(rec.tangentRepairBind&&tangentRepairPipeline&&rec.cubicCount>1){pass=encoder.beginComputePass({label:`Somata 7.3.20 Spiral topology tangent repair L${rec.layerIndex}`});pass.setPipeline(tangentRepairPipeline);pass.setBindGroup(0,rec.tangentRepairBind);pass.dispatchWorkgroups(Math.ceil(Math.max(0,rec.cubicCount-1)/128));pass.end();stats.tangentRepairDispatches++;}
+        if(rec.closureBind&&closurePipeline&&rec.pathCount>0){pass=encoder.beginComputePass({label:`Somata 7.4.9 Spiral periodic closure L${rec.layerIndex}`});pass.setPipeline(closurePipeline);pass.setBindGroup(0,rec.closureBind);pass.dispatchWorkgroups(Math.ceil(rec.pathCount/64));pass.end();}
+        if(rec.tangentRepairBind&&tangentRepairPipeline&&rec.cubicCount>1){pass=encoder.beginComputePass({label:`Somata 7.4.9 Spiral topology tangent repair L${rec.layerIndex}`});pass.setPipeline(tangentRepairPipeline);pass.setBindGroup(0,rec.tangentRepairBind);pass.dispatchWorkgroups(Math.ceil(Math.max(0,rec.cubicCount-1)/128));pass.end();stats.tangentRepairDispatches++;}
         rec.lastCubicT=tt;stats.cubicComputeDispatches++;return true;
     }
     function encodeFastRail(rec,encoder,t){
         if(!rec?.ready||!encoder||!fastRailPipeline||!rec.fastRailBind)return false;if(rec.staticVisual===true)return true;
         const tt=resolveEffectT(rec,t),raw=rec.cubicUniformStaging||(rec.cubicUniformStaging=new ArrayBuffer(32)),u32=rec.cubicUniformU32||(rec.cubicUniformU32=new Uint32Array(raw)),f32=rec.cubicUniformF32||(rec.cubicUniformF32=new Float32Array(raw));u32[0]=rec.cubicCount>>>0;f32[4]=tt;f32[5]=rec.sourceSpline===true?1:0;f32[6]=rec.targetSpline===true?1:0;device.queue.writeBuffer(rec.cubicUniformBuffer,0,raw);
-        const pass=encoder.beginComputePass({label:`Somata 7.3.9 Spiral Fast Visual Rail L${rec.layerIndex}`});pass.setPipeline(fastRailPipeline);pass.setBindGroup(0,rec.fastRailBind);pass.dispatchWorkgroups(Math.ceil(rec.cubicCount*SUBDIV/128));pass.end();stats.fastRailDispatches++;return true;
+        const pass=encoder.beginComputePass({label:`Somata 7.4.9 Spiral Fast Visual Rail L${rec.layerIndex}`});pass.setPipeline(fastRailPipeline);pass.setBindGroup(0,rec.fastRailBind);pass.dispatchWorkgroups(Math.ceil(rec.cubicCount*SUBDIV/128));pass.end();stats.fastRailDispatches++;return true;
     }
     function canReuseOrderedFastRail(rec,frameCtx,target,currentT){const fid=Math.max(0,Number(frameCtx?.frameId)||0),tt=rec?.staticVisual===true?0:resolveEffectT(rec,currentT);return Boolean(rec?.ready&&(target?.deferred===true||target?.deferredFrame===true)&&Number(rec.fastRailRootProducerFrameId)===fid&&Math.abs((Number(rec.fastRailRootProducerT)||0)-tt)<1e-12);}
     function canReuseOrderedCurrentCubics(rec,frameCtx,target,currentT){const fid=Math.max(0,Number(frameCtx?.frameId)||0),tt=rec?.staticVisual===true?0:resolveEffectT(rec,currentT);return Boolean(rec?.ready&&(target?.deferred===true||target?.deferredFrame===true)&&Number(rec.currentCubicsRootProducerFrameId)===fid&&Math.abs((Number(rec.currentCubicsRootProducerT)||0)-tt)<1e-12);}
@@ -523,9 +435,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
         const hiddenGraffitiGlow=mode==='glow'&&frameCtx.lineProfileStrokeOnly===true&&frameCtx.lineProfileApplication==='graffiti';
         if(state?.fourierMode===true)return'fourier';if(state?.showRoundingGuides)return'rounding-guides';if(frameCtx.lineProfileStrokeOnly&&!hiddenGraffitiGlow)return'profile-replaces-base';if(mode==='base'&&!frameCtx.lineDisplayEnabled)return'line-hidden';
         if(frameCtx.morphFrameActive){if(frameCtx.geometryProvider!==frameCtx.blueMorphProvider)return'another-provider';if(frameCtx.geometryPlan?.kind!=='blue-circle-slide')return'kind-'+String(frameCtx.geometryPlan?.kind||'unknown');const rec=getResource(frameCtx.layerIndex);if(!rec?.ready)return'resource-not-ready';return'';}
-        // Somata 7.3.9 — Corridor is no longer owned by the generic stroke-command path.
-        // The retained-cubic Spiral renderer already carries copy transforms/colors and must
-        // remain the single Base/Glow owner for both static and Morph Spiral frames.
+
         if(typeof isSpiralLayer!=='function'||!isSpiralLayer(frameCtx.layer))return'not-static-spiral';
         if(frameCtx.geometryPlan?.dynamic===true)return'static-dynamic-geometry';
         if(!ready){warmup();return'renderer-warming';}
@@ -553,22 +463,17 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
         uf.fill(0);uf[0]=width;uf[1]=height;uu[2]=rec.cubicCount>>>0;uu[3]=copyCount>>>0;uf[4]=a;uf[5]=c;uf[6]=e;uf[8]=b;uf[9]=d;uf[10]=f;uf[12]=hw;uf[13]=gr;uf[14]=core;uf[15]=glow;uf[16]=t;const buf=mode==='glow'?rec.uniformGlow:rec.uniformBase;device.queue.writeBuffer(buf,0,uniformBytes);stats.uploads+=80;return mode==='glow'?rec.uniformGlowBind:rec.uniformBaseBind;
     }
     function resolveTarget(frameCtx,opts={}){
-        // Fastest path: simple Spiral layers write source-over straight into the frame-global
-        // GPU scene.  No per-layer scratch texture and no fullscreen LayerScene -> FrameScene seal.
+
         if(opts.deferFrameScene===true&&typeof WebGPUStrokeRenderer!=='undefined'&&WebGPUStrokeRenderer.getExternalFrameSceneTarget){
             const t=WebGPUStrokeRenderer.getExternalFrameSceneTarget(frameCtx.frameId);if(t?.view){width=Math.max(1,Number(t.width)||mainCanvas.width||1);height=Math.max(1,Number(t.height)||mainCanvas.height||1);return{view:t.view,deferredFrame:true,deferred:false,loadOp:'load'};}
         }
         if(opts.deferLayerScene===true&&typeof WebGPUStrokeRenderer!=='undefined'){
-            // Somata 7.3.9 — join an already resident Layer Scene instead of asking for a
-            // second external root.  This removes the Corridor ownership race that could
-            // drop strict-Spiral Base and leave Web without a target.
+
             const resident=WebGPUStrokeRenderer.getDeferredLayerSceneTexture?.(frameCtx.frameId);
             if(resident?.texture){width=Math.max(1,mainCanvas.width||1);height=Math.max(1,mainCanvas.height||1);return{view:resident.texture.createView(),texture:resident.texture,deferred:true,deferredFrame:false,resident:true,loadOp:'load'};}
             if(WebGPUStrokeRenderer.getExternalLayerSceneTarget){const t=WebGPUStrokeRenderer.getExternalLayerSceneTarget(frameCtx.frameId);if(t?.view){width=Math.max(1,Number(t.width)||mainCanvas.width||1);height=Math.max(1,Number(t.height)||mainCanvas.height||1);return{view:t.view,texture:t.texture,deferred:true,deferredFrame:false,resident:false,loadOp:'clear'};}}
         }
-        // 6.8 strict Spiral contract: do not render into a hidden WebGPU canvas and then
-        // drawImage it through Canvas2D.  If the frame/layer GPU scene is not available,
-        // report ineligible so the caller can keep the frame GPU-resident via another GPU path.
+
         stats.gpuSceneUnavailable=(stats.gpuSceneUnavailable||0)+1;return null;
     }
     function finishEncoded(frameCtx,targetCtx,enc,target,opts={},rec=null,currentT=NaN){
@@ -585,9 +490,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
             }else accepted=WebGPUStrokeRenderer.deferExternalLayerScene?.(cmd,frameCtx.frameId,'spiral-bezier-morph')===true;
             if(accepted){
                 frameCtx.frame.gpuLayerSceneDeferred=true;frameCtx.frame.gpuMainSceneEmpty=frameCtx.frame.gpuMainCanvasHasContent!==true;frameCtx._spiralBezierLayerSceneDeferred=true;stats.deferredLayerSceneFrames++;
-                // Only an actual LayerScene ROOT is guaranteed to execute before every queued
-                // prerequisite/effect. A resident queued Base/Glow command has its own phase and
-                // must not be advertised as an already-ordered current-cubic producer.
+
                 if(target.resident!==true&&rec?.ready&&Number.isFinite(Number(currentT))){rec.currentCubicsRootProducerFrameId=Math.max(0,Number(frameCtx.frameId)||0);rec.currentCubicsRootProducerT=rec.staticVisual===true?0:resolveEffectT(rec,currentT);rec.fastRailRootProducerFrameId=Math.max(0,Number(frameCtx.frameId)||0);rec.fastRailRootProducerT=rec.staticVisual===true?0:resolveEffectT(rec,currentT);}
                 return true;
             }
@@ -599,7 +502,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
         if(!isEligible(frameCtx,mode)){stats.fallbacks++;return false;}const rec=getVisualResource(frameCtx);const target=resolveTarget(frameCtx,opts);if(!rec?.ready||!target){stats.fallbacks++;return false;}
         try{
             targetCtx.save();applyLayerFrameEffectTransform(targetCtx,frameCtx);const copies=packCopies(frameCtx,rec);if(!copies){targetCtx.restore();return true;}const ub=prepareUniform(frameCtx,rec,copies,targetCtx,mode,opts);targetCtx.restore();
-            const enc=device.createCommandEncoder({label:`Somata 7.3.9 Spiral Fast Rail ${rec.staticVisual===true?'Static':'Morph'} ${mode}`});const currentT=rec.staticVisual===true?0:resolveEffectT(rec,frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress);
+            const enc=device.createCommandEncoder({label:`Somata 7.4.9 Spiral Fast Rail ${rec.staticVisual===true?'Static':'Morph'} ${mode}`});const currentT=rec.staticVisual===true?0:resolveEffectT(rec,frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress);
             if(rec.staticVisual!==true){
                 if(canReuseOrderedCurrentCubics(rec,frameCtx,target,currentT))stats.cubicComputeReuses++;else if(!encodeEffectCubics(rec,enc,currentT)){stats.fallbacks++;return false;}
                 if(canReuseOrderedFastRail(rec,frameCtx,target,currentT))stats.fastRailReuses++;else if(!encodeFastRail(rec,enc,currentT)){stats.fallbacks++;return false;}
@@ -613,7 +516,7 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
         if(!isEligible(frameCtx,'glow')||!isEligible(frameCtx,'base')){stats.fallbacks++;return false;}const rec=getVisualResource(frameCtx),target=resolveTarget(frameCtx,opts);if(!target){stats.fallbacks++;return false;}
         try{
             targetCtx.save();applyLayerFrameEffectTransform(targetCtx,frameCtx);const copies=packCopies(frameCtx,rec);if(!copies){targetCtx.restore();return true;}const ug=prepareUniform(frameCtx,rec,copies,targetCtx,'glow',{radiusPx:opts.radiusPx,alphaScale:opts.glowAlphaScale}),ub=prepareUniform(frameCtx,rec,copies,targetCtx,'base',{alphaScale:opts.baseAlphaScale});targetCtx.restore();
-            const enc=device.createCommandEncoder({label:`Somata 7.3.9 Spiral Fast Rail ${rec.staticVisual===true?'Static':'Morph'} fused Glow+Base`});const currentT=rec.staticVisual===true?0:resolveEffectT(rec,frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress);
+            const enc=device.createCommandEncoder({label:`Somata 7.4.9 Spiral Fast Rail ${rec.staticVisual===true?'Static':'Morph'} fused Glow+Base`});const currentT=rec.staticVisual===true?0:resolveEffectT(rec,frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress);
             if(rec.staticVisual!==true){if(canReuseOrderedCurrentCubics(rec,frameCtx,target,currentT))stats.cubicComputeReuses++;else if(!encodeEffectCubics(rec,enc,currentT)){stats.fallbacks++;return false;}if(canReuseOrderedFastRail(rec,frameCtx,target,currentT))stats.fastRailReuses++;else if(!encodeFastRail(rec,enc,currentT)){stats.fallbacks++;return false;}}
             const pass=enc.beginRenderPass({colorAttachments:[{view:target.view,clearValue:{r:0,g:0,b:0,a:0},loadOp:target.loadOp||'clear',storeOp:'store'}]});const segmented=(frameCtx?.lineLayerMode??frameCtx?.spiralLineType)==='segmented';pass.setPipeline(segmented?pipelineOver:(target.deferredFrame?pipelineOver:pipelineMax));pass.setBindGroup(1,rec.bind);pass.setBindGroup(2,rec.copyBind);pass.setVertexBuffer(0,cornerBuffer);pass.setBindGroup(0,ug);pass.draw(4,rec.cubicCount*SUBDIV*copies);const basePipe=!segmented&&uniformPipelineMax?((target.deferredFrame||rec.copyPackedMultiColor)?uniformPipelineOver:uniformPipelineMax):(segmented?pipelineOver:((target.deferredFrame||rec.copyPackedMultiColor)?pipelineOver:pipelineMax));pass.setPipeline(basePipe);pass.setBindGroup(0,ub);pass.draw(4,rec.cubicCount*SUBDIV*copies);pass.end();
             if(!finishEncoded(frameCtx,targetCtx,enc,target,opts,rec,currentT))return false;stats.frames++;stats.glowFrames++;stats.baseFrames++;stats.fusedFrames++;if(state.tunnel?.active===true)stats.corridorFrames++;return true;
@@ -642,7 +545,5 @@ window.invalidateGpuSpiralBezierMorphResources=(reason)=>WebGPUSpiralBezierMorph
 window.parkGpuSpiralBezierMorphResources=(reason)=>WebGPUSpiralBezierMorphRenderer.park(reason);
 window.getGpuSpiralBezierMorphAuxPaths=(layerIndex,t)=>WebGPUSpiralBezierMorphRenderer.auxiliaryPaths(layerIndex,t);
 window.__somataSpiralBezierMorphStatus=()=>WebGPUSpiralBezierMorphRenderer.status();
-// Iter28 — compile the dedicated retained-Bézier raster pipeline before the first Spiral
-// interaction when the browser is idle.  This does not build layer geometry or start an
-// animation; it only removes first-use shader/pipeline latency from the user gesture.
+
 (()=>{if(!globalThis.navigator?.gpu||globalThis.isSecureContext!==true)return;const kick=()=>{try{WebGPUSpiralBezierMorphRenderer.warmup?.();}catch(_){}};if(typeof requestIdleCallback==='function')requestIdleCallback(kick,{timeout:350});else setTimeout(kick,0);})();

@@ -1,7 +1,5 @@
-// SpiroStar v513 — Render Consumer Demand Graph
-// One cheap preflight decides which data domains a layer can possibly require this frame.
-// Expensive geometry builders may use this plan to remain lazy instead of assuming that
-// every enabled visual role needs CPU paths, arc-length tables and Canvas vectors.
+
+
 window.__spiroRegisterModule?.('js/render/consumer-demand');
 
 const SPIRO_CONSUMER_NEEDS={GPU_PATH:1,CPU_PATH:2,ARC_LENGTH:4,CANVAS_VECTOR:8,FILL:16,LAMPS:32,EXACT_ARC:64};
@@ -25,16 +23,14 @@ function prepareLayerConsumerDemand(frameCtx){
     plan.mask=0;plan.roles||(plan.roles={});for(const k of Object.keys(plan.roles))delete plan.roles[k];
     plan.layerId=layer?.id||null;plan.frameId=Number(frameCtx?.frameId)||0;
     if(!layer){frameCtx.consumerDemand=plan;return plan;}
-    // v513: one capability graph is the source of truth.  The old consumer mask remains as
-    // a compatibility projection for existing diagnostics/helpers while new render passes
-    // can reason in POSITIONS / TOPOLOGY / ARC / CPU_PATH / CANVAS tiers directly.
+
     const graph=typeof compileLayerRenderGraph==='function'?compileLayerRenderGraph(frameCtx):null;
     if(graph){
         const mapCaps=(caps)=>{let out=0;if(caps&SPIRO_PATH_CAPS.POSITIONS)out|=SPIRO_CONSUMER_NEEDS.GPU_PATH;if(caps&SPIRO_PATH_CAPS.CPU_PATH)out|=SPIRO_CONSUMER_NEEDS.CPU_PATH;if(caps&(SPIRO_PATH_CAPS.APPROX_ARC|SPIRO_PATH_CAPS.EXACT_ARC))out|=SPIRO_CONSUMER_NEEDS.ARC_LENGTH;if(caps&SPIRO_PATH_CAPS.EXACT_ARC)out|=SPIRO_CONSUMER_NEEDS.EXACT_ARC;if(caps&SPIRO_PATH_CAPS.CANVAS)out|=SPIRO_CONSUMER_NEEDS.CANVAS_VECTOR;if(caps&SPIRO_PATH_CAPS.FILL)out|=SPIRO_CONSUMER_NEEDS.FILL;if(caps&SPIRO_PATH_CAPS.LAMPS)out|=SPIRO_CONSUMER_NEEDS.LAMPS;return out;};
         for(const pass of graph.passes){const needs=mapCaps(pass.caps);plan.roles[pass.name]=needs;plan.mask|=needs;}
         plan.needsGpuPath=graph.needsPositions;plan.needsCpuPath=graph.needsCpuPath;plan.needsArcLength=graph.needsApproxArc||graph.needsExactArc;plan.needsExactArc=graph.needsExactArc;plan.arcMode=graph.arcTier;plan.needsCanvasVector=graph.needsCanvas;plan.gpuOnly=graph.gpuOnly;plan.dynamic=graph.dynamic;plan.renderGraph=graph;
     }else{
-        // Compatibility only; retained for partial/standalone script execution.
+
         const cfg=layerConsumerConfig(layer),lineVisible=frameCtx.lineDisplayEnabled===true||getLayerLineVisible?.(layer)===true;
         const fill=(getLayerLineVisible?.(layer)!==false)&&layer.fill===true,glow=(Number(frameCtx.glow)||Number(layer.glow)||0)>0,outline=state?.lineOutline?.enabled===true;
         const profileApplication=frameCtx.lineProfileApplication||layer.lineProfileApplication||'stroke',profileMode=profileApplication==='graffiti'?'graffiti':normalizeLineProfileValue?.(layer.lineProfileStroke??layer.lineProfile,'round');
@@ -54,9 +50,7 @@ function shouldPrepareDynamicVectorMaster(frameCtx){
     const d=frameCtx?.consumerDemand||prepareLayerConsumerDemand(frameCtx);
     if(!frameCtx?.geometryMorphEnabled||frameCtx.geometryPlan?.kind==='lightning'||typeof Path2D==='undefined'||state.showRoundingGuides)return false;
     renderConsumerDemandRuntime.vectorMasterRequested++;
-    // A vector master is a CPU fallback acceleration structure, never a correctness
-    // requirement. When the analytic WebGPU stroke path is already ready, recording the
-    // complete dynamic polygon before GPU command preparation is duplicate O(N) work.
+
     const gpuStrokeReady=Boolean(d.webgpuStrokeReady&&!frameCtx.lineProfileStrokeOnly);
     if(gpuStrokeReady){renderConsumerDemandRuntime.vectorMasterSkipped++;return false;}
     return Boolean((state.tunnel.active&&frameCtx.visibleInstances?.copies?.length)||(!state.tunnel.active&&frameCtx.glow>0)||state.lineOutline?.enabled===true);

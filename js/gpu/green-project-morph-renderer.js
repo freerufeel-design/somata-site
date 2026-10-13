@@ -1,7 +1,5 @@
-// SpiroStar v534 — GPU-native green (playlist project) Morph base/glow renderer with retained render bundles.
-// Source/target correspondence is prepared once per transition on CPU; per-frame XY/width
-// interpolation and rasterization happen in WGSL. This is especially important for Spiral,
-// where the legacy Canvas path emitted a variable-width stroke for every resampled segment.
+
+
 window.__spiroRegisterModule?.('js/gpu/green-project-morph-renderer');
 
 const WebGPUGreenProjectMorphRenderer=(()=>{
@@ -14,12 +12,6 @@ const WebGPUGreenProjectMorphRenderer=(()=>{
     const stats={frames:0,baseFrames:0,glowFrames:0,fusedGlowBaseFrames:0,crossfadeFrames:0,segments:0,copies:0,resourceBuilds:0,resourceBytes:0,uniformBindReuses:0,copyPackReuses:0,bundleBuilds:0,bundleHits:0,bundleExecutes:0,bundleFallbacks:0,submissionsAvoided:0,canvasCompositesAvoided:0,uploads:0,fallbacks:0,errors:0};
     const lastDecision={eligible:false,reason:'not-requested',layerIndex:-1,mode:'base'};
 
-    // Five vec4<f32> per segment:
-    // 0 source a.xy / b.xy
-    // 1 target a.xy / b.xy
-    // 2 source widths / target widths
-    // 3 pair alpha at source/target, segment alpha at source/target
-    // 4 reserved
     const WGSL=`
 struct U{
  viewport:vec2<f32>, segCount:u32, copyCount:u32,
@@ -80,9 +72,7 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{return vec2<f32>(u.row0.x*p.x+u.row0.y*p.
     function composite(ctx){ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';ctx.filter='none';ctx.drawImage(canvas,0,0);ctx.restore();}
     function renderPass(frameCtx,targetCtx,rec,mode,opts,styleLayer=null){const k=packCopies(frameCtx,styleLayer);if(!k)return true;const frameUniform=prepareUniform(frameCtx,rec,k,targetCtx,mode,opts);const enc=device.createCommandEncoder({label:`green project Morph ${mode}`}),pass=enc.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});const bundled=renderBundleFor(rec,rec.count*k,[frameUniform],`green project Morph ${mode} bundle`);if(bundled){pass.executeBundles(bundled.list);stats.bundleExecutes++;}else{pass.setPipeline(pipeline);pass.setBindGroup(0,frameUniform.bind);pass.setBindGroup(1,bindFor(rec));pass.setBindGroup(2,copyBind);pass.setVertexBuffer(0,cornerBuffer);pass.draw(4,rec.count*k);}pass.end();device.queue.submit([enc.finish()]);composite(targetCtx);stats.segments+=rec.count*k;stats.copies+=k;return true;}
     function endpointOptions(frameCtx,opts,layer,t,weight){const mul=typeof getLayerStrokeWidthMultiplier==='function'?getLayerStrokeWidthMultiplier(layer):1,visible=layer?.visible!==false,opacity=visible?Math.max(0,Math.min(1,Number(layer?.opacity??100)/100)):0;return{...opts,morphTOverride:t,parameterTOverride:t,strokeWidthOverride:Math.max(.001,(Number(layer?.strokeWidth)||1.5)*mul),baseAlphaOverride:opacity,alphaScale:Math.max(0,Math.min(1,Number(opts?.alphaScale??1)))*Math.max(0,Math.min(1,weight))};}
-    // v531 — advanced/smooth Green Morph can rasterize Glow + Base in one WebGPU pass when
-    // there is no Fill/Web ordering barrier between them. Green Fade keeps the split path because
-    // source/target copies may use different colors/styles in the same frame.
+
     function renderGlowAndBase(frameCtx,targetCtx,opts={}){
         lastDecision.mode='glow+base';if(!isEligible(frameCtx)||frameCtx.geometryPlan?.kind==='green-fade'||!ensureSize()){stats.fallbacks++;return false;}
         try{
@@ -95,9 +85,7 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{return vec2<f32>(u.row0.x*p.x+u.row0.y*p.
         }catch(err){lastError=String(err?.message||err);lastDecision.reason=lastError;stats.errors++;stats.fallbacks++;return false;}
     }
     function render(frameCtx,targetCtx,opts={}){const mode=opts.mode==='glow'?'glow':'base';lastDecision.mode=mode;if(!isEligible(frameCtx)||!ensureSize()){stats.fallbacks++;return false;}try{const provider=frameCtx.greenMorphProvider,plan=provider.gpuGeometryPlan,rec=buildResource(plan);if(!rec){stats.fallbacks++;return false;}if(frameCtx.geometryPlan?.kind==='green-fade'){const t=Math.max(0,Math.min(1,Number(provider.progress)||0)),src=provider.sourceLayer||frameCtx.layer,dst=provider.targetLayer||frameCtx.layer;if(t<.9999)renderPass(frameCtx,targetCtx,rec,mode,endpointOptions(frameCtx,opts,src,0,1-t),src);if(t>.0001)renderPass(frameCtx,targetCtx,rec,mode,endpointOptions(frameCtx,opts,dst,1,t),dst);stats.crossfadeFrames++;}else renderPass(frameCtx,targetCtx,rec,mode,opts,frameCtx.layer);stats.frames++;if(mode==='glow')stats.glowFrames++;else stats.baseFrames++;lastDecision.reason='webgpu';return true;}catch(err){lastError=String(err?.message||err);lastDecision.reason=lastError;stats.errors++;stats.fallbacks++;return false;}}
-    // v529: auxiliary GPU effects (particles first) reuse the exact immutable endpoint
-    // buffer owned by the green base renderer instead of re-packing/uploading the same
-    // five-vec4 segment records at transition start.
+
     function acquireEndpointResource(plan){if(!plan?.pairs?.length||!warmup())return null;try{return buildResource(plan);}catch(_){return null;}}
     async function awaitGreenRendererReady(timeoutMs=3000){
         if(ready&&!lost)return true;
@@ -106,10 +94,7 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{return vec2<f32>(u.row0.x*p.x+u.row0.y*p.
         while(initializing&&performance.now()-started<Math.max(250,Number(timeoutMs)||3000))await new Promise(resolve=>setTimeout(resolve,0));
         return ready&&!lost;
     }
-    // v535 — immutable project-transition resources are built before Green Morph's visible
-    // clock starts.  This prevents a dense Spiral transition from spending its first moving
-    // frame compiling the pipeline / uploading endpoint correspondence and then switching
-    // backend once WebGPU becomes ready.
+
     async function prewarmPlans(plans){
         if(!globalThis.navigator?.gpu)return false;
         if(!await awaitGreenRendererReady())return false;

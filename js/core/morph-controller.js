@@ -1,6 +1,5 @@
-// SpiroStar v538 — Morph Orchestrator
-// Single ownership point for Blue/Orange priority, Blue phase invalidation and timeline semantics.
-// Persistent project data remains in `state`; live animation data remains in `runtimeState`.
+
+
 window.__spiroRegisterModule?.('js/core/morph-controller');
 
 const SpiroMorphController = (() => {
@@ -60,8 +59,7 @@ const SpiroMorphController = (() => {
         if (!rt.active) return { changed:false, manualPause:false, serial:currentBluePhaseSerial() };
         const manualPause = rt.paused === true && rt.pausedByOrangeProject !== true;
         if (manualPause) {
-            // Orange still owns the composition switch, but a user pause must not be converted
-            // into an orange-owned pause that would later auto-resume.
+
             invalidateBluePhase('orange-priority-manual-pause', { clearFrame:false });
             rt.paused = true;
             rt.pausedByOrangeProject = false;
@@ -77,7 +75,6 @@ const SpiroMorphController = (() => {
         rt.pauseStartedAt = now;
         return { changed:true, manualPause:false, serial:currentBluePhaseSerial() };
     }
-
 
     function pauseBlueForGreen(now = performance.now()) {
         const rt = blueRuntime();
@@ -148,8 +145,7 @@ const SpiroMorphController = (() => {
         const ease = typeof easing === 'function' ? easing : clamp01;
         let geometryT = Number(ease(transitionLinearT));
         if (!Number.isFinite(geometryT)) geometryT = transitionLinearT;
-        // Endpoints are exact. This is the only endpoint snapping layer; consumers must not
-        // ease again, which preserves strict linearity when speedType === 'linear'.
+
         if (transitionLinearT <= 1e-9) geometryT = 0;
         else if (transitionLinearT >= 1 - 1e-9) geometryT = 1;
         return { elapsed, linearT, transitionLinearT, geometryT };

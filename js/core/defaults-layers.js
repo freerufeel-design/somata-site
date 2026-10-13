@@ -1,61 +1,31 @@
-// SpiroStar v500 Modular Base
-// Effect defaults, layer normalization and layer factory
+
+
 window.__spiroRegisterModule?.('js/core/defaults-layers');
         const DEFAULT_WEB_CONFIG = Object.freeze({ type:'bevel', style:'web', region:'inside', inside:true, outsideStraight:false, outsideArc:false, placementMode:'selfIntersection', oscillating:false, oscillationStrength:10, oscillationStrengthMultiplier:1, oscillationMultiplier:1, angleThreshold:60, width:0.6, widthRelative:false, widthPercent:40, matchLineColor:false, color:'#ffffff', secondaryColor:'#00ffff', sunDegrees:20, distance:20, depthMultiplier:1, spacing:10, angleVariation:6 });
-        const DEFAULT_SWEEP_CONFIG = Object.freeze({ enabled:false, effectType:'lightning', coreBlendMode:'normal', glowBlendMode:'normal', sharedGlintVersion:1, flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode:'whole', direction:'forward', speed:0.25, speedMultiplier:1, syncMusic:true, lengthPercent:18, widthPercent:75, everyN:2, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:true, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', lightningFlashColor:'#ffffff', lightningFlashMode:'moving', lightningSpectralSectorDegrees:45, lightningSpectralAngularSpeed:90, lightningFlashOpacity:100, lightningSegmentPercent:100, lightningFlashLengthPercent:18, lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningWidthPercent:64, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningPreGlowIntensity:50, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase:0, currentVelocity:0, lastUpdate:0, cycleCount:0 });
+        const DEFAULT_SWEEP_CONFIG = Object.freeze({ enabled:false, effectType:'lightning', profileShape:'current', coreBlendMode:'normal', glowBlendMode:'normal', flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode:'whole', direction:'forward', speed:0.25, speedMultiplier:1, syncMusic:true, lengthPercent:18, widthPercent:75, everyN:2, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningProfileShape:'current', lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:true, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', lightningSegmentPercent:100, lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningWidthPercent:64, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningPreGlowIntensity:50, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase:0, currentVelocity:0, lastUpdate:0, cycleCount:0 });
 
-        // Somata shared Glint contract — one authored «Проблеск» block is used by both
-        // standalone Glint and Lightning pre-charge.  Old Lightning projects had a second,
-        // duplicated flash block; migrate that block exactly once and keep the historical
-        // fields mirrored only for backward-compatible project export/import.
         function normalizeSweepFlashMode(value){return value==='spectral'?'spectral':'moving';}
         function compactSweepPixelValue(value,multiplier=1,maxBase=50){
             const effective=Math.max(0,(Number.isFinite(Number(value))?Number(value):0)*Math.max(0,Number.isFinite(Number(multiplier))?Number(multiplier):1));
             if(effective<=maxBase)return{base:effective,multiplier:1};
             const m=Math.max(1,Math.ceil(effective/maxBase));return{base:effective/m,multiplier:m};
         }
-        function migrateSharedSweepGlintConfig(cfg){
+        function normalizeSweepConfig(cfg){
             if(!cfg||typeof cfg!=='object')return cfg;
-            if(Math.max(0,Number(cfg.sharedGlintVersion)||0)<1){
-                if(cfg.effectType==='lightning'){
-                    const pre=Math.max(0,Math.min(1,(Number.isFinite(Number(cfg.lightningPreGlowIntensity))?Number(cfg.lightningPreGlowIntensity):50)/100));
-                    const link=pre>.000001?Math.max(.01,Math.min(64,1/pre)):2;
-                    cfg.flashMode=normalizeSweepFlashMode(cfg.lightningFlashMode);
-                    cfg.lengthPercent=Math.max(1,Math.min(100,Number.isFinite(Number(cfg.lightningFlashLengthPercent))?Number(cfg.lightningFlashLengthPercent):18));
-                    cfg.opacity=Math.max(0,Math.min(100,Number.isFinite(Number(cfg.lightningFlashOpacity))?Number(cfg.lightningFlashOpacity):100));
-                    cfg.color=/^#[0-9a-f]{6}$/i.test(cfg.lightningFlashColor||'')?cfg.lightningFlashColor:(/^#[0-9a-f]{6}$/i.test(cfg.color||'')?cfg.color:'#ffffff');
-                    cfg.spectralSectorDegrees=Math.max(1,Math.min(360,Number.isFinite(Number(cfg.lightningSpectralSectorDegrees))?Number(cfg.lightningSpectralSectorDegrees):45));
-                    cfg.spectralAngularSpeed=Math.max(-720,Math.min(720,Number.isFinite(Number(cfg.lightningSpectralAngularSpeed))?Number(cfg.lightningSpectralAngularSpeed):90));
-                    cfg.widthPercent=75;
-                    cfg.brightness=Math.max(0,(Number.isFinite(Number(cfg.lightningBrightness))?Number(cfg.lightningBrightness):100)*pre);
-                    const glowCompact=compactSweepPixelValue((Number.isFinite(Number(cfg.lightningGlow))?Number(cfg.lightningGlow):16)*pre,Number.isFinite(Number(cfg.lightningGlowMultiplier))?Number(cfg.lightningGlowMultiplier):1,50);
-                    cfg.glow=glowCompact.base;cfg.glowMultiplier=glowCompact.multiplier;
-                    cfg.glowIntensity=Math.max(0,(Number.isFinite(Number(cfg.lightningGlowIntensity))?Number(cfg.lightningGlowIntensity):100)*pre);
-                    cfg.glowIntensityMultiplier=Math.max(0,Number.isFinite(Number(cfg.lightningGlowIntensityMultiplier))?Number(cfg.lightningGlowIntensityMultiplier):1);
-                    cfg.softness=Math.max(0,Number.isFinite(Number(cfg.lightningSoftness))?Number(cfg.lightningSoftness):100);
-                    cfg.softnessMultiplier=Math.max(0,Number.isFinite(Number(cfg.lightningSoftnessMultiplier))?Number(cfg.lightningSoftnessMultiplier):1);
-                    cfg.lightningUseGlintMultiplier=true;cfg.lightningGlintMultiplier=link;
-                }else{
-                    cfg.flashMode=(cfg.flashType==='spectral'||cfg.glintPrecision==='spectral')?'spectral':'moving';
-                    cfg.widthPercent=Number.isFinite(Number(cfg.widthPercent))?Number(cfg.widthPercent):75;
-                    cfg.lightningUseGlintMultiplier=true;cfg.lightningGlintMultiplier=2;
-                }
-                cfg.sharedGlintVersion=1;
-            }
+            cfg.profileShape=cfg.profileShape==='line'?'line':'current';
+            cfg.lightningProfileShape=cfg.lightningProfileShape==='line'?'line':'current';
             cfg.flashMode=normalizeSweepFlashMode(cfg.flashMode);
             cfg.lengthPercent=Math.max(1,Math.min(100,Number.isFinite(Number(cfg.lengthPercent))?Number(cfg.lengthPercent):18));
             cfg.widthPercent=Math.max(0,Math.min(200,Number.isFinite(Number(cfg.widthPercent))?Number(cfg.widthPercent):75));
+            cfg.opacity=Math.max(0,Math.min(100,Number.isFinite(Number(cfg.opacity))?Number(cfg.opacity):100));
+            cfg.color=/^#[0-9a-f]{6}$/i.test(cfg.color||'')?cfg.color:'#ffffff';
+            cfg.spectralSectorDegrees=Math.max(1,Math.min(360,Number.isFinite(Number(cfg.spectralSectorDegrees))?Number(cfg.spectralSectorDegrees):45));
+            cfg.spectralAngularSpeed=Math.max(-720,Math.min(720,Number.isFinite(Number(cfg.spectralAngularSpeed))?Number(cfg.spectralAngularSpeed):90));
             cfg.lightningUseGlintMultiplier=cfg.lightningUseGlintMultiplier!==false;
             cfg.lightningGlintMultiplier=Math.max(0,Number.isFinite(Number(cfg.lightningGlintMultiplier))?Number(cfg.lightningGlintMultiplier):2);
-            // Deprecated mirrors: they are never independent runtime controls anymore.
-            cfg.lightningFlashMode=cfg.flashMode;cfg.lightningFlashLengthPercent=cfg.lengthPercent;cfg.lightningFlashOpacity=cfg.opacity;
-            cfg.lightningFlashColor=cfg.color;cfg.lightningSpectralSectorDegrees=cfg.spectralSectorDegrees;cfg.lightningSpectralAngularSpeed=cfg.spectralAngularSpeed;
             return cfg;
         }
 
-        // Somata 6.9 — independent Photoshop-style compositing for Sweep/Lightning core and glow.
-        // These six modes have exact fixed-function WebGPU equivalents, so strict Spiral scenes
-        // stay on the retained Bézier GPU path without a Canvas round-trip.
         const SWEEP_BLEND_MODES = Object.freeze(['normal','screen','multiply','add','darken','lighten']);
         function normalizeSweepBlendMode(value){const v=String(value||'normal').toLowerCase();return SWEEP_BLEND_MODES.includes(v)?v:'normal';}
         function sweepBlendCanvasOperation(value){const v=normalizeSweepBlendMode(value);return v==='normal'?'source-over':(v==='add'?'lighter':v);}
@@ -133,9 +103,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             }
             return cfg;
         }
-        // A layer only needs migration/default filling once per object lifetime. Keeping
-        // this outside the frame loop eliminates two object allocations plus Object.entries
-        // scans every time Web/Sweep are queried during rendering.
+
         const effectStateReadyLayers = new WeakSet();
         const effectStateOwnerCache = new WeakMap();
         function getPersistentEffectLayer(layer) {
@@ -147,8 +115,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             return layer;
         }
         function ensureLayerEffectState(layer) {
-            // Fast path: normal rendering passes the actual persistent layer object.
-            // Once initialized, this avoids both allocations and a state.layers.find().
+
             if(layer && effectStateReadyLayers.has(layer))return layer;
             let owner=layer && typeof layer==='object' ? effectStateOwnerCache.get(layer) : null;
             if(!owner)owner=getPersistentEffectLayer(layer);
@@ -159,9 +126,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             if(typeof owner.showWeb!=='boolean') owner.showWeb=false;
             if(!owner.web||typeof owner.web!=='object') owner.web=createDefaultWebConfig();
             else {
-                // v523: migrate the historical inside/outside/combined selector to three
-                // independent Web branches. Historical "outside" is the curved outside
-                // profile, now explicitly named outsideArc.
+
                 const hasBranchFlags=['inside','outsideStraight','outsideArc'].some(key=>Object.prototype.hasOwnProperty.call(owner.web,key));
                 if(!hasBranchFlags){
                     const legacyRegion=['inside','outside','combined'].includes(owner.web.region)?owner.web.region:'inside';
@@ -173,13 +138,13 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 if(owner.web.style==='silk')owner.web.style='spiderSun';owner.web.style=['web','laser','spiderSun'].includes(owner.web.style)?owner.web.style:'web';
             }
             if(!owner.sweep||typeof owner.sweep!=='object') owner.sweep=createDefaultSweepConfig();
-            else {migrateSharedSweepGlintConfig(owner.sweep);for(const [key,value] of Object.entries(DEFAULT_SWEEP_CONFIG))if(!Object.prototype.hasOwnProperty.call(owner.sweep,key))owner.sweep[key]=value;}
-            migrateSharedSweepGlintConfig(owner.sweep);
+            else {normalizeSweepConfig(owner.sweep);for(const [key,value] of Object.entries(DEFAULT_SWEEP_CONFIG))if(!Object.prototype.hasOwnProperty.call(owner.sweep,key))owner.sweep[key]=value;}
+            normalizeSweepConfig(owner.sweep);
             if(!owner.sprite||typeof owner.sprite!=='object') owner.sprite=createDefaultLineSpriteConfig();
             else owner.sprite=normalizeLineSpriteConfig(owner.sprite);
             owner.lineMotionFx=normalizeLineMotionFxConfig(owner.lineMotionFx);
             owner.particles=normalizeParticleConfig(owner.particles);
-            // requestAnimationFrame is scheduled once for the whole app, never serialized per layer.
+
             delete owner.sweep.raf;
             effectStateReadyLayers.add(owner);
             return owner;
@@ -189,6 +154,28 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
         function getLayerWebConfig(layer) { const owner=ensureLayerEffectState(layer); return owner?.web || createDefaultWebConfig(); }
         function getLayerWebEnabled(layer) { const owner=ensureLayerEffectState(layer); return owner?.showWeb===true; }
         function getLayerSweepConfig(layer) { const owner=ensureLayerEffectState(layer); return owner?.sweep || createDefaultSweepConfig(); }
+
+        function getLayerEffectOwner(layer) {
+            if(!layer)return null;
+            const id=layer.id;
+            const persistent=Array.isArray(state?.layers)?state.layers.find(item=>item===layer||(id!=null&&item?.id===id)):null;
+            return ensureLayerEffectState(persistent||layer)||persistent||layer||null;
+        }
+        function markLayerEffectChanged(layer, reason='live-effect-change') {
+            const owner=getLayerEffectOwner(layer);
+            if(owner&&typeof invalidateLayerEffect==='function')invalidateLayerEffect(owner,reason);
+            return owner;
+        }
+        function setLayerSweepEnabled(layer, enabled) {
+            const owner=getLayerEffectOwner(layer);if(!owner)return false;
+            getLayerSweepConfig(owner).enabled=enabled===true;markLayerEffectChanged(owner,'sweep-enabled');return getLayerSweepConfig(owner).enabled===true;
+        }
+        function setLayerParticlesConfig(layer, value, reason='particles-change') {
+            const owner=getLayerEffectOwner(layer);if(!owner)return null;owner.particles=normalizeParticleConfig(value);markLayerEffectChanged(owner,reason);return owner.particles;
+        }
+        function setLayerParticlesEnabled(layer, enabled) {
+            const owner=getLayerEffectOwner(layer);if(!owner)return false;const cfg=normalizeParticleConfig(owner.particles);cfg.enabled=enabled===true;owner.particles=cfg;markLayerEffectChanged(owner,'particles-enabled');return cfg.enabled===true;
+        }
         function getActiveEffectLayer() { return ensureLayerEffectState(state.layers.find(l=>l.id===state.activeLayerId)); }
         function getEffectTargets() {
             const active=getActiveEffectLayer();
@@ -201,17 +188,11 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
         }
         function cloneEffectConfig(value) { return JSON.parse(JSON.stringify(value)); }
 
-        // v165: effect visibility is layer-scoped. In Master mode a right-click first
-        // remembers exactly which layers were on and turns only those off; the next
-        // right-click restores only that remembered set. If everything was already off
-        // before the toggle, Master deliberately turns the effect on for every layer.
         function ensureSidebarFeatureToggleMemory(){
             if(!state.sidebarFeatureToggleMemory||typeof state.sidebarFeatureToggleMemory!=='object'||Array.isArray(state.sidebarFeatureToggleMemory))state.sidebarFeatureToggleMemory={};
             return state.sidebarFeatureToggleMemory;
         }
-        // v389 — restore layer-scoped line visibility. The Shape-star/right-click and
-        // the Lines checkbox follow the same editing scope as the rest of the layer UI:
-        // Master => every layer, otherwise only the current selection (or active layer).
+
         function getLayerLineVisible(layer){return layer?.lineVisible!==false;}
         function setLayerLineVisible(layer,enabled){if(layer){layer.lineVisible=enabled===true;if(typeof invalidateLayerStyle==='function')invalidateLayerStyle(layer,'line-visible');}return layer?.lineVisible!==false;}
         function getLineVisibilityTargets(){
@@ -232,11 +213,6 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             el.checked=targets.length?on===targets.length:state.showLines!==false;
             el.indeterminate=targets.length>1&&on>0&&on<targets.length;
         }
-        function cancelLineMasterMute(){
-            // Compatibility shim for v388 project/runtime code. v389 has no hidden global mute.
-            state.forceAllLinesHidden=false;
-            const memory=ensureSidebarFeatureToggleMemory();if(memory.lines)delete memory.lines;
-        }
         function applyLineVisibilityToTargets(enabled){
             const targets=getLineVisibilityTargets();if(!targets.length)return false;
             for(const layer of targets)setLayerLineVisible(layer,enabled);
@@ -245,9 +221,21 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             syncLineMasterVisibilityUI();syncSweepUI();syncSidebarToolStates();requestMainCanvasRender();return true;
         }
         function toggleAllLinesWithMemory(){
-            const targets=getLineVisibilityTargets();if(!targets.length)return;
-            const next=!targets.every(getLayerLineVisible);
-            applyLineVisibilityToTargets(next);
+            const layers=(state.layers||[]).filter(Boolean);if(!layers.length)return;
+            const memory=ensureSidebarFeatureToggleMemory(),key='lines',enabledIds=layers.filter(getLayerLineVisible).map(l=>l.id),remembered=memory[key];
+            if(enabledIds.length){
+                memory[key]={armed:true,layerIds:enabledIds.slice()};
+                for(const layer of layers)setLayerLineVisible(layer,false);
+                state.showLines=false;
+            }else if(remembered?.armed===true){
+                const ids=new Set(Array.isArray(remembered.layerIds)?remembered.layerIds:[]),hasKnown=layers.some(l=>ids.has(l.id));
+                for(const layer of layers)setLayerLineVisible(layer,hasKnown?ids.has(layer.id):true);
+                state.showLines=layers.every(getLayerLineVisible);delete memory[key];
+            }else{
+                for(const layer of layers)setLayerLineVisible(layer,true);
+                state.showLines=true;
+            }
+            syncLineMasterVisibilityUI();syncSweepUI();syncSidebarToolStates();requestMainCanvasRender();
         }
         window.__spiroLineVisibilityStatus=()=>({
             master:state.masterLayerEdit===true,
@@ -268,21 +256,18 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             const owner=ensureLayerEffectState(layer);if(!owner)return;const on=enabled===true;
             if(mode==='lamps')setLayerLampsEnabled(owner,on);
             else if(mode==='graffiti'){
-                // Somata 6.4: the left-rail Graffiti quick toggle is a true
-                // Graffiti <-> Point switch. Turning it off must not restore a
-                // previous Dash/Sprite profile, otherwise repeated RMB clicks do
-                // not return to the documented Point mode.
+
                 setLayerMainLineMode(owner,on?'graffiti':'point');
             }
             else if(mode==='web'){
-                // Visibility is a hard switch: no morph-boundary queue and no fade tail.
+
                 webRuntime.pendingByLayer.delete(owner.id);
                 webRuntime.transitionByLayer.delete(owner.id);
                 webRuntime.desiredVisibilityByLayer.delete(owner.id);
                 applyWebSwitchPatch({showWeb:on},false,owner);
             }
-            else if(mode==='sweep')getLayerSweepConfig(owner).enabled=on;
-            else if(mode==='particles'){owner.particles=normalizeParticleConfig(owner.particles);owner.particles.enabled=on;}
+            else if(mode==='sweep')setLayerSweepEnabled(owner,on);
+            else if(mode==='particles')setLayerParticlesEnabled(owner,on);
         }
         function syncSidebarGlobalFeatureTemplate(mode, enabled){
             const on=enabled===true;
@@ -305,10 +290,6 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             const layers=state.layers.map(ensureLayerEffectState).filter(Boolean);
             const globalIntent=state.masterLayerEdit===true || sidebarFeatureStatesAreUniform(mode,layers);
 
-            // v180: A uniform composition means there is no per-layer visibility layout
-            // to protect. Treat a right-click/long-press as a global intent even outside
-            // Master mode. Once layers differ, the same gesture only changes the active
-            // layer unless Master is explicitly enabled, preserving deliberate per-layer work.
             if(!globalIntent){
                 setSidebarFeatureEnabled(mode,active,!sidebarFeatureEnabled(mode,active));
             }else{
@@ -322,8 +303,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                         for(const layer of layers)setSidebarFeatureEnabled(mode,layer,ids.has(layer.id));
                         syncSidebarGlobalFeatureTemplate(mode,layers.length>0 && layers.every(l=>ids.has(l.id)));
                     }else{
-                        // Orange morph/project replacement changes layer ids. A stale memory
-                        // must never turn the first right-click into a no-op on the new composition.
+
                         for(const layer of layers)setSidebarFeatureEnabled(mode,layer,true);
                         syncSidebarGlobalFeatureTemplate(mode,true);
                     }
@@ -346,8 +326,6 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             syncSidebarToolStates();requestMainCanvasRender();
         }
 
-        // v147: lamps are owned by layers. state.lamps remains the factory/legacy
-        // template so old project files keep loading without data loss.
         function cloneLampConfig(value=state.lamps) { return JSON.parse(JSON.stringify(value || {})); }
         function ensureLayerLampState(layer) {
             if(!layer || typeof layer!=='object') return state.lamps;
@@ -360,9 +338,9 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             for(const [k,v] of Object.entries(base)) if(!Object.prototype.hasOwnProperty.call(owner.lamps,k)) owner.lamps[k]=cloneEffectConfig(v);
             if (Number.isFinite(Number(owner.lamps.brightnessMultiplier)) && Number(owner.lamps.brightnessMultiplier) !== 1) owner.lamps.brightness=Math.max(0,Math.min(200,(Number(owner.lamps.brightness)||0)*Number(owner.lamps.brightnessMultiplier)));
             delete owner.lamps.brightnessMultiplier;
-            if(typeof owner.lamps.webgl!=='boolean') owner.lamps.webgl=true;
-            if(typeof owner.lamps.rasterized!=='boolean') owner.lamps.rasterized=false;
-            if(typeof owner.lamps.hd!=='boolean') owner.lamps.hd=false;
+            owner.lamps.webgl=true;
+            delete owner.lamps.rasterized;
+            delete owner.lamps.hd;
             if(typeof owner.lamps.freezeLight!=='boolean') owner.lamps.freezeLight=false;
             if(!Number.isFinite(Number(owner.lamps.freezeTailSec)))owner.lamps.freezeTailSec=1.5;
             owner.lamps.freezeTailSec=Math.max(.05,Math.min(30,Number(owner.lamps.freezeTailSec)||1.5));
@@ -403,8 +381,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             if(targets.length)return targets;
             const c=getActiveLampConfig(); return c?[c]:[];
         }
-        // v538: lamp evaluation context is explicit and stack-scoped. Rendering must never
-        // impersonate a layer by mutating persistent `state.lamps`; nested callers are safe.
+
         const lampEvaluationConfigStack=[];
         function getLampEvaluationConfig(){
             if(lampEvaluationConfigStack.length)return lampEvaluationConfigStack[lampEvaluationConfigStack.length-1];
@@ -420,12 +397,8 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
         }
         window.__spiroLampConfigContextStatus=()=>({depth:lampEvaluationConfigStack.length,usesPersistentMutation:false});
 
-        // v204: Sweep config is explicit in the render pipeline. Legacy/UI callers that
-        // omit a layer resolve against the actively edited layer, never a render-global layer.
         function currentSweepConfig(layer=null) { return getLayerSweepConfig(layer || getActiveEffectLayer()); }
 
-        // v117: vertex rounding follows the v105 contour path in static,
-        // Morphing and Spiral renderers; lamp calm mode preserves path identity.
         const gcd = (a, b) => b === 0 ? Math.abs(a) : gcd(b, a % b);
 
         function createLayerId(prefix = 'layer') {
@@ -539,8 +512,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 motionRotation: { enabled:false, speed:30, multiplier:1, direction:'ccw', tunnelLag:0, tunnelLagMultiplier:1 },
                 opacity: 100,
                 lineOpacity: 100,
-                // 7.3.9: generic line overlap/layering policy. Uniform unions neighbouring
-                // stroke/glow coverage; Segmented keeps source-over accumulation per segment.
+
                 lineLayerMode: 'uniform',
                 spiralLineType: 'uniform', // legacy project/import alias; migrated to lineLayerMode
                 strokeColor: '#00ffcc',
@@ -550,8 +522,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 glowMultiplier: 1,
                 glowIntensity: 40,
                 glowIntensityMultiplier: 1,
-                // v389: line visibility is layer-scoped. Master mode edits every layer;
-                // ordinary/multi-selection edits only the selected layer set.
+
                 lineVisible: true,
                 showLamps: state.showLamps === true,
                 showWeb: state.showWeb === true,
@@ -562,8 +533,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 particles: createDefaultParticleConfig(),
                 lineProfile: 'round',
                 lineProfileApplication: state.graffitiDefaultActive === true ? 'graffiti' : 'stroke',
-                // v433: Line and Graffiti are independent render modes. `lineProfile` is
-                // always the Line-mode profile; Graffiti owns `lineProfileGraffiti`.
+
                 lineProfileStroke: 'round',
                 lineMarkerType: 'slash',
                 lineProfileGraffiti: 'slash',
@@ -603,9 +573,6 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             };
         }
 
-        // User-added layers should immediately stand out on the dark canvas.
-        // Generate a vivid HSV color and return it as #RRGGBB so all existing
-        // color interpolation/export code can keep working with hex colors.
         function randomBrightLayerColor() {
             const h = Math.random() * 360;
             const s = 0.78 + Math.random() * 0.22;

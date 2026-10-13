@@ -1,8 +1,5 @@
-// SpiroStar v518 — Executable GPU Command Scheduler
-// Capability RenderGraph says WHAT a layer needs. This module owns WHEN shared prerequisites
-// are encoded/submitted and guarantees command ordering inside the deferred Layer/Frame scene.
-// It prevents duplicate Morph / Exact-Arc compute when several GPU effects consume the same
-// topology Morph in one frame, while keeping direct/overlay backends on their proven fallback.
+
+
 window.__spiroRegisterModule?.('js/render/gpu-command-scheduler');
 
 const spiroGpuCommandSchedulerRuntime={
@@ -36,17 +33,11 @@ function spiroGpuScheduleLayerSceneCommand(frameCtx,phase,commandBuffer,label='e
 }
 function spiroGpuScheduledTokenMatches(token,frameId,t){return Boolean(token&&token.frameId===frameId&&token.t===t);}
 
-// Schedule resident prerequisites before every visual LayerScene phase. Somata 7.3.9 reserves
-// phases 1/2 for Morph/Arc, then Glow=3, Fill=4, Web-under-Base=4.5, Base=5.
-// Command buffers stay in the SAME ordered queue as consumers; no CPU wait/readback is needed.
 function spiroGpuEnsureMorphPrerequisite(frameCtx,morphRec,t,phase=1){
     if(!frameCtx?.frame?.gpuLayerSceneDeferred||!morphRec?.ready)return false;
     const s=spiroGpuSchedulerFrame(frameCtx),fid=s?.frameId||Number(frameCtx.frameId)||0,u=typeof morphRec?.resolveMorphT==='function'?morphRec.resolveMorphT(t):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(t):Math.max(0,Math.min(1,Number(t)||0)));if(!s)return false;
     const custom=typeof morphRec.encodeCurrentCubics==='function';
-    // Iter11: retained Spiral Base/Glow may already be the ROOT command buffer of this exact
-    // deferred LayerScene. That producer is guaranteed to execute before every queued effect,
-    // so re-dispatching currentCubics here is redundant. Never apply this optimization outside
-    // the same deferred LayerScene: independent command buffers still require an explicit prereq.
+
     if(custom&&frameCtx.frame.gpuLayerSceneDeferred===true&&Number(morphRec.currentCubicsRootProducerFrameId)===fid&&Math.abs((Number(morphRec.currentCubicsRootProducerT)||0)-u)<1e-12){s.morph.set(morphRec,{frameId:fid,t:u,rootProducer:true});spiroGpuCommandSchedulerRuntime.rootProducerReuses++;spiroGpuCommandSchedulerRuntime.duplicateComputeAvoided++;return true;}
     if(custom&&Number(morphRec.currentCubicsCommittedFrameId)===fid&&Math.abs((Number(morphRec.currentCubicsCommittedT)||0)-u)<1e-12){spiroGpuCommandSchedulerRuntime.committedReuses++;return true;}
     if(!custom&&morphRec.hasCommittedData&&morphRec.lastCommittedT===u){spiroGpuCommandSchedulerRuntime.committedReuses++;return true;}
@@ -65,24 +56,19 @@ function spiroGpuEnsureArcPrerequisite(frameCtx,table,phase=2){
     if(rec.hasCommittedData&&rec.lastCommittedT===t){spiroGpuCommandSchedulerRuntime.committedReuses++;return true;}
     const hit=s.arc.get(rec);if(spiroGpuScheduledTokenMatches(hit,fid,t)){spiroGpuCommandSchedulerRuntime.arcScheduledReuses++;spiroGpuCommandSchedulerRuntime.duplicateComputeAvoided++;return true;}
     if(typeof buildGpuMorphArcPrerequisiteCommand!=='function')return false;
-    // Iter15: Base/Glow has already queued the exact retained current-cubic producer before
-    // preflight. Arc can therefore start from that buffer and avoid a duplicate polar compute.
-    // This is legal only inside the same deferred LayerScene queue and for the exact same t.
+
     const morphRec=rec.morphRec,orderedRoot=Boolean(typeof morphRec?.encodeCurrentCubics==='function'&&frameCtx.frame.gpuLayerSceneDeferred===true&&Number(morphRec.currentCubicsRootProducerFrameId)===fid&&Math.abs((Number(morphRec.currentCubicsRootProducerT)||0)-t)<1e-12);
     const pre=buildGpuMorphArcPrerequisiteCommand(table,orderedRoot?{reuseOrderedCurrentCubics:true}:null);if(!pre?.ready)return false;
     if(orderedRoot){spiroGpuCommandSchedulerRuntime.rootProducerArcReuses++;spiroGpuCommandSchedulerRuntime.duplicateComputeAvoided++;}
     if(pre.commandBuffer&&!spiroGpuScheduleLayerSceneCommand(frameCtx,phase,pre.commandBuffer,`prereq-arc-L${rec.morphRec?.layerIndex??0}`,pre.onSubmitted,{prerequisite:'arc',resource:rec}))return false;
     s.arc.set(rec,{frameId:fid,t});
-    // Arc prerequisite contains the Morph prerequisite in the same encoder. Mark it scheduled too
-    // so a later position-only consumer does not encode Morph a second time before submit.
+
     if(rec.morphRec)s.morph.set(rec.morphRec,{frameId:fid,t});
     spiroGpuCommandSchedulerRuntime.arcPrerequisites++;return true;
 }
 
 function spiroGpuPrepareMorphForLayerScene(frameCtx,morphRec,t,consumerEncoder){
-    // Iter9: special Spiral rails no longer trust a Base-pass command buffer that merely exists
-    // somewhere else in the deferred frame. Schedule one explicit ordered current-cubic
-    // prerequisite (or let an Arc prerequisite own it) so every consumer has a real dependency.
+
     if(spiroGpuEnsureMorphPrerequisite(frameCtx,morphRec,t))return true;
     if(typeof morphRec?.encodeCurrentCubics==='function'){
         const tt=typeof morphRec.resolveMorphT==='function'?morphRec.resolveMorphT(t):Math.max(0,Math.min(1,Number(t)||0));
@@ -110,8 +96,6 @@ function spiroGpuPreflightLayerPrerequisites(frameCtx){
     return{active:true,arc,morph};
 }
 
-// Multi-layer frame scenes move command buffers out of the per-layer queue before the final
-// queue.submit(). Keep submit callbacks with the frame scene instead of dropping residency state.
 function transferLayerSceneEffectCallbacksToFrameScene(frame){
     const q=Array.isArray(frame?.gpuLayerSceneEffectCommands)?frame.gpuLayerSceneEffectCommands:null;if(!q?.length)return 0;
     let dst=frame.gpuFrameSceneSubmitCallbacks;if(!Array.isArray(dst))dst=frame.gpuFrameSceneSubmitCallbacks=[];
@@ -123,7 +107,4 @@ function notifyFrameSceneEffectCommandsSubmitted(frame){
     for(const cb of q){try{cb?.();n++;}catch(_){}}q.length=0;spiroGpuCommandSchedulerRuntime.submittedCallbacks+=n;return n;
 }
 function clearFrameSceneEffectCallbacks(frame){const q=frame?.gpuFrameSceneSubmitCallbacks;if(Array.isArray(q))q.length=0;}
-function spiroGpuCommandSchedulerFrameStatus(frame){
-    const s=frame?._spiroGpuCommandSchedule;if(!s)return null;return{frameId:s.frameId,commandCount:s.commandCount,prerequisiteCount:s.prerequisiteCount,labels:s.labels.slice()};
-}
 window.__spiroGpuCommandSchedulerStatus=()=>({...spiroGpuCommandSchedulerRuntime,last:spiroGpuCommandSchedulerRuntime.last,contract:'Capability RenderGraph -> executable ordered GPU prerequisites; strict Spiral reuses the already ordered Base current-cubic root for Arc when possible, otherwise emits one explicit prerequisite; one Exact-Arc compute per resource+t per deferred frame; cross-layer submit callbacks survive frame-scene sealing.'});

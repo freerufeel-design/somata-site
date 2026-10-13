@@ -1,5 +1,5 @@
-// Somata 6.8 Iter17 — strict Spiral line-profile markers from retained cubic Bézier GPU Arc.
-// No CPU path materialisation, no marker-center upload, no Canvas presentation bridge.
+
+
 window.__spiroRegisterModule?.('js/gpu/profile-arc-marker-renderer');
 
 const WebGPUProfileArcMarkerRenderer = (() => {
@@ -65,8 +65,7 @@ fn markerSd(p:vec2<f32>)->f32{
     async function ensureReady(){
         const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration?.():-1;if(ready&&device&&gen===generation)return true;if(initializing)return initializing;if(ready&&gen!==generation)reset();
         initializing=(async()=>{try{const shared=await WebGPUDeviceHub.acquire();device=shared.device;generation=shared.generation;format=navigator.gpu.getPreferredCanvasFormat();const mod=device.createShaderModule({label:'Somata Spiral profile Arc markers WGSL',code:WGSL});if(typeof assertWebGPUShaderModule==='function')await assertWebGPUShaderModule(mod,'Somata Spiral profile Arc markers WGSL');const target={format,blend:{color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}}};pipeline=device.createRenderPipeline({label:'Somata Spiral profile Arc markers',layout:'auto',vertex:{module:mod,entryPoint:'vsArc',buffers:[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}]},fragment:{module:mod,entryPoint:'fsMain',targets:[target]},primitive:{topology:'triangle-list'}});corridorPipeline=device.createRenderPipeline({label:'Somata Spiral Corridor profile Arc markers',layout:'auto',vertex:{module:mod,entryPoint:'vsArcCorridor',buffers:[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}]},fragment:{module:mod,entryPoint:'fsMain',targets:[target]},primitive:{topology:'triangle-list'}});cornerBuffer=device.createBuffer({label:'Somata profile Arc marker corners',size:48,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(cornerBuffer,0,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]));dummyCopyBuffer=device.createBuffer({label:'Somata profile Arc dummy copy',size:32,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(dummyCopyBuffer,0,new Float32Array([1,0,1,0,0,1,1,0]));ready=true;lastError='';
-            // Iter30 — a line profile replaces the Base carrier. If this async pipeline becomes
-            // ready after the warmup frame, explicitly request the frame that will reveal it.
+
             try{requestMainCanvasRender?.();}catch(_){}
             return true;}catch(err){lastError=String(err?.message||err);stats.errors++;ready=false;return false;}finally{initializing=null;}})();return initializing;
     }

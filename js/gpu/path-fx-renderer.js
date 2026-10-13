@@ -1,20 +1,14 @@
-// SpiroStar v512 — dedicated WebGPU Path FX renderer
-// Extracted from legacy/app-a; owns Sprite + Moving Line pipelines and frame-wide overlay queue.
+
+
 window.__spiroRegisterModule?.('js/gpu/path-fx-renderer');
 
-// v432 — GPU Path FX renderer: spline-bent sprites, hard key-corner head stops, animated sinusoid and reliable base replacement.
-// v429 — GPU Path FX renderer. Sprite and Moving Line no longer depend on
-// deferred Layer Scene: they can render into a transparent WebGPU overlay that sits
-// above whichever Canvas/WebGPU backend produced the base scene. This avoids the
-// previous "effect enabled but invisible" failure when any legacy pass blocked FrameGraph.
-// Custom sprite images are sampled directly in WGSL; the built-in snake is procedural.
 const WebGPUPathFxRenderer=(()=>{
     const overlayCanvas=document.getElementById('pathFxOverlayCanvas');
     let overlayContext=null,overlayConfiguredGeneration=-1,overlayFrameId=-1,overlayUsedFrame=-1;
     let device=null,format=null,ready=false,attempted=false,initializing=false,lost=false,lastError='',generation=0;
     let pipeline=null,uniformBuffers=[],uniformCursor=0,pathIndexStatic=new WeakMap(),pathIndexDynamic=new WeakMap(),recordSet=new Set(),bindCache=new WeakMap(),renderBundleCache=new WeakMap(),fallbackArcMetaBuffer=null;
     let views=new WeakMap(),frames=0,draws=0,segments=0,pathIndexUploads=0,pathIndexUploadBytes=0,overlayFrames=0,overlayDraws=0;
-    // v510: one frame-wide overlay queue replaces per-copy command encoders/submits.
+
     let overlayFrameActive=false,overlayQueue=[],overlayQueuedDraws=0,overlayFlushes=0,overlaySubmissions=0,overlayClearOnlySubmissions=0,overlayMaxBatch=0,uniformBufferGrows=0,sharedArcReuses=0,bundleBuilds=0,bundleHits=0,bundleExecutes=0,bundleFallbacks=0;
     let sampler=null,whiteTexture=null,whiteTextureView=null,builtinSpriteTextures=new Map(),spriteTextureCache=new Map(),customTextureLoads=0,customTextureErrors=0;
     const uf=new Float32Array(36);
@@ -71,15 +65,12 @@ fn deadVertex()->O{var o:O;o.pos=vec4<f32>(-3.0,-3.0,0.0,1.0);o.arcSide=vec2<f32
     let subdivisions=max(1u,u32(u.p0.y+0.5));let bi=iid/subdivisions;let sj=iid%subdivisions;let baseCount=u32(u.p1.y+0.5);
     if(bi>=baseCount){return deadVertex();}
     let s0=segData[bi*2u];let s1=segData[bi*2u+1u];let a0=s0.xy;let b0=s0.zw;
-    // A topology morph can transiently collapse an edge even when both phase endpoints are
-    // valid. Keep the resident topology stable, but discard that instance before normalize()
-    // so a zero vector can never inject NaNs into the whole ribbon pass.
+
     if(s1.y<=0.000001){return deadVertex();}
     let baseLen=s1.y;let packedPi=pathIndex[bi];let pi=packedPi&0x00ffffffu;if(!selectedPath(pi)){return deadVertex();}
     let keyStart=(packedPi&0x40000000u)!=0u;let keyEnd=(packedPi&0x80000000u)!=0u;
     var ta=normalize(b0-a0);var tb=ta;
-    // Sprite is a continuous ribbon: even authored key corners share a join tangent.  Motion-only
-    // keeps the authored hard-corner contract unless the visible carrier is a smooth spline.
+
     let spriteMode=u.p0.z>0.5;let joinStart=spriteMode||u.p4.x>.5||!keyStart;let joinEnd=spriteMode||u.p4.x>.5||!keyEnd;
     if(joinStart&&bi>0u&&(pathIndex[bi-1u]&0x00ffffffu)==pi){let ps=segData[(bi-1u)*2u];let dv=ps.zw-ps.xy;let dl=length(dv);if(dl>.000001){let pd=dv/dl;let sum=pd+ta;if(length(sum)>.0001){ta=normalize(sum);}}}
     if(joinEnd&&bi+1u<baseCount&&(pathIndex[bi+1u]&0x00ffffffu)==pi){let ns=segData[(bi+1u)*2u];let dv=ns.zw-ns.xy;let dl=length(dv);if(dl>.000001){let nd=dv/dl;let sum=tb+nd;if(length(sum)>.0001){tb=normalize(sum);}}}
@@ -87,8 +78,7 @@ fn deadVertex()->O{var o:O;o.pos=vec4<f32>(-3.0,-3.0,0.0,1.0);o.arcSide=vec2<f32
     let pa=splinePoint(a0,b0,ta,tb,x0);let pb=splinePoint(a0,b0,ta,tb,x1);let tna=splineTangent(a0,b0,ta,tb,x0);let tnb=splineTangent(a0,b0,ta,tb,x1);
     let g0=s1.x+baseLen*x0;let g1=s1.x+baseLen*x1;let l0=(s1.x-s1.z)+baseLen*x0;let l1=(s1.x-s1.z)+baseLen*x1;
     let oa=offsetAt(g0,l0);let ob=offsetAt(g1,l1);let a=pa+vec2<f32>(-tna.y,tna.x)*oa;let b=pb+vec2<f32>(-tnb.y,tnb.x)*ob;
-    // Shared cross-sections, not six independent capsule corners.  Adjacent instances therefore
-    // meet on exactly the same two vertices and the sprite reads as one continuous printed ribbon.
+
     let na=normalize(vec2<f32>(-tna.y,tna.x));let nb=normalize(vec2<f32>(-tnb.y,tnb.x));
     let half=max(.0001,u.p0.x);let edge=half+u.aaLocal;let sideScale=edge/half;
     let endFlags=array<f32,4>(0.0,1.0,0.0,1.0);let sideFlags=array<f32,4>(-1.0,-1.0,1.0,1.0);
@@ -101,23 +91,23 @@ fn builtInSprite(spriteType:i32,spriteU:f32,dist:f32,span:f32,side:f32)->vec4<f3
     let fromStart=max(0.0,spriteU*span);let fromEnd=max(0.0,(1.0-spriteU)*span);let absSide=abs(side);
     var alpha=0.0;var rgb=primary;
     if(spriteType==0){
-// Snake: mathematically printed emerald/yellow body. Head and eye exist only at the final end.
+
 let tailSpan=max(8.0,hw*2.2);let headSpan=max(12.0,hw*3.4);let tail=mix(.10,.56,smoothstep(0.0,tailSpan,fromStart));
 let headT=1.0-clamp(fromEnd/headSpan,0.0,1.0);let half=max(tail,mix(.56,.88,smoothstep(.05,.82,headT)));
 alpha=1.0-smoothstep(half,half+.045,absSide);
 let period=max(5.0,hw*.72);let stripe=.5+.5*sin(6.28318530718*dist/period+side*2.2);let yellow=smoothstep(.47,.58,stripe);rgb=mix(primary,secondary,yellow*.88);
 let ex=(fromEnd-headSpan*.26)/max(1.0,headSpan*.115);let ey=(side+.27)/.075;if(ex*ex+ey*ey<1.0){rgb=ink;alpha=1.0;}
     }else if(spriteType==1){
-// Bones: continuous centre rail with periodic knobs, like a printed bone chain.
+
 let period=max(6.0,hw*1.35);let ph=fract(dist/period);let shaft=1.0-smoothstep(.13,.18,absSide);let knob=max(1.0-smoothstep(.36,.43,absSide),0.0)*(1.0-smoothstep(.12,.22,min(ph,1.0-ph)*2.0));alpha=max(shaft,knob);rgb=mix(primary,secondary,.25+.55*absSide);
     }else if(spriteType==2){
-// Dachshund: long brown body, light belly/legs, broad head at the end.
+
 let headSpan=max(13.0,hw*3.0);let tailSpan=max(9.0,hw*2.0);let tail=mix(.10,.48,smoothstep(0.0,tailSpan,fromStart));let headT=1.0-clamp(fromEnd/headSpan,0.0,1.0);let half=max(tail,mix(.48,.82,smoothstep(.15,.85,headT)));let period=max(8.0,hw*2.2);let ph=fract(dist/period);let leg=select(0.0,1.0,side>.25&&softBand(ph,.16,.28)>.5);let shape=max(half,select(half,.78,leg>0.5));alpha=1.0-smoothstep(shape,shape+.045,absSide);rgb=mix(primary,secondary,clamp((side+.05)*.55+leg*.55,0.0,1.0));let ex=(fromEnd-headSpan*.25)/max(1.0,headSpan*.11);let ey=(side+.25)/.07;if(ex*ex+ey*ey<1.0){rgb=ink;alpha=1.0;}
     }else if(spriteType==3){
-// Dragon: continuous red body with periodic gold dorsal spikes and a final head.
+
 let headSpan=max(13.0,hw*3.1);let headT=1.0-clamp(fromEnd/headSpan,0.0,1.0);let baseHalf=mix(.46,.78,smoothstep(.15,.86,headT));let period=max(6.0,hw*.95);let ph=abs(fract(dist/period)-.5)*2.0;let spike=(1.0-ph)*.42;let half=select(baseHalf,max(baseHalf,.45+spike),side<0.0);alpha=1.0-smoothstep(half,half+.045,absSide);rgb=mix(primary,secondary,select(.12,.92,side<-.38&&ph<.72));let ex=(fromEnd-headSpan*.25)/max(1.0,headSpan*.11);let ey=(side+.24)/.07;if(ex*ex+ey*ey<1.0){rgb=ink;alpha=1.0;}
     }else{
-// Caterpillar: smoothly connected periodic lobes, no separate rectangles.
+
 let period=max(6.0,hw*1.15);let ph=.5+.5*cos(6.28318530718*dist/period);var half=.42+.18*ph;let headSpan=max(11.0,hw*2.7);let headT=1.0-clamp(fromEnd/headSpan,0.0,1.0);half=max(half,mix(.42,.76,smoothstep(.15,.85,headT)));alpha=1.0-smoothstep(half,half+.045,absSide);rgb=mix(primary,secondary,.18+.68*(1.0-ph));let ex=(fromEnd-headSpan*.24)/max(1.0,headSpan*.105);let ey=(side+.23)/.07;if(ex*ex+ey*ey<1.0){rgb=ink;alpha=1.0;}
     }
     return vec4<f32>(rgb,alpha);
@@ -239,20 +229,6 @@ if(cov<=.0001){discard;}
         const amp=mc?(Math.max(0,Number(mc.amplitudePx)||0)*Math.max(0,Number.isFinite(Number(mc.amplitudeMultiplier))?Number(mc.amplitudeMultiplier):1))/Math.max(.0001,scale):0,wl=mc?Math.max(2,(Number(mc.wavelengthPx)||36)*Math.max(.01,Number.isFinite(Number(mc.wavelengthMultiplier))?Number(mc.wavelengthMultiplier):2))/Math.max(.0001,scale):72,speed=mc?Math.max(0,Number(mc.speedPercent)||0)/100:0,time=(Number(now)||performance.now())*.001,travel=time*60*speed/Math.max(.0001,scale),phase=time*6.28318530718*speed;
         const residentVisualRail=table?.gpuArcResident===true&&table?._gpuMorphArcResource?.morphRec?.bezierVisualRail===true;const smoothSpline=!residentVisualRail&&layer?.profileMode==='spline';
 
-// v437 summary:
-// - Fill preparation remains available for Dash/Graffiti profiles instead of being skipped with the hidden carrier stroke.
-// - Dash markers are physically 5x the displayed line thickness while the UI value/multiplier contract stays unchanged.
-// - Dash Glow and Outline now use the GPU marker SDF itself, not the hidden continuous carrier line.
-// - Moving Line is positioned after Fill in the editor and its effect provider is independent from Morph/line visibility.
-// - Sprite mode explicitly enables/warms GPU Path FX. Graffiti Waist gets dense local sampling and tangent-normalized orientation.
-// v436 summary:
-// - Four top-level line modes: Point / Dash / Sprite / Graffiti.
-// - Dash owns independent GPU stamp types: circle / square / cross / slash.
-// - Sprite gallery is visible only in Sprite mode; Graffiti never exposes sprites.
-// - Graffiti owns only calligraphic nib stamps; its ribbon angle is local-tangent-relative.
-// - Playlist palette is common to the whole line and stays above the four mode selectors.
-// v435: the spline carrier itself is already adaptively sampled. Extra shader subdivisions
-        // are only for time-varying deformation, never for making a sprite look less segmented.
         let subdivisions=mode===2?8:mode===3?12:mode===1?8:1;const spritePlacement=normalizeLineSpritePlacement(cfg?.mode),placement=spritePlacement==='everyNthPath'?1:spritePlacement==='whole'?2:spritePlacement==='perSegment'?3:spritePlacement==='everyNth'?4:0;
         uf.fill(0);uf[0]=mainCanvas.width;uf[1]=mainCanvas.height;uf[2]=.8/Math.max(.0001,scale);uf[3]=Number(table.total)||0;uf[4]=m.a;uf[5]=m.c;uf[6]=m.e;uf[8]=m.b;uf[9]=m.d;uf[10]=m.f;
         uf[12]=col[0];uf[13]=col[1];uf[14]=col[2];uf[15]=Math.max(0,Math.min(1,Number(alpha)||0))*col[3];
@@ -295,8 +271,7 @@ if(cov<=.0001){discard;}
         if(!overlayFrameActive)return true;if(!configureOverlay(mainCanvas.width,mainCanvas.height)){overlayFrameActive=false;return false;}
         try{
             const tex=overlayContext.getCurrentTexture(),enc=device.createCommandEncoder({label:'SpiroStar Path FX frame queue v512'});
-            // v512: the same command buffer first produces Morph points + exact arc metrics,
-            // then consumes them in the overlay render pass. No CPU readback and no extra submit.
+
             const encodedArc=new Set(),submittedArcTables=[];for(const item of overlayQueue){const rec=item.table?._gpuMorphArcResource;if(rec&&!encodedArc.has(rec)){
                 const committed=typeof isGpuMorphArcTableCommitted==='function'&&isGpuMorphArcTableCommitted(item.table);
                 if(committed){sharedArcReuses++;encodedArc.add(rec);continue;}

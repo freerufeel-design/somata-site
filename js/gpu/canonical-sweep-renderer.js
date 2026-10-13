@@ -1,10 +1,7 @@
-// SpiroStar v512 — dedicated canonical GPU Sweep renderer
-// Extracted from legacy/app-a; owns whole/per-path glint pipelines and Corridor instancing.
+
+
 window.__spiroRegisterModule?.('js/gpu/canonical-sweep-renderer');
 
-// v328 — GPU-native Sweep for whole/per-path glints, including Corridor. Canonical
-        // segments are stored once and Corridor uploads only compact copy scale/rotation/alpha
-        // records. The GPU expands segment × copy and clips the moving arc window itself.
         const WebGPUCanonicalSweepRenderer = (() => {
             const canvas=document.createElement('canvas');
             let device=null,context=null,format=null,cornerBuffer=null,uniformBuffer=null,dummyCubicBuffer=null,uniformLayout=null,segmentLayout=null,copyLayout=null,sceneCompositeLayout=null,haloPipeline=null,corePipeline=null,haloCorridorPipeline=null,coreCorridorPipeline=null,uniformBind=null,corridorUniformBind=null,sceneScratchTexture=null,sceneScratchView=null,sceneCompositePipeline=null,sceneCoreCompositePipeline=null,sceneCompositePipelines=Object.create(null),sceneCompositeBindGroup=null,sceneCoreCompositeBindGroup=null,targetViews=new WeakMap();
@@ -29,8 +26,7 @@ fn cubicDerivativeArc(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,t:f32)
 fn arcCorrectMicroT(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,sub:u32,subdiv:u32,f0:f32)->f32{
     let f=clamp(f0,0.0,1.0);let sd=max(1u,subdiv);let t0=f32(sub)/f32(sd);let t1=f32(sub+1u)/f32(sd);if(f<=0.000001){return t0;}if(f>=0.999999){return t1;}
     let s0=max(0.000001,length(cubicDerivativeArc(p0,c1,c2,p3,t0)));let s1=max(0.000001,length(cubicDerivativeArc(p0,c1,c2,p3,t1)));let dv=s1-s0;let arcTarget=f*max(0.000001,s0+0.5*dv);
-    // Integral of the local linear-speed model has a closed-form inverse. Rationalized root
-    // avoids cancellation and is cheaper than iterative Newton correction in particle/Web loads.
+
     let disc=max(0.000000000001,s0*s0+2.0*dv*arcTarget);let q=clamp((2.0*arcTarget)/max(0.000001,s0+sqrt(disc)),0.0,1.0);return mix(t0,t1,q);
 }
 fn retainedPoint(si:u32,microT:f32)->vec2<f32>{
@@ -81,8 +77,7 @@ struct V{@builtin(position) p:vec4<f32>};
                     const shared=await WebGPUDeviceHub.acquire();device=shared.device;hubGeneration=shared.generation;lost=false;context=canvas.getContext('webgpu');if(!context)throw new Error('WebGPU canvas context недоступен');format=navigator.gpu.getPreferredCanvasFormat();
                     const module=device.createShaderModule({label:'SpiroStar canonical sweep WGSL',code:WGSL});await assertWebGPUShaderModule(module,'SpiroStar canonical sweep WGSL');
                     const target={format,blend:{color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}}},vbuf=[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}];
-                    // Iter33: canonical Sweep shares explicit group layouts between halo/core.
-                    // Reusing BGLs extracted from auto-layout pipelines is invalid WebGPU.
+
                     uniformLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'uniform'}}]});
                     segmentLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'read-only-storage'}},{binding:1,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'read-only-storage'}}]});
                     copyLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
@@ -157,9 +152,7 @@ struct V{@builtin(position) p:vec4<f32>};
                     if(!k)return true;const sb=segmentBind(rec,table,true),stage=(core,mode)=>{const encoder=device.createCommandEncoder({label:core?'SpiroStar Corridor canonical sweep core':'SpiroStar Corridor canonical sweep halo'}),pass=encoder.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});pass.setPipeline(core?coreCorridorPipeline:haloCorridorPipeline);pass.setBindGroup(0,ur.corridorBind);pass.setBindGroup(1,sb);pass.setBindGroup(2,copy.bindGroup);pass.setVertexBuffer(0,cornerBuffer);pass.draw(4,rec.count*2*k);pass.end();device.queue.submit([encoder.finish()]);submissions++;composite(ctx,mode);};stage(false,sweepBlendCanvasOperation(sweepGlowBlendMode(cfg)));stage(true,sweepBlendCanvasOperation(sweepCoreBlendMode(cfg)));frames++;corridorDraws++;corridorCopies+=k;corridorLogicalInstances+=rec.count*2*k;return true;
                 }catch(err){lastError=String(err?.message||err);return false;}
             }
-            // v336 — Sweep keeps its historical Canvas `lighter` semantics without Canvas2D:
-            // render the sweep into a transparent GPU scratch texture, then add that texture
-            // into Layer Scene in a second GPU pass. Both passes stay deferred until frame submit.
+
             function encodeToLayerScene(targetTexture,table,ctx,cfg,phase,lineWidth,visual,alpha,lenFracOverride,uniformOwner=null,frameCtx=null){
                 if(!targetTexture||!canUse(cfg,false)||!table?.total||!ensureSize())return null;
                 try{const encoder=device.createCommandEncoder({label:'SpiroStar canonical sweep → Layer Scene'});if(!ensureArcTableReady(table,frameCtx,encoder))return null;const rec=WebGPUCanonicalPathStore.acquire(table,device,hubGeneration);if(!rec?.count)return{handled:true,commandBuffer:null};const ur=prepareUniforms(table,rec,ctx,cfg,phase,lineWidth,visual,alpha,lenFracOverride,uniformOwner);if(ur.alpha<=.0001)return{handled:true,commandBuffer:null};const sb=segmentBind(rec,table,false);

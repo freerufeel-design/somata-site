@@ -1,8 +1,7 @@
-// SpiroStar v500 Modular Base
-// Single-rAF scheduler, performance governor, profiler and invalidation
+
+
 window.__spiroRegisterModule?.('js/core/scheduler');
-        // Somata 7.3.9 — user-configurable render cap. The default is deliberately 60 FPS so
-        // high-refresh displays (120/144 Hz) do not automatically double the heavy scene work.
+
         const FPS_LIMIT_DEFAULT = 60;
         const FPS_LIMIT_MIN = 15;
         const FPS_LIMIT_MAX = 240;
@@ -18,10 +17,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             if (saved !== null && saved !== '') configuredFpsLimit = normalizeFpsLimit(saved);
         } catch (_) {}
         if (fpsLimitSettingEl) fpsLimitSettingEl.value = String(configuredFpsLimit);
-        // One browser rAF owns all continuous animation sources and the heavy canvas paint.
-        // Individual subsystems register lightweight state-update tasks here instead of
-        // starting independent requestAnimationFrame loops. Event-driven invalidations use
-        // the same scheduler, so several updates in one display frame still produce one paint.
+
         const animationScheduler = (() => {
             const tasks = new Map();
             const afterPaint = new Map();
@@ -42,17 +38,10 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             let fpsLimit = configuredFpsLimit;
             let nextFrameDueAt = 0;
             let fpsGateSkips = 0;
-            // v191: reuse the task-name snapshot instead of allocating Array.from(tasks.entries())
-            // on every animation frame. Tasks may mutate the map while callbacks run.
+
             const taskSnapshot = [];
             const afterPaintSnapshot = [];
 
-            // Somata 7.2.4 freeze diagnostics. A visible Morph hitch must leave a concise,
-            // copyable record in the in-app console instead of only being inferred from FPS.
-            // We measure the scheduler gap, every animation task, the main paint, GPU-prewarm
-            // holds and (when Chromium exposes it) Long Tasks. Thresholds are intentionally
-            // high enough to ignore normal 60/120 Hz jitter but low enough to catch a visible
-            // multi-frame freeze.
             const MORPH_TASK_NAMES=new Set(['morph','morph-owner','minimalMorph','project-morph']);
             const MORPH_FREEZE_GAP_MS=100;
             const MORPH_FREEZE_WORK_MS=50;
@@ -78,7 +67,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 if(!hasMorphActivity()&&detail?.force!==true)return null;
                 if(document.visibilityState==='hidden')return null;
                 const at=performance.now();
-                // Do not report the giant rAF gap produced by returning from another tab/window.
+
                 if(at-lastVisibilityResumeAt<350&&code==='MORPH_RAF_GAP')return null;
                 const durationMs=roundFreezeMs(detail?.durationMs);
                 const governor=safeFreezeRead(window.__spiroPerformanceGovernorStatus)||{};
@@ -88,8 +77,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 const recentGpuRuntime=Number(gpuRuntime?.lastAt)>0&&at-Number(gpuRuntime.lastAt)<1200?gpuRuntime.last:null;
                 const task=String(detail?.task||'');
                 const key=`${code}|${task}|${recentFullGpu?.code||''}|${recentGpuRuntime?.stage||''}`;
-                // One incident may be observed by both our timers and PerformanceObserver.
-                // Keep the most specific first record and suppress near-identical duplicates.
+
                 if(at-lastMorphFreezeAt<250)return null;
                 if(key===lastMorphFreezeKey&&at-lastMorphFreezeAt<1400)return null;
 
@@ -140,8 +128,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 morphFreezeCount++;
                 const rec={at:roundFreezeMs(at),...payload};morphFreezeHistory.push(rec);if(morphFreezeHistory.length>32)morphFreezeHistory.shift();
                 lastMorphFreezeAt=at;lastMorphFreezeKey=key;
-                // error-overlay.js mirrors this dedicated warning into the bottom in-app
-                // console, while DevTools keeps the structured payload for deeper inspection.
+
                 console.warn('[Somata Morph Freeze]',payload);
                 try{window.__somataDiagNote?.('morph.freeze',`${payload.code}: ${payload.cause}`);}catch(_){ }
                 return payload;
@@ -149,21 +136,19 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             document.addEventListener?.('visibilitychange',()=>{if(document.visibilityState!=='hidden')lastVisibilityResumeAt=performance.now();});
 
             const armRenderWatchdog = () => {
-                if (watchdogTimer || !renderPending) return;
+                // Morph is a continuous animation task. Guard it even when a particular tick did not
+                // leave renderPending=true; otherwise a lost/delayed browser rAF can freeze Morph
+                // indefinitely without ever arming the recovery timer.
+                if (watchdogTimer || (!renderPending && !hasMorphActivity())) return;
                 const armedFrame = frameCount;
                 watchdogTimer = setTimeout(() => {
                     watchdogTimer = 0;
-                    if (!renderPending || inFrame) return;
-                    // Background tabs intentionally throttle rAF. Do not turn the recovery guard
-                    // into a hidden-tab animation loop; visibilitychange below restarts scheduling.
+                    if ((!renderPending && !hasMorphActivity()) || inFrame) return;
+
                     if (document.visibilityState === 'hidden') { raf = 0; return; }
-                    // Iter23 — a UI invalidation must not depend forever on one stale/lost rAF.
-                    // Under normal animation the rAF fires long before this guard. Only when no
-                    // scheduler tick happened after the invalidation do we recover synchronously.
+
                     if (frameCount !== armedFrame) { schedule(); return; }
-                    // The browser rAF that failed to arrive is still registered. Cancel its
-                    // stale callback before synchronous recovery; otherwise it can fire later
-                    // beside the newly scheduled rAF and double-advance a Morph boundary.
+
                     const staleRaf=raf;
                     if(staleRaf)try{cancelAnimationFrame(staleRaf);}catch(_){}
                     raf = 0;
@@ -177,16 +162,9 @@ window.__spiroRegisterModule?.('js/core/scheduler');
 
             const schedule = () => {
                 if (!raf) raf = requestAnimationFrame(tick);
-                if (renderPending) armRenderWatchdog();
+                if (renderPending || hasMorphActivity()) armRenderWatchdog();
             };
 
-            // v503: the scheduler must never get permanently stuck in `inFrame=true`.
-            // In the monolith a rare uncaught error in a late render/finalize hook was mostly
-            // masked by direct renderMainCanvas() calls from the profile editor. After the split,
-            // most controls correctly use requestMainCanvasRender(); if one scheduled paint threw,
-            // `inFrame` could remain true forever and all later invalidations would update state
-            // without scheduling a new frame. Changing/resetting the spline still appeared to fix
-            // everything because those controls use a direct synchronous paint.
             const tick = (now) => {
                 const tickStartedAt=performance.now();
                 const tickNow=Number(now)||tickStartedAt;
@@ -194,10 +172,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 const tickGapMs=previousTickAt>0?Math.max(0,tickNow-previousTickAt):0;
                 raf = 0;
                 if (watchdogTimer) { clearTimeout(watchdogTimer); watchdogTimer = 0; }
-                // FPS cap is applied at the single scheduler owner, before animation tasks and paint.
-                // Keep requesting browser rAF so the cap stays phase-locked to any display refresh
-                // rate, but skip heavy work until the next target slot. The rolling due-time avoids
-                // a 144 Hz display degenerating into a fixed 48 FPS every-third-refresh cadence.
+
                 const frameIntervalMs = 1000 / Math.max(FPS_LIMIT_MIN, fpsLimit);
                 if (nextFrameDueAt <= 0) nextFrameDueAt = tickNow;
                 if (tickNow + 0.5 < nextFrameDueAt) {
@@ -210,13 +185,16 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                     do { nextFrameDueAt += frameIntervalMs; } while (nextFrameDueAt <= tickNow + 0.25);
                 }
                 lastTickAt = tickNow;
-                if(tickGapMs>=MORPH_FREEZE_GAP_MS&&hasMorphActivity())reportMorphFreeze('MORPH_RAF_GAP',{durationMs:tickGapMs});
+                if(tickGapMs>=MORPH_FREEZE_GAP_MS&&hasMorphActivity()){
+                    reportMorphFreeze('MORPH_RAF_GAP',{durationMs:tickGapMs});
+                    // A delayed browser/driver rAF must still produce a fresh Morph paint even if the
+                    // animation task itself does not leave an invalidate request behind on this tick.
+                    renderPending=true;watchdogRecoveries++;watchdogLastRecoveryAt=tickNow;
+                }
                 inFrame = true;
                 frameCount++;
                 try {
-                    // Snapshot iteration lets a task safely register/remove another task.
-                    // Keep the backing array and refill it to avoid a short-lived entries array
-                    // every display frame while morph/tunnel/audio tasks are active.
+
                     taskSnapshot.length = 0;
                     for (const name of tasks.keys()) taskSnapshot.push(name);
                     for (let ti = 0; ti < taskSnapshot.length; ti++) {
@@ -240,10 +218,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                     const shouldPaint = renderPending;
                     renderPending = false;
                     if (shouldPaint) {
-                        // v522.10 — module bootstrap is synchronous, but an rAF requested by an
-                        // early module may fire before main-pipeline.js has declared renderMainCanvas.
-                        // Keep the invalidation pending instead of treating bootstrap as a render
-                        // failure; afterPaint callbacks must wait for an actual paint as well.
+
                         if (window.__spiroAppBootComplete !== true || typeof renderMainCanvas !== 'function') {
                             renderPending = true;
                         } else {
@@ -261,7 +236,10 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                                 console.error('Scheduled main-canvas paint failed', err);
                             }
                         }
-                        if (!renderPending && afterPaint.size) {
+                        // afterNextPaint means after the paint that just completed, not after an idle paint.
+                        // Continuous effects may request the next frame while renderMainCanvas is running;
+                        // gating this on !renderPending starves boundary commits and stops Morph after cycle 1.
+                        if (afterPaint.size) {
                             afterPaintSnapshot.length=0;
                             for(const entry of afterPaint.entries())afterPaintSnapshot.push(entry);
                             afterPaint.clear();
@@ -276,8 +254,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                         }
                     }
                 } finally {
-                    // This finally is the real v503 fix: future UI invalidations remain live even
-                    // if a render backend/finalizer unexpectedly throws once.
+
                     lastTickDurationMs=performance.now()-tickStartedAt;
                     inFrame = false;
                     if (tasks.size || renderPending || afterPaint.size) schedule();
@@ -298,18 +275,14 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                     if (!name || typeof fn !== 'function') return;
                     afterPaint.set(name, fn);
                     renderPending = true;
-                    // Schedule even from inside a frame. Normally the current tick will satisfy
-                    // the request; the extra rAF is harmless and also acts as a recovery path if
-                    // the current tick aborts in browser/backend code.
+
                     schedule();
                 },
                 invalidate() {
                     renderPending = true;
                     lastInvalidateAt = performance.now();
                     invalidateCount++;
-                    // v503 self-healing invalidation: never rely on the `inFrame` flag to decide
-                    // whether a future frame exists. schedule() already deduplicates by `raf`.
-                    // Iter23 adds a dormant 120 ms watchdog only for a genuinely stalled rAF.
+
                     schedule();
                 },
                 consumeRenderRequest() { renderPending = false; },
@@ -347,9 +320,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
         window.__somataGetFpsLimit=()=>animationScheduler.getFpsLimit();
         window.__somataMorphFreezeDiagnostics=()=>animationScheduler.freezeStats();
         window.__somataReportMorphFreeze=(code,detail={})=>animationScheduler.reportMorphFreeze(code,detail);
-        // Chromium's Long Task observer catches blocking work outside Somata's own scheduler
-        // (GC, another script, browser work). Scheduler/task timings remain authoritative when
-        // they identify a more specific culprit; the reporter suppresses duplicate observations.
+
         try{
             if(typeof PerformanceObserver==='function'&&Array.isArray(PerformanceObserver.supportedEntryTypes)&&PerformanceObserver.supportedEntryTypes.includes('longtask')){
                 const morphLongTaskObserver=new PerformanceObserver(list=>{
@@ -364,8 +335,6 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             }
         }catch(_){ }
 
-        // Somata 6.8 Iter23 — minimal, copy/paste-friendly console diagnostics. Keep a tiny
-        // fixed ring so button/startup failures can be reported without enabling verbose logging.
         const somataDiagEvents = [];
         function somataDiagPush(type, detail='') {
             const rec={t:Number(performance.now().toFixed(1)),type:String(type||'event'),detail:String(detail||'')};
@@ -384,11 +353,6 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             somataDiagPush('click',String(key||'control').slice(0,160));
         },true);
 
-        // v386 — quality-preserving performance governor with three GPU-residency pressure
-        // tiers. Browsers still do not expose dedicated VRAM reliably, so no VRAM size is
-        // guessed. Sustained <60 FPS keeps more buffers/bind groups resident; critical pressure
-        // can widen cache/ring residency to 8x when reported system memory is ample/unknown.
-        // Geometry quality, DPR, sampling and effect count are never reduced.
         const performanceGovernor = (() => {
             const targetFps=60,enterFps=57.5,deepFps=52,criticalFps=45,exitFps=59.25;
             const deviceMemoryGb=Math.max(0,Number(navigator.deviceMemory)||0);
@@ -423,23 +387,12 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 if(emaRenderMs>0&&emaRenderMs>=emaGpuMs*1.35)return 'cpu-driver';
                 return 'mixed';
             };
-            // v396 — when real GPU timestamps show spare GPU time but the frame is still below
-            // 60 FPS, the bottleneck is predominantly CPU/driver/upload-side. In that case spend
-            // even more VRAM on rotating dynamic buffers (up to 12x at critical pressure) instead
-            // of reusing the same allocation too aggressively. GPU-bound frames keep the proven
-            // 2x/4x/8x residency policy so memory growth cannot masquerade as a shader-speed fix.
+
             const ringScale=()=>{const base=cacheScale();if(pressureLevel===0)return 1;return bottleneck()==='cpu-driver'?Math.min(12,Math.ceil(base*(pressureLevel===3?1.5:1.25))):base;};
-            // v535 — frame-rate-independent dynamic ring residency.  Earlier builds let an FPS
-            // pressure transition enlarge dozens of WebGPU rings in the middle of an otherwise
-            // smooth Morph.  The extra residency was useful, but creating those buffers/bindings
-            // on the first slow frame could itself become the visible hitch.  Choose a modest
-            // in-flight ring class once from the browser's coarse device-memory hint and keep it
-            // stable for the whole session.  FPS may still tune cache retention/capacity growth,
-            // but it no longer changes the number of rotating GPU objects while animation runs.
+
             const residencyRingScale=()=>((deviceMemoryGb===0||deviceMemoryGb>=8)?2:1);
             const ringCount=(base=3)=>{const n=Math.max(1,Math.round(Math.max(1,Number(base)||1)));return n+(residencyRingScale()>1?1:0);};
-            // Rings remain sticky across all effects.  This makes Blue/Green Morph, Web, Lightning,
-            // lamps and particles immune to FPS-governor ring-topology changes.
+
             const stickyRingCount=(base=3,current=0)=>Math.max(Math.max(1,Math.floor(Number(current)||0)),ringCount(base));
             const growthFactor=()=>pressureLevel===3?3.0:(pressureLevel===2?2.4:(pressureLevel===1?2.0:1.6));
             const minDynamicCapacity=(base=256)=>{
@@ -474,7 +427,6 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 effectCull:{...effectCullStats},
                 passes,
                 topPasses,
-                glowCache:{...staticGlowCacheStats},
                 performanceGovernor:performanceGovernor.status(),
                 renderRuntime:{frameId:renderRuntime.frameId,active:renderRuntime.active}
             };
@@ -492,11 +444,6 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             };
         };
 
-
-        // Somata 7.0.12 — effect benchmark console profiler. It intentionally measures the
-        // existing FullGPU graph instead of adding another render path. CPU pass timings are
-        // sampled every frame while a benchmark is active; whole-frame GPU timestamp-query is
-        // temporarily sampled more often, and GPU subsystem counters are diffed start -> stop.
         const somataFxBenchmark = (()=>{
             const history=[];let active=null,last=null;
             const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -569,9 +516,6 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             lastFpsText: ''
         };
 
-
-        // v210 — sampled pass profiler. One frame out of ten is timed so profiling
-        // does not become a meaningful part of the frame budget itself.
         const renderPassProfiler = {
             sampleEvery:10, frameSerial:0, active:false, frameStart:0,
             current:Object.create(null), last:Object.create(null), ema:Object.create(null), samples:0,
@@ -583,8 +527,6 @@ window.__spiroRegisterModule?.('js/core/scheduler');
         };
         window.__spiroPassProfiler=renderPassProfiler;
 
-        // v210 — O(1) lookups for hot effect helpers. The lookup is rebuilt only when
-        // the layer array/id order changes, not for every lamp/web query.
         const layerLookupRuntime={layersRef:null,ids:[],byId:new Map(),indexById:new Map(),indexByObject:new WeakMap()};
         function refreshLayerLookup(force=false){
             const layers=(typeof SpiroMorphController!=='undefined'&&typeof SpiroMorphController.getDisplayLayers==='function')
@@ -633,7 +575,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
         });
 
         function requestMainCanvasRender() {
-            // Event-driven paints and continuous animation share the same display-frame owner.
+
             animationScheduler.invalidate();
         }
 

@@ -1,12 +1,7 @@
-// SpiroStar v513 — Dedicated WebGPU Graffiti ribbon renderer
-// Extracted from legacy/app-a so Graffiti GPU backend can evolve independently.
+
+
 window.__spiroRegisterModule?.('js/gpu/graffiti-ribbon-renderer');
 
-
-// Somata 7.0.13 Graffiti contour Glow repair — the halo is a GPU post-process of the
-// exact calligraphic ribbon mask.  It therefore follows nib width/angle/variation/joins
-// instead of glowing a hidden thin centreline.  The mask and both blur passes remain in
-// WebGPU textures; there is no Canvas2D blur/readback path here.
 const WebGPUGraffitiContourGlow=(()=>{
     const SLOT_COUNT=32,BLUR_TAPS=12;
     let device=null,format=null,generation=-1,ready=false,initializing=null,lastError='not-initialized';
@@ -52,7 +47,7 @@ fn blurredAlpha(uv0:vec2<f32>)->f32{
             pipelineOver=makeComposite('over');pipelineBehind=makeComposite('behind');pipelineOverStencil=makeComposite('over',blend('over'),true);pipelineBehindStencil=makeComposite('behind',blend('behind'),true);pipelineModes=Object.create(null);pipelineModesStencil=Object.create(null);
             if(typeof sweepBlendGpuState==='function'){for(const mode of (typeof SWEEP_BLEND_MODES!=='undefined'?SWEEP_BLEND_MODES:['normal','screen','multiply','add','darken','lighten'])){const bs=sweepBlendGpuState(mode);pipelineModes[mode]=makeComposite(`mode-${mode}`,bs);pipelineModesStencil[mode]=makeComposite(`mode-${mode}`,bs,true);}}
             sampler=device.createSampler({magFilter:'linear',minFilter:'linear',addressModeU:'clamp-to-edge',addressModeV:'clamp-to-edge'});
-            slots=Array.from({length:SLOT_COUNT},()=>({w:0,h:0,mask:null,scratch:null,uniformH:null,uniformV:null}));cursor=0;ready=true;lastError='';return true;
+            slots=Array.from({length:SLOT_COUNT},()=>({w:0,h:0,mask:null,scratch:null,uniformH:null,uniformV:null}));cursor=0;ready=true;lastError='';try{requestMainCanvasRender?.();}catch(_){}return true;
         }catch(err){ready=false;fail('init/pipeline',err?.message||err,err);return false;}})();initializing=task;try{return await task;}finally{if(initializing===task)initializing=null;}
     }
     function destroySlot(slot){for(const t of [slot?.mask,slot?.scratch])try{t?.destroy?.();}catch(_){}for(const b of [slot?.uniformH,slot?.uniformV])try{b?.destroy?.();}catch(_){}if(slot){slot.mask=slot.scratch=slot.uniformH=slot.uniformV=null;slot.w=slot.h=0;}}
@@ -81,9 +76,6 @@ fn blurredAlpha(uv0:vec2<f32>)->f32{
 })();
 window.__spiroGraffitiContourGlowGPUStatus=()=>WebGPUGraffitiContourGlow.status();
 
-// v522.13 — native closed Graffiti core ribbon.
-// Closed contours include the last->first span. Core stays unexpanded; Glow is generated
-// from this exact ribbon as a GPU mask + separable GPU blur, avoiding geometric halo wedges.
 const WebGPUGraffitiRibbonRenderer=(()=>{
     const overlayCanvas=document.getElementById('graffitiGpuOverlayCanvas');
     let overlayContext=null,overlayCurrentTexture=null,overlayConfiguredGeneration=-1,overlayFrameId=-1,overlayClearedFrame=-1,overlayUsedFrame=-1,overlayFrames=0,overlayDraws=0;
@@ -123,8 +115,7 @@ fn emit(p:vec2<f32>,v:In,copyAlpha:f32)->Out{
     let edge=smoothstep(vec3<f32>(0.0),fw*1.15,v.bary);
     var cov=1.0;
     if(v.edgeMask.x>0.5){cov=min(cov,edge.x);}if(v.edgeMask.y>0.5){cov=min(cov,edge.y);}if(v.edgeMask.z>0.5){cov=min(cov,edge.z);}
-    // row0.w = core/outer width ratio; row1.w = halo strength. v522.13 feeds
-    // coreRatio=1 and haloStrength=0: the ribbon is core-only; Glow is a separate GPU pass.
+
     let cr=clamp(u.row0.w,0.0,1.0);let gs=max(0.0,u.row1.w);let s=abs(v.side);
     let sw=max(fwidth(s)*1.35,0.0005);
     let core=1.0-smoothstep(max(0.0,cr-sw),min(1.0,cr+sw),s);
@@ -145,19 +136,14 @@ fn emit(p:vec2<f32>,v:In,copyAlpha:f32)->Out{
             const make=(kind)=>device.createRenderPipeline({label:`SpiroStar variable Graffiti ribbon ${kind}`,layout:pl,vertex:{module,entryPoint:'vs',buffers:vb},fragment:{module,entryPoint:'fs',targets:[{format,blend:blend(kind)}]},primitive:{topology:'triangle-list',cullMode:'none'}});
             const makeCorridor=(kind)=>device.createRenderPipeline({label:`SpiroStar Corridor variable Graffiti ribbon ${kind}`,layout:corridorPl,vertex:{module,entryPoint:'vsCorridor',buffers:vb},fragment:{module,entryPoint:'fs',targets:[{format,blend:blend(kind)}]},primitive:{topology:'triangle-list',cullMode:'none'}});
             pipelineOver=make('over');pipelineBehind=make('behind');corridorPipelineOver=makeCorridor('over');corridorPipelineBehind=makeCorridor('behind');
-            // Deferred effect command buffers can coexist until the final frame submit.
-            // A wide uniform ring prevents later queue.writeBuffer calls from mutating
-            // parameters referenced by earlier Graffiti/Outline command buffers.
+
             uniformBuffers=Array.from({length:64},(_,i)=>device.createBuffer({size:64,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST,label:`SpiroStar variable Graffiti uniforms ${i}`}));uniformCursor=0;
             corridorCopyCapacity=64;corridorCopyData=new Float32Array(corridorCopyCapacity*8);corridorCopyBuffers=Array.from({length:12},(_,i)=>device.createBuffer({size:corridorCopyCapacity*8*4,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST,label:`SpiroStar Corridor variable Graffiti copies ${i}`}));corridorCopyBindGroups=new Array(corridorCopyBuffers.length).fill(null);corridorCopyCursor=0;
-            ready=true;initializing=false;return true;
+            ready=true;initializing=false;try{requestMainCanvasRender?.();}catch(_){}return true;
         }catch(err){ready=false;initializing=false;stats.failures++;noteFailure('init/pipeline',err?.message||err,err);return false;}
     }
     function warmup(){try{WebGPUGraffitiContourGlow.warmup?.();}catch(_){}const hubReady=WebGPUDeviceHub.warmup(),gen=WebGPUDeviceHub.getGeneration();if(ready&&(!hubReady||gen!==hubGeneration)){ready=false;attempted=false;initializing=false;lost=!hubReady;for(const b of uniformBuffers)try{b?.destroy?.();}catch(_){}for(const slot of vertexSlots)try{slot?.buffer?.destroy?.();}catch(_){}for(const b of corridorCopyBuffers)try{b?.destroy?.();}catch(_){}uniformBuffers=[];vertexSlots=[];vertexSlotCursor=0;corridorCopyBuffers=[];corridorCopyBindGroups=[];corridorCopyCapacity=0;corridorCopyData=null;corridorCopyCursor=0;sharedCorridorCopyBinds=new WeakMap();targetViews=new WeakMap();vertexCapacity=0;vertexData=null;pipelineOver=pipelineBehind=corridorPipelineOver=corridorPipelineBehind=null;layout=corridorLayout=null;}if(!ready&&!initializing&&(!attempted||hubReady))initAsync();return ready&&!lost;}
-    // Contour Glow doubled the number of deferred Graffiti draws per layer. The old three-buffer
-    // ring could therefore be overwritten before the frame-wide queue.submit() (3 layers = 6
-    // writes), which produced intermittent missing/incorrect core centres. Never reuse a vertex
-    // buffer inside the same render frame. Across frames queue ordering makes reuse safe.
+
     function graffitiGpuFrameId(){return Math.max(1,Number(renderRuntime?.frameId)||Number(frameGeometryRuntime?.frameId)||1);}
     function ensureVertexCapacity(floatCount){
         if(floatCount<=vertexCapacity&&vertexData)return;
@@ -199,8 +185,7 @@ fn emit(p:vec2<f32>,v:In,copyAlpha:f32)->Out{
             const c=GPUColorCache.rgba(s.color),glow=Math.max(0,(Number(layer?.glow)||0)*getLayerGlowMultiplier(layer)),gi=Math.max(0,((Number.isFinite(Number(layer?.glowIntensity))?Number(layer.glowIntensity):40)/100)*getLayerGlowIntensityMultiplier(layer));
             const sx=Math.hypot(Number(m.a)||0,Number(m.b)||0),sy=Math.hypot(Number(m.c)||0,Number(m.d)||0),screenScale=Math.sqrt(Math.max(1e-8,sx*sy));
             const blurPx=Math.max(0,glow*.55*gi),localBlur=blurPx/screenScale;
-            // Core ribbon never expands to carry Glow. The contour Glow path rasterizes this exact
-            // same ribbon to a GPU mask and blurs the mask, so corners do not grow support wedges.
+
             const outerWidth=s.width,coreRatio=1,haloStrength=0;
             diagnostic.stage='cpu-ribbon-mesh';const batch=meshBatch(prepared,s,outerWidth);if(!batch){noteFailure('cpu-ribbon-mesh','ribbon mesh preparation returned empty');return{handled:false,commandBuffer:null};}
             const total=batch.floats;if(!total)return{handled:true,commandBuffer:null};diagnostic.stage='gpu-vertex-buffer';ensureVertexCapacity(total);
@@ -318,9 +303,6 @@ fn emit(p:vec2<f32>,v:In,copyAlpha:f32)->Out{
         try{const tex=overlayCurrentTexture||overlayContext.getCurrentTexture(),rec=encodeCorridorGlowToLayerScene(tex,prepared,layer,targetCtx,copies,alphas,frameCtx,footprint,opts);if(rec?.handled){if(rec.commandBuffer)device.queue.submit([rec.commandBuffer]);overlayUsedFrame=overlayFrameId;overlayDraws++;if(overlayCanvas)overlayCanvas.style.display='block';noteSuccess('corridor contour-glow overlay/draw','webgpu-overlay','WebGPU canvas');}return rec;}catch(err){noteFailure('corridor contour-glow overlay/draw',err?.message||err,err);return{handled:false,commandBuffer:null};}
     }
 
-    // Effects rendered after Graffiti (Glint/Lightning) must target this exact overlay texture
-    // when the Graffiti core itself had to use the WebGPU overlay. Drawing them to mainCanvas
-    // would put them physically underneath the overlay despite a later logical render pass.
     function getActiveOverlayTarget(frameId=overlayFrameId){
         const fid=Math.max(0,Number(frameId)||0);if(!warmup()||fid!==overlayFrameId||overlayUsedFrame!==fid||!overlayContext||!overlayCurrentTexture)return null;
         return{texture:overlayCurrentTexture,frameId:fid};
@@ -334,7 +316,5 @@ fn emit(p:vec2<f32>,v:In,copyAlpha:f32)->Out{
     return{warmup,isReady:()=>warmup(),canEncode,canEncodeCorridor,encodeToLayerScene,encodeCorridorToLayerScene,encodeGlowToLayerScene,encodeCorridorGlowToLayerScene,beginOverlayFrame,drawToOverlay,drawCorridorToOverlay,drawGlowToOverlay,drawCorridorGlowToOverlay,getActiveOverlayTarget,submitOverlayEffect,status};
 })();
 window.__spiroGraffitiRibbonGPUStatus=()=>WebGPUGraffitiRibbonRenderer.status();
-// 7.0.4 — start FullGPU Graffiti pipeline compilation during application boot so the
-// first authored Graffiti frame does not discover the pipeline lazily inside the render loop.
-// This is prewarm only: no Canvas/WebGL/Fast-GPU renderer is selected if initialization fails.
+
 try{queueMicrotask(()=>{try{if(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed()){WebGPUGraffitiContourGlow.warmup();WebGPUGraffitiRibbonRenderer.warmup();}}catch(_){}});}catch(_){}

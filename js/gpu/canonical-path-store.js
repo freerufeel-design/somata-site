@@ -1,11 +1,7 @@
-// SpiroStar v510 — Canonical GPU Path Store
-// Extracted from legacy/app-a. One owner for packed arc-length segment buffers shared by GPU effects.
+
+
 window.__spiroRegisterModule?.('js/gpu/canonical-path-store');
 
-// v328 — one canonical GPU path store owns the packed arc-length segments used
-// by GPU-native effects. Static tables are uploaded once; dynamic morph tables use a
-// triple ring. Renderers keep only their pipeline-specific bind groups, not duplicate
-// copies of the same segment data.
 const WebGPUCanonicalPathStore = (() => {
     const FLOATS_PER_SEGMENT=8;
     let device=null,generation=0,staticCache=new WeakMap(),dynamicCache=new WeakMap(),ring=[null,null,null],capacity=0,ringData=null,ringIndex=0;
@@ -59,8 +55,7 @@ const WebGPUCanonicalPathStore = (() => {
     function acquire(table,dev,gen){
         if(!table||!sync(dev,gen))return null;
         const need=Math.max(0,Number(table.segmentCount)||table.segs?.length||0);if(!need)return{buffer:null,count:0,generation,slot:-1,dynamic:table.dynamicFrame===true};
-        // v511: GPU-native Morph Arc owns an already-packed canonical segment buffer.
-        // Return the resident resource directly: no CPU pack, no staging upload, no snapshot walk.
+
         if(table.gpuArcResident===true&&table.gpuCanonicalSegmentBuffer){
             return{buffer:table.gpuCanonicalSegmentBuffer,count:need,generation,slot:-1,dynamic:true,externalGpu:true,metaBuffer:table.gpuArcMetaBuffer||null};
         }
@@ -70,9 +65,7 @@ const WebGPUCanonicalPathStore = (() => {
             device.queue.writeBuffer(buffer,0,cpu.buffer,cpu.byteOffset,count*FLOATS_PER_SEGMENT*4);staticUploadBytes+=count*FLOATS_PER_SEGMENT*4;
             rec={buffer,count,generation,slot:-1,dynamic:false};staticCache.set(table,rec);staticBuilds++;return rec;
         }
-        // v408: frameGeometryRuntime deliberately reuses dynamic table objects. Keep a
-        // dedicated GPU record for that owner so Sweep/Web/Profile can share one upload
-        // in the frame and unchanged geometry can remain resident across frames.
+
         if(table&&typeof table==='object'&&Number.isFinite(Number(table.frameId)))return acquireDynamicResident(table,need);
         ensureRing(need);const slot=ringIndex++%ring.length,buffer=ring[slot],count=pack(table,ringData);device.queue.writeBuffer(buffer,0,ringData.buffer,ringData.byteOffset,count*FLOATS_PER_SEGMENT*4);dynamicUploads++;dynamicUploadBytes+=count*FLOATS_PER_SEGMENT*4;
         return{buffer,count,generation,slot,dynamic:true};

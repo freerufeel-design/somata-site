@@ -1,9 +1,5 @@
-// SpiroStar v520 — phase-resident Lamp Topology Identity Resource
-// Key lamps no longer rediscover the full Morph polygon every display frame.  One immutable
-// physical-lamp lineage is built per Morph phase, capped to the historical display population,
-// then evaluated in O(lamps<=260).  Dynamic/Smooth key positions can additionally be evaluated
-// directly by the Lamp WGSL from a resident endpoint buffer.  True Linear keeps its historical
-// split/merge gates on the CPU control plane, but no longer performs an O(N) path traversal/frame.
+
+
 window.__spiroRegisterModule?.('js/gpu/lamp-topology-resource');
 
 const GPU_LAMP_TOPOLOGY_MAX=260;
