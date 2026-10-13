@@ -10,7 +10,7 @@ async function main(){
     const dom=await h.evaluate(`(()=>({
       ranges:[...document.querySelectorAll('input[type="range"]')].map(e=>e.id).filter(Boolean),
       inputs:[...document.querySelectorAll('input')].map(e=>e.id).filter(Boolean),
-      spiral:['paramSpiralOrder','paramSpiralStep','paramSpiralStepLinked','paramSpiralTangential','paramSpiralRoundSeams'].filter(id=>document.getElementById(id)),
+      spiral:['paramSpiralOrder','paramSpiralStep','paramSpiralStepLinked','paramSpiralTangential','paramSpiralRoundSeams','paramSpiralFillEnabled','paramSpiralFillType'].filter(id=>document.getElementById(id)),
       dynamicAudioRanges:[...document.querySelectorAll('#audioMasterRouteControlRows input[type="range"], .audio-route-gain input[type="range"]')].length
     }))()`);
     const impact=fs.readFileSync(path.join(h.ROOT,'tests/effect-render-impact.js'),'utf8');

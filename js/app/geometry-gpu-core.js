@@ -2814,7 +2814,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                     for (let step = 0; step < verticesPerOrbit; step++) {
                         const idx = (g + step * K) % N;
                         const angle = idx * stepAngle + rotRad - Math.PI / 2;
-                        P.push({ x: R * Math.cos(angle), y: R * Math.sin(angle) });
+                        P.push({ x: R * Math.cos(angle), y: R * Math.sin(angle), polygonIndex: idx });
                     }
                 }
                 if (P.length < 2) continue;
@@ -2873,7 +2873,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 }
 
                 if (spiralEnabled) {
-                    for (const e of edges) {
+                    for (let spiralEdgeIndex=0; spiralEdgeIndex<edges.length; spiralEdgeIndex++) {
+                        const e=edges[spiralEdgeIndex];
                         if (e.length < 2) continue;
                         const bakedProfileRound=layer.profileMode==='segments' && spiralRounding>0.001;
                         const cornerFlags=e.map((p,idx)=>bakedProfileRound?false:(Boolean(p.__profileCorner)||interiorCorner(p.ptIdx)));
@@ -2910,6 +2911,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                             spiralPolygonProfileSplineCarrier:spiralProfileData?.polygonProfileSplineCarrier===true,
                             spiralProfileSourceCubicCount:Number(spiralProfileData?.profileSourceCubicCount)||0,
                             spiralContinuityProtected:spiralClosed===true,
+                            spiralBranchIndex:Number.isFinite(Number(P[spiralEdgeIndex]?.polygonIndex))?Number(P[spiralEdgeIndex].polygonIndex):spiralEdgeIndex,
                             orbitIndex:sIdx
                         });
                     }
@@ -3357,7 +3359,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             let submissions=0,draws=0,bufferBuilds=0,bufferHits=0,fallbacks=0,renderedTriangles=0,gpuEvictions=0;
             let directEncodes=0,directTriangles=0,uniformSlotGrows=0,windingDraws=0,windingCovers=0,windingTriangles=0,parityDraws=0,parityCovers=0,dynamicMeshUploads=0,dynamicMeshUploadBytes=0,dynamicMeshGrows=0,dynamicMeshReuses=0;
             let gpuMeshCache=new WeakMap(),gpuMeshRecords=new Set(),uniformSlots=[],uniformCursor=0;
-            const fullUniform=new Float32Array(16),UNIFORM_RING=16;
+            const fullUniform=new Float32Array(20),UNIFORM_RING=16;
             const WGSL=`
 struct U {
     viewport: vec2<f32>,
@@ -3365,6 +3367,7 @@ struct U {
     row0: vec4<f32>,
     row1: vec4<f32>,
     color: vec4<f32>,
+    centerShade: vec4<f32>, // center x/y and inner/outer radius in framebuffer pixels; outer<=inner disables
 };
 @group(0) @binding(0) var<uniform> u: U;
 struct VOut { @builtin(position) p: vec4<f32> };
@@ -3381,8 +3384,12 @@ struct VOut { @builtin(position) p: vec4<f32> };
     let p=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0));
     var o:VOut;o.p=vec4<f32>(p[vid],0.0,1.0);return o;
 }
-@fragment fn fsMain()->@location(0) vec4<f32>{
-    let a=clamp(u.color.a,0.0,1.0);
+@fragment fn fsMain(v:VOut)->@location(0) vec4<f32>{
+    var a=clamp(u.color.a,0.0,1.0);
+    if(u.centerShade.w>u.centerShade.z+0.001){
+        a*=smoothstep(u.centerShade.z,u.centerShade.w,distance(v.p.xy,u.centerShade.xy));
+    }
+    if(a<0.00001){discard;}
     return vec4<f32>(u.color.rgb*a,a);
 }`;
             function destroyMeshRecord(rec){
@@ -3486,7 +3493,7 @@ struct VOut { @builtin(position) p: vec4<f32> };
                 let slot=uniformSlots[index];
                 if(slot?.generation===hubGeneration&&slot.buffer&&slot.bindGroup)return slot;
                 if(slot)try{slot.buffer?.destroy?.();}catch(_){}
-                const buffer=device.createBuffer({label:`SpiroStar native Fill Mesh uniform ${index}`,size:64,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+                const buffer=device.createBuffer({label:`SpiroStar native Fill Mesh uniform ${index}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
                 const bindGroup=device.createBindGroup({layout:bindGroupLayout,entries:[{binding:0,resource:{buffer}}]});
                 slot={buffer,bindGroup,lastFrameId:0,generation:hubGeneration,index};uniformSlots[index]=slot;uniformSlotGrows++;return slot;
             }
@@ -3579,10 +3586,20 @@ struct VOut { @builtin(position) p: vec4<f32> };
                 const rot=frameCtx?.hasCombinedRotation?Number(frameCtx.combinedRotationRad)||0:0,scale=frameCtx?.hasCombinedScale?Number(frameCtx.combinedScale)||1:1,cc=Math.cos(rot)*scale,ss=Math.sin(rot)*scale;
                 return{a:a*cc+c*ss,b:b*cc+d*ss,c:a*(-ss)+c*cc,d:b*(-ss)+d*cc,e,f};
             }
+            function fillSpiralCenterShade(frameCtx,targetCtx){
+                if(state?.tunnel?.active!==true||!isSpiralLayer(frameCtx?.layer)||Math.max(0,Math.round(Number(state?.tunnel?.centerHiddenCopies)||0))<=0)return null;
+                let range=null;try{range=typeof getTunnelCenterRevealRange==='function'?getTunnelCenterRevealRange(state.tunnel,frameCtx?.visibleInstances?.copies?.[0]?.stepRatio):null;}catch(_){range=null;}
+                if(!range)return null;
+                const lightScale=Math.max(.001,Math.abs(Number(frameCtx?.lightMorphScale)||1));
+                const localExtent=Math.max(1,(Number(frameCtx?.layerExtent)||Number(frameCtx?.layer?.radius)||220)/lightScale);
+                const m=affineForFrame(frameCtx,targetCtx,null,null),matrixScale=Math.sqrt(Math.max(1e-12,Math.abs(m.a*m.d-m.b*m.c)));
+                const inner=Math.max(0,localExtent*Math.max(0,Number(range.startScale)||0)*matrixScale),outer=Math.max(inner+.001,localExtent*Math.max(0,Number(range.endScale)||0)*matrixScale);
+                return{cx:Number(m.e)||0,cy:Number(m.f)||0,inner,outer};
+            }
             function prepareUniformSlot(frameCtx,targetCtx,copyIndex=null,mesh=null){
                 const rgba=GPUColorCache.rgba(frameCtx.layer?.fillColor||frameCtx.layer?.strokeColor||'#ffffff'),copies=frameCtx.visibleInstances?.copies||[],copy=copyIndex==null?null:copies[copyIndex];
                 const alphaList=frameCtx.visibleInstances?.fillAlphas||frameCtx.visibleInstances?.alphas||[];
-                const copyAlpha=Math.max(0,Math.min(1,Number(alphaList[copyIndex==null?0:copyIndex]??1)));
+                const copyAlpha=mesh?.corridorBaked===true?1:Math.max(0,Math.min(1,Number(alphaList[copyIndex==null?0:copyIndex]??1)));
                 const alpha=Math.max(0,Math.min(1,rgba[3]*Math.max(0,Number(frameCtx.baseAlpha)||0)*copyAlpha));
                 if(alpha<=.00001)return{empty:true,slot:null};
                 const m=affineForFrame(frameCtx,targetCtx,copy,mesh),frameId=Math.max(1,Number(frameCtx?.frameId)||Number(renderRuntime?.frameId)||1),slot=acquireUniformSlot(frameId);
@@ -3590,6 +3607,8 @@ struct VOut { @builtin(position) p: vec4<f32> };
                 fullUniform[4]=m.a;fullUniform[5]=m.c;fullUniform[6]=m.e;fullUniform[7]=0;
                 fullUniform[8]=m.b;fullUniform[9]=m.d;fullUniform[10]=m.f;fullUniform[11]=0;
                 fullUniform[12]=rgba[0];fullUniform[13]=rgba[1];fullUniform[14]=rgba[2];fullUniform[15]=alpha;
+                const centerShade=fillSpiralCenterShade(frameCtx,targetCtx);
+                fullUniform[16]=centerShade?.cx||0;fullUniform[17]=centerShade?.cy||0;fullUniform[18]=centerShade?.inner||0;fullUniform[19]=centerShade?.outer||0;
                 device.queue.writeBuffer(slot.buffer,0,fullUniform);slot.lastFrameId=frameId;
                 return{empty:false,slot};
             }
@@ -3627,6 +3646,10 @@ struct VOut { @builtin(position) p: vec4<f32> };
                 const rec=encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,false);
                 if(rec.handled){directEncodes++;directTriangles+=rec.triangles+rec.windingTriangles;}return rec;
             }
+            function encodeMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx){
+                if(!targetTexture||!canEncodeToTexture(frameCtx,mesh))return{handled:false,commandBuffer:null,reason:lastError||'native Fill renderer not ready'};
+                try{const encoder=device.createCommandEncoder({label:'Somata interwinding Spiral Fill Layer Scene encoder'}),rec=encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,false);if(!rec.handled)return{...rec,commandBuffer:null,reason:lastError||'Fill encode failed'};if(rec.empty)return{...rec,commandBuffer:null};const commandBuffer=encoder.finish();directEncodes++;directTriangles+=rec.triangles+rec.windingTriangles;return{...rec,commandBuffer};}catch(err){lastError=String(err?.message||err);fallbacks++;return{handled:false,commandBuffer:null,reason:lastError};}
+            }
             function encodeCorridorCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx){
                 if(!targetTexture||!canEncodeToTexture(frameCtx,mesh))return{handled:false,commandBuffer:null,reason:lastError||'native Fill renderer not ready'};
                 try{const encoder=device.createCommandEncoder({label:'SpiroStar native Corridor Fill Layer Scene encoder'}),rec=encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,true);if(!rec.handled)return{...rec,commandBuffer:null,reason:lastError||'Corridor Fill encode failed'};if(rec.empty)return{...rec,commandBuffer:null};const commandBuffer=encoder.finish();directEncodes++;directTriangles+=rec.triangles+rec.windingTriangles;return{...rec,commandBuffer};}catch(err){lastError=String(err?.message||err);fallbacks++;return{handled:false,commandBuffer:null,reason:lastError};}
@@ -3643,7 +3666,7 @@ struct VOut { @builtin(position) p: vec4<f32> };
             }
             function clear(){/* render pass clears every presentation */}
             function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost&&WebGPUDeviceHub.isReady(),attempted,initializing,lost,lastError,width,height,submissions,draws,bufferBuilds,bufferHits,gpuEvictions,residentMeshRecords:gpuMeshRecords.size,fallbacks,renderedTriangles,directEncodes,directTriangles,windingDraws,windingCovers,parityDraws,parityCovers,windingTriangles,uniformSlots:uniformSlots.length,uniformSlotGrows,dynamicMeshUploads,dynamicMeshUploadBytes,dynamicMeshGrows,dynamicMeshReuses,msaa:4,stencilFormat:'depth24plus-stencil8',hubGeneration};}
-            return{warmup,isReady:()=>warmup(),canEncodeToTexture,encodeToTexture,encodeCorridorCommandToTexture,render,clear,status};
+            return{warmup,isReady:()=>warmup(),canEncodeToTexture,encodeToTexture,encodeMeshCommandToTexture,encodeCorridorCommandToTexture,render,clear,status};
         })();
 
         const WebGPUFillRenderer = (() => {
@@ -3737,6 +3760,10 @@ struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
                 const rec=WebGPUFillMeshRenderer.encodeToTexture(encoder,targetTexture,frameCtx,mesh,targetCtx);
                 if(rec?.handled)active='webgpu-mesh-layer-scene';return rec;
             }
+            function encodeMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx){
+                const rec=WebGPUFillMeshRenderer.encodeMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx);
+                if(rec?.handled)active='webgpu-mesh-layer-scene-command';return rec;
+            }
             function encodeCorridorMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx){
                 const rec=WebGPUFillMeshRenderer.encodeCorridorCommandToTexture(targetTexture,frameCtx,mesh,targetCtx);
                 if(rec?.handled)active='webgpu-mesh-corridor-layer-scene';return rec;
@@ -3748,7 +3775,7 @@ struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
             }
             function clear(){active='none';WebGPUFillMeshRenderer.clear();WebGPUFillRenderer.clear();FillWebGLRenderer.clear();}
             function status(){return{active,nativeMesh:WebGPUFillMeshRenderer.status(),webgpuMask:WebGPUFillRenderer.status(),webgl2:FillWebGLRenderer.status()};}
-            return{isAvailable,renderMesh,canEncodeMeshToTexture,encodeMeshToTexture,encodeCorridorMeshCommandToTexture,render,clear,status};
+            return{isAvailable,renderMesh,canEncodeMeshToTexture,encodeMeshToTexture,encodeMeshCommandToTexture,encodeCorridorMeshCommandToTexture,render,clear,status};
         })();
 
         const frameGraphPerformanceRuntime={penaltyUntilFrame:0,materializations:0,lastMaterializedFrame:0,lastRiskReason:'',preflightRejects:0};
@@ -3813,8 +3840,8 @@ struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
         }
 
         const WebGPUFinalCompositeRenderer = (() => {
-            let device=null,context=null,format=null,pipeline=null,sampler=null,uniformBuffer=null;
-            let sceneTexture=null,bgTexture=null,dummyBgTexture=null,dummyLampTexture=null,dummyLayerTexture=null,bindGroup=null,boundBgTexture=null,boundLampTexture=null,boundLayerTexture=null,boundUnderlayTexture=null,boundSceneTexture=null;
+            let device=null,context=null,format=null,pipeline=null,textureOverPipeline=null,lampBlendPipeline=null,sampler=null,uniformBuffer=null,lampBlendUniformBuffer=null;
+            let sceneTexture=null,bgTexture=null,dummyBgTexture=null,dummyLampTexture=null,dummyLayerTexture=null,lampBlendScratchTexture=null,lampBlendScratchView=null,bindGroup=null,boundBgTexture=null,boundLampTexture=null,boundLayerTexture=null,boundUnderlayTexture=null,boundSceneTexture=null,textureOverBindGroups=new WeakMap(),lampBlendBindGroups=new WeakMap();
 
             let finalRenderBundle=null,finalRenderBundleList=[],finalBundleBuilds=0,finalBundleExecutes=0;
             let ready=false,attempted=false,initializing=false,lost=false,lastError='',lastInitError='',retryCount=0,hubGeneration=0;
@@ -3830,6 +3857,8 @@ struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
                 'plus-lighter':7,overlay:8,'soft-light':9,'hard-light':10,difference:11,exclusion:12,
                 hue:13,saturation:14,color:15,luminosity:16
             });
+            const lampBlendCode=Object.freeze({'source-over':0,lighter:7,screen:5,'color-dodge':6,difference:11,color:15});
+            function normalizedLampBlend(value){const v=String(value||'lighter').toLowerCase();if(v==='normal')return 'source-over';if(v==='add'||v==='plus-lighter'||v==='linear-dodge')return 'lighter';if(v==='inverted'||v==='invert')return 'difference';return Object.prototype.hasOwnProperty.call(lampBlendCode,v)?v:'lighter';}
             const WGSL=`
 struct U {
     a: vec4<f32>, // viewport.xy, bgColor.rg
@@ -3884,6 +3913,19 @@ fn blend(b:vec3<f32>,s:vec3<f32>,m:i32)->vec3<f32>{
     if(m==15){return setLum(s,lum(b));}
     return setLum(b,lum(s));
 }
+fn compositeLamp(dst:vec4<f32>,src:vec4<f32>,m:i32)->vec4<f32>{
+    let asrc=clamp(src.a,0.0,1.0);let adst=clamp(dst.a,0.0,1.0);
+    if(asrc<=0.000001){return dst;}
+    let cs=clamp(src.rgb,vec3<f32>(0.0),vec3<f32>(1.0));let cb=clamp(dst.rgb,vec3<f32>(0.0),vec3<f32>(1.0));
+    if(m==7){
+        let outA=min(1.0,asrc+adst);let outP=min(vec3<f32>(1.0),cs*asrc+cb*adst);
+        let outRgb=select(vec3<f32>(0.0),outP/max(0.000001,outA),outA>0.000001);return vec4<f32>(outRgb,outA);
+    }
+    let blended=blend(cb,cs,m);let outA=asrc+adst-asrc*adst;
+    let outP=cs*asrc*(1.0-adst)+cb*adst*(1.0-asrc)+blended*asrc*adst;
+    let outRgb=select(vec3<f32>(0.0),outP/max(0.000001,outA),outA>0.000001);
+    return vec4<f32>(clamp(outRgb,vec3<f32>(0.0),vec3<f32>(1.0)),outA);
+}
 fn smoother(x:f32)->f32{let q=clamp(x,0.0,1.0);return q*q*q*(q*(q*6.0-15.0)+10.0);}
 fn coverUv(uv:vec2<f32>)->vec2<f32>{
     let d=vec2<f32>(textureDimensions(bgTex));let sa=d.x/max(1.0,d.y);let da=u.a.x/max(1.0,u.a.y);var q=uv;
@@ -3901,10 +3943,55 @@ fn coverUv(uv:vec2<f32>)->vec2<f32>{
     let ul=textureSample(underlayTex,samp,v.uv);if(ul.a>0.000001){let outA=sc.a+ul.a*(1.0-sc.a);let outPremul=sc.rgb*sc.a+ul.rgb*(1.0-sc.a);let outRgb=select(vec3<f32>(0.0),outPremul/max(0.000001,outA),outA>0.000001);sc=vec4<f32>(outRgb,outA);}
     if(u.d.w>0.5&&!lateCanvasOverlay){let ly=layerSample;let outA=ly.a+sc.a*(1.0-ly.a);let outPremul=ly.rgb+sc.rgb*sc.a*(1.0-ly.a);let outRgb=select(vec3<f32>(0.0),outPremul/max(0.000001,outA),outA>0.000001);sc=vec4<f32>(outRgb,outA);}
     if(lateCanvasOverlay){let ov=sceneSample;let outA=ov.a+sc.a*(1.0-ov.a);let outPremul=ov.rgb*ov.a+sc.rgb*sc.a*(1.0-ov.a);let outRgb=select(vec3<f32>(0.0),outPremul/max(0.000001,outA),outA>0.000001);sc=vec4<f32>(outRgb,outA);}
-    if(u.d.z>0.5){let lp=textureSample(lampTex,samp,v.uv);let outA=min(1.0,sc.a+lp.a);let outPremul=min(vec3<f32>(1.0),sc.rgb*sc.a+lp.rgb);let outRgb=select(vec3<f32>(0.0),outPremul/max(0.000001,outA),outA>0.000001);sc=vec4<f32>(outRgb,outA);}
+    if(u.d.z>50.0){let lp=textureSample(lampTex,samp,v.uv);let lampMode=i32(round(u.d.z))-100;sc=compositeLamp(sc,lp,lampMode);}
     var a=clamp(sc.a*u.b.w,0.0,1.0);
     if(u.c.w>0.5){var mx=1.0;var my=1.0;if(v.uv.x<u.c.y){mx=smoother(v.uv.x/max(0.000001,u.c.y));}else if(v.uv.x>1.0-u.c.y){mx=smoother((1.0-v.uv.x)/max(0.000001,u.c.y));}if(v.uv.y<u.c.z){my=smoother(v.uv.y/max(0.000001,u.c.z));}else if(v.uv.y>1.0-u.c.z){my=smoother((1.0-v.uv.y)/max(0.000001,u.c.z));}a*=mx*my;}
     let src=clamp(sc.rgb,vec3<f32>(0.0),vec3<f32>(1.0));let bm=blend(base,src,i32(round(u.b.y)));let mixed=mix(src,bm,clamp(u.b.z,0.0,1.0));let outRgb=mixed*a+base*(1.0-a);return vec4<f32>(clamp(outRgb,vec3<f32>(0.0),vec3<f32>(1.0)),1.0);
+}`;
+            const TEXTURE_OVER_WGSL=`
+@group(0) @binding(0) var srcTex:texture_2d<f32>;
+@group(0) @binding(1) var srcSampler:sampler;
+struct V{@builtin(position) p:vec4<f32>,@location(0) uv:vec2<f32>};
+@vertex fn vs(@builtin(vertex_index) i:u32)->V{let q=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0))[i];var o:V;o.p=vec4<f32>(q,0.0,1.0);o.uv=vec2<f32>((q.x+1.0)*0.5,(1.0-q.y)*0.5);return o;}
+@fragment fn fs(v:V)->@location(0) vec4<f32>{return textureSample(srcTex,srcSampler,v.uv);}`;
+            const LAMP_BLEND_WGSL=`
+struct BlendU{mode:f32,_p0:f32,_p1:f32,_p2:f32};
+@group(0) @binding(0) var lampTex:texture_2d<f32>;
+@group(0) @binding(1) var sceneTex:texture_2d<f32>;
+@group(0) @binding(2) var<uniform> bu:BlendU;
+@vertex fn vs(@builtin(vertex_index) i:u32)->@builtin(position) vec4<f32>{
+    let q=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0))[i];
+    return vec4<f32>(q,0.0,1.0);
+}
+fn lum(c:vec3<f32>)->f32{return dot(c,vec3<f32>(0.3,0.59,0.11));}
+fn clipColor(c0:vec3<f32>)->vec3<f32>{
+    var c=c0;let l=lum(c);let n=min(min(c.r,c.g),c.b);
+    if(n<0.0){c=vec3<f32>(l)+(c-vec3<f32>(l))*(l/max(0.000001,l-n));}
+    let x=max(max(c.r,c.g),c.b);if(x>1.0){c=vec3<f32>(l)+(c-vec3<f32>(l))*((1.0-l)/max(0.000001,x-l));}
+    return clamp(c,vec3<f32>(0.0),vec3<f32>(1.0));
+}
+fn setLum(c:vec3<f32>,l:f32)->vec3<f32>{return clipColor(c+vec3<f32>(l-lum(c)));}
+fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
+    if(m==5){return cb+cs-cb*cs;}
+    if(m==6){return vec3<f32>(
+        select(min(1.0,cb.r/max(0.000001,1.0-cs.r)),1.0,cs.r>=0.999999),
+        select(min(1.0,cb.g/max(0.000001,1.0-cs.g)),1.0,cs.g>=0.999999),
+        select(min(1.0,cb.b/max(0.000001,1.0-cs.b)),1.0,cs.b>=0.999999));}
+    if(m==11){return abs(cb-cs);}
+    if(m==15){return setLum(cs,lum(cb));}
+    return cs;
+}
+@fragment fn fs(@builtin(position) p:vec4<f32>)->@location(0) vec4<f32>{
+    let dims=vec2<i32>(textureDimensions(sceneTex));let xy=clamp(vec2<i32>(p.xy),vec2<i32>(0),dims-vec2<i32>(1));
+    let src=textureLoad(lampTex,xy,0);let dst=textureLoad(sceneTex,xy,0);
+    let asrc=clamp(src.a,0.0,1.0);let adst=clamp(dst.a,0.0,1.0);if(asrc<=0.000001){return dst;}
+    let cs=clamp(src.rgb,vec3<f32>(0.0),vec3<f32>(1.0));
+    let cb=select(vec3<f32>(0.0),clamp(dst.rgb/max(0.000001,adst),vec3<f32>(0.0),vec3<f32>(1.0)),adst>0.000001);
+    let m=i32(round(bu.mode));
+    if(m==7){return vec4<f32>(min(vec3<f32>(1.0),dst.rgb+cs*asrc),min(1.0,adst+asrc));}
+    let b=lampBlend(cb,cs,m);let outA=asrc+adst-asrc*adst;
+    let outP=cs*asrc*(1.0-adst)+cb*adst*(1.0-asrc)+b*asrc*adst;
+    return vec4<f32>(clamp(outP,vec3<f32>(0.0),vec3<f32>(1.0)),clamp(outA,0.0,1.0));
 }`;
             function resetGpuTiming(){for(const slot of gpuTimerSlots){try{slot?.querySet?.destroy?.();}catch(_){}try{slot?.resolve?.destroy?.();}catch(_){}try{slot?.read?.destroy?.();}catch(_){}}gpuTimerSlots=[];gpuTimerCursor=0;gpuTimerGeneration=0;gpuTimingDisabledReason='';}
             function ensureGpuTiming(){
@@ -3917,7 +4004,7 @@ fn coverUv(uv:vec2<f32>)->vec2<f32>{
             }
             function finishGpuTiming(timer){if(!timer?.slot)return null;try{const e=device.createCommandEncoder({label:'SpiroStar frame timestamp end'});e.writeTimestamp(timer.slot.querySet,1);e.resolveQuerySet(timer.slot.querySet,0,2,timer.slot.resolve,0);e.copyBufferToBuffer(timer.slot.resolve,0,timer.slot.read,0,16);return e.finish();}catch(err){gpuTimingMisses++;gpuTimingDisabledReason=String(err?.message||err);return null;}}
             function readGpuTiming(timer){const slot=timer?.slot;if(!slot||slot.pending)return;slot.pending=true;slot.read.mapAsync(GPUMapMode.READ).then(()=>{try{const a=new BigUint64Array(slot.read.getMappedRange());const dt=a[1]>=a[0]?a[1]-a[0]:0n;const ms=Number(dt)/1e6;slot.read.unmap();if(Number.isFinite(ms)&&ms>0&&ms<250){gpuTimingLastMs=ms;gpuTimingEmaMs=gpuTimingEmaMs?gpuTimingEmaMs*.85+ms*.15:ms;gpuTimingSamples++;performanceGovernor.noteGpuFrame(ms);}else gpuTimingMisses++;}catch(_){try{slot.read.unmap();}catch(__){}gpuTimingMisses++;}finally{slot.pending=false;}}).catch(()=>{slot.pending=false;gpuTimingMisses++;});}
-            function resetTextures(){resetGpuTiming();for(const t of [sceneTexture,bgTexture,dummyBgTexture,dummyLampTexture,dummyLayerTexture])try{t?.destroy?.();}catch(_){}sceneTexture=bgTexture=dummyBgTexture=dummyLampTexture=dummyLayerTexture=null;bindGroup=null;finalRenderBundle=null;finalRenderBundleList.length=0;boundBgTexture=boundLampTexture=boundLayerTexture=boundUnderlayTexture=boundSceneTexture=null;width=height=bgWidth=bgHeight=0;}
+            function resetTextures(){resetGpuTiming();textureOverBindGroups=new WeakMap();lampBlendBindGroups=new WeakMap();for(const t of [sceneTexture,bgTexture,dummyBgTexture,dummyLampTexture,dummyLayerTexture,lampBlendScratchTexture])try{t?.destroy?.();}catch(_){}sceneTexture=bgTexture=dummyBgTexture=dummyLampTexture=dummyLayerTexture=lampBlendScratchTexture=null;lampBlendScratchView=null;bindGroup=null;finalRenderBundle=null;finalRenderBundleList.length=0;boundBgTexture=boundLampTexture=boundLayerTexture=boundUnderlayTexture=boundSceneTexture=null;width=height=bgWidth=bgHeight=0;}
             async function initAsync(){
                 if(ready&&!lost)return true;if(initializing)return false;if(attempted&&!ready&&!lost)return false;
                 attempted=true;initializing=true;lastError='';
@@ -3927,8 +4014,13 @@ fn coverUv(uv:vec2<f32>)->vec2<f32>{
                     device.pushErrorScope?.('validation');
                     const module=device.createShaderModule({label:'SpiroStar final composite WGSL',code:WGSL});await assertWebGPUShaderModule(module,'SpiroStar final composite WGSL');
                     pipeline=device.createRenderPipeline({label:'SpiroStar final composite',layout:'auto',vertex:{module,entryPoint:'vsMain'},fragment:{module,entryPoint:'fsMain',targets:[{format}]},primitive:{topology:'triangle-list'}});
+                    const overModule=device.createShaderModule({label:'Somata effect-stack texture-over WGSL',code:TEXTURE_OVER_WGSL});await assertWebGPUShaderModule(overModule,'Somata effect-stack texture-over WGSL');
+                    textureOverPipeline=device.createRenderPipeline({label:'Somata effect-stack texture-over',layout:'auto',vertex:{module:overModule,entryPoint:'vs'},fragment:{module:overModule,entryPoint:'fs',targets:[{format,blend:{color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}}}]},primitive:{topology:'triangle-list'}});
+                    const lampBlendModule=device.createShaderModule({label:'Somata lamp blend interleave WGSL',code:LAMP_BLEND_WGSL});await assertWebGPUShaderModule(lampBlendModule,'Somata lamp blend interleave WGSL');
+                    lampBlendPipeline=device.createRenderPipeline({label:'Somata lamp blend interleave',layout:'auto',vertex:{module:lampBlendModule,entryPoint:'vs'},fragment:{module:lampBlendModule,entryPoint:'fs',targets:[{format}]},primitive:{topology:'triangle-list'}});
                     sampler=device.createSampler({magFilter:'linear',minFilter:'linear',addressModeU:'clamp-to-edge',addressModeV:'clamp-to-edge'});
                     uniformBuffer=device.createBuffer({label:'SpiroStar final composite uniforms',size:64,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+                    lampBlendUniformBuffer=device.createBuffer({label:'Somata lamp blend mode uniform',size:16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
                     dummyBgTexture=device.createTexture({label:'SpiroStar dummy background',size:[1,1,1],format:'rgba8unorm',usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST});
                     device.queue.writeTexture({texture:dummyBgTexture},new Uint8Array([0,0,0,0]),{bytesPerRow:4},[1,1,1]);
                     dummyLampTexture=device.createTexture({label:'SpiroStar dummy lamp input',size:[1,1,1],format:'rgba8unorm',usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST});
@@ -4027,8 +4119,28 @@ fn coverUv(uv:vec2<f32>)->vec2<f32>{
                 if(renderBackendTelemetry.canvasTouched?.()===true&&(layer||underlay)&&!lateCanvasOverlay)return false;
                 if((!hasDeferred&&!finalGpuPostWorthIt(frame))||backgroundMorphActive()||!warmup())return false;return backgroundReady();
             }
-            function ensureSize(){const w=Math.max(1,mainCanvas.width|0),h=Math.max(1,mainCanvas.height|0);if(width===w&&height===h&&sceneTexture&&finalGpuCanvas.width===w&&finalGpuCanvas.height===h)return true;width=w;height=h;finalGpuCanvas.width=w;finalGpuCanvas.height=h;context.configure({device,format,alphaMode:'opaque'});try{sceneTexture?.destroy?.();}catch(_){}sceneTexture=device.createTexture({label:'SpiroStar final scene input',size:[w,h,1],format:'rgba8unorm',usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST|GPUTextureUsage.RENDER_ATTACHMENT});bindGroup=null;finalRenderBundle=null;finalRenderBundleList.length=0;boundBgTexture=boundLampTexture=boundLayerTexture=boundUnderlayTexture=boundSceneTexture=null;return true;}
+            function ensureSize(){const w=Math.max(1,mainCanvas.width|0),h=Math.max(1,mainCanvas.height|0);if(width===w&&height===h&&sceneTexture&&lampBlendScratchTexture&&finalGpuCanvas.width===w&&finalGpuCanvas.height===h)return true;width=w;height=h;finalGpuCanvas.width=w;finalGpuCanvas.height=h;context.configure({device,format,alphaMode:'opaque'});try{sceneTexture?.destroy?.();}catch(_){}try{lampBlendScratchTexture?.destroy?.();}catch(_){}sceneTexture=device.createTexture({label:'SpiroStar final scene input',size:[w,h,1],format:'rgba8unorm',usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST|GPUTextureUsage.RENDER_ATTACHMENT});lampBlendScratchTexture=device.createTexture({label:'Somata lamp blend destination scratch',size:[w,h,1],format,usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST});lampBlendScratchView=lampBlendScratchTexture.createView();lampBlendBindGroups=new WeakMap();bindGroup=null;finalRenderBundle=null;finalRenderBundleList.length=0;boundBgTexture=boundLampTexture=boundLayerTexture=boundUnderlayTexture=boundSceneTexture=null;return true;}
             function ensureBgTexture(){const url=typeof state.backgroundImageDataUrl==='string'?state.backgroundImageDataUrl:'';if(!url)return dummyBgTexture;if(!(bgKey===url&&bgImage?.naturalWidth>0))return null;const w=Math.max(1,bgImage.naturalWidth|0),h=Math.max(1,bgImage.naturalHeight|0);if(bgTexture&&bgWidth===w&&bgHeight===h)return bgTexture;try{bgTexture?.destroy?.();}catch(_){}bgTexture=device.createTexture({label:'SpiroStar final background',size:[w,h,1],format:'rgba8unorm',usage:GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_DST|GPUTextureUsage.RENDER_ATTACHMENT});bgWidth=w;bgHeight=h;device.queue.copyExternalImageToTexture({source:bgImage},{texture:bgTexture,premultipliedAlpha:false},[w,h]);bgUploads++;bindGroup=null;finalRenderBundle=null;finalRenderBundleList.length=0;boundBgTexture=boundLampTexture=boundLayerTexture=boundUnderlayTexture=boundSceneTexture=null;return bgTexture;}
+            function encodeTextureOverTarget(sourceTexture,targetTexture,label='effect-stack texture-over'){
+                if(!sourceTexture||!targetTexture||!textureOverPipeline||!sampler||!warmup())return null;
+                try{
+                    let bg=textureOverBindGroups.get(sourceTexture);if(!bg){bg=device.createBindGroup({layout:textureOverPipeline.getBindGroupLayout(0),entries:[{binding:0,resource:sourceTexture.createView()},{binding:1,resource:sampler}]});textureOverBindGroups.set(sourceTexture,bg);}
+                    const enc=device.createCommandEncoder({label:String(label||'effect-stack texture-over')}),pass=enc.beginRenderPass({colorAttachments:[{view:targetTexture.createView(),loadOp:'load',storeOp:'store'}]});pass.setPipeline(textureOverPipeline);pass.setBindGroup(0,bg);pass.draw(3);pass.end();return enc.finish();
+                }catch(err){lastError=String(err?.message||err);return null;}
+            }
+            function encodeLampBlendIntoTarget(sourceTexture,targetTexture,blendMode='lighter',label='Somata lamp blend → Layer Scene'){
+                if(!sourceTexture||!targetTexture||!lampBlendPipeline||!lampBlendUniformBuffer||!lampBlendScratchTexture||!lampBlendScratchView||!warmup())return null;
+                try{
+                    const mode=normalizedLampBlend(blendMode),code=lampBlendCode[mode]??7;
+                    device.queue.writeBuffer(lampBlendUniformBuffer,0,new Float32Array([code,0,0,0]));
+                    let bg=lampBlendBindGroups.get(sourceTexture);
+                    if(!bg){bg=device.createBindGroup({layout:lampBlendPipeline.getBindGroupLayout(0),entries:[{binding:0,resource:sourceTexture.createView()},{binding:1,resource:lampBlendScratchView},{binding:2,resource:{buffer:lampBlendUniformBuffer}}]});lampBlendBindGroups.set(sourceTexture,bg);}
+                    const enc=device.createCommandEncoder({label:String(label||'Somata lamp blend → Layer Scene')});
+                    enc.copyTextureToTexture({texture:targetTexture},{texture:lampBlendScratchTexture},[width,height,1]);
+                    const pass=enc.beginRenderPass({colorAttachments:[{view:targetTexture.createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
+                    pass.setPipeline(lampBlendPipeline);pass.setBindGroup(0,bg);pass.draw(3);pass.end();return enc.finish();
+                }catch(err){lastError=String(err?.message||err);return null;}
+            }
             function updatePresentationCss(active){
                 if(active){finalGpuCanvas.style.display='block';mainCanvas.style.visibility='hidden';sceneBlendCanvas.style.display='none';sceneBlendCanvas.style.visibility='hidden';if(gridPatternEl)gridPatternEl.style.visibility='hidden';const bg=document.getElementById('viewportBackgroundImage');if(bg)bg.style.visibility='hidden';}
                 else{finalGpuCanvas.style.display='none';mainCanvas.style.visibility='';sceneBlendCanvas.style.visibility='';if(gridPatternEl)gridPatternEl.style.visibility='';const bg=document.getElementById('viewportBackgroundImage');if(bg)bg.style.visibility='';}
@@ -4038,10 +4150,14 @@ fn coverUv(uv:vec2<f32>)->vec2<f32>{
                 try{
                     const layerSource=deferredLayerSource(),ltx=layerSource?.texture||dummyLayerTexture;
                     const underlaySource=deferredUnderlaySource(),utx=underlaySource?.texture||dummyLayerTexture;
+                    const layerEffects=layerSource&&!layerSource?.globalFrameScene?peekLayerSceneEffectCommands(frame):[];
+                    const rawLampSource=deferredLampSource(),rawLampCommand=rawLampSource?LampGPURenderer?.getDeferredCommandBuffer?.():null;
+                    const wantsLampInterleave=Boolean(rawLampSource?.texture&&layerSource?.texture&&!layerSource?.globalFrameScene&&layerEffects.some(item=>Number(item?.phase)>=50));
+                    const lampLayerSceneCommand=wantsLampInterleave?encodeLampBlendIntoTarget(rawLampSource.texture,layerSource.texture,rawLampSource?.blendMode,'Somata Lamps blend-aware → Layer Scene between Web and Sweep'):null;
+                    const lampsEmbedded=Boolean(wantsLampInterleave&&lampLayerSceneCommand),lampSource=lampsEmbedded?null:rawLampSource,lt=lampSource?.texture||dummyLampTexture;
 
                     const strictSpiral=frame?.strictSpiralGpuPresentRequired===true,lateCanvasOverlay=Boolean(strictSpiral&&frame?.strictSpiralLateCanvasOverlay===true&&frame?.gpuMainCanvasHasContent===true&&renderBackendTelemetry.hasMaterialization?.()!==true),mainSceneEmpty=Boolean(layerSource&&(lateCanvasOverlay?false:(strictSpiral?frame?.gpuMainCanvasHasContent!==true:frame?.gpuMainSceneEmpty)));const st=mainSceneEmpty?dummyLampTexture:sceneTexture;
                     if(mainSceneEmpty)sceneUploadSkips++;else{device.queue.copyExternalImageToTexture({source:mainCanvas},{texture:sceneTexture,premultipliedAlpha:false},[width,height]);sceneUploads++;}
-                    const lampSource=deferredLampSource(),lt=lampSource?.texture||dummyLampTexture;
                     if(!bindGroup||boundBgTexture!==bt||boundLampTexture!==lt||boundLayerTexture!==ltx||boundUnderlayTexture!==utx||boundSceneTexture!==st){bindGroup=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:st.createView()},{binding:1,resource:bt.createView()},{binding:2,resource:lt.createView()},{binding:3,resource:ltx.createView()},{binding:4,resource:utx.createView()},{binding:5,resource:sampler},{binding:6,resource:{buffer:uniformBuffer}}]});boundBgTexture=bt;boundLampTexture=lt;boundLayerTexture=ltx;boundUnderlayTexture=utx;boundSceneTexture=st;finalRenderBundle=null;finalRenderBundleList.length=0;if(typeof device.createRenderBundleEncoder==='function'){try{const rbe=device.createRenderBundleEncoder({label:'SpiroStar final composite render bundle',colorFormats:[format]});rbe.setPipeline(pipeline);rbe.setBindGroup(0,bindGroup);rbe.draw(3);finalRenderBundle=rbe.finish();finalRenderBundleList[0]=finalRenderBundle;finalBundleBuilds++;}catch(_){finalRenderBundle=null;finalRenderBundleList.length=0;}}}
                     const cfg=normalizeSceneBlendState(),c=GPUColorCache.rgba(state.bgColor||'#090d16'),v=vignetteInfo(frame),dpr=Math.max(.25,Number(frame?.dpr)||window.devicePixelRatio||1);
                     uniformData.fill(0);
@@ -4050,17 +4166,18 @@ fn coverUv(uv:vec2<f32>)->vec2<f32>{
 
                     uniformData[4]=c[2];uniformData[5]=modeCode[cfg.mode]??0;uniformData[6]=(cfg.mode==='normal'?0:cfg.strength/100);uniformData[7]=cfg.opacity/100;
 
-                    uniformData[8]=state.backgroundImageDataUrl?1:0;uniformData[9]=v.fx;uniformData[10]=v.fy;uniformData[11]=v.on?1:0;uniformData[12]=state.showGrid?1:0;uniformData[13]=dpr;uniformData[14]=lampSource?1:0;uniformData[15]=layerSource?(lateCanvasOverlay?2:1):0;
+                    uniformData[8]=state.backgroundImageDataUrl?1:0;uniformData[9]=v.fx;uniformData[10]=v.fy;uniformData[11]=v.on?1:0;uniformData[12]=state.showGrid?1:0;uniformData[13]=dpr;uniformData[14]=lampSource?(100+(lampBlendCode[normalizedLampBlend(lampSource?.blendMode)]??7)):0;uniformData[15]=layerSource?(lateCanvasOverlay?2:1):0;
                     let uniformChanged=!uniformHasLast;for(let i=0;!uniformChanged&&i<16;i++)if(uniformData[i]!==uniformLast[i])uniformChanged=true;
                     if(uniformChanged){device.queue.writeBuffer(uniformBuffer,0,uniformData);uniformLast.set(uniformData);uniformHasLast=true;uniformUploads++;}else uniformUploadSkips++;
-                    if(lampSource)lampDirectFrames++;if(layerSource)layerDirectFrames++;if(underlaySource)underlayDirectFrames++;
+                    if(rawLampSource)lampDirectFrames++;if(layerSource)layerDirectFrames++;if(underlaySource)underlayDirectFrames++;
                     const enc=device.createCommandEncoder({label:'SpiroStar final composite frame'}),pass=enc.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:c[0],g:c[1],b:c[2],a:1},loadOp:'clear',storeOp:'store'}]});if(finalRenderBundle){pass.executeBundles(finalRenderBundleList);finalBundleExecutes++;}else{pass.setPipeline(pipeline);pass.setBindGroup(0,bindGroup);pass.draw(3);}pass.end();
-                    const finalCommand=enc.finish(),frameSceneCommands=layerSource?.globalFrameScene?WebGPUStrokeRenderer?.getFrameSceneCommandBuffers?.(renderRuntime.frameId):null,layerCommand=layerSource&&!layerSource?.globalFrameScene?WebGPUStrokeRenderer?.getDeferredLayerSceneCommandBuffer?.(renderRuntime.frameId):null,lampCommand=lampSource?LampGPURenderer?.getDeferredCommandBuffer?.():null;
-                    const layerEffects=layerSource&&!layerSource?.globalFrameScene?peekLayerSceneEffectCommands(frame):[];
+                    const finalCommand=enc.finish(),frameSceneCommands=layerSource?.globalFrameScene?WebGPUStrokeRenderer?.getFrameSceneCommandBuffers?.(renderRuntime.frameId):null,layerCommand=layerSource&&!layerSource?.globalFrameScene?WebGPUStrokeRenderer?.getDeferredLayerSceneCommandBuffer?.(renderRuntime.frameId):null;
                     const underlayCommands=underlaySource?WebGPUStrokeRenderer.getFrameUnderlayCommandBuffers?.(renderRuntime.frameId):null;
 
                     const frameCommands=frameCommandScratch;frameCommands.length=0;const gpuTimer=beginGpuTiming(frame?.id??renderRuntime.frameId);if(gpuTimer?.begin)frameCommands.push(gpuTimer.begin);
-                    if(underlayCommands?.clearCommand)frameCommands.push(underlayCommands.clearCommand);for(const cmd of underlayCommands?.effectCommands||[])if(cmd)frameCommands.push(cmd);if(Array.isArray(frameSceneCommands))for(const cmd of frameSceneCommands)if(cmd)frameCommands.push(cmd);if(layerCommand)frameCommands.push(layerCommand);for(const item of layerEffects)if(item?.commandBuffer)frameCommands.push(item.commandBuffer);if(lampCommand)frameCommands.push(lampCommand);frameCommands.push(finalCommand);const gpuTimerEnd=finishGpuTiming(gpuTimer);if(gpuTimerEnd)frameCommands.push(gpuTimerEnd);mergedFrameCommandBuffers+=frameCommands.length;device.queue.submit(frameCommands);try{notifyLayerSceneEffectCommandsSubmitted?.(frame);}catch(_){}try{notifyFrameSceneEffectCommandsSubmitted?.(frame);}catch(_){}if(gpuTimerEnd)readGpuTiming(gpuTimer);submissions++;if(lampCommand){LampGPURenderer.markDeferredSubmitted();mergedLampSubmissions++;}if(layerSource?.globalFrameScene){WebGPUStrokeRenderer.markFrameScenePresented?.(renderRuntime.frameId);clearLayerSceneEffectCommands(frame);}else if(layerSource){WebGPUStrokeRenderer.markDeferredLayerScenePresented?.(renderRuntime.frameId);clearLayerSceneEffectCommands(frame);}
+                    if(underlayCommands?.clearCommand)frameCommands.push(underlayCommands.clearCommand);for(const cmd of underlayCommands?.effectCommands||[])if(cmd)frameCommands.push(cmd);if(Array.isArray(frameSceneCommands))for(const cmd of frameSceneCommands)if(cmd)frameCommands.push(cmd);if(layerCommand)frameCommands.push(layerCommand);
+                    if(lampsEmbedded){for(const item of layerEffects)if(Number(item?.phase)<50&&item?.commandBuffer)frameCommands.push(item.commandBuffer);if(rawLampCommand)frameCommands.push(rawLampCommand);frameCommands.push(lampLayerSceneCommand);for(const item of layerEffects)if(Number(item?.phase)>=50&&item?.commandBuffer)frameCommands.push(item.commandBuffer);}else{for(const item of layerEffects)if(item?.commandBuffer)frameCommands.push(item.commandBuffer);if(rawLampCommand)frameCommands.push(rawLampCommand);}
+                    frameCommands.push(finalCommand);const gpuTimerEnd=finishGpuTiming(gpuTimer);if(gpuTimerEnd)frameCommands.push(gpuTimerEnd);mergedFrameCommandBuffers+=frameCommands.length;device.queue.submit(frameCommands);try{notifyLayerSceneEffectCommandsSubmitted?.(frame);}catch(_){}try{notifyFrameSceneEffectCommandsSubmitted?.(frame);}catch(_){}if(gpuTimerEnd)readGpuTiming(gpuTimer);submissions++;if(rawLampCommand){LampGPURenderer.markDeferredSubmitted();mergedLampSubmissions++;}if(layerSource?.globalFrameScene){WebGPUStrokeRenderer.markFrameScenePresented?.(renderRuntime.frameId);clearLayerSceneEffectCommands(frame);}else if(layerSource){WebGPUStrokeRenderer.markDeferredLayerScenePresented?.(renderRuntime.frameId);clearLayerSceneEffectCommands(frame);}
                     if(underlaySource){WebGPUStrokeRenderer.markFrameUnderlayCommandsSubmitted?.(renderRuntime.frameId);WebGPUStrokeRenderer.markFrameUnderlayPresented?.(renderRuntime.frameId);}frames++;updatePresentationCss(true);return true;
                 }catch(err){lastError=String(err?.message||err);updatePresentationCss(false);return false;}
             }
@@ -4068,7 +4185,7 @@ fn coverUv(uv:vec2<f32>)->vec2<f32>{
             function canDeferVignette(frame){return vignetteInfo(frame).on&&canPresent(frame);}
             function setGpuTimingInterval(value=24){GPU_TIMING_INTERVAL=Math.max(1,Math.min(120,Math.round(Number(value)||24)));return GPU_TIMING_INTERVAL;}
             function status(){warmup();return{supported:!!navigator?.gpu,attempted,initializing,available:ready&&!lost&&WebGPUDeviceHub.isReady(),lost,active:finalGpuCanvas?.style?.display==='block',lastError,lastInitError,retryCount,width,height,submissions,sceneUploads,sceneUploadSkips,bgUploads,frames,lampDirectFrames,layerDirectFrames,underlayDirectFrames,mergedLampSubmissions,frameGraph:{singleSubmitFrames:submissions,mergedCommandBuffers:mergedFrameCommandBuffers,uniformUploads,uniformUploadSkips,commandScratchReused:true,effectQueueSortedOnInsert:true,policy:'ordinary Base line and GPU-only effects force GPU-resident Layer Scene; other optional scenes still use profitability/correctness preflight; expected Canvas content may upload once beneath/above the resident line when ordering is explicit; mixed-path materialization still triggers cooldown',materializations:frameGraphPerformanceRuntime.materializations,penaltyUntilFrame:frameGraphPerformanceRuntime.penaltyUntilFrame,preflightRejects:frameGraphPerformanceRuntime.preflightRejects,lastRiskReason:frameGraphPerformanceRuntime.lastRiskReason,renderBundles:{supported:typeof device?.createRenderBundleEncoder==='function',finalBuilds:finalBundleBuilds,finalExecutes:finalBundleExecutes},gpuTiming:{supported:WebGPUDeviceHub.hasTimestampQuery?.()===true,samples:gpuTimingSamples,misses:gpuTimingMisses,lastMs:Number(gpuTimingLastMs.toFixed(3)),emaMs:Number(gpuTimingEmaMs.toFixed(3)),interval:GPU_TIMING_INTERVAL,disabledReason:gpuTimingDisabledReason}},backgroundReady:backgroundReady(),hub:WebGPUDeviceHub.status()};}
-            return{warmup,retry,canPresent,canDeferVignette,canDeferLamps,canDeferLayerScene,render,disable,status,setGpuTimingInterval};
+            return{warmup,retry,canPresent,canDeferVignette,canDeferLamps,canDeferLayerScene,encodeTextureOverTarget,encodeLampBlendIntoTarget,render,disable,status,setGpuTimingInterval};
         })();
 
         const WebGPUStrokeRenderer = (() => {
@@ -5173,9 +5290,9 @@ fn over(src:vec4<f32>,dst:vec4<f32>)->vec4<f32>{return src+dst*(1.0-src.a);}
 @fragment fn fsScene(v:SceneVSOut)->@location(0) vec4<f32>{
     var out=vec4<f32>(0.0);
     if(u.flags.w>0.5 && u.extra.y>0.5){out=textureSample(outlineTex,sceneSampler,v.uv);}
-    if(u.flags.x>0.5){out=over(textureSample(glowTex,sceneSampler,v.uv),out);}
     if(u.flags.y>0.5){let cov=clamp(textureSample(maskTex,sceneSampler,v.uv).a,0.0,1.0);let a=clamp(u.fillColor.a*cov,0.0,1.0);out=over(vec4<f32>(u.fillColor.rgb*a,a),out);}
     if(u.extra.z>0.5){out=over(textureSample(nativeFillTex,sceneSampler,v.uv),out);}
+    if(u.flags.x>0.5){out=over(textureSample(glowTex,sceneSampler,v.uv),out);}
     if(u.flags.z>0.5){out=over(textureSample(baseTex,sceneSampler,v.uv),out);}
     if(u.flags.w>0.5 && u.extra.y<0.5){out=over(textureSample(outlineTex,sceneSampler,v.uv),out);}
     if(u.extra.x>0.5){out=over(textureSample(coreTex,sceneSampler,v.uv),out);}
@@ -5362,14 +5479,14 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                     const corridorVertexBuffers=[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}];
                     const makeCorridorPipeline=(kind)=>device.createRenderPipeline({label:`SpiroStar Corridor ${kind}`,layout:corridorLayout,vertex:{module:corridorModule,entryPoint:'vsCorridor',buffers:corridorVertexBuffers},fragment:{module:corridorModule,entryPoint:'fsCorridor',targets:[{format,blend:blendState(kind)}]},primitive:{topology:'triangle-list',cullMode:'none'}});
                     corridorPipelineMax=makeCorridorPipeline('max');corridorPipelineOver=makeCorridorPipeline('over');
-                    const bezierCorridorModule=device.createShaderModule({label:'Somata 7.4.9 Bézier Corridor WGSL',code:BEZIER_CORRIDOR_WGSL});await assertWebGPUShaderModule(bezierCorridorModule,'Somata 7.4.9 Bézier Corridor WGSL');
+                    const bezierCorridorModule=device.createShaderModule({label:'Somata 7.4.30 Bézier Corridor WGSL',code:BEZIER_CORRIDOR_WGSL});await assertWebGPUShaderModule(bezierCorridorModule,'Somata 7.4.30 Bézier Corridor WGSL');
                     bezierCorridorBindGroupLayout=device.createBindGroupLayout({entries:[
                         {binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'uniform'}},
                         {binding:1,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}},
                         {binding:2,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}
                     ]});
                     const bezierCorridorLayout=device.createPipelineLayout({bindGroupLayouts:[bezierCorridorBindGroupLayout]});
-                    const makeBezierCorridorPipeline=(kind)=>device.createRenderPipeline({label:`Somata 7.4.9 Bézier Corridor ${kind}`,layout:bezierCorridorLayout,vertex:{module:bezierCorridorModule,entryPoint:'vsCorridor',buffers:corridorVertexBuffers},fragment:{module:bezierCorridorModule,entryPoint:'fsCorridor',targets:[{format,blend:blendState(kind)}]},primitive:{topology:'triangle-list',cullMode:'none'}});
+                    const makeBezierCorridorPipeline=(kind)=>device.createRenderPipeline({label:`Somata 7.4.30 Bézier Corridor ${kind}`,layout:bezierCorridorLayout,vertex:{module:bezierCorridorModule,entryPoint:'vsCorridor',buffers:corridorVertexBuffers},fragment:{module:bezierCorridorModule,entryPoint:'fsCorridor',targets:[{format,blend:blendState(kind)}]},primitive:{topology:'triangle-list',cullMode:'none'}});
                     bezierCorridorPipelineMax=makeBezierCorridorPipeline('max');bezierCorridorPipelineOver=makeBezierCorridorPipeline('over');
                     corridorUniformBuffer=device.createBuffer({size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST,label:'SpiroStar Corridor uniforms'});corridorDeferredUniformBuffers=Array.from({length:32},(_,i)=>device.createBuffer({size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST,label:`SpiroStar Corridor deferred uniforms ${i}`}));corridorDeferredUniformCursor=0;
                     }catch(err){optionalInitErrors.push(`corridor: ${String(err?.message||err)}`);corridorBindGroupLayout=null;corridorPipelineMax=null;corridorPipelineOver=null;bezierCorridorBindGroupLayout=null;bezierCorridorPipelineMax=null;bezierCorridorPipelineOver=null;corridorUniformBuffer=null;}
@@ -6659,7 +6776,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                         const deferredUniform=sceneRole?acquireDeferredCorridorUniform():null;if(sceneRole&&!deferredUniform)return false;if(!sceneRole)writeCorridorUniforms();const activeUniformBuffer=deferredUniform?.buffer||corridorUniformBuffer;
                         const bg=getBezierCorridorBindGroup(bezier,copyBuffer,activeUniformBuffer);if(!bg)return false;
                         const surf=sceneRole?layerBatchSurfaces[sceneRole]:null,targetView=sceneRole?surf?.view:context.getCurrentTexture().createView();if(!targetView)return false;
-                        const encoder=device.createCommandEncoder({label:sceneRole?`Somata 7.4.9 Bézier Corridor ${sceneRole}`:'Somata 7.4.9 Bézier Corridor encoder'}),pass=encoder.beginRenderPass({colorAttachments:[{view:targetView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
+                        const encoder=device.createCommandEncoder({label:sceneRole?`Somata 7.4.30 Bézier Corridor ${sceneRole}`:'Somata 7.4.30 Bézier Corridor encoder'}),pass=encoder.beginRenderPass({colorAttachments:[{view:targetView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
                         const useOver=segmented||(effectMode===4&&multiColor);pass.setPipeline(useOver?bezierCorridorPipelineOver:bezierCorridorPipelineMax);pass.setBindGroup(0,bg);pass.setVertexBuffer(0,cornerBuffer);pass.draw(6,microCount*k);pass.end();if(sceneRole&&!compositeCorridorRoleToLayerScene(encoder,sceneRole,opt.layerSceneClear===true))return false;const command=encoder.finish();
                         corridorSubmit++;corridorDraws++;bezierCorridorDraws++;bezierCorridorCopies+=k;bezierCorridorGpuSegments+=microCount*k;if(effectMode!==4){corridorEffectDraws++;staticEffectReuseHits++;}
                         if(sceneRole)return{handled:true,commandBuffer:command};device.queue.submit([command]);lastSubmit++;if(opt.deferComposite===true)return true;return compositeTo(targetCtx,opt.composite||'source-over');

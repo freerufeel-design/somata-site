@@ -268,8 +268,9 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             if(plan.dynamic!==true&&geometry?.drawData)GeometryKernel.staticContours(geometry.drawData,'fillPolicy',true);
             const fillAlpha=getFillOpacityUnit(layer.fillColor,DEFAULT_FILL_OPACITY_PERCENT);
 
-            const fillConfigured=getLayerLineVisible(layer)&&layer.fill===true&&fillAlpha>.00001;
-            const dynamic=plan.dynamic===true,spiral=isSpiralLayer(layer);
+            const spiral=isSpiralLayer(layer);
+            let fillConfigured=getLayerLineVisible(layer)&&layer.fill===true&&fillAlpha>.00001;
+            const dynamic=plan.dynamic===true;
 
             const li=Math.max(0,Math.floor(Number(frameCtx.layerIndex)||0));
             const spiralEndpoint=spiral||[
@@ -277,20 +278,29 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
                 frameCtx.blueMorphProvider?.sourceLayer,frameCtx.blueMorphProvider?.targetLayer,
                 runtimeState?.morph?.renderSourceLayers?.[li],runtimeState?.morph?.renderTargetLayers?.[li]
             ].some(candidate=>candidate&&isSpiralLayer(candidate));
+            if(spiralEndpoint&&layer.spiralFillEnabled!==true)fillConfigured=false;
             const unsupportedFillKind=plan.kind==='orange-fade'||plan.kind==='blue-fade'||plan.kind==='green-fade'||plan.kind==='lightning';
             const hasStaticFillTopology=dynamic?false:(Number(geometry?.fillContourCount)||0)>0&&geometry?.hasClosedFillTopology===true;
+            const staticDrawData=dynamic?null:(plan.sourceData||frameCtx.staticDrawData||geometry?.drawData||null);
+            const spiralBandFillTopology=!dynamic&&spiralEndpoint&&typeof FillMeshPreparer!=='undefined'&&FillMeshPreparer.hasSpiralBandTopology?.(staticDrawData,layer)===true;
+            const dynamicSourceLayer=frameCtx.sourceLayer||plan.sourceLayer||frameCtx.blueMorphProvider?.sourceLayer||runtimeState?.morph?.renderSourceLayers?.[li]||null;
+            const dynamicTargetLayer=plan.targetLayer||frameCtx.blueMorphProvider?.targetLayer||runtimeState?.morph?.renderTargetLayers?.[li]||null;
+            const evenClosedSpiral=(candidate)=>candidate&&isSpiralLayer(candidate)&&candidate.spiralClosed!==false&&((Math.max(2,Math.round(Number(candidate.N)||0))&1)===0);
+            const dynamicSpiralBandTopology=dynamic&&spiralEndpoint&&evenClosedSpiral(dynamicSourceLayer)&&evenClosedSpiral(dynamicTargetLayer);
 
-            const fillHasRenderableTopology=dynamic?true:hasStaticFillTopology;
+            const fillHasRenderableTopology=dynamic?(spiralEndpoint?dynamicSpiralBandTopology:true):(hasStaticFillTopology||spiralBandFillTopology);
             const fillRequested=fillConfigured&&fillHasRenderableTopology;
             const corridor=state.tunnel?.active===true;
 
             const dynamicCorridorNative=fillRequested&&dynamic&&corridor&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerGeometry);
-            const nativeGpuFillEligible=fillRequested&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(!corridor||!tunnelColorShiftIsActive())&&((hasStaticFillTopology&&!dynamic&&!spiralEndpoint)||dynamicCorridorNative);
+            const staticNativeFillTopology=!dynamic&&(hasStaticFillTopology&&!spiralEndpoint||spiralBandFillTopology);
+            const nativeGpuFillEligible=fillRequested&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(!corridor||!tunnelColorShiftIsActive())&&(staticNativeFillTopology||dynamicCorridorNative);
             const gpuMaskEligible=fillRequested&&hasStaticFillTopology&&!dynamic&&!spiralEndpoint&&!corridor&&!unsupportedFillKind&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerFillInstances);
             const contract={
                 kind:String(plan.kind||'static'),
                 dynamic,spiral:spiralEndpoint,corridor,
                 fillConfigured,
+                spiralBandFillTopology,dynamicSpiralBandTopology,
                 fillSuppressedNoTopology:fillConfigured&&!fillRequested,
                 fillRequested,
                 fillAlpha,

@@ -31,16 +31,21 @@ function renderLayerParticlePass(frameCtx){
     if(!cfg?.enabled||frameCtx?.layer?.visible===false)return false;
     try{
 
+        // v7.4.30: particles are the top per-layer GPU phase. Keep them in the resident
+        // Layer Scene whenever possible so finalGpuCanvas/output capture includes them.
+        // Final composition interleaves Lamps at phase 50, Sweep at 60/61 and Particles at 70.
+        if(frameCtx?.frame?.gpuLayerSceneDeferred!==true){
+            const opened=WebGPUStrokeRenderer?.beginExternalLayerScene?.(frameCtx.frameId,'particle-effect')===true;
+            if(opened){frameCtx.frame.gpuLayerSceneDeferred=true;frameCtx.frame.gpuMainSceneEmpty=true;}
+        }
         if(frameCtx?.frame?.gpuLayerSceneDeferred===true){
             const scene=WebGPUStrokeRenderer?.getDeferredLayerSceneTexture?.(frameCtx.frameId),rec=scene?.texture?WebGPUParticleRenderer?.encodeToLayerScene?.(scene.texture,frameCtx,mainCtx):null;
-            if(rec?.handled){if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,35,rec.commandBuffer,'particles',rec.onSubmitted);renderBackendTelemetry?.mark?.('particles','gpu','deferred Layer Scene particles');return true;}
+            if(rec?.handled){if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,70,rec.commandBuffer,'particles',rec.onSubmitted);renderBackendTelemetry?.mark?.('particles','gpu','top Layer Scene particles');return true;}
         }
         const strictSpiral=typeof isStrictSpiralWebGPUFrame==='function'?isStrictSpiralWebGPUFrame(frameCtx):(typeof isSpiralLayer==='function'&&isSpiralLayer(frameCtx.layer)&&state?.fourierMode!==true);
-
-        if(strictSpiral){renderBackendTelemetry?.mark?.('particles','gpu','Spiral Layer-Scene-only particles warmup');try{requestMainCanvasRender?.();}catch(_){}return false;}
+        if(strictSpiral){renderBackendTelemetry?.mark?.('particles','gpu','Spiral particle Layer Scene warmup');try{requestMainCanvasRender?.();}catch(_){}return false;}
         const ok=WebGPUParticleRenderer?.queueLayer?.(frameCtx,mainCtx)===true;
-        if(ok){renderBackendTelemetry?.mark?.('particles','gpu','WebGPU contour particles overlay');return true;}
-        if(strictSpiral){renderBackendTelemetry?.mark?.('particles','gpu','Spiral particles GPU-only warmup');return false;}
+        if(ok){renderBackendTelemetry?.mark?.('particles','gpu','particle overlay compatibility path');return true;}
         return queueParticleGpuFallback(frameCtx,cfg);
     }catch(_){if(typeof isStrictSpiralWebGPUFrame==='function'?isStrictSpiralWebGPUFrame(frameCtx):(typeof isSpiralLayer==='function'&&isSpiralLayer(frameCtx?.layer)&&state?.fourierMode!==true))return false;return queueParticleGpuFallback(frameCtx,cfg);}
 }

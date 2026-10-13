@@ -89,7 +89,8 @@ window.__spiroSweepGpuArcBridgeStatus=()=>({...sweepGpuArcBridgeStats,contract:'
 function isLightningSpectralPreflash(effect){const cfg=effect?.frameData?.cfg||effect?.cfg;return cfg?.effectType==='lightning'&&effect.frameData?.lightningVector?.stage==='precharge'&&Boolean(effect.frameData?.lightningSpectralPrepared);}
 function lightningSpectralPreflashAlpha(effect,_baseAlpha){return Math.max(0,Math.min(1,Number(effect?.frameData?.lightningVector?.prechargeAlpha)||0));}
 
-const GRAFFITI_SWEEP_GLOW_PHASE=40,GRAFFITI_SWEEP_CORE_PHASE=41;
+const SOMATA_SWEEP_PHASE=60,SOMATA_SWEEP_CORE_PHASE=61;
+const GRAFFITI_SWEEP_GLOW_PHASE=SOMATA_SWEEP_PHASE,GRAFFITI_SWEEP_CORE_PHASE=SOMATA_SWEEP_CORE_PHASE;
 function isGraffitiSweepCarrier(frameCtx){const e=frameCtx?.effectLayer||(typeof getLayerEffectOwner==='function'?getLayerEffectOwner(frameCtx?.layer):null)||frameCtx?.layer;return (frameCtx?.lineProfileApplication||e?.lineProfileApplication||frameCtx?.layer?.lineProfileApplication)==='graffiti';}
 function sweepCubicPoint(a,b,c,d,t){const q=1-t,q2=q*q,t2=t*t;return{x:q2*q*a.x+3*q2*t*b.x+3*q*t2*c.x+t2*t*d.x,y:q2*q*a.y+3*q2*t*b.y+3*q*t2*c.y+t2*t*d.y};}
 function sweepSpectralRelAngle(x,y,prepared){const tau=Math.PI*2,cx=Number(prepared?.centerX)||0,cy=Number(prepared?.centerY)||0,start=Number.isFinite(Number(prepared?.spectralStartAngle))?Number(prepared.spectralStartAngle):0,a=Math.atan2(y-cy,x-cx),dir=Number(prepared?.spectralDirection)<0?-1:1,raw=dir>0?a-start:start-a;return raw-Math.floor(raw/tau)*tau;}
@@ -138,9 +139,12 @@ function graffitiSweepPieces(frameCtx,effect){
 function graffitiSweepVisual(effect,baseAlpha){
     const data=effect.frameData,cfg=data.cfg,lightning=cfg.effectType==='lightning',f=lightning?data.lightningVector:null,pre=lightning&&f?.stage==='precharge';
     const v=lightning?(pre?{glowSize:f?.prechargeGlow,strength:f?.prechargeGlowIntensity,brightness:f?.prechargeBrightness,softness:f?.prechargeSoftness,opacity:f?.flashOpacity}:{glowSize:f?.glow,strength:f?.glowIntensity,brightness:f?.brightness,softness:f?.softness,opacity:100}):data.glintVisual;
-    const alpha=lightning?Math.max(0,Math.min(1,pre?(Number(f?.prechargeAlpha)||0):(Number(f?.intensity)||0)*Math.max(0,Math.min(1,Number(baseAlpha)||0)))):Math.max(0,Math.min(1,Number(baseAlpha)||0));
+    let pulse=null;if(lightning&&!pre&&f?.stage==='after'&&Array.isArray(f.microPulses)){for(const p of f.microPulses){if(!pulse||Number(p?.intensity||0)>Number(pulse?.intensity||0))pulse=p;}}
+    const liveIntensity=lightning&&!pre?Math.max(Number(f?.intensity)||0,Number(pulse?.intensity)||0):0;
+    const alpha=lightning?Math.max(0,Math.min(1,pre?(Number(f?.prechargeAlpha)||0):liveIntensity*Math.max(0,Math.min(1,Number(baseAlpha)||0)))):Math.max(0,Math.min(1,Number(baseAlpha)||0));
     const opacity=Number.isFinite(Number(v?.opacity))?Number(v.opacity):1,opacityUnit=opacity>1?opacity/100:opacity;
-    return{width:lightning?Math.max(.15,Number(pre?f?.prechargeWidth:f?.boltW)||.15):Math.max(.15,Number(data.sweepW)||.15),color:String(lightning?(pre?(f?.flash||cfg.color||'#ffffff'):(f?.primary||cfg.lightningColor||'#ffffff')):(cfg.color||'#ffffff')),coreAlpha:alpha*Math.max(0,Math.min(1,opacityUnit)),glowAlpha:Math.max(0,Math.min(1,alpha*.22*Math.max(0,Number(v?.strength)||0)*Math.max(0,Number(v?.brightness)||0))),glowSize:Math.max(0,Number(v?.glowSize)||0),softness:Math.max(0,Math.min(1.5,Number(v?.softness)||0))};
+    const pulseColor=pulse?(Number(pulse.index)%2===0?(f?.secondary||f?.primary):(f?.primary||f?.secondary)):null;
+    return{width:lightning?Math.max(.15,Number(pre?f?.prechargeWidth:f?.boltW)||.15):Math.max(.15,Number(data.sweepW)||.15),color:String(lightning?(pre?(f?.flash||cfg.color||'#ffffff'):(pulseColor||f?.primary||cfg.lightningColor||'#ffffff')):(cfg.color||'#ffffff')),coreAlpha:alpha*Math.max(0,Math.min(1,opacityUnit)),glowAlpha:Math.max(0,Math.min(1,alpha*.22*Math.max(0,Number(v?.strength)||0)*Math.max(0,Number(v?.brightness)||0))),glowSize:Math.max(0,Number(v?.glowSize)||0),softness:Math.max(0,Math.min(1.5,Number(v?.softness)||0)),microPulseIndex:pulse?Number(pulse.index):-1};
 }
 function renderGraffitiProfileSweep(frameCtx,effect,baseAlpha,visibleInstances){
     if(!isGraffitiSweepCarrier(frameCtx)||typeof WebGPUGraffitiRibbonRenderer==='undefined')return false;
@@ -194,7 +198,7 @@ function sweepProfileMode(cfg){const value=cfg?.effectType==='lightning'?cfg?.li
 function reportSweepGpuIssue(frameCtx,stage,reason,extra=null){
     try{renderBackendTelemetry.mark('sweep','gpu',`GPU pass skipped: ${stage}`);}catch(_){}
     if(typeof somataGpuDiagnosticError==='function')somataGpuDiagnosticError('sweep',stage,reason,frameCtx,{fallback:'skip-sweep-pass',recovered:true,...(extra||{})});
-    else console.error('[Somata 7.4.9 GPU][sweep]',stage,reason,{frameId:frameCtx?.frameId,layerIndex:frameCtx?.layerIndex,...(extra||{})});
+    else console.error('[Somata 7.4.30 GPU][sweep]',stage,reason,{frameId:frameCtx?.frameId,layerIndex:frameCtx?.layerIndex,...(extra||{})});
     try{requestMainCanvasRender?.();}catch(_){}
 }
 function renderLayerSweepPass(frameCtx){
@@ -231,7 +235,7 @@ function renderLayerSweepPass(frameCtx){
                 ? WebGPULightningArcRenderer.encodeCorridorToLayerScene(scene.texture,effect.frameData.prepared,effect.frameData.lightningVector,mainCtx,effect.frameData?.lightningVector?.stage==='precharge'?1:baseAlpha,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,behavior)
                 : WebGPULightningArcRenderer.encodeToLayerScene(scene.texture,effect.frameData.prepared,effect.frameData.lightningVector,mainCtx,(effect.frameData?.lightningVector?.stage==='precharge'?1:baseAlpha)*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),behavior,frameCtx);
         }finally{mainCtx.restore();}
-        if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu','shared GPU-arc exact lightning');if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,40,rec.commandBuffer,`lightning-arc-${behavior}`,rec.onSubmitted);return;}
+        if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu','shared GPU-arc exact lightning');if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,SOMATA_SWEEP_PHASE,rec.commandBuffer,`lightning-arc-${behavior}`,rec.onSubmitted);return;}
         return reportSweepGpuIssue(frameCtx,'lightning-arc-encode','Exact GPU Arc Lightning encode failed; only the Lightning pass is skipped',{behavior});
     }
 
@@ -242,7 +246,7 @@ function renderLayerSweepPass(frameCtx){
                 ? WebGPUBezierSweepRenderer.encodeToLayerScene(scene.texture,effect.frameData.lightningSpectralPrepared,mainCtx,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,frameCtx.layer)
                 : WebGPUBezierSweepRenderer.encodeToLayerScene(scene.texture,effect.frameData.lightningSpectralPrepared,mainCtx,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),null,null,frameCtx,effect.footprint,frameCtx.layer);
         }finally{mainCtx.restore();}
-        if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu','spectral Bézier lightning preflash');if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,40,rec.commandBuffer,'lightning-spectral-preflash',rec.onSubmitted);else rec.onSubmitted?.();return;}
+        if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu','spectral Bézier lightning preflash');if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,SOMATA_SWEEP_PHASE,rec.commandBuffer,'lightning-spectral-preflash',rec.onSubmitted);else rec.onSubmitted?.();return;}
         return reportSweepGpuIssue(frameCtx,'lightning-preflash-encode','Spectral Lightning preflash GPU encode failed');
     }
 
@@ -258,7 +262,7 @@ function renderLayerSweepPass(frameCtx){
                 mainCtx.save();try{if(effect.tunnelActive){applyMotionTunnelLag(mainCtx,copy,frameCtx.layer);mainCtx.scale(copy.scale,copy.scale);}applyLayerFrameEffectTransform(mainCtx,frameCtx);if(!queueMovingSweepGlowWebGL(mainCtx,effect.paths,layer,(stage==='precharge'?1:baseAlpha)*a,effect.now,effect.frameData))healthy=false;}finally{mainCtx.restore();}
                 if(!healthy)break;
             }
-            if(healthy){const rec=SweepGPURenderer.encodeToLayerScene(scene.texture,null,'symmetric',frameCtx.frameId,cfg,stage==='precharge');if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu','deferred GPU lightning');if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,40,rec.commandBuffer,'lightning');return;}}
+            if(healthy){const rec=SweepGPURenderer.encodeToLayerScene(scene.texture,null,'symmetric',frameCtx.frameId,cfg,stage==='precharge');if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu','deferred GPU lightning');if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,SOMATA_SWEEP_PHASE,rec.commandBuffer,'lightning');return;}}
             SweepGPURenderer.clear();return reportSweepGpuIssue(frameCtx,'lightning-encode','GPU Lightning encode failed',{behavior});
         }
         const pending=[],clipPaths=effect.frameData?.prepared?.visible||effect.frameData?.visible||effect.paths||[];let healthy=true;
@@ -271,7 +275,7 @@ function renderLayerSweepPass(frameCtx){
                 const clip=buildLightningSceneStencilGeometry(clipPaths,mainCtx.getTransform(),clipKey,dynamic),rec=SweepGPURenderer.encodeToLayerScene(scene.texture,clip,behavior,frameCtx.frameId,cfg,stage==='precharge');if(!rec?.handled){healthy=false;break;}if(rec.commandBuffer)pending.push(rec.commandBuffer);
             }finally{mainCtx.restore();}
         }
-        if(healthy){for(let i=0;i<pending.length;i++)queueLayerSceneEffectCommand(frameCtx,40,pending[i],`lightning-${behavior}`);renderBackendTelemetry.mark('sweep','gpu','deferred clipped GPU lightning');return;}
+        if(healthy){for(let i=0;i<pending.length;i++)queueLayerSceneEffectCommand(frameCtx,SOMATA_SWEEP_PHASE,pending[i],`lightning-${behavior}`);renderBackendTelemetry.mark('sweep','gpu','deferred clipped GPU lightning');return;}
         SweepGPURenderer.clear();return reportSweepGpuIssue(frameCtx,'lightning-clipped-encode','Clipped GPU Lightning encode failed',{behavior});
     }
 
@@ -282,7 +286,7 @@ function renderLayerSweepPass(frameCtx){
                 ? WebGPUBezierSweepRenderer.encodeToLayerScene(scene.texture,effect.frameData.prepared,mainCtx,cfg,effect.frameData.sweepW,effect.frameData.glintVisual,1,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,frameCtx.layer)
                 : WebGPUBezierSweepRenderer.encodeToLayerScene(scene.texture,effect.frameData.prepared,mainCtx,cfg,effect.frameData.sweepW,effect.frameData.glintVisual,Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),null,null,frameCtx,effect.footprint,frameCtx.layer);
         }finally{mainCtx.restore();}
-        if(rec?.handled){const label=effect.frameData.prepared?.spectral===true?'spectral-bezier-glint':(effect.frameData.prepared?.glintType==='chaotic'?'chaotic-bezier-glint':'precise-bezier-glint');renderBackendTelemetry.mark('sweep','gpu',label);if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,40,rec.commandBuffer,label,rec.onSubmitted);else rec.onSubmitted?.();return;}
+        if(rec?.handled){const label=effect.frameData.prepared?.spectral===true?'spectral-bezier-glint':(effect.frameData.prepared?.glintType==='chaotic'?'chaotic-bezier-glint':'precise-bezier-glint');renderBackendTelemetry.mark('sweep','gpu',label);if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,SOMATA_SWEEP_PHASE,rec.commandBuffer,label,rec.onSubmitted);else rec.onSubmitted?.();return;}
         return reportSweepGpuIssue(frameCtx,'bezier-glint-encode','Bézier Glint GPU encode failed',{profileShape:sweepProfileMode(cfg)});
     }
 
@@ -293,7 +297,7 @@ function renderLayerSweepPass(frameCtx){
                 ? WebGPUCanonicalSweepRenderer.encodeCorridorToLayerScene(scene.texture,effect.frameData.prepared?.table,mainCtx,cfg,effect.frameData.phase,effect.frameData.sweepW,effect.frameData.glintVisual,1,effect.frameData.prepared?.lenFrac,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,frameCtx.layer)
                 : WebGPUCanonicalSweepRenderer.encodeToLayerScene(scene.texture,effect.frameData.prepared?.table,mainCtx,cfg,effect.frameData.phase,effect.frameData.sweepW,effect.frameData.glintVisual,Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),effect.frameData.prepared?.lenFrac,frameCtx.layer,frameCtx);
         }finally{mainCtx.restore();}
-        if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu',effect.frameData?.gpuMorphArc===true?'deferred shared GPU-arc glint':'deferred canonical glint');if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,40,rec.commandBuffer,'sweep',rec.onSubmitted);else rec.onSubmitted?.();return;}
+        if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu',effect.frameData?.gpuMorphArc===true?'deferred shared GPU-arc glint':'deferred canonical glint');if(rec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,SOMATA_SWEEP_PHASE,rec.commandBuffer,'sweep',rec.onSubmitted);else rec.onSubmitted?.();return;}
         return reportSweepGpuIssue(frameCtx,'canonical-glint-encode','Canonical Glint GPU encode failed',{profileShape:sweepProfileMode(cfg)});
     }
 

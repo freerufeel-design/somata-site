@@ -874,9 +874,11 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             if (spiralEnabled) {
                 const tangential = options.spiralTangential === true;
                 const roundSeams = options.spiralRoundSeams !== false;
-                const spiralProfilePts = options.profileMode !== 'spline'
-                    ? densifySegmentProfileForSpiral(profilePts, getConfiguredSplinePointCount())
-                    : profilePts;
+                const spiralProfilePts = options.continuousProfileBlend === true
+                    ? profilePts
+                    : (options.profileMode !== 'spline'
+                        ? densifySegmentProfileForSpiral(profilePts, getConfiguredSplinePointCount())
+                        : profilePts);
                 const pathCount = P.length;
                 if (!scratch.spiralPaths) scratch.spiralPaths = [];
                 while (scratch.spiralPaths.length < pathCount) scratch.spiralPaths.push({ points: [], closed: false });
@@ -887,7 +889,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     mapProfileOntoSpiralEdge(spiralProfilePts, P, i, R, spiralOrder, tangential, path.points, options.spiralStep || 1, options.polygonN || P.length, options.spiralClosed !== false, 0, options.spiralDirectionOverride, options.spiralExponentOverride);
                     const spiralRound=Math.max(0,Math.min(2,Number(options.roundingFrac)||0));
                     let mappedForClosure=path.points;
-                    if(options.profileMode==='segments'&&spiralRound>0.001)
+                    if(options.continuousProfileBlend!==true&&options.profileMode==='segments'&&spiralRound>0.001)
                         mappedForClosure=applySpiralFinalSpaceProfileRounding(path.points,spiralRound);
 
                     if(options.spiralClosed!==false){
@@ -1021,19 +1023,45 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return out;
         }
 
+        function profileModeTransitionProgress(t = 0) {
+            let u = Math.max(0, Math.min(1, Number(t) || 0));
+            // Profile mode changes follow wall-clock phase progress rather than geometry easing.
+            // That prevents a new spline tangent field from popping in at a phase boundary.
+            if (runtimeState?.morph?.active === true && Number.isFinite(Number(runtimeState.morph.progress))) {
+                u = Math.max(0, Math.min(1, Number(runtimeState.morph.progress) || 0));
+            }
+            const rawMode = state?.morph?.profileModeTransition;
+            const mode = rawMode === 'second' ? 'start' : (['phase','start','end'].includes(rawMode) ? rawMode : 'phase');
+            if (mode !== 'phase') {
+                const span = Math.max(0, Math.min(1, (Number(state?.morph?.profileModeTransitionPercent) || 0) / 100));
+                if (span <= 1e-7) {
+                    u = mode === 'start' ? 1 : (u >= 1 ? 1 : 0);
+                } else if (mode === 'start') {
+                    u = Math.max(0, Math.min(1, u / span));
+                } else {
+                    u = Math.max(0, Math.min(1, (u - (1 - span)) / span));
+                }
+            }
+            // Smoothstep has zero velocity at both ends, so the phase hand-off has no tangent jerk.
+            return u * u * (3 - 2 * u);
+        }
+
         function resolveMorphProfileModeForRender(sourceMode, targetMode, t = 0) {
             const src = sourceMode || 'segments';
             const dst = targetMode || src;
             if (src === dst) return src;
-            if (src === 'spline' || dst === 'spline') return Number(t) <= 1e-7 ? src : 'spline';
+            if (src === 'spline' || dst === 'spline') {
+                const blend = morphSplineBlend(src, dst, t);
+                return blend >= .5 ? 'spline' : 'segments';
+            }
             return Number(t) < 0.5 ? src : dst;
         }
 
         function morphSplineBlend(sourceMode, targetMode, t = 0) {
             const srcSpline = (sourceMode || 'segments') === 'spline';
             const dstSpline = (targetMode || sourceMode || 'segments') === 'spline';
-            const u = Math.max(0, Math.min(1, Number(t) || 0));
             if (srcSpline === dstSpline) return srcSpline ? 1 : 0;
+            const u = profileModeTransitionProgress(t);
             return srcSpline ? (1 - u) : u;
         }
 
@@ -1130,7 +1158,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
 
             const splineBlend = morphSplineBlend(sourceLayer.profileMode, targetLayer.profileMode, t);
             const mixedSplineSegment = isMixedSplineSegmentTransition(sourceLayer.profileMode, targetLayer.profileMode);
-            const profilePts = splineBlend > 0
+            const profilePts = (!mixedSplineSegment && splineBlend > 0)
                 ? smoothPreSampledSplinePoints(rawProfilePts) : rawProfilePts;
 
             const sourceRounding = Math.max(0, Math.min(MAX_ROUNDING_PERCENT, Number(sourceLayer.rounding) || 0));
@@ -1166,6 +1194,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 options.spiralStep = getEffectiveSpiralStep(layer);
                 options.polygonN = Math.max(2, Math.round(Number(layer.N) || vertexPts.length || 4));
                 options.profileMode = morphProfileMode;
+                options.continuousProfileBlend = mixedSplineSegment;
                 options.splineRenderMode = layer?.splineRenderMode;
                 options.lineJoinType = layer?.lineJoinType || 'rounded';
                 options.scratch = options;
@@ -1372,15 +1401,20 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 return;
             }
 
-            if(round>0){
-
-                splinePathForDraw(ctx,points,Boolean(closed),round,cornerFlags||[],bridgeRoundFlags||[]);
+            if(continuousProfileBlend){
+                // Blend Bézier controls on the existing point carrier. This is O(N) and does not
+                // increase the sampling/segment budget, even when rounding is enabled.
+                let blendPoints=points;
+                if(round>0.001 && typeof transformSplineKnotsForRounding==='function') {
+                    try { blendPoints=transformSplineKnotsForRounding(points,Boolean(closed),round,cornerFlags||[]) || points; } catch(_) {}
+                }
+                drawMorphSplineBlendPath(ctx,blendPoints,Boolean(closed),blend,cornerFlags||[]);
                 return;
             }
 
-            if(continuousProfileBlend){
+            if(round>0){
 
-                drawMorphSplineBlendPath(ctx,points,Boolean(closed),blend,cornerFlags||[]);
+                splinePathForDraw(ctx,points,Boolean(closed),round,cornerFlags||[],bridgeRoundFlags||[]);
                 return;
             }
 
@@ -1559,6 +1593,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             drawMorphConstructionGuide,
             interpolateMorphProfile,
             resolveMorphProfileModeForRender,
+            profileModeTransitionProgress,
             morphSplineBlend,
             getMorphClosureTransitionPlan,
             drawAngularAnchorMorph,

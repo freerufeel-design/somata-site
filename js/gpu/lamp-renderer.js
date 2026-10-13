@@ -1,6 +1,19 @@
 
 window.__spiroRegisterModule?.('js/gpu/lamp-renderer');
 
+const SOMATA_LAMP_BLEND_MODES=Object.freeze(['lighter','screen','source-over','color-dodge','difference','color']);
+function normalizeLampBlendMode(value){
+    const v=String(value||'lighter').toLowerCase();
+    if(v==='normal')return 'source-over';
+    if(v==='add'||v==='plus-lighter'||v==='linear-dodge')return 'lighter';
+    if(v==='inverted'||v==='invert')return 'difference';
+    return SOMATA_LAMP_BLEND_MODES.includes(v)?v:'lighter';
+}
+function lampCanvasCompositeOperation(value){
+    const v=normalizeLampBlendMode(value);
+    return v==='source-over'?'source-over':v;
+}
+
 const LampWebGLRenderer = (() => {
             const FLOATS_PER_INSTANCE = 11;
             const TYPE_CODE = Object.freeze({whiteCore:0,softCore:1,solarDark:2,ring:3,star:4});
@@ -10,6 +23,7 @@ const LampWebGLRenderer = (() => {
             let lampVao=null, toneVao=null, quadBuffer=null, instanceBuffer=null;
             let hdrTexture=null, hdrFbo=null, width=0, height=0;
             let instanceData=new Float32Array(FLOATS_PER_INSTANCE*512), instanceCount=0;
+            let frameBlendMode='lighter',frameBlendModeSet=false,frameBlendMixed=false;
             let lampUniformViewport=null, toneUniformHdr=null, toneUniformExposure=null;
             let lastError='';
             const clamp01=v=>Math.max(0,Math.min(1,Number(v)||0));
@@ -320,7 +334,7 @@ void main(){
                 }
             }
             function beginFrame(w,h){
-                instanceCount=0;
+                instanceCount=0;frameBlendMode='lighter';frameBlendModeSet=false;frameBlendMixed=false;
                 if(!allocate(w,h)){clear();return false;}
                 gl.bindFramebuffer(gl.FRAMEBUFFER,hdrFbo);gl.viewport(0,0,width,height);
                 gl.disable(gl.BLEND);gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
@@ -330,9 +344,8 @@ void main(){
             function canUse(cfg){
                 if(cfg?.webgl===false)return false;
                 if(!init()||!available||lost)return false;
-                const blend=cfg?.blendMode||'lighter';
-
-                return blend==='lighter'||blend==='screen';
+                const blend=normalizeLampBlendMode(cfg?.blendMode||'lighter');
+                return SOMATA_LAMP_BLEND_MODES.includes(blend);
             }
             function ensureCapacity(count){
                 const need=count*FLOATS_PER_INSTANCE;
@@ -343,6 +356,7 @@ void main(){
             function queueVisualPlan(ctx,visualPlan,alpha,drawPlan){
                 const items=visualPlan?.items,cfg=drawPlan?.config||visualPlan?.cfg||state.lamps||{};
                 if(!items?.length||alpha<=.001||!canUse(cfg))return false;
+                const requestedBlend=normalizeLampBlendMode(cfg?.blendMode);if(!frameBlendModeSet){frameBlendMode=requestedBlend;frameBlendModeSet=true;}else if(frameBlendMode!==requestedBlend){frameBlendMixed=true;frameBlendMode='lighter';}
                 const tr=ctx.getTransform?.();if(!tr)return false;
                 const scale=Math.hypot(Number(tr.a)||0,Number(tr.b)||0);if(!(scale>1e-9))return true;
                 const style=drawPlan?.preparedStyle||visualPlan?.style||{};
@@ -395,7 +409,7 @@ void main(){
                 mainCtx.setTransform(1,0,0,1,0,0);
                 mainCtx.globalAlpha=1;
                 mainCtx.filter='none';
-                mainCtx.globalCompositeOperation='lighter';
+                mainCtx.globalCompositeOperation=lampCanvasCompositeOperation(frameBlendMode);
                 mainCtx.drawImage(lampGlCanvas,0,0,mainCanvas.width,mainCanvas.height);
                 mainCtx.restore();
             }
@@ -441,7 +455,7 @@ void main(){
                 lastFlushMode=storageMode;
                 return true;
             }
-            function status(){return {attempted,available,lost,float16:Boolean(floatExt),floatBlend:Boolean(floatBlendExt),storageMode,lastFlushMode,lastGlError,instances:instanceCount,width,height,error:lastError};}
+            function status(){return {attempted,available,lost,float16:Boolean(floatExt),floatBlend:Boolean(floatBlendExt),storageMode,lastFlushMode,lastGlError,instances:instanceCount,width,height,error:lastError,blendMode:frameBlendMode,blendMixed:frameBlendMixed};}
             return {beginFrame,canUse,queueVisualPlan,flush,clear,status};
         })();
         window.__spiroLampWebGLStatus=()=>LampWebGLRenderer.status();
@@ -452,14 +466,15 @@ void main(){
             const canvas=document.createElement('canvas');
             let adapter=null,device=null,context=null,format=null,hubGeneration=0;
             let lampPipeline=null,corridorLampPipeline=null,arcLampPipeline=null,arcCorridorLampPipeline=null,topologyLampPipeline=null,topologyCorridorLampPipeline=null,tonePipeline=null,freezePipeline=null,trailCombinePipeline=null,cornerBuffer=null,instanceBuffers=[null,null,null],uniformBuffer=null,toneUniformBuffer=null,freezeUniformBuffer=null,rainUniformBuffer=null,dummyStorageBuffer=null;
-            let lampBindGroup=null,toneBindGroups=[null,null,null],freezeBindGroups=[null,null],rainToneBindGroups=[null,null],rainBindGroups=[null,null],trailCombineBindGroups=[null,null,null,null],rainCurrentCombineBindGroups=[null,null],hdrTexture=null,toneTexture=null,freezeHistoryTextures=[null,null],freezeHistoryViews=[null,null],rainHistoryTextures=[null,null],rainHistoryViews=[null,null],trailCompositeTexture=null,trailCompositeView=null,trailCompositeToneBindGroup=null;
+            let lampBindGroup=null,toneBindGroups=[null,null,null],freezeBindGroups=[null,null],rainToneBindGroups=[null,null],rainBindGroups=[null,null],trailCombineBindGroups=[null,null,null,null],rainCurrentCombineBindGroups=[null,null],hdrTexture=null,toneTexture=null,freezeHistoryTextures=[null,null],freezeHistoryViews=[null,null],rainHistoryTextures=[null,null],rainHistoryViews=[null,null],rainSourceTexture=null,rainSourceView=null,rainSourceValid=false,rainSourceRefreshes=0,trailCompositeTexture=null,trailCompositeView=null,trailCompositeToneBindGroup=null;
             let attempted=false,initializing=false,ready=false,lost=false,lastError='';
             let width=0,height=0,capacity=0,instanceCount=0,submissions=0,lastFlushMode='none',lastToneValid=false,deferredComposite=false,directSceneFrames=0,fallbackPresentFrames=0,lampFrameSerial=0;
+            let frameBlendMode='lighter',frameBlendModeSet=false,frameBlendMixed=false;
 
             let deferredCommandBuffer=null,deferredCommandGeneration=0,mergedFrameSubmissions=0,hdrView=null,toneView=null;
             let instanceData=new Float32Array(FLOATS_PER_INSTANCE*512);
             const uniformData=new Float32Array(4),toneUniformData=new Float32Array(8),freezeUniformData=new Float32Array(16),rainUniformData=new Float32Array(16);
-            let frameNow=0,freezeHistoryIndex=0,freezeHistoryValid=false,freezeLastRenderAt=0,freezeLastMotionAt=0,rainHistoryIndex=0,rainHistoryValid=false,rainLastRenderAt=0,rainLastMotionAt=0,freezeFrameHash=2166136261>>>0,freezeLastFrameHash=0,freezeDrawCount=0,freezeLastDrawCount=-1,freezeFrames=0,rainFrames=0,freezeResets=0,rainResets=0;
+            let frameNow=0,freezeHistoryIndex=0,freezeHistoryValid=false,freezeLastRenderAt=0,freezeLastMotionAt=0,rainHistoryIndex=0,rainHistoryValid=false,rainLastRenderAt=0,rainLastMotionAt=0,freezeFrameHash=2166136261>>>0,freezeLastFrameHash=0,freezeDrawCount=0,freezeLastDrawCount=-1,rainFrameHash=2166136261>>>0,rainDrawCount=0,rainLastFrameHash=0,rainLastDrawCount=-1,freezeFrames=0,rainFrames=0,freezeResets=0,rainResets=0,freezeEffectiveTailSec=NaN,freezeTailSlewAt=0;
 
             let instanceFrameHash=2166136261>>>0,lastInstanceHash=0,lastInstanceCount=0,lastInstanceSnapshot=null,lastInstanceBuffer=null;
             let instanceUploadBytes=0,instanceUploadSkips=0,instanceUploadBytesAvoided=0;
@@ -711,13 +726,13 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
 @fragment fn fsMain(@builtin(position) p:vec4<f32>)->@location(0) vec4<f32>{
     let dims=vec2<i32>(textureDimensions(currentTex));let xy=clamp(vec2<i32>(p.xy),vec2<i32>(0),dims-vec2<i32>(1));let currentSample=max(textureLoad(currentTex,xy,0),vec4<f32>(0.0));var current=currentSample.rgb;
     if(fu.coreOnly>0.5){let coreMask=smoothstep(0.42,0.82,clamp(currentSample.a,0.0,1.0));current*=coreMask;}
-    var previous=vec4<f32>(0.0);if(fu.historyValid>0.5){let src=vec2<f32>(p.xy)-vec2<f32>(fu.shiftX,fu.shiftY);previous=historyAt(src,dims);}
+    var previous=vec4<f32>(0.0);if(fu.historyValid>0.5){let src=vec2<f32>(xy)-vec2<f32>(fu.shiftX,fu.shiftY);previous=historyAt(src,dims);}
     let oldAge=max(0.0,previous.a);let newAge=oldAge+max(0.0,fu.dt);let oldEnvelope=trailEnvelope(oldAge,fu.tailSec,fu.hardness);let newEnvelope=trailEnvelope(newAge,fu.tailSec,fu.hardness);var ratio=0.0;if(oldEnvelope>0.000001){ratio=clamp(newEnvelope/oldEnvelope,0.0,1.0);}
     var historical=max(previous.rgb,vec3<f32>(0.0))*ratio;let histPeak=max(max(historical.r,historical.g),historical.b);
     if(histPeak>0.000001){
         let mode=i32(fu.colorMode+0.5);
         if(mode==1||mode==2){historical=recolorPeak(historical,vec3<f32>(fu.targetR,fu.targetG,fu.targetB));}
-        else if(mode==3){let tail=max(0.0001,fu.tailSec);let a0=clamp(oldAge/tail,0.0,1.0);let a1=clamp(newAge/tail,0.0,1.0);let range=clamp(fu.hueRangeDeg,0.0,180.0)*0.017453292519943295;let h0=sin(a0*6.283185307179586)*range;let h1=sin(a1*6.283185307179586)*range;historical=hueRotate(historical,h1-h0);}
+        else if(mode==3){let tail=max(0.0001,fu.tailSec);let a0=clamp(oldAge/tail,0.0,1.0);let a1=clamp(newAge/tail,0.0,1.0);let range=clamp(fu.hueRangeDeg,0.0,180.0)*0.017453292519943295;let h0=a0*range;let h1=a1*range;historical=hueRotate(historical,h1-h0);}
     }
     let currentPeak=max(max(current.r,current.g),current.b);let historyPeak=max(max(historical.r,historical.g),historical.b);let rgb=max(current,historical);let age=select(newAge,0.0,currentPeak>=historyPeak&&currentPeak>0.000001);if(max(max(rgb.r,rgb.g),rgb.b)<=0.000001){return vec4<f32>(0.0);}return vec4<f32>(rgb,age);
 }`;
@@ -799,7 +814,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             }
             function warmup(){
                 const hubReady=WebGPUDeviceHub.warmup(),gen=WebGPUDeviceHub.getGeneration();
-                if(ready&&(!hubReady||gen!==hubGeneration)){ready=false;attempted=false;initializing=false;lost=!hubReady;arcLampPipeline=arcCorridorLampPipeline=topologyLampPipeline=topologyCorridorLampPipeline=freezePipeline=trailCombinePipeline=null;try{context?.unconfigure?.();}catch(_){} try{hdrTexture?.destroy?.();}catch(_){} try{toneTexture?.destroy?.();}catch(_){}try{trailCompositeTexture?.destroy?.();}catch(_){}for(const t of [...freezeHistoryTextures,...rainHistoryTextures])try{t?.destroy?.();}catch(_){}try{toneUniformBuffer?.destroy?.();}catch(_){}try{freezeUniformBuffer?.destroy?.();}catch(_){}try{rainUniformBuffer?.destroy?.();}catch(_){}try{dummyStorageBuffer?.destroy?.();}catch(_){}hdrTexture=toneTexture=trailCompositeTexture=null;freezeHistoryTextures=[null,null];freezeHistoryViews=[null,null];rainHistoryTextures=[null,null];rainHistoryViews=[null,null];hdrView=toneView=trailCompositeView=null;toneBindGroups=[null,null,null];rainToneBindGroups=[null,null];freezeBindGroups=[null,null];rainBindGroups=[null,null];trailCombineBindGroups=[null,null,null,null];rainCurrentCombineBindGroups=[null,null];trailCompositeToneBindGroup=null;toneUniformBuffer=freezeUniformBuffer=rainUniformBuffer=null;dummyStorageBuffer=null;freezeHistoryValid=rainHistoryValid=false;freezeLastRenderAt=rainLastRenderAt=0;freezeLastMotionAt=rainLastMotionAt=0;lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;lampFrameSerial=0;lastInstanceBuffer=null;lastInstanceSnapshot=null;lastInstanceCount=0;lastInstanceHash=0;for(const b of instanceBuffers)try{b?.destroy?.();}catch(_){}instanceBuffers=[null,null,null];capacity=0;resetCorridorBatchPool();}
+                if(ready&&(!hubReady||gen!==hubGeneration)){ready=false;attempted=false;initializing=false;lost=!hubReady;arcLampPipeline=arcCorridorLampPipeline=topologyLampPipeline=topologyCorridorLampPipeline=freezePipeline=trailCombinePipeline=null;try{context?.unconfigure?.();}catch(_){} try{hdrTexture?.destroy?.();}catch(_){} try{toneTexture?.destroy?.();}catch(_){}try{rainSourceTexture?.destroy?.();}catch(_){}try{trailCompositeTexture?.destroy?.();}catch(_){}for(const t of [...freezeHistoryTextures,...rainHistoryTextures])try{t?.destroy?.();}catch(_){}try{toneUniformBuffer?.destroy?.();}catch(_){}try{freezeUniformBuffer?.destroy?.();}catch(_){}try{rainUniformBuffer?.destroy?.();}catch(_){}try{dummyStorageBuffer?.destroy?.();}catch(_){}hdrTexture=toneTexture=rainSourceTexture=trailCompositeTexture=null;freezeHistoryTextures=[null,null];freezeHistoryViews=[null,null];rainHistoryTextures=[null,null];rainHistoryViews=[null,null];hdrView=toneView=rainSourceView=trailCompositeView=null;rainSourceValid=false;toneBindGroups=[null,null,null];rainToneBindGroups=[null,null];freezeBindGroups=[null,null];rainBindGroups=[null,null];trailCombineBindGroups=[null,null,null,null];rainCurrentCombineBindGroups=[null,null];trailCompositeToneBindGroup=null;toneUniformBuffer=freezeUniformBuffer=rainUniformBuffer=null;dummyStorageBuffer=null;freezeHistoryValid=rainHistoryValid=false;freezeLastRenderAt=rainLastRenderAt=0;freezeLastMotionAt=rainLastMotionAt=0;lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;lampFrameSerial=0;lastInstanceBuffer=null;lastInstanceSnapshot=null;lastInstanceCount=0;lastInstanceHash=0;for(const b of instanceBuffers)try{b?.destroy?.();}catch(_){}instanceBuffers=[null,null,null];capacity=0;resetCorridorBatchPool();}
                 if(!ready&&!initializing&&(!attempted||lost))void initAsync();return ready&&!lost&&hubReady;
             }
             function ensureCapacity(count){
@@ -810,13 +825,18 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             }
             function ensureFreezeHistoryResources(){
                 const ordinaryReady=freezeHistoryTextures[0]&&freezeHistoryTextures[1]&&freezeHistoryViews[0]&&freezeHistoryViews[1]&&toneBindGroups[1]&&toneBindGroups[2]&&freezeBindGroups[0]&&freezeBindGroups[1];
-                const rainReady=rainHistoryTextures[0]&&rainHistoryTextures[1]&&rainHistoryViews[0]&&rainHistoryViews[1]&&rainToneBindGroups[0]&&rainToneBindGroups[1]&&rainBindGroups[0]&&rainBindGroups[1];
+                const rainReady=rainSourceTexture&&rainSourceView&&rainHistoryTextures[0]&&rainHistoryTextures[1]&&rainHistoryViews[0]&&rainHistoryViews[1]&&rainToneBindGroups[0]&&rainToneBindGroups[1]&&rainBindGroups[0]&&rainBindGroups[1];
                 const combineReady=trailCompositeTexture&&trailCompositeView&&trailCompositeToneBindGroup&&trailCombineBindGroups.every(Boolean)&&rainCurrentCombineBindGroups.every(Boolean);
                 if(ordinaryReady&&rainReady&&combineReady)return true;
                 for(const t of [...freezeHistoryTextures,...rainHistoryTextures])try{t?.destroy?.();}catch(_){}
+                try{rainSourceTexture?.destroy?.();}catch(_){}
                 try{trailCompositeTexture?.destroy?.();}catch(_){}
                 freezeHistoryTextures=[0,1].map(i=>device.createTexture({label:`Somata FreezeLight history ${i}`,size:{width,height,depthOrArrayLayers:1},format:'rgba16float',usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING}));
                 rainHistoryTextures=[0,1].map(i=>device.createTexture({label:`Somata FreezeLight Rain history ${i}`,size:{width,height,depthOrArrayLayers:1},format:'rgba16float',usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING}));
+                // Rain owns a frozen emitter snapshot. Corridor phase/scale may animate the visible
+                // lamps, but does not drag this emitter field radially toward the tunnel centre.
+                rainSourceTexture=device.createTexture({label:'Somata FreezeLight Rain independent emitter snapshot',size:{width,height,depthOrArrayLayers:1},format:'rgba16float',usage:GPUTextureUsage.COPY_DST|GPUTextureUsage.TEXTURE_BINDING});
+                rainSourceView=rainSourceTexture.createView();rainSourceValid=false;
                 trailCompositeTexture=device.createTexture({label:'Somata FreezeLight combined independent trails',size:{width,height,depthOrArrayLayers:1},format:'rgba16float',usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
                 freezeHistoryViews=freezeHistoryTextures.map(t=>t.createView());
                 rainHistoryViews=rainHistoryTextures.map(t=>t.createView());
@@ -826,7 +846,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                 rainToneBindGroups=rainHistoryViews.map(view=>device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:view},{binding:1,resource:{buffer:toneUniformBuffer}}]}));
                 trailCompositeToneBindGroup=device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:trailCompositeView},{binding:1,resource:{buffer:toneUniformBuffer}}]});
                 freezeBindGroups=freezeHistoryViews.map(view=>device.createBindGroup({layout:freezePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:hdrView},{binding:1,resource:view},{binding:2,resource:{buffer:freezeUniformBuffer}}]}));
-                rainBindGroups=rainHistoryViews.map(view=>device.createBindGroup({layout:freezePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:hdrView},{binding:1,resource:view},{binding:2,resource:{buffer:rainUniformBuffer}}]}));
+                rainBindGroups=rainHistoryViews.map(view=>device.createBindGroup({layout:freezePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:rainSourceView},{binding:1,resource:view},{binding:2,resource:{buffer:rainUniformBuffer}}]}));
                 trailCombineBindGroups=[];
                 for(let fi=0;fi<2;fi++)for(let ri=0;ri<2;ri++)trailCombineBindGroups[fi*2+ri]=device.createBindGroup({layout:trailCombinePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:freezeHistoryViews[fi]},{binding:1,resource:rainHistoryViews[ri]}]});
                 rainCurrentCombineBindGroups=rainHistoryViews.map(view=>device.createBindGroup({layout:trailCombinePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:hdrView},{binding:1,resource:view}]}));
@@ -836,17 +856,28 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                 if(!warmup()||!ready||!device||!context)return false;w=Math.max(1,w|0);h=Math.max(1,h|0);
                 if(width===w&&height===h&&canvas.width===w&&canvas.height===h&&hdrTexture&&toneTexture)return true;
                 width=w;height=h;canvas.width=w;canvas.height=h;context.configure({device,format,alphaMode:'premultiplied',usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.COPY_DST});
-                try{hdrTexture?.destroy?.();}catch(_){}try{toneTexture?.destroy?.();}catch(_){}try{trailCompositeTexture?.destroy?.();}catch(_){}for(const t of [...freezeHistoryTextures,...rainHistoryTextures])try{t?.destroy?.();}catch(_){}
-                hdrTexture=device.createTexture({label:'Spiro lamp RGBA16F HDR',size:{width,height,depthOrArrayLayers:1},format:'rgba16float',usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
+                try{hdrTexture?.destroy?.();}catch(_){}try{toneTexture?.destroy?.();}catch(_){}try{rainSourceTexture?.destroy?.();}catch(_){}try{trailCompositeTexture?.destroy?.();}catch(_){}for(const t of [...freezeHistoryTextures,...rainHistoryTextures])try{t?.destroy?.();}catch(_){}
+                hdrTexture=device.createTexture({label:'Spiro lamp RGBA16F HDR',size:{width,height,depthOrArrayLayers:1},format:'rgba16float',usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_SRC});
                 toneTexture=device.createTexture({label:'Spiro lamp tone scene bridge',size:{width,height,depthOrArrayLayers:1},format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_SRC});
-                hdrView=hdrTexture.createView();toneView=toneTexture.createView();freezeHistoryTextures=[null,null];freezeHistoryViews=[null,null];rainHistoryTextures=[null,null];rainHistoryViews=[null,null];freezeBindGroups=[null,null];rainBindGroups=[null,null];rainToneBindGroups=[null,null];trailCombineBindGroups=[null,null,null,null];rainCurrentCombineBindGroups=[null,null];trailCompositeTexture=null;trailCompositeView=null;trailCompositeToneBindGroup=null;
+                hdrView=hdrTexture.createView();toneView=toneTexture.createView();rainSourceTexture=null;rainSourceView=null;rainSourceValid=false;freezeHistoryTextures=[null,null];freezeHistoryViews=[null,null];rainHistoryTextures=[null,null];rainHistoryViews=[null,null];freezeBindGroups=[null,null];rainBindGroups=[null,null];rainToneBindGroups=[null,null];trailCombineBindGroups=[null,null,null,null];rainCurrentCombineBindGroups=[null,null];trailCompositeTexture=null;trailCompositeView=null;trailCompositeToneBindGroup=null;
                 toneBindGroups=[device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:hdrView},{binding:1,resource:{buffer:toneUniformBuffer}}]}),null,null];
                 freezeHistoryIndex=rainHistoryIndex=0;freezeHistoryValid=rainHistoryValid=false;freezeLastRenderAt=rainLastRenderAt=0;freezeLastMotionAt=rainLastMotionAt=0;lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;
                 uniformData[0]=width;uniformData[1]=height;uniformData[2]=0;uniformData[3]=0;device.queue.writeBuffer(uniformBuffer,0,uniformData);
                 return true;
             }
-            function beginFrame(w,h,now=performance.now()){frameNow=Number(now)||performance.now();lampFrameSerial=(lampFrameSerial+1)>>>0;instanceCount=0;instanceFrameHash=2166136261>>>0;freezeFrameHash=2166136261>>>0;freezeDrawCount=0;corridorBatchCount=0;arcBatchCount=0;deferredLocalArcTables=[];lastFlushMode='none';lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;return ensureSize(w,h);}
+            function beginFrame(w,h,now=performance.now()){frameNow=Number(now)||performance.now();lampFrameSerial=(lampFrameSerial+1)>>>0;instanceCount=0;frameBlendMode='lighter';frameBlendModeSet=false;frameBlendMixed=false;instanceFrameHash=2166136261>>>0;freezeFrameHash=2166136261>>>0;freezeDrawCount=0;rainFrameHash=2166136261>>>0;rainDrawCount=0;corridorBatchCount=0;arcBatchCount=0;deferredLocalArcTables=[];lastFlushMode='none';lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;return ensureSize(w,h);}
             function freezeTailSec(){return Math.max(.05,Math.min(30,Number(state?.lamps?.freezeTailSec)||1.5));}
+            function updateFreezeEffectiveTail(now=performance.now()){
+                const target=freezeTailSec(),t=Number(now)||performance.now();
+                if(!Number.isFinite(freezeEffectiveTailSec)){freezeEffectiveTailSec=target;freezeTailSlewAt=t;return freezeEffectiveTailSec;}
+                const dt=Math.max(0,Math.min(1,(t-(freezeTailSlewAt||t))/1000));freezeTailSlewAt=t;
+                // Smoothly slew the envelope duration rather than invalidating history.
+                // ~350 ms time constant: visible but quick enough for live performance.
+                const k=1-Math.exp(-dt/0.35);freezeEffectiveTailSec+=((target-freezeEffectiveTailSec)*k);
+                if(Math.abs(target-freezeEffectiveTailSec)<0.002)freezeEffectiveTailSec=target;
+                return Math.max(.05,Math.min(30,freezeEffectiveTailSec));
+            }
+            function freezeTailIsSettling(){return Number.isFinite(freezeEffectiveTailSec)&&Math.abs(freezeTailSec()-freezeEffectiveTailSec)>=0.002;}
             function freezeHardness(){return Math.max(0,Math.min(100,Number.isFinite(Number(state?.lamps?.freezeHardness))?Number(state.lamps.freezeHardness):50));}
             function freezeColorMode(){const m=state?.lamps?.freezeColorMode;return ['lamp','line','fixed','hue'].includes(m)?m:'lamp';}
             function freezeHueDegrees(){return Math.max(0,Math.min(180,Number.isFinite(Number(state?.lamps?.freezeHueDegrees))?Number(state.lamps.freezeHueDegrees):45));}
@@ -870,9 +901,9 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             function freezeRainEnabled(){return state?.lamps?.freezeRain===true;}
             function lampTrailEnabled(){return freezeLightEnabled()||freezeRainEnabled();}
             function freezeTailTick(now){
-                const t=Number(now)||performance.now();
+                const t=Number(now)||performance.now(),effectiveTail=updateFreezeEffectiveTail(t);
                 const ordinaryHistory=freezeLightEnabled()&&freezeHistoryValid,rainHistory=freezeRainEnabled()&&rainHistoryValid;
-                const ordinary=ordinaryHistory&&t<=freezeLastMotionAt+freezeTailSec()*1000+20;
+                const ordinary=ordinaryHistory&&(t<=freezeLastMotionAt+effectiveTail*1000+20||freezeTailIsSettling());
                 const rain=rainHistory&&t<=rainLastMotionAt+freezeRainTailSec()*1000+20;
 
                 if(ordinaryHistory||rainHistory)requestMainCanvasRender();
@@ -880,11 +911,15 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             }
             function armFreezeTail(){try{animationScheduler?.add?.('lamp-freezelight',freezeTailTick);}catch(_){} }
             function removeFreezeTailSchedulerIfIdle(){if((freezeLightEnabled()&&freezeHistoryValid)||(freezeRainEnabled()&&rainHistoryValid))return;try{animationScheduler?.remove?.('lamp-freezelight');}catch(_){} }
-            function resetFreezeTrail(){freezeHistoryValid=false;freezeLastRenderAt=0;freezeLastMotionAt=0;freezeResets++;removeFreezeTailSchedulerIfIdle();}
-            function resetFreezeRain(){rainHistoryValid=false;rainLastRenderAt=0;rainLastMotionAt=0;rainResets++;removeFreezeTailSchedulerIfIdle();}
-            function resetFreezeLight(){resetFreezeTrail();resetFreezeRain();freezeLastFrameHash=0;freezeLastDrawCount=-1;try{animationScheduler?.remove?.('lamp-freezelight');}catch(_){} }
+            function resetFreezeTrail(){freezeHistoryValid=false;freezeLastRenderAt=0;freezeLastMotionAt=0;freezeLastFrameHash=0;freezeLastDrawCount=-1;freezeEffectiveTailSec=NaN;freezeTailSlewAt=0;freezeResets++;removeFreezeTailSchedulerIfIdle();}
+            function resetFreezeRain(){rainHistoryValid=false;rainSourceValid=false;rainLastRenderAt=0;rainLastMotionAt=0;rainLastFrameHash=0;rainLastDrawCount=-1;rainResets++;removeFreezeTailSchedulerIfIdle();}
+            // Ordinary Freeze Light and Freeze Light Rain are intentionally independent.
+            // Keep resetFreezeLight as the legacy/public ordinary-effect reset and use resetFreezeAll only for lifecycle teardown/project reload.
+            function resetFreezeLight(){resetFreezeTrail();}
+            function resetFreezeAll(){resetFreezeTrail();resetFreezeRain();try{animationScheduler?.remove?.('lamp-freezelight');}catch(_){} }
             function mixFreezeCopies(copies,alphas,frameCtx,layer){if(!lampTrailEnabled()||!Array.isArray(copies))return;freezeFrameHash=lampHashMix(freezeFrameHash,copies.length);let basis=null;try{basis=WebGPUCorridorCopyStore?.getTransformBasis?.(frameCtx,copies,alphas,layer);}catch(_){}if(basis?.data){for(let i=0;i<copies.length;i++){const o=i*6;for(let j=0;j<5;j++)freezeFrameHash=lampHashMix(freezeFrameHash,basis.data[o+j]);}}else{for(let i=0;i<copies.length;i++){const c=copies[i];freezeFrameHash=lampHashMix(freezeFrameHash,Number(c?.scale)||0);freezeFrameHash=lampHashMix(freezeFrameHash,Number(alphas?.[i]??1));try{freezeFrameHash=lampHashMix(freezeFrameHash,getMotionTunnelLagRadians(c,layer));}catch(_){}}}if(frameCtx){freezeFrameHash=lampHashMix(freezeFrameHash,Number(frameCtx.combinedScale)||1);freezeFrameHash=lampHashMix(freezeFrameHash,Number(frameCtx.combinedRotationRad)||0);}}
-            function canUse(cfg){if(cfg?.webgl===false)return false;const blend=cfg?.blendMode||'lighter';return blend==='lighter'||blend==='screen';}
+            function canUse(cfg){if(cfg?.webgl===false)return false;const blend=normalizeLampBlendMode(cfg?.blendMode||'lighter');return SOMATA_LAMP_BLEND_MODES.includes(blend);}
+            function noteFrameBlend(cfg){const requested=normalizeLampBlendMode(cfg?.blendMode);if(!frameBlendModeSet){frameBlendMode=requested;frameBlendModeSet=true;}else if(frameBlendMode!==requested){frameBlendMixed=true;frameBlendMode='lighter';}return frameBlendMode;}
             function ensureCorridorBatch(index,lampNeed,copyNeed){
                 let batch=corridorBatchPool[index];
                 if(!batch){batch={lampCapacity:0,copyCapacity:0,lampData:null,copyData:null,lampBuffers:[],copyBuffers:[],uniformBuffer:null,uniformF32:null,uniformU32:null,uniformBindGroup:null,uniformSnapshot:new Uint32Array(12),uniformHasLast:false,storageBindGroups:[],sharedStorageBindGroups:[],sharedCopy:false,lampCount:0,copyCount:0,slot:0,ringCount:0,lastLampHash:0,lastLampCount:0,lastLampSnapshot:null,lastLampBuffer:null,lastLampSlot:-1};corridorBatchPool[index]=batch;}
@@ -901,6 +936,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             function queueCorridorVisualPlan(ctx,visualPlan,alpha,drawPlan,copies,alphas,frameCtx){
                 const items=visualPlan?.items,cfg=drawPlan?.config||visualPlan?.cfg||state.lamps||{};
                 if(!ready||!items?.length||alpha<=.001||!canUse(cfg)||!Array.isArray(copies)||!copies.length||!frameCtx)return false;
+                noteFrameBlend(cfg);
                 const root=ctx?.getTransform?.();if(!root)return false;
                 const batch=ensureCorridorBatch(corridorBatchCount,items.length,copies.length),style=drawPlan?.preparedStyle||visualPlan?.style||{};
                 const softness=Math.max(0,Math.min(150,Number(style.effectiveSoftness)||0)),type=style.type||'whiteCore',typeCode=TYPE_CODE[type]??0;let lk=0,lampHash=2166136261>>>0;
@@ -929,7 +965,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                 else{let k=0;for(let i=0;i<copies.length;i++){const ca=Math.max(0,Math.min(1,Number(alphas?.[i]??1)));if(ca<=.00001)continue;const copy=copies[i],sc=Math.max(.000001,Number(copy?.scale)||0),ang=getMotionTunnelLagRadians(copy,frameCtx.layer),c=Math.cos(ang),q=Math.sin(ang),o=k*CORRIDOR_COPY_FLOATS;batch.copyData[o]=sc*c;batch.copyData[o+1]=-sc*q;batch.copyData[o+2]=ca;batch.copyData[o+3]=0;batch.copyData[o+4]=sc*q;batch.copyData[o+5]=sc*c;batch.copyData[o+6]=sc;batch.copyData[o+7]=0;k++;}ck=k;if(!ck)return true;copyBuffer=batch.copyBuffers[slot];device.queue.writeBuffer(copyBuffer,0,batch.copyData.buffer,batch.copyData.byteOffset,ck*CORRIDOR_COPY_FLOATS*4);corridorCopyUploads+=ck*CORRIDOR_COPY_FLOATS*4;bg=batch.storageBindGroups[slot];if(!bg){bg=device.createBindGroup({layout:corridorLampPipeline.getBindGroupLayout(1),entries:[{binding:0,resource:{buffer:lampBuffer}},{binding:1,resource:{buffer:copyBuffer}}]});batch.storageBindGroups[slot]=bg;}batch.sharedCopy=false;}
                 if(!batch.uniformHasLast||!sameLampU32(batch.uniformU32,batch.uniformSnapshot,12)){device.queue.writeBuffer(batch.uniformBuffer,0,batch.uniformU32);batch.uniformSnapshot.set(batch.uniformU32);batch.uniformHasLast=true;corridorUniformUploads++;}else corridorUniformUploadSkips++;
                 batch.storageBindGroups[slot]=batch.sharedCopy?batch.storageBindGroups[slot]:bg;batch.activeBindGroup=bg;batch.lampCount=lk;batch.copyCount=ck;batch.slot=slot;
-                if(lampTrailEnabled()){freezeFrameHash=lampHashMix(freezeFrameHash,lampHash);for(const n of [ra,rb,rc,rd,re,rf,frameRot,frameScale])freezeFrameHash=lampHashMix(freezeFrameHash,n);mixFreezeCopies(copies,alphas,frameCtx,frameCtx.layer);freezeDrawCount+=lk*ck;}
+                if(lampTrailEnabled()){freezeFrameHash=lampHashMix(freezeFrameHash,lampHash);for(const n of [ra,rb,rc,rd,re,rf,frameRot,frameScale])freezeFrameHash=lampHashMix(freezeFrameHash,n);mixFreezeCopies(copies,alphas,frameCtx,frameCtx.layer);freezeDrawCount+=lk*ck;rainFrameHash=lampHashMix(rainFrameHash,lampHash);for(const n of [ra,rb,rc,rd,re,rf])rainFrameHash=lampHashMix(rainFrameHash,n);rainDrawCount+=lk;}
                 corridorBatchCount++;corridorLogicalInstances+=lk*ck;return true;
             }
             function ensureArcBatch(index,lampNeed){
@@ -943,6 +979,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             function queueArcVisualPlan(ctx,visualPlan,alpha,drawPlan,prepared,copies=null,alphas=null,frameCtx=null){
                 const items=visualPlan?.items,cfg=drawPlan?.config||visualPlan?.cfg||state.lamps||{},table=prepared?.gpuMorphArcTable,arcRec=table?._gpuMorphArcResource;
                 if(!ready||!items?.length||alpha<=.001||!canUse(cfg)||!arcRec?.ready||!frameCtx)return false;
+                noteFrameBlend(cfg);
                 const root=ctx?.getTransform?.();if(!root)return false;const corridor=Array.isArray(copies)&&copies.length>0;
                 const batch=ensureArcBatch(arcBatchCount,items.length),style=drawPlan?.preparedStyle||visualPlan?.style||{};
                 const softness=Math.max(0,Math.min(150,Number(style.effectiveSoftness)||0)),type=style.type||'whiteCore',typeCode=TYPE_CODE[type]??0;let lk=0,lampMotionHash=2166136261>>>0;
@@ -965,12 +1002,13 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                 const entries=[{binding:0,resource:{buffer:lampBuffer}},{binding:1,resource:{buffer:corridor?copyBuffer:dummyStorageBuffer}},{binding:2,resource:{buffer:arcRec.segmentBuffer}},{binding:3,resource:{buffer:arcRec.pathSegmentRangeBuffer}},{binding:5,resource:{buffer:arcRec.morphRec.cubicBuffer}}];
                 const bg=device.createBindGroup({layout:pipe.getBindGroupLayout(1),entries});if(corridor)batch.corridorBindGroup=bg;else batch.storageBindGroup=bg;
                 batch.lampCount=lk;batch.copyCount=corridor?copyCount:1;batch.slot=slot;batch.table=table;batch.kind='arc';batch.arcScheduled=typeof spiroGpuEnsureArcPrerequisite==='function'&&spiroGpuEnsureArcPrerequisite(frameCtx,table);batch.corridor=corridor;
-                if(lampTrailEnabled()){freezeFrameHash=lampHashMix(freezeFrameHash,lampMotionHash);for(const n of [ra,rb,rc,rd,re,rf,Number(table?.gpuMorphT)||0,Number(arcRec?.morphRec?.phaseSerial)||0])freezeFrameHash=lampHashMix(freezeFrameHash,n);mixFreezeCopies(copies,alphas,frameCtx,frameCtx.layer);freezeDrawCount+=lk*(corridor?copyCount:1);}
+                if(lampTrailEnabled()){freezeFrameHash=lampHashMix(freezeFrameHash,lampMotionHash);for(const n of [ra,rb,rc,rd,re,rf,Number(table?.gpuMorphT)||0,Number(arcRec?.morphRec?.phaseSerial)||0])freezeFrameHash=lampHashMix(freezeFrameHash,n);mixFreezeCopies(copies,alphas,frameCtx,frameCtx.layer);freezeDrawCount+=lk*(corridor?copyCount:1);rainFrameHash=lampHashMix(rainFrameHash,lampMotionHash);for(const n of [ra,rb,rc,rd,re,rf,Number(table?.gpuMorphT)||0,Number(arcRec?.morphRec?.phaseSerial)||0])rainFrameHash=lampHashMix(rainFrameHash,n);rainDrawCount+=lk;}
                 arcBatchCount++;return true;
             }
             function queueTopologyVisualPlan(ctx,visualPlan,alpha,drawPlan,prepared,copies=null,alphas=null,frameCtx=null){
                 const items=visualPlan?.items,cfg=drawPlan?.config||visualPlan?.cfg||state.lamps||{},top=prepared?.gpuLampTopologyResource;
                 if(!ready||!items?.length||alpha<=.001||!canUse(cfg)||!top?.gpuReady||!top?.gpuBuffer||!frameCtx)return false;
+                noteFrameBlend(cfg);
                 const root=ctx?.getTransform?.();if(!root)return false;const corridor=Array.isArray(copies)&&copies.length>0,batch=ensureArcBatch(arcBatchCount,items.length),style=drawPlan?.preparedStyle||visualPlan?.style||{};
                 const softness=Math.max(0,Math.min(150,Number(style.effectiveSoftness)||0)),type=style.type||'whiteCore',typeCode=TYPE_CODE[type]??0;let lk=0,lampMotionHash=2166136261>>>0;
                 for(let i=0;i<items.length;i++){
@@ -985,12 +1023,13 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                 const pipe=corridor?topologyCorridorLampPipeline:topologyLampPipeline;batch.uniformBindGroup=device.createBindGroup({layout:pipe.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:batch.uniformBuffer}}]});let copyBuffer=null,copyCount=0;if(corridor){const shared=WebGPUCorridorCopyStore.acquireRaw(device,hubGeneration,frameCtx,copies,alphas,'lamp',frameCtx.layer);if(!shared?.buffer||!shared.k)return false;copyBuffer=shared.buffer;copyCount=shared.k;}
                 const entries=[{binding:0,resource:{buffer:lampBuffer}},{binding:1,resource:{buffer:corridor?copyBuffer:dummyStorageBuffer}},{binding:4,resource:{buffer:top.gpuBuffer}}];const bg=device.createBindGroup({layout:pipe.getBindGroupLayout(1),entries});if(corridor)batch.corridorBindGroup=bg;else batch.storageBindGroup=bg;
                 batch.lampCount=lk;batch.copyCount=corridor?copyCount:1;batch.slot=slot;batch.table=null;batch.kind='topology';batch.arcScheduled=false;batch.corridor=corridor;
-                if(lampTrailEnabled()){freezeFrameHash=lampHashMix(freezeFrameHash,lampMotionHash);for(const n of [ra,rb,rc,rd,re,rf,Number(prepared?.gpuMorphT)||0,Number(top?.serial)||0])freezeFrameHash=lampHashMix(freezeFrameHash,n);mixFreezeCopies(copies,alphas,frameCtx,frameCtx.layer);freezeDrawCount+=lk*(corridor?copyCount:1);}
+                if(lampTrailEnabled()){freezeFrameHash=lampHashMix(freezeFrameHash,lampMotionHash);for(const n of [ra,rb,rc,rd,re,rf,Number(prepared?.gpuMorphT)||0,Number(top?.serial)||0])freezeFrameHash=lampHashMix(freezeFrameHash,n);mixFreezeCopies(copies,alphas,frameCtx,frameCtx.layer);freezeDrawCount+=lk*(corridor?copyCount:1);rainFrameHash=lampHashMix(rainFrameHash,lampMotionHash);for(const n of [ra,rb,rc,rd,re,rf,Number(prepared?.gpuMorphT)||0,Number(top?.serial)||0])rainFrameHash=lampHashMix(rainFrameHash,n);rainDrawCount+=lk;}
                 arcBatchCount++;return true;
             }
             function queueVisualPlan(ctx,visualPlan,alpha,drawPlan){
                 const items=visualPlan?.items,cfg=drawPlan?.config||visualPlan?.cfg||state.lamps||{};
                 if(!ready||!items?.length||alpha<=.001||!canUse(cfg))return false;
+                noteFrameBlend(cfg);
                 const tr=ctx.getTransform?.();if(!tr)return false;const scale=Math.hypot(Number(tr.a)||0,Number(tr.b)||0);if(!(scale>1e-9))return true;
                 const style=drawPlan?.preparedStyle||visualPlan?.style||{};const softness=Math.max(0,Math.min(150,Number(style.effectiveSoftness)||0));
                 const type=style.type||'whiteCore',typeCode=TYPE_CODE[type]??0;ensureCapacity(instanceCount+items.length);const freezeStartCount=instanceCount;
@@ -1005,28 +1044,25 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                     const base=instanceCount*FLOATS_PER_INSTANCE;let o=base;instanceData[o++]=px;instanceData[o++]=py;instanceData[o++]=outer;instanceData[o++]=body;
                     instanceData[o++]=rgb[0];instanceData[o++]=rgb[1];instanceData[o++]=rgb[2];instanceData[o++]=softness/100;instanceData[o++]=vb/100;instanceData[o++]=typeCode;instanceData[o++]=a;for(let hi=0;hi<FLOATS_PER_INSTANCE;hi++)instanceFrameHash=lampHashMix(instanceFrameHash,instanceData[base+hi]);instanceCount++;
                 }
-                if(lampTrailEnabled()){freezeFrameHash=lampHashMix(freezeFrameHash,instanceFrameHash);for(const n of [Number(tr.a)||0,Number(tr.b)||0,Number(tr.c)||0,Number(tr.d)||0,Number(tr.e)||0,Number(tr.f)||0])freezeFrameHash=lampHashMix(freezeFrameHash,n);freezeDrawCount+=Math.max(0,instanceCount-freezeStartCount);}
+                if(lampTrailEnabled()){freezeFrameHash=lampHashMix(freezeFrameHash,instanceFrameHash);rainFrameHash=lampHashMix(rainFrameHash,instanceFrameHash);for(const n of [Number(tr.a)||0,Number(tr.b)||0,Number(tr.c)||0,Number(tr.d)||0,Number(tr.e)||0,Number(tr.f)||0]){freezeFrameHash=lampHashMix(freezeFrameHash,n);rainFrameHash=lampHashMix(rainFrameHash,n);}const added=Math.max(0,instanceCount-freezeStartCount);freezeDrawCount+=added;rainDrawCount+=added;}
                 return true;
             }
             function compositeToMain(){
-                if(!mainCtx||!mainCanvas||!canvas)return;mainCtx.save();mainCtx.setTransform(1,0,0,1,0,0);mainCtx.globalAlpha=1;mainCtx.filter='none';mainCtx.globalCompositeOperation='lighter';mainCtx.drawImage(canvas,0,0,mainCanvas.width,mainCanvas.height);mainCtx.restore();
+                if(!mainCtx||!mainCanvas||!canvas)return;mainCtx.save();mainCtx.setTransform(1,0,0,1,0,0);mainCtx.globalAlpha=1;mainCtx.filter='none';mainCtx.globalCompositeOperation=lampCanvasCompositeOperation(frameBlendMode);mainCtx.drawImage(canvas,0,0,mainCanvas.width,mainCanvas.height);mainCtx.restore();
             }
             function flush(options={}){
                 if(!ready||lost||!device||!context||!hdrTexture||!toneTexture)return false;
                 const hasCurrent=instanceCount>0||corridorBatchCount>0||arcBatchCount>0,freezeEnabled=freezeLightEnabled(),rainEnabled=freezeRainEnabled(),trailEnabled=freezeEnabled||rainEnabled,now=Number(frameNow)||performance.now();
-                let signatureChanged=false;
+                let freezeSignatureChanged=false,rainSignatureChanged=false;
                 if(trailEnabled){
-                    signatureChanged=freezeFrameHash!==freezeLastFrameHash||freezeDrawCount!==freezeLastDrawCount;
-                    const rainStarting=rainEnabled&&!rainHistoryValid;
-                    if(signatureChanged||rainStarting){
-                        if(freezeEnabled&&signatureChanged)freezeLastMotionAt=now;
-                        if(rainEnabled&&(signatureChanged||rainStarting))rainLastMotionAt=now;
-                        if(hasCurrent||freezeHistoryValid||rainHistoryValid||rainStarting)armFreezeTail();
-                    }
-                    freezeLastFrameHash=freezeFrameHash;freezeLastDrawCount=freezeDrawCount;
-                }else if(freezeHistoryValid||rainHistoryValid||freezeLastDrawCount>=0)resetFreezeLight();
-                const freezeEnd=freezeLastMotionAt+freezeTailSec()*1000,rainEnd=rainLastMotionAt+freezeRainTailSec()*1000;
-                const freezeNeedsFrame=freezeEnabled&&freezeHistoryValid&&now<=freezeEnd+20,rainNeedsFrame=rainEnabled&&rainHistoryValid&&now<=rainEnd+20;
+                    const freezeStarting=freezeEnabled&&!freezeHistoryValid,rainStarting=rainEnabled&&!rainHistoryValid;
+                    if(freezeEnabled){freezeSignatureChanged=freezeFrameHash!==freezeLastFrameHash||freezeDrawCount!==freezeLastDrawCount;if(freezeSignatureChanged||freezeStarting)freezeLastMotionAt=now;freezeLastFrameHash=freezeFrameHash;freezeLastDrawCount=freezeDrawCount;}
+                    if(rainEnabled){rainSignatureChanged=rainFrameHash!==rainLastFrameHash||rainDrawCount!==rainLastDrawCount;if(rainSignatureChanged||rainStarting)rainLastMotionAt=now;rainLastFrameHash=rainFrameHash;rainLastDrawCount=rainDrawCount;}
+                    if(freezeSignatureChanged||rainSignatureChanged||freezeStarting||rainStarting){if(hasCurrent||freezeHistoryValid||rainHistoryValid||freezeStarting||rainStarting)armFreezeTail();}
+                }else if(freezeHistoryValid||rainHistoryValid||freezeLastDrawCount>=0||rainLastDrawCount>=0)resetFreezeAll();
+                const effectiveFreezeTail=updateFreezeEffectiveTail(now);if(freezeEnabled&&freezeHistoryValid&&freezeTailIsSettling())armFreezeTail();
+                const freezeEnd=freezeLastMotionAt+effectiveFreezeTail*1000,rainEnd=rainLastMotionAt+freezeRainTailSec()*1000;
+                const freezeNeedsFrame=freezeEnabled&&freezeHistoryValid&&(now<=freezeEnd+20||freezeTailIsSettling()),rainNeedsFrame=rainEnabled&&rainHistoryValid&&now<=rainEnd+20;
                 if(!hasCurrent&&!freezeNeedsFrame&&!rainNeedsFrame){
                     if(freezeEnabled&&freezeHistoryValid&&now>freezeEnd)freezeHistoryValid=false;
                     if(rainEnabled&&rainHistoryValid&&now>rainEnd)rainHistoryValid=false;
@@ -1049,11 +1085,19 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                     for(let ai=0;ai<arcBatchCount;ai++){const batch=arcBatchPool[ai];if(!batch?.lampCount)continue;const topology=batch.kind==='topology';if(!topology&&!batch?.table)continue;hdrPass.setPipeline(topology?(batch.corridor?topologyCorridorLampPipeline:topologyLampPipeline):(batch.corridor?arcCorridorLampPipeline:arcLampPipeline));hdrPass.setBindGroup(0,batch.uniformBindGroup);hdrPass.setBindGroup(1,batch.corridor?batch.corridorBindGroup:batch.storageBindGroup);hdrPass.setVertexBuffer(0,cornerBuffer);hdrPass.draw(4,batch.lampCount*Math.max(1,batch.copyCount),0,0);if(topology){if(batch.corridor)topologyCorridorDraws++;else topologyDraws++;}else if(batch.corridor)arcCorridorDraws++;else arcDraws++;}
                     hdrPass.end();
 
+                    if(rainEnabled&&rainSourceTexture&&(!rainSourceValid||rainSignatureChanged)){
+                        // Snapshot the current emitter field only when lamp geometry/style itself changes.
+                        // Corridor copy scale/phase is deliberately absent from rainFrameHash, so tunnel
+                        // animation cannot pull existing Rain emitters radially toward the centre.
+                        encoder.copyTextureToTexture({texture:hdrTexture},{texture:rainSourceTexture},{width,height,depthOrArrayLayers:1});
+                        rainSourceValid=true;rainSourceRefreshes++;
+                    }
+
                     let activeToneBindGroup=toneBindGroups[0];
                     if(freezeEnabled){
                         const wasValid=freezeHistoryValid,previous=freezeHistoryIndex,next=1-previous;
                         const dt=wasValid&&freezeLastRenderAt>0?Math.max(0,(now-freezeLastRenderAt)/1000):0;
-                        freezeUniformData.fill(0);freezeUniformData[0]=dt;freezeUniformData[1]=freezeTailSec();freezeUniformData[2]=freezeHardness()/100;freezeUniformData[3]=wasValid?1:0;freezeUniformData[4]=0;freezeUniformData[5]=0;freezeUniformData[6]=0;const fm=freezeColorMode();freezeUniformData[7]=fm==='line'?1:(fm==='fixed'?2:(fm==='hue'?3:0));const fc=freezeTargetRgb();freezeUniformData[8]=fc[0];freezeUniformData[9]=fc[1];freezeUniformData[10]=fc[2];freezeUniformData[11]=freezeHueDegrees();
+                        freezeUniformData.fill(0);freezeUniformData[0]=dt;freezeUniformData[1]=effectiveFreezeTail;freezeUniformData[2]=freezeHardness()/100;freezeUniformData[3]=wasValid?1:0;freezeUniformData[4]=0;freezeUniformData[5]=0;freezeUniformData[6]=0;const fm=freezeColorMode();freezeUniformData[7]=fm==='line'?1:(fm==='fixed'?2:(fm==='hue'?3:0));const fc=freezeTargetRgb();freezeUniformData[8]=fc[0];freezeUniformData[9]=fc[1];freezeUniformData[10]=fc[2];freezeUniformData[11]=freezeHueDegrees();
                         device.queue.writeBuffer(freezeUniformBuffer,0,freezeUniformData);
                         const pass=encoder.beginRenderPass({label:'Somata FreezeLight feedback',colorAttachments:[{view:freezeHistoryViews[next],clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
                         pass.setPipeline(freezePipeline);pass.setBindGroup(0,freezeBindGroups[previous]);pass.draw(3,1,0,0);pass.end();
@@ -1075,8 +1119,8 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                     }
                     toneUniformData.fill(0);const chromatic=freezeEnabled&&freezeChromaticEnabled();toneUniformData[0]=chromatic?1:0;toneUniformData[1]=2;const ac=freezeChromaticRgb();toneUniformData[4]=ac[0];toneUniformData[5]=ac[1];toneUniformData[6]=ac[2];device.queue.writeBuffer(toneUniformBuffer,0,toneUniformData);
                     const tonePass=encoder.beginRenderPass({label:'Spiro lamp tone',colorAttachments:[{view:toneView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});tonePass.setPipeline(tonePipeline);tonePass.setBindGroup(0,activeToneBindGroup);tonePass.draw(3,1,0,0);tonePass.end();
-                    if(freezeEnabled&&freezeHistoryValid&&!signatureChanged&&now>freezeEnd+20&&freezeHardness()<=0){freezeHistoryValid=false;freezeLastRenderAt=0;}
-                    if(rainEnabled&&rainHistoryValid&&!signatureChanged&&now>rainEnd+20&&freezeRainHardness()<=0){rainHistoryValid=false;rainLastRenderAt=0;}
+                    if(freezeEnabled&&freezeHistoryValid&&!freezeSignatureChanged&&now>freezeEnd+20&&freezeHardness()<=0){freezeHistoryValid=false;freezeLastRenderAt=0;}
+                    if(rainEnabled&&rainHistoryValid&&!rainSignatureChanged&&now>rainEnd+20&&freezeRainHardness()<=0){rainHistoryValid=false;rainLastRenderAt=0;}
                     lastToneValid=true;deferredComposite=deferComposite;
                     const freezeSuffix=(freezeEnabled?'+freezelight':'')+(rainEnabled?'+freezelight-rain':'');
                     if(deferComposite){
@@ -1089,14 +1133,14 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                     return true;
                 }catch(err){deferredCommandBuffer=null;deferredCommandGeneration=0;lastError=String(err?.message||err);lastFlushMode='failed';ready=false;attempted=false;requestMainCanvasRender();return false;}
             }
-            function getCompositeTexture(){return deferredComposite&&lastToneValid&&toneTexture?{texture:toneTexture,width,height,generation:hubGeneration}:null;}
+            function getCompositeTexture(){return deferredComposite&&lastToneValid&&toneTexture?{texture:toneTexture,width,height,generation:hubGeneration,blendMode:frameBlendMode,blendMixed:frameBlendMixed}:null;}
             function getDeferredCommandBuffer(){return deferredComposite&&deferredCommandBuffer&&deferredCommandGeneration===hubGeneration?deferredCommandBuffer:null;}
             function markDeferredSubmitted(){if(!deferredComposite)return;for(const table of deferredLocalArcTables)try{noteGpuMorphArcTableSubmitted?.(table);}catch(_){}deferredLocalArcTables=[];deferredCommandBuffer=null;deferredCommandGeneration=0;deferredComposite=false;mergedFrameSubmissions++;lastFlushMode=lastFlushMode.replace('+queued','+merged-submit');}
             function presentDeferredToMain(){if(!deferredComposite||!lastToneValid||!toneTexture)return true;try{const encoder=device.createCommandEncoder({label:'Spiro lamp deferred fallback present'});encoder.copyTextureToTexture({texture:toneTexture},{texture:context.getCurrentTexture()},[width,height,1]);const copyCommand=encoder.finish(),lampCommand=getDeferredCommandBuffer();device.queue.submit(lampCommand?[lampCommand,copyCommand]:[copyCommand]);submissions++;for(const table of deferredLocalArcTables)try{noteGpuMorphArcTableSubmitted?.(table);}catch(_){}deferredLocalArcTables=[];deferredCommandBuffer=null;deferredCommandGeneration=0;compositeToMain();deferredComposite=false;fallbackPresentFrames++;lastFlushMode=lastFlushMode.replace('+queued','')+'→fallback-main';return true;}catch(err){deferredCommandBuffer=null;deferredCommandGeneration=0;lastError=String(err?.message||err);return false;}}
             function hasDeferredComposite(){return deferredComposite&&lastToneValid&&!!toneTexture;}
-            function clear(){instanceCount=0;corridorBatchCount=0;arcBatchCount=0;deferredLocalArcTables=[];lastFlushMode='none';lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;resetFreezeLight();}
-            function status(){warmup();return{supported:!!navigator?.gpu,attempted,initializing,available:ready&&!lost&&WebGPUDeviceHub.isReady(),lost,lastError,width,height,instances:instanceCount,submissions,lastFlushMode,storageMode:'rgba16float',ringBuffers:instanceBuffers.length,frameSerial:lampFrameSerial,persistentTextureViews:Boolean(hdrView&&toneView),deferredComposite:hasDeferredComposite(),deferredCommandBuffer:Boolean(getDeferredCommandBuffer()),directSceneFrames,mergedFrameSubmissions,fallbackPresentFrames,residentPayloads:{instanceUploadBytes,instanceUploadSkips,instanceUploadBytesAvoided,policy:'exact payload reuse keeps prior ring slot resident when vector lamps are unchanged'},corridor:{batches:corridorBatchCount,logicalInstances:corridorLogicalInstances,lampUploadBytes:corridorLampUploads,lampUploadSkips:corridorLampUploadSkips,lampUploadBytesAvoided:corridorLampUploadBytesAvoided,uniformUploads:corridorUniformUploads,uniformUploadSkips:corridorUniformUploadSkips,copyUploadBytes:corridorCopyUploads,sharedCopyReuse:corridorSharedCopyReuse,sharedCopyAvoidedBytes:corridorSharedCopyAvoidedBytes,draws:corridorDraws,fallbacks:corridorFallbacks},arcNative:{batches:arcBatchCount,draws:arcDraws,corridorDraws:arcCorridorDraws,attachmentUploadBytes:arcAttachmentUploads,prerequisiteFusions:arcPrerequisiteFusions,scheduledReuses:arcScheduledReuses,policy:'bounded arbitrary lamp style records; xy sampled from resident exact Morph Arc in vertex shader'},topologyIdentity:{draws:topologyDraws,corridorDraws:topologyCorridorDraws,policy:'phase-resident Key lamp source/target identity; WGSL interpolates Dynamic/Smooth topology positions while CPU supplies only bounded handoff/style offsets'},freezeLight:{enabled:freezeLightEnabled(),tailSec:freezeTailSec(),hardness:freezeHardness(),colorMode:freezeColorMode(),hueDegrees:freezeHueDegrees(),chromatic:freezeChromaticEnabled(),historyValid:freezeHistoryValid,historyIndex:freezeHistoryIndex,frames:freezeFrames,resets:freezeResets,lastMotionAt:freezeLastMotionAt,policy:'post-raster screen-space history; exact Corridor/Arc attachment motion hashed; selectable lamp/line/fixed/hue trail color; optional non-persistent edge chromatic fringe'},freezeRain:{enabled:freezeRainEnabled(),degrees:freezeRainDegrees(),source:freezeRainSource(),speed:freezeRainSpeed(),tailSec:freezeRainTailSec(),hardness:freezeRainHardness(),historyValid:rainHistoryValid,historyIndex:rainHistoryIndex,frames:rainFrames,resets:rainResets,lastMotionAt:rainLastMotionAt,policy:'independent age-aware advected feedback; 180deg down; 50% legacy velocity; core or whole-lamp source; separate from ordinary FreezeLight'},arcBindGroupDummyStorage:Boolean(dummyStorageBuffer),hub:WebGPUDeviceHub.status()};}
-            return{warmup,ensureReady,isReady:()=>warmup(),beginFrame,canUse,queueVisualPlan,queueCorridorVisualPlan,queueArcVisualPlan,queueTopologyVisualPlan,flush,getCompositeTexture,getDeferredCommandBuffer,markDeferredSubmitted,presentDeferredToMain,hasDeferredComposite,resetFreezeLight,resetFreezeTrail,resetFreezeRain,clear,status};
+            function clear(){instanceCount=0;corridorBatchCount=0;arcBatchCount=0;deferredLocalArcTables=[];lastFlushMode='none';lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;resetFreezeAll();}
+            function status(){warmup();return{supported:!!navigator?.gpu,attempted,initializing,available:ready&&!lost&&WebGPUDeviceHub.isReady(),lost,lastError,width,height,instances:instanceCount,submissions,lastFlushMode,storageMode:'rgba16float',ringBuffers:instanceBuffers.length,frameSerial:lampFrameSerial,blendMode:frameBlendMode,blendMixed:frameBlendMixed,persistentTextureViews:Boolean(hdrView&&toneView),deferredComposite:hasDeferredComposite(),deferredCommandBuffer:Boolean(getDeferredCommandBuffer()),directSceneFrames,mergedFrameSubmissions,fallbackPresentFrames,residentPayloads:{instanceUploadBytes,instanceUploadSkips,instanceUploadBytesAvoided,policy:'exact payload reuse keeps prior ring slot resident when vector lamps are unchanged'},corridor:{batches:corridorBatchCount,logicalInstances:corridorLogicalInstances,lampUploadBytes:corridorLampUploads,lampUploadSkips:corridorLampUploadSkips,lampUploadBytesAvoided:corridorLampUploadBytesAvoided,uniformUploads:corridorUniformUploads,uniformUploadSkips:corridorUniformUploadSkips,copyUploadBytes:corridorCopyUploads,sharedCopyReuse:corridorSharedCopyReuse,sharedCopyAvoidedBytes:corridorSharedCopyAvoidedBytes,draws:corridorDraws,fallbacks:corridorFallbacks},arcNative:{batches:arcBatchCount,draws:arcDraws,corridorDraws:arcCorridorDraws,attachmentUploadBytes:arcAttachmentUploads,prerequisiteFusions:arcPrerequisiteFusions,scheduledReuses:arcScheduledReuses,policy:'bounded arbitrary lamp style records; xy sampled from resident exact Morph Arc in vertex shader'},topologyIdentity:{draws:topologyDraws,corridorDraws:topologyCorridorDraws,policy:'phase-resident Key lamp source/target identity; WGSL interpolates Dynamic/Smooth topology positions while CPU supplies only bounded handoff/style offsets'},freezeLight:{enabled:freezeLightEnabled(),tailSec:freezeTailSec(),effectiveTailSec:Number.isFinite(freezeEffectiveTailSec)?freezeEffectiveTailSec:freezeTailSec(),tailSettling:freezeTailIsSettling(),hardness:freezeHardness(),colorMode:freezeColorMode(),hueDegrees:freezeHueDegrees(),chromatic:freezeChromaticEnabled(),historyValid:freezeHistoryValid,historyIndex:freezeHistoryIndex,frames:freezeFrames,resets:freezeResets,lastMotionAt:freezeLastMotionAt,policy:'post-raster screen-space history; live tail-duration slew preserves history; hue mode advances monotonically from lamp color to the configured maximum tail hue; optional non-persistent edge chromatic fringe'},freezeRain:{enabled:freezeRainEnabled(),degrees:freezeRainDegrees(),source:freezeRainSource(),speed:freezeRainSpeed(),tailSec:freezeRainTailSec(),hardness:freezeRainHardness(),historyValid:rainHistoryValid,historyIndex:rainHistoryIndex,frames:rainFrames,resets:rainResets,lastMotionAt:rainLastMotionAt,motionHash:rainLastFrameHash,emitterSnapshotValid:rainSourceValid,emitterRefreshes:rainSourceRefreshes,policy:'independent emitter snapshot plus age-aware screen-space advection; Corridor copy scale/phase is excluded from Rain source refresh and motion lifetime, so tunnel animation cannot pull Rain radially; separate texture/history/reset from ordinary FreezeLight'},arcBindGroupDummyStorage:Boolean(dummyStorageBuffer),hub:WebGPUDeviceHub.status()};}
+            return{warmup,ensureReady,isReady:()=>warmup(),beginFrame,canUse,queueVisualPlan,queueCorridorVisualPlan,queueArcVisualPlan,queueTopologyVisualPlan,flush,getCompositeTexture,getDeferredCommandBuffer,markDeferredSubmitted,presentDeferredToMain,hasDeferredComposite,resetFreezeLight,resetFreezeTrail,resetFreezeRain,resetFreezeAll,clear,status};
         })();
 
         const LampGPURenderer=(()=>{
@@ -1129,8 +1173,9 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             function resetFreezeLight(){WebGPULampRenderer.resetFreezeLight?.();}
             function resetFreezeTrail(){WebGPULampRenderer.resetFreezeTrail?.();}
             function resetFreezeRain(){WebGPULampRenderer.resetFreezeRain?.();}
+            function resetFreezeAll(){WebGPULampRenderer.resetFreezeAll?.();}
             function clear(){active='none';WebGPULampRenderer.clear();LampWebGLRenderer.clear();}
             function status(){return{active,webgpu:WebGPULampRenderer.status(),webgl2:LampWebGLRenderer.status()};}
-            return{beginFrame,queueVisualPlan,queueCorridorVisualPlan,queueArcVisualPlan,queueTopologyVisualPlan,isWebGPUReady,ensureWebGPUReady,flush,getCompositeTexture,getDeferredCommandBuffer,markDeferredSubmitted,presentDeferredToMain,hasDeferredComposite,resetFreezeLight,resetFreezeTrail,resetFreezeRain,clear,status};
+            return{beginFrame,queueVisualPlan,queueCorridorVisualPlan,queueArcVisualPlan,queueTopologyVisualPlan,isWebGPUReady,ensureWebGPUReady,flush,getCompositeTexture,getDeferredCommandBuffer,markDeferredSubmitted,presentDeferredToMain,hasDeferredComposite,resetFreezeLight,resetFreezeTrail,resetFreezeRain,resetFreezeAll,clear,status};
         })();
         window.__spiroLampGPUStatus=()=>LampGPURenderer.status();

@@ -1378,7 +1378,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         function beginLampAdaptiveFrame(){
             lampAdaptiveFrame.currentArea=0;lampAdaptiveFrame.activeLayers=0;lampAdaptiveFrame.seen.clear();lampAdaptiveFrame.needsSettle=false;
 
-            lampAdaptiveFrame.instantStatic=typeof isAnyMorphLikeAnimationActive==='function'?!isAnyMorphLikeAnimationActive():!(runtimeState?.morph?.active===true||runtimeState?.minimalMorph?.active===true||runtimeState?.projectMorph?.active===true);
+            lampAdaptiveFrame.instantStatic=typeof isGeometryMorphActive==='function'?!isGeometryMorphActive():!(runtimeState?.morph?.active===true||runtimeState?.minimalMorph?.active===true||runtimeState?.projectMorph?.active===true);
         }
         function finishLampAdaptiveFrame(){
             const prev=Math.max(0,Number(lampAdaptiveFrame.previousArea)||0);
@@ -1758,7 +1758,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         function prepareLayerFrameProfileData(frameCtx){
             if(!frameCtx)return null;
             if(frameCtx.profilePreparedReady)return frameCtx.profilePrepared;
-            const layer=frameCtx.layer,effectLayer=frameCtx.effectLayer||(typeof getLayerEffectOwner==='function'?getLayerEffectOwner(layer):ensureLayerEffectState(layer))||layer,paths=getLayerFrameAuxiliaryPaths(frameCtx),rounded=getLayerFrameRoundedPaths(frameCtx);
+            const layer=frameCtx.layer,effectLayer=frameCtx.effectLayer||(typeof getLayerEffectOwner==='function'?getLayerEffectOwner(layer):ensureLayerEffectState(layer))||layer,paths=getLayerFrameAuxiliaryPaths(frameCtx),rounded=layer?.profileMode==='spline'?buildHighPrecisionGlintPaths(frameCtx):getLayerFrameRoundedPaths(frameCtx);
             let data=frameCtx.profileData;
             if(!data)data=frameCtx.profileData={};
             const application=['stroke','graffiti'].includes(effectLayer?.lineProfileApplication)?effectLayer.lineProfileApplication:'stroke';
@@ -3717,7 +3717,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const fmt=n=>Number(n).toFixed(Math.abs(Number(n)%1)>.001?1:0);
             set('lampFreezeTailText',`${formatTimeSeconds(Math.max(.05,Number(c.freezeTailSec??1.5)))} с`);
             set('lampFreezeHardnessText',`${Math.round(Math.max(0,Math.min(100,Number(c.freezeHardness??50))))}%`);
-            set('lampFreezeHueText',`±${Math.round(Math.max(0,Math.min(180,Number(c.freezeHueDegrees??45))))}°`);
+            set('lampFreezeHueText',`0→${Math.round(Math.max(0,Math.min(180,Number(c.freezeHueDegrees??45))))}°`);
             set('lampFreezeRainDegreesText',`${Math.round(((Number(c.freezeRainDegrees??180)%360)+360)%360)}°`);
             set('lampFreezeRainSpeedText',`${Math.round(Math.max(0,Math.min(100,Number(c.freezeRainSpeed??50))))}%`);
             set('lampFreezeRainTailText',`${formatTimeSeconds(Math.max(.05,Number(c.freezeRainTailSec??1.5)))} с`);

@@ -53,16 +53,19 @@ async function main(){
     assert(!circles.inFrame,'circle-mode test left scheduler inside a frame');
     console.log('PASS geometry circle modes',circles);
 
-    console.log('4) Master button must synchronize all layer parameters immediately and keep mirroring edits');
-    const master=await h.evaluate(`(async()=>{const T=__somataUserActionTest,a=T.reset('master');const c=createLayer('master-3');c.visible=false;state.layers.push(c);refreshLayerLookup(true);state.activeLayerId=a.id;setSingleLayerSelection(a);
-      a.N=11;a.K=3;a.radius=177;a.rotation=33;a.rounding=21;a.strokeWidth=4.25;a.opacity=73;a.geometryCircles={enabled:true,circumscribed:true,inscribed:false,median:true,keyPoints:false};a.web.width=1.7;a.web.enabled=true;a.showWeb=true;a.sweep.enabled=true;a.particles.enabled=true;a.showLamps=true;a.graffitiAngle=31;
-      for(const l of state.layers.slice(1)){l.N=4;l.K=1;l.radius=260;l.rotation=0;l.rounding=0;l.strokeWidth=1;l.opacity=100;l.geometryCircles={enabled:false,circumscribed:false,inscribed:true,median:false,keyPoints:false};l.web.width=.4;l.web.enabled=false;l.showWeb=false;l.sweep.enabled=false;l.particles.enabled=false;l.showLamps=false;l.graffitiAngle=75;}
-      syncSidebarInputs();const preserved=state.layers.map(l=>({id:l.id,name:l.name,visible:l.visible}));document.getElementById('btnMasterLayer').click();await new Promise(r=>setTimeout(r,60));
-      const keys=['N','K','radius','rotation','rounding','strokeWidth','opacity','showWeb','showLamps','graffitiAngle'];const immediate=state.layers.every(l=>keys.every(k=>JSON.stringify(l[k])===JSON.stringify(a[k]))&&JSON.stringify(l.geometryCircles)===JSON.stringify(a.geometryCircles)&&l.web.width===a.web.width&&l.web.enabled===a.web.enabled&&l.sweep.enabled===a.sweep.enabled&&l.particles.enabled===a.particles.enabled);
-      const identityPreserved=state.layers.every((l,i)=>l.id===preserved[i].id&&l.name===preserved[i].name&&l.visible===preserved[i].visible);
-      const r=document.getElementById('paramRadius');r.value='231';r.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,80));const mirroredEdit=state.layers.every(l=>Math.abs(Number(l.radius)-231)<1e-6);const st=animationScheduler.stats();return{master:state.masterLayerEdit===true,immediate,identityPreserved,mirroredEdit,radii:state.layers.map(l=>l.radius),inFrame:st.inFrame};})()`);
-    assert(master.master,'Master did not stay enabled');assert(master.immediate,'Master enable did not immediately synchronize authored parameters');assert(master.identityPreserved,'Master synchronization changed id/name/visibility');assert(master.mirroredEdit,'Master did not mirror a later radius input to every layer');assert(!master.inFrame,'Master test left scheduler inside a frame');
-    console.log('PASS Master all-layer synchronization',master);
+    console.log('4) Master must preserve per-layer differences and broadcast only the setting being edited');
+    const master=await h.evaluate(`(async()=>{const T=__somataUserActionTest,a=T.reset('master');const b=state.layers[1]||createLayer('master-2'),c=createLayer('master-3');if(!state.layers.includes(b))state.layers.push(b);c.visible=false;state.layers.push(c);refreshLayerLookup(true);state.activeLayerId=a.id;setSingleLayerSelection(a);
+      a.radius=177;a.rotation=33;a.rounding=21;a.web.width=.7;a.web.spacing=7;
+      b.radius=260;b.rotation=7;b.rounding=4;b.web.width=1.4;b.web.spacing=15;
+      c.radius=310;c.rotation=91;c.rounding=38;c.web.width=2.2;c.web.spacing=27;
+      syncSidebarInputs();const before=state.layers.map(l=>({id:l.id,name:l.name,visible:l.visible,radius:l.radius,rotation:l.rotation,rounding:l.rounding,webWidth:l.web.width,webSpacing:l.web.spacing}));document.getElementById('btnMasterLayer').click();await new Promise(r=>setTimeout(r,60));
+      const afterEnable=state.layers.map(l=>({radius:l.radius,rotation:l.rotation,rounding:l.rounding,webWidth:l.web.width,webSpacing:l.web.spacing}));
+      const noNormalize=afterEnable.every((v,i)=>v.radius===before[i].radius&&v.rotation===before[i].rotation&&v.rounding===before[i].rounding&&v.webWidth===before[i].webWidth&&v.webSpacing===before[i].webSpacing);
+      const r=document.getElementById('paramRadius');r.value='231';r.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,80));const radiusMirrored=state.layers.every(l=>Math.abs(Number(l.radius)-231)<1e-6);const unrelatedPreserved=state.layers.every((l,i)=>l.rotation===before[i].rotation&&l.rounding===before[i].rounding&&l.web.spacing===before[i].webSpacing);
+      const w=document.getElementById('webWidth');w.value='3.1';w.dispatchEvent(new Event('input',{bubbles:true}));await new Promise(r=>setTimeout(r,80));const webWidthMirrored=state.layers.every(l=>Math.abs(Number(l.web.width)-3.1)<1e-6);const webSpacingPreserved=state.layers.every((l,i)=>l.web.spacing===before[i].webSpacing);
+      const identityPreserved=state.layers.every((l,i)=>l.id===before[i].id&&l.name===before[i].name&&l.visible===before[i].visible);const st=animationScheduler.stats();return{master:state.masterLayerEdit===true,noNormalize,radiusMirrored,unrelatedPreserved,webWidthMirrored,webSpacingPreserved,identityPreserved,rows:state.layers.map(l=>({radius:l.radius,rotation:l.rotation,rounding:l.rounding,webWidth:l.web.width,webSpacing:l.web.spacing})),inFrame:st.inFrame};})()`);
+    assert(master.master,'Master did not stay enabled');assert(master.noNormalize,'Master enable normalized unrelated layer state');assert(master.radiusMirrored,'Master did not broadcast the edited radius');assert(master.unrelatedPreserved,'radius edit changed unrelated per-layer settings');assert(master.webWidthMirrored,'Master did not broadcast the edited nested Web width');assert(master.webSpacingPreserved,'Web width edit normalized the rest of each Web config');assert(master.identityPreserved,'Master changed id/name/visibility');assert(!master.inFrame,'Master test left scheduler inside a frame');
+    console.log('PASS Master changed-path broadcast',master);
 
     console.log('5) Final-GPU rejection must present current frame, never retain stale pixels');
     const rescue=await h.evaluate(`(()=>{const frame={id:771,gpuLayerSceneDeferred:true,gpuLampsDeferred:false,gpuFinalVignetteDeferred:true,gpuMainSceneEmpty:true};let presented=0,disabled=0;
@@ -123,9 +126,14 @@ async function main(){
     assert(!adaptive.inFrame,'adaptive brightness test left scheduler inside a frame');
     console.log('PASS adaptive brightness Morph/exposure/channel',adaptive);
 
+    console.log('12) Orange Morph mode selector must create a coherent Mandala target');
+    const mandala=await h.evaluate(`(async()=>{const T=__somataUserActionTest;T.reset('orange-mandala');const count=document.getElementById('randomLayerCount');count.value='4';count.dispatchEvent(new Event('change',{bubbles:true}));const mode=document.getElementById('minimalMorphMode');mode.value='mandala';mode.dispatchEvent(new Event('change',{bubbles:true}));const instant=document.getElementById('minimalMorphInstant');instant.checked=true;instant.dispatchEvent(new Event('change',{bubbles:true}));const btn=document.getElementById('btnMinimalMorph');btn.click();await new Promise(r=>setTimeout(r,180));const ns=state.layers.map(l=>Number(l.N)||0),radii=state.layers.map(l=>Number(l.radius)||0),names=state.layers.map(l=>String(l.name||'')),rots=state.layers.map(l=>Number(l.rotation)||0),targetCount=state.layers.length,active=runtimeState.minimalMorph.active===true,stored=state.minimalMorph.mode,ui=mode.value;btn.click();await new Promise(r=>setTimeout(r,40));return{count:targetCount,ns,radii,names,rots,active,stored,ui,inFrame:animationScheduler.stats().inFrame};})()`);
+    assert(mandala.active,'Orange Morph did not start from the real button');assert(mandala.stored==='mandala'&&mandala.ui==='mandala','Mandala selector did not reach live state');assert(mandala.count===4,'Mandala did not honor the requested layer count');assert(new Set(mandala.ns).size===1&&mandala.ns[0]>=8,'Mandala target has no shared radial symmetry');assert(mandala.radii.every((r,i,a)=>i===0||r<a[i-1]),'Mandala rings are not nested from outer to inner');assert(mandala.names.every(n=>n.startsWith('Мандала')),'Orange Morph did not use the Mandala composition factory');assert(!mandala.inFrame,'Mandala test left scheduler inside a frame');
+    console.log('PASS Orange Morph Mandala',mandala);
+
     const exc=uncaughtExceptions(h.events).slice(baseline);
     assert(exc.length===0,'uncaught browser exceptions: '+exc.join(' | '));
-    console.log('RUNTIME USER ACTIONS: 11/11 PASS');
+    console.log('RUNTIME USER ACTIONS: 12/12 PASS');
   } finally {await h.close();}
 }
 main().catch(err=>{console.error('FAIL runtime user actions:',err.stack||err.message);process.exit(1);});

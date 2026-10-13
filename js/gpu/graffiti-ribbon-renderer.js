@@ -3,7 +3,7 @@
 window.__spiroRegisterModule?.('js/gpu/graffiti-ribbon-renderer');
 
 const WebGPUGraffitiContourGlow=(()=>{
-    const SLOT_COUNT=32,BLUR_TAPS=12;
+    const SLOT_COUNT=32,BLUR_MAX_TAPS=32;
     let device=null,format=null,generation=-1,ready=false,initializing=null,lastError='not-initialized';
     let bindLayout=null,pipelineBlur=null,pipelineOver=null,pipelineBehind=null,pipelineOverStencil=null,pipelineBehindStencil=null,pipelineModes=Object.create(null),pipelineModesStencil=Object.create(null),sampler=null,slots=[],cursor=0;
     const stats={frames:0,blurPasses:0,composites:0,textureBuilds:0,failures:0};
@@ -24,15 +24,27 @@ struct V { @builtin(position) pos:vec4<f32>, @location(0) uv:vec2<f32> };
 }
 fn blurredAlpha(uv0:vec2<f32>)->f32{
     var sum=0.0;var wsum=0.0;let r=max(0.0,u.radius);
-    for(var i:i32=-${BLUR_TAPS};i<=${BLUR_TAPS};i=i+1){
-        let q=f32(i)/f32(${BLUR_TAPS});let soft=u._pad.x;var zScale=select(2.45,mix(3.35,1.25,min(1.0,max(0.0,soft))),soft>=0.0);if(soft>1.0){zScale=mix(zScale,0.92,min(1.0,(soft-1.0)*2.0));}let z=q*zScale;let w=exp(-0.5*z*z);
+    // Keep the historical 12-tap cost at normal radii. Only very large Glow
+    // radii increase the sample lattice, which removes the visible contour bands.
+    let taps=clamp(i32(ceil(r*0.5)),12,${BLUR_MAX_TAPS});
+    for(var i:i32=-${BLUR_MAX_TAPS};i<=${BLUR_MAX_TAPS};i=i+1){
+        if(abs(i)>taps){continue;}
+        let q=f32(i)/f32(taps);let soft=u._pad.x;var zScale=select(2.45,mix(3.35,1.25,min(1.0,max(0.0,soft))),soft>=0.0);if(soft>1.0){zScale=mix(zScale,0.92,min(1.0,(soft-1.0)*2.0));}let z=q*zScale;let w=exp(-0.5*z*z);
         let uv=clamp(uv0+u.dir*u.invSize*(r*q),vec2<f32>(0.0),vec2<f32>(1.0));
         sum+=textureSampleLevel(srcTex,srcSamp,uv,0.0).a*w;wsum+=w;
     }
     return sum/max(0.000001,wsum);
 }
 @fragment fn fsBlur(v:V)->@location(0) vec4<f32>{let a=blurredAlpha(v.uv);return vec4<f32>(a,a,a,a);}
-@fragment fn fsComposite(v:V)->@location(0) vec4<f32>{let a=clamp(blurredAlpha(v.uv)*u.alpha,0.0,1.0);if(a<0.0001){discard;}return vec4<f32>(u.color.rgb*a,a);}`;
+@fragment fn fsComposite(v:V)->@location(0) vec4<f32>{
+    let raw=blurredAlpha(v.uv);
+    // A normalized blur loses peak energy as radius grows. The ordinary line
+    // Glow is analytic and does not. Compensate the thin Graffiti contour so
+    // equal Glow settings have comparable perceived power without clipping the core.
+    let densityGain=max(1.0,u._pad.y);
+    let a=clamp((1.0-exp(-raw*densityGain))*u.alpha,0.0,1.0);
+    if(a<0.0001){discard;}return vec4<f32>(u.color.rgb*a,a);
+}`;
     function blend(kind){if(kind==='behind')return{color:{srcFactor:'one-minus-dst-alpha',dstFactor:'one',operation:'add'},alpha:{srcFactor:'one-minus-dst-alpha',dstFactor:'one',operation:'add'}};return{color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}};}
     async function initAsync(){
         if(ready&&device&&generation===WebGPUDeviceHub.getGeneration())return true;if(initializing)return initializing;
@@ -57,12 +69,14 @@ fn blurredAlpha(uv0:vec2<f32>)->f32{
         if(!slot)return null;if(slot.w!==w||slot.h!==h||!slot.mask||!slot.scratch){destroySlot(slot);slot.w=w;slot.h=h;const usage=GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING;slot.mask=device.createTexture({label:'Somata Graffiti Glow contour mask',size:[w,h,1],format,usage});slot.scratch=device.createTexture({label:'Somata Graffiti Glow blur scratch',size:[w,h,1],format,usage});slot.uniformH=device.createBuffer({label:'Somata Graffiti Glow H uniforms',size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});slot.uniformV=device.createBuffer({label:'Somata Graffiti Glow V uniforms',size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});stats.textureBuilds++;}
         return slot;
     }
-    function writeUniform(buffer,w,h,dx,dy,radius,alpha,color,softness=-1){const u=new Float32Array(12);u[0]=1/Math.max(1,w);u[1]=1/Math.max(1,h);u[2]=dx;u[3]=dy;u[4]=Math.max(.01,Number(radius)||0);u[5]=Math.max(0,Math.min(1,Number(alpha)||0));u[6]=Number.isFinite(Number(softness))?Number(softness):-1;u[8]=Number(color?.[0])||0;u[9]=Number(color?.[1])||0;u[10]=Number(color?.[2])||0;u[11]=1;device.queue.writeBuffer(buffer,0,u);}
+    function writeUniform(buffer,w,h,dx,dy,radius,alpha,color,softness=-1,densityGain=1){const u=new Float32Array(12);u[0]=1/Math.max(1,w);u[1]=1/Math.max(1,h);u[2]=dx;u[3]=dy;u[4]=Math.max(.01,Number(radius)||0);u[5]=Math.max(0,Math.min(1,Number(alpha)||0));u[6]=Number.isFinite(Number(softness))?Number(softness):-1;u[7]=Math.max(1,Math.min(8,Number(densityGain)||1));u[8]=Number(color?.[0])||0;u[9]=Number(color?.[1])||0;u[10]=Number(color?.[2])||0;u[11]=1;device.queue.writeBuffer(buffer,0,u);}
     function encodeBlurComposite(encoder,slot,targetTexture,opts={}){
         if(!encoder||!slot?.mask||!slot?.scratch||!targetTexture||!warmup())return false;
         try{
             const radius=Math.max(.5,Number(opts.radiusPx)||.5),alpha=Math.max(0,Math.min(1,Number(opts.alphaScale)||0)),color=opts.color||[1,1,1,1];
-            const softness=Number.isFinite(Number(opts.softness))?Math.max(0,Math.min(1.5,Number(opts.softness))):-1;writeUniform(slot.uniformH,slot.w,slot.h,1,0,radius,1,[1,1,1,1],softness);writeUniform(slot.uniformV,slot.w,slot.h,0,1,radius,alpha,color,softness);
+            const softness=Number.isFinite(Number(opts.softness))?Math.max(0,Math.min(1.5,Number(opts.softness))):-1;
+            const widthPx=Math.max(.5,Number(opts.widthPx)||1.5),densityGain=Math.max(1,Math.min(8,1+radius/Math.max(3,widthPx*3.2)));
+            writeUniform(slot.uniformH,slot.w,slot.h,1,0,radius,1,[1,1,1,1],softness,1);writeUniform(slot.uniformV,slot.w,slot.h,0,1,radius,alpha,color,softness,densityGain);
             const hbg=device.createBindGroup({layout:bindLayout,entries:[{binding:0,resource:slot.mask.createView()},{binding:1,resource:sampler},{binding:2,resource:{buffer:slot.uniformH}}]});
             const vbg=device.createBindGroup({layout:bindLayout,entries:[{binding:0,resource:slot.scratch.createView()},{binding:1,resource:sampler},{binding:2,resource:{buffer:slot.uniformV}}]});
             let pass=encoder.beginRenderPass({colorAttachments:[{view:slot.scratch.createView(),loadOp:'clear',storeOp:'store',clearValue:{r:0,g:0,b:0,a:0}}]});pass.setPipeline(pipelineBlur);pass.setBindGroup(0,hbg);pass.draw(3);pass.end();
@@ -209,7 +223,7 @@ fn emit(p:vec2<f32>,v:In,copyAlpha:f32)->Out{
             const slot=WebGPUGraffitiContourGlow.acquire(mainCanvas.width,mainCanvas.height);if(!slot){noteFailure('contour-glow acquire','GPU contour Glow scratch textures unavailable');return{handled:false,commandBuffer:null};}
             const enc=device.createCommandEncoder({label:'Somata Graffiti exact ribbon contour Glow'}),pass=enc.beginRenderPass({colorAttachments:[{view:slot.mask.createView(),loadOp:'clear',storeOp:'store',clearValue:{r:0,g:0,b:0,a:0}}]});
             pass.setPipeline(pipelineOver);pass.setVertexBuffer(0,vb);const bg=makeUniformBindGroup(m,[1,1,1,1],Math.max(0,Math.min(1,Number(maskAlpha)||0)),1,0);if(!bg){pass.end();return{handled:false,commandBuffer:null};}pass.setBindGroup(0,bg);pass.draw(batch.vertices,1,0,0);pass.end();
-            const color=GPUColorCache.rgba(s.color);if(!WebGPUGraffitiContourGlow.encodeBlurComposite(enc,slot,targetTexture,{radiusPx,alphaScale,color,composite:opts?.composite||'source-over'})){noteFailure('contour-glow blur','GPU contour blur/composite encode failed');return{handled:false,commandBuffer:null};}
+            const color=GPUColorCache.rgba(s.color);if(!WebGPUGraffitiContourGlow.encodeBlurComposite(enc,slot,targetTexture,{radiusPx,alphaScale,color,widthPx:Math.max(.5,s.width),composite:opts?.composite||'source-over'})){noteFailure('contour-glow blur','GPU contour blur/composite encode failed');return{handled:false,commandBuffer:null};}
             stats.contourGlowFrames++;stats.contourGlowMasks++;stats.glowFrames++;stats.glowPasses++;stats.glowVertices+=batch.vertices;noteSuccess('contour-glow encode/draw','webgpu-layer-scene','deferred GPU texture');return{handled:true,commandBuffer:enc.finish()};
         }catch(err){stats.failures++;noteFailure(diagnostic.stage||'contour-glow encode',err?.message||err,err,{target:'layer-scene'});return{handled:false,commandBuffer:null};}
     }
@@ -259,7 +273,7 @@ fn emit(p:vec2<f32>,v:In,copyAlpha:f32)->Out{
             const slot=WebGPUGraffitiContourGlow.acquire(mainCanvas.width,mainCanvas.height);if(!slot){noteFailure('corridor contour-glow acquire','GPU contour Glow scratch textures unavailable');return{handled:false,commandBuffer:null};}
             const enc=device.createCommandEncoder({label:'Somata Corridor Graffiti exact ribbon contour Glow'}),pass=enc.beginRenderPass({colorAttachments:[{view:slot.mask.createView(),loadOp:'clear',storeOp:'store',clearValue:{r:0,g:0,b:0,a:0}}]});pass.setPipeline(corridorPipelineOver);pass.setBindGroup(1,copyBg);pass.setVertexBuffer(0,vb);
             const bg=makeUniformBindGroup(m,[1,1,1,1],1,1,0);if(!bg){pass.end();return{handled:false,commandBuffer:null};}pass.setBindGroup(0,bg);pass.draw(batch.vertices,k,0,0);pass.end();
-            const color=GPUColorCache.rgba(s.color);if(!WebGPUGraffitiContourGlow.encodeBlurComposite(enc,slot,targetTexture,{radiusPx,alphaScale,color,composite:opts?.composite||'source-over'})){noteFailure('corridor contour-glow blur','GPU contour blur/composite encode failed');return{handled:false,commandBuffer:null};}
+            const color=GPUColorCache.rgba(s.color);if(!WebGPUGraffitiContourGlow.encodeBlurComposite(enc,slot,targetTexture,{radiusPx,alphaScale,color,widthPx:Math.max(.5,s.width),composite:opts?.composite||'source-over'})){noteFailure('corridor contour-glow blur','GPU contour blur/composite encode failed');return{handled:false,commandBuffer:null};}
             stats.contourGlowFrames++;stats.contourGlowMasks++;stats.glowFrames++;stats.glowPasses++;stats.glowVertices+=batch.vertices*k;noteSuccess('corridor contour-glow encode/draw','webgpu-layer-scene','deferred GPU texture');return{handled:true,commandBuffer:enc.finish()};
         }catch(err){stats.failures++;noteFailure(diagnostic.stage||'corridor contour-glow encode',err?.message||err,err,{target:'layer-scene'});return{handled:false,commandBuffer:null};}
     }

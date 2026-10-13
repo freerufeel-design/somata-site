@@ -43,11 +43,14 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             const afterPaintSnapshot = [];
 
             const MORPH_TASK_NAMES=new Set(['morph','morph-owner','minimalMorph','project-morph']);
-            const MORPH_FREEZE_GAP_MS=100;
+            const MORPH_FREEZE_GAP_MS=180;
             const MORPH_FREEZE_WORK_MS=50;
+            const MORPH_RENDER_FREEZE_MS=160;
+            const MORPH_WATCHDOG_REPORT_MS=220;
             const MORPH_FREEZE_LONG_TASK_MS=100;
             const morphFreezeHistory=[];
             let morphFreezeCount=0;
+            let externalRafGapCount=0,lastExternalRafGap=null;
             let lastMorphFreezeAt=-1e9;
             let lastMorphFreezeKey='';
             let lastVisibilityResumeAt=performance.now();
@@ -109,8 +112,12 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                     }else if(String(governor?.bottleneck||'')==='gpu'&&Number(governor?.emaGpuMs)>0){
                         cause=`The Morph frame gap was ${durationMs} ms and GPU timing indicates a GPU/driver bottleneck (${roundFreezeMs(governor.emaGpuMs)} ms EMA).`;
                     }else{
-                        certainty='unknown';
-                        cause=`No rAF reached the Morph scheduler for ${durationMs} ms. No slow Somata task/render or recent GPU fault was measured; likely browser main-thread scheduling, GC, another script, driver synchronisation, or system load.`;
+                        // An rAF gap with no measured Somata CPU/GPU cause is a browser/system scheduling gap,
+                        // not evidence that Morph itself froze. Recovery still happens in tick(), but do not
+                        // emit a red/console Morph freeze for an unattributed event.
+                        externalRafGapCount++;
+                        lastExternalRafGap={at:roundFreezeMs(at),durationMs};
+                        return null;
                     }
                 }else{
                     certainty='unknown';
@@ -154,7 +161,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                     raf = 0;
                     watchdogRecoveries++;
                     watchdogLastRecoveryAt = performance.now();
-                    if(hasMorphActivity())reportMorphFreeze('MORPH_SCHEDULER_WATCHDOG',{durationMs:Math.max(120,watchdogLastRecoveryAt-lastInvalidateAt),task:'scheduler-watchdog'});
+                    const watchdogDelayMs=Math.max(120,watchdogLastRecoveryAt-lastInvalidateAt);if(hasMorphActivity()&&watchdogDelayMs>=MORPH_WATCHDOG_REPORT_MS)reportMorphFreeze('MORPH_SCHEDULER_WATCHDOG',{durationMs:watchdogDelayMs,task:'scheduler-watchdog'});
                     try { tick(watchdogLastRecoveryAt); }
                     catch (err) { console.error('Somata scheduler watchdog recovery failed', err); }
                 }, 120);
@@ -227,7 +234,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                                 renderMainCanvas();
                                 const paintMs=performance.now()-paintStartedAt;
                                 lastPaintTiming={ms:paintMs,at:performance.now()};
-                                if(paintMs>=MORPH_FREEZE_WORK_MS&&hasMorphActivity())reportMorphFreeze('MORPH_RENDER_SLOW',{durationMs:paintMs,task:'renderMainCanvas'});
+                                if(paintMs>=MORPH_RENDER_FREEZE_MS&&hasMorphActivity())reportMorphFreeze('MORPH_RENDER_SLOW',{durationMs:paintMs,task:'renderMainCanvas'});
                                 paintCount++;
                                 lastScheduledPaintAt = performance.now();
                             } catch (err) {
@@ -298,8 +305,8 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 hasAfterPaint(name) { return afterPaint.has(name); },
                 isMorphActive() { return hasMorphActivity(); },
                 reportMorphFreeze(code,detail={}) { return reportMorphFreeze(code,detail); },
-                freezeStats() { return {count:morphFreezeCount,thresholds:{gapMs:MORPH_FREEZE_GAP_MS,workMs:MORPH_FREEZE_WORK_MS,longTaskMs:MORPH_FREEZE_LONG_TASK_MS},last:morphFreezeHistory.at(-1)||null,history:morphFreezeHistory.slice()}; },
-                stats() { return { activeTasks: tasks.size, frameCount, paintCount, paintErrors, lastPaintError, inFrame, rafPending: Boolean(raf), renderPending, lastTickAt, lastInvalidateAt, lastScheduledPaintAt, invalidateCount, watchdogArmed:Boolean(watchdogTimer), watchdogRecoveries, watchdogLastRecoveryAt, lastTickDurationMs:roundFreezeMs(lastTickDurationMs), morphFreezeCount, fpsLimit, fpsFrameIntervalMs:roundFreezeMs(1000/Math.max(FPS_LIMIT_MIN,fpsLimit)), fpsGateSkips }; }
+                freezeStats() { return {count:morphFreezeCount,externalRafGapCount,lastExternalRafGap,thresholds:{gapMs:MORPH_FREEZE_GAP_MS,workMs:MORPH_FREEZE_WORK_MS,renderMs:MORPH_RENDER_FREEZE_MS,watchdogReportMs:MORPH_WATCHDOG_REPORT_MS,longTaskMs:MORPH_FREEZE_LONG_TASK_MS},last:morphFreezeHistory.at(-1)||null,history:morphFreezeHistory.slice()}; },
+                stats() { return { activeTasks: tasks.size, frameCount, paintCount, paintErrors, lastPaintError, inFrame, rafPending: Boolean(raf), renderPending, lastTickAt, lastInvalidateAt, lastScheduledPaintAt, invalidateCount, watchdogArmed:Boolean(watchdogTimer), watchdogRecoveries, watchdogLastRecoveryAt, lastTickDurationMs:roundFreezeMs(lastTickDurationMs), morphFreezeCount, externalRafGapCount, lastExternalRafGap, fpsLimit, fpsFrameIntervalMs:roundFreezeMs(1000/Math.max(FPS_LIMIT_MIN,fpsLimit)), fpsGateSkips }; }
             };
         })();
         function applyFpsLimit(value, persist = true) {

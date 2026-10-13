@@ -10,7 +10,7 @@ const WebGPULightningArcRenderer=(()=>{
     let uniformBuffers=[],uniformBinds=[],uniformCursor=0,pathBinds=new WeakMap(),copyBinds=new WeakMap(),strokeBundleCache=new WeakMap(),bundleObjectIds=new WeakMap(),bundleObjectSerial=0;
     const uniformData=new Float32Array(32);
     const stats={frames:0,draws:0,strokeDraws:0,uniformBindReuses:0,corridorFrames:0,corridorCopies:0,logicalSegments:0,exactRasterSubsegments:0,arcEncodes:0,arcReuses:0,
-        clippedFrames:0,stencilEdges:0,blurredHaloPasses:0,bundleBuilds:0,bundleHits:0,bundleExecutes:0,bundleFallbacks:0,cpuPathBuildsAvoided:0,cpuExactRailBuildsAvoided:0,cpuPieceBuildsAvoided:0,cpuSegmentUploadsAvoided:0,failures:0};
+        clippedFrames:0,stencilEdges:0,blurredHaloPasses:0,analyticHaloPasses:0,strikeBlurBypasses:0,bundleBuilds:0,bundleHits:0,bundleExecutes:0,bundleFallbacks:0,cpuPathBuildsAvoided:0,cpuExactRailBuildsAvoided:0,cpuPieceBuildsAvoided:0,cpuSegmentUploadsAvoided:0,failures:0};
 
     const WGSL=`
 struct U {
@@ -226,14 +226,17 @@ struct V{@builtin(position) p:vec4<f32>};
                     const color=GPUColorCache.rgba(style.color);const ok=blurApi.encodeBlurComposite?.(encoder,slot,targetTexture,{radiusPx:Math.max(.5,Number(style.glowRadius)||.5),alphaScale:Math.max(0,Math.min(1,Number(style.glowAlpha)||0)),color,softness:style.softness,blendMode:sweepGlowBlendMode(prepared.cfg),stencilView:clipped?stencilView:null,stencilReference:behavior==='inside'?1:0});if(!ok)throw new Error('Lightning contour Glow blur encode failed');stats.blurredHaloPasses++;
                 }
             };
-            drawBlurredHaloGroup(haloStyles);drawAnalyticGroup(coreStyles,true);
+            const analyticStrikeHalo=frame.stage!=='precharge';
+            if(analyticStrikeHalo){drawAnalyticGroup(haloStyles,false);stats.analyticHaloPasses+=haloStyles.length;stats.strikeBlurBypasses+=haloStyles.length;}
+            else drawBlurredHaloGroup(haloStyles);
+            drawAnalyticGroup(coreStyles,true);
             stats.frames++;stats.draws++;stats.logicalSegments+=arcRec.segmentCount*copyCount*styles.length;stats.exactRasterSubsegments+=arcRec.segmentCount*rasterSubdiv*copyCount*styles.length;stats.cpuPathBuildsAvoided++;stats.cpuExactRailBuildsAvoided++;stats.cpuPieceBuildsAvoided++;stats.cpuSegmentUploadsAvoided+=arcRec.segmentCount;
             return{handled:true,commandBuffer:encoder.finish(),onSubmitted:()=>noteGpuMorphArcTableSubmitted?.(prepared.table)};
         }catch(err){lastError=String(err?.message||err);stats.failures++;return{handled:false,commandBuffer:null,reason:lastError};}
     }
     function encodeToLayerScene(targetTexture,prepared,frame,ctx,baseAlpha,behavior='symmetric',frameCtx=null){return encode(targetTexture,prepared,frame,ctx,baseAlpha,behavior,null,null,frameCtx,1);}
     function encodeCorridorToLayerScene(targetTexture,prepared,frame,ctx,baseAlpha,copies,alphas,frameCtx,footprint=1,behavior='symmetric'){return encode(targetTexture,prepared,frame,ctx,baseAlpha,behavior,copies,alphas,frameCtx,footprint);}
-    function status(){warmup();return{available:ready,generation,lastError,width,height,exactBezierRasterSubdiv:EXACT_BEZIER_RASTER_SUBDIV,...stats,contract:'Topology/Spiral Morph Lightning uses the shared resident GPU Arc and authoritative retained cubic Bézier carrier. Exact precision sub-samples every Arc microsegment directly on the retained cubic (6x); simple precision keeps the lightweight chord path. Symmetric Glow is generated from the strike mask by separable GPU blur. No CPU geometry or Canvas carrier is rebuilt.'};}
+    function status(){warmup();return{available:ready,generation,lastError,width,height,exactBezierRasterSubdiv:EXACT_BEZIER_RASTER_SUBDIV,...stats,contract:'Topology/Spiral Morph Lightning uses the shared resident GPU Arc and authoritative retained cubic Bézier carrier. Exact precision sub-samples every Arc microsegment directly on the retained cubic (6x); simple precision keeps the lightweight chord path. Precharge Glow may use the separable blur, while strike/afterglow halos use the analytic GPU stroke field to avoid impact-frame blur stalls. No CPU geometry or Canvas carrier is rebuilt.'};}
     return{warmup,isReady:()=>warmup()&&Boolean(typeof WebGPUGraffitiContourGlow!=='undefined'&&WebGPUGraffitiContourGlow.isReady?.()),encodeToLayerScene,encodeCorridorToLayerScene,status};
 })();
 window.__spiroGpuLightningArcStatus=()=>WebGPULightningArcRenderer.status();

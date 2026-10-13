@@ -8,22 +8,38 @@ window.__spiroRegisterModule?.('js/ui/profile-presets');
             nodes: (p.nodes || []).map(([x,y]) => ({x,y}))
         }));
 
+        // Dedicated profiles for Orange Morph → Mandala.  They deliberately favour smooth,
+        // radially coherent silhouettes and are also available to Blue Morph as a fifth group.
+        PROFILE_PRESET_DEFS.push(...[
+            {index:51,key:'md_lotus',name:'Мандала · Лотос',group:'mandala',family:'sine',mode:'spline',nodes:[[0,0],[.16,.16],[.38,.62],[.5,.78],[.62,.62],[.84,.16],[1,0]],loop:false,closed:true},
+            {index:52,key:'md_petal',name:'Мандала · Лепесток',group:'mandala',family:'sine',mode:'spline',nodes:[[0,0],[.15,.08],[.35,.44],[.5,.72],[.65,.44],[.85,.08],[1,0]],loop:false,closed:true},
+            {index:53,key:'md_wave',name:'Мандала · Волна',group:'mandala',family:'sine',mode:'spline',nodes:[[0,0],[.14,.30],[.30,.52],[.48,.18],[.66,-.26],[.84,-.12],[1,0]],loop:false,closed:true},
+            {index:54,key:'md_double_lotus',name:'Мандала · Двойной лотос',group:'mandala',family:'sine',mode:'spline',nodes:[[0,0],[.12,.12],[.27,.52],[.43,.18],[.55,.62],[.69,.18],[.84,.42],[1,0]],loop:false,closed:true},
+            {index:55,key:'md_crown',name:'Мандала · Корона',group:'mandala',family:'triangle',mode:'segments',nodes:[[0,0],[.18,.18],[.32,.56],[.5,.24],[.68,.56],[.82,.18],[1,0]],loop:false,closed:true},
+            {index:56,key:'md_diamond',name:'Мандала · Алмаз',group:'mandala',family:'triangle',mode:'segments',nodes:[[0,0],[.22,.26],[.5,.66],[.78,.26],[1,0]],loop:false,closed:true},
+            {index:57,key:'md_gate',name:'Мандала · Ворота',group:'mandala',family:'square',mode:'segments',nodes:[[0,0],[.16,0],[.16,.46],[.34,.46],[.34,.64],[.66,.64],[.66,.46],[.84,.46],[.84,0],[1,0]],loop:false,closed:true},
+            {index:58,key:'md_ribbon',name:'Мандала · Лента',group:'mandala',family:'sine',mode:'spline',nodes:[[0,0],[.12,-.08],[.30,.42],[.48,.58],[.66,.14],[.82,-.18],[1,0]],loop:false,closed:true},
+            {index:59,key:'md_drop',name:'Мандала · Капля',group:'mandala',family:'sine',mode:'spline',nodes:[[0,0],[.18,.10],[.38,.56],[.5,.74],[.63,.42],[.82,.10],[1,0]],loop:false,closed:true},
+            {index:60,key:'md_knot',name:'Мандала · Узел',group:'mandala',family:'sine',mode:'spline',nodes:[[0,0],[.14,.16],[.36,.58],[.58,.26],[.44,-.30],[.30,.28],[.58,.56],[.80,.14],[1,0]],loop:true,closed:true}
+        ].map(p=>({...p,mode:(p.loop===true||p.family==='sine')?'spline':'segments',nodes:(p.nodes||[]).map(([x,y])=>({x,y}))})));
+
         const PROFILE_PRESETS = Object.freeze(Object.fromEntries(PROFILE_PRESET_DEFS.map(p => [p.key, { mode:p.mode, nodes:p.nodes }])));
         const PROFILE_PRESET_META = Object.freeze(Object.fromEntries(PROFILE_PRESET_DEFS.map(p => [p.key, {
             index:p.index, name:p.name, group:p.group, family:p.family, loop:p.loop === true,
             closed: typeof p.closed === 'boolean' ? p.closed : null
         }])));
         const PROFILE_PRESET_KEYS = PROFILE_PRESET_DEFS.map(p => p.key);
-        const PROFILE_PRESET_GROUP_ORDER = Object.freeze(['standard','closed','loops','open']);
+        const PROFILE_PRESET_GROUP_ORDER = Object.freeze(['standard','closed','loops','open','mandala']);
         const PROFILE_PRESET_GROUPS = Object.freeze({
 
             standard: PROFILE_PRESET_DEFS.filter(p => p.group === 'standard').map(p => p.key),
             closed: PROFILE_PRESET_DEFS.filter(p => p.group === 'noLoops' || (p.group === 'closed' && p.loop !== true)).map(p => p.key),
             loops: PROFILE_PRESET_DEFS.filter(p => p.group === 'loops' || (p.group === 'closed' && p.loop === true)).map(p => p.key),
-            open: PROFILE_PRESET_DEFS.filter(p => p.group === 'open').map(p => p.key)
+            open: PROFILE_PRESET_DEFS.filter(p => p.group === 'open').map(p => p.key),
+            mandala: PROFILE_PRESET_DEFS.filter(p => p.group === 'mandala').map(p => p.key)
         });
         const PROFILE_PRESET_GROUP_LABELS = Object.freeze({
-            standard:'Стандартные', closed:'Замкнутые', loops:'С петлями', open:'Разомкнутые'
+            standard:'Стандартные', closed:'Замкнутые', loops:'С петлями', open:'Разомкнутые', mandala:'Мандала'
         });
         const MORPH_PROFILE_GROUP_KEYS = PROFILE_PRESET_GROUP_ORDER;
         const PROFILE_PRESET_NAV_KEYS = Object.freeze(PROFILE_PRESET_GROUP_ORDER.flatMap(group => PROFILE_PRESET_GROUPS[group] || []));

@@ -769,7 +769,24 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         function getSelectedLayers(){const ids=getSelectedLayerIds();return (state.layers||[]).filter(l=>ids.has(l.id));}
         function hasMultiLayerSelection(){return state.masterLayerEdit!==true&&getSelectedLayers().length>1;}
         function getLayerEditTargets(){
-            if(state.masterLayerEdit===true)return [...(state.layers||[])];
+            // Master is a write-broadcast mode, not a state-normalisation mode.
+            // UI handlers always edit only the active source layer; the capture-phase
+            // master diff mirrors just the paths changed by that interaction afterward.
+            // This prevents a control that serialises a whole effect block from making
+            // every unrelated setting identical across all layers.
+            if(state.masterLayerEdit===true){
+                const active=(state.layers||[]).find(l=>l.id===state.activeLayerId)||(state.layers||[])[0];
+                return active?[active]:[];
+            }
+            const selected=getSelectedLayers();
+            if(selected.length)return selected;
+            const active=(state.layers||[]).find(l=>l.id===state.activeLayerId);
+            return active?[active]:[];
+        }
+        function getLayerBroadcastTargets(){
+            // Destination set for the post-event mirror. In Master this is every layer,
+            // while the event handler itself still edits only the active source layer.
+            if(state.masterLayerEdit===true)return state.layers||[];
             const selected=getSelectedLayers();
             if(selected.length)return selected;
             const active=(state.layers||[]).find(l=>l.id===state.activeLayerId);
@@ -960,8 +977,32 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const base=Math.max(2,Math.min(30,Number(baseValue)||2));
             return Math.max(2,Math.min(120,Math.round(base*getGeometryNMultiplierUI())));
         }
+        function normalizeMorphVertexMultiplier(value){
+            const n=Math.round(Number(value));
+            return Number.isFinite(n)?Math.max(1,Math.min(60,n)):1;
+        }
+        function morphVertexAllowedValues(multiplier=state.morph?.vertexMultiplier){
+            const m=normalizeMorphVertexMultiplier(multiplier),out=[];
+            const first=Math.max(2,Math.ceil(2/m)*m);
+            for(let n=first;n<=120;n+=m)out.push(n);
+            return out.length?out:[Math.min(120,Math.max(2,m))];
+        }
+        function normalizeMorphVertexRangeValues(minValue,maxValue,multiplier=state.morph?.vertexMultiplier,changedId=''){
+            const m=normalizeMorphVertexMultiplier(multiplier),allowed=morphVertexAllowedValues(m);
+            let rawMin=Math.max(2,Math.min(120,Math.round(Number(minValue)||4)));
+            let rawMax=Math.max(2,Math.min(120,Math.round(Number(maxValue)||19)));
+            if(rawMin>rawMax){if(changedId==='morphVertexMin')rawMax=rawMin;else rawMin=rawMax;}
+            let minN=allowed.find(n=>n>=rawMin);
+            let maxN=[...allowed].reverse().find(n=>n<=rawMax);
+            if(minN===undefined||maxN===undefined||minN>maxN){
+                const ref=changedId==='morphVertexMax'?rawMax:rawMin;
+                const nearest=allowed.reduce((best,n)=>Math.abs(n-ref)<Math.abs(best-ref)?n:best,allowed[0]);
+                minN=nearest;maxN=nearest;
+            }
+            return{multiplier:m,minN,maxN,allowed};
+        }
 
-        const SPIRAL_MORPH_TYPES=new Set(['torn','continuous','phase','phaseCircle','minimalTurn']);
+        const SPIRAL_MORPH_TYPES=new Set(['torn','continuous','phase','phaseCircle','minimalTurn','topology']);
         function normalizeSpiralMorphType(value,legacyPreserve=true){
             return SPIRAL_MORPH_TYPES.has(value)?value:(legacyPreserve===false?'torn':'phaseCircle');
         }
@@ -970,20 +1011,25 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             if(state.morph){state.morph.spiralMorphType=type;state.morph.preserveSpiralContinuity=type!=='torn';}
             return type;
         }
-        function spiralMorphKeepsContinuity(){return getSpiralMorphType()!=='torn'&&state.morph?.mode!=='fade';}
+        function spiralMorphForcesContinuousRail(){const t=getSpiralMorphType();return t==='phaseCircle'||t==='minimalTurn';}
+        function spiralMorphKeepsContinuity(){const t=getSpiralMorphType();return spiralMorphForcesContinuousRail()||(t!=='torn'&&state.morph?.mode!=='fade');}
         function spiralMorphLocksN(){const t=getSpiralMorphType();return t==='continuous'||t==='phase';}
-        function spiralMorphLocksK(){return getSpiralMorphType()==='continuous';}
-        function spiralMorphUsesCorridorPhase(){const t=getSpiralMorphType();return (t==='phase'||t==='phaseCircle'||t==='minimalTurn')&&state.morph?.mode!=='fade';}
-        function spiralMorphUsesCircleRebuild(){const t=getSpiralMorphType();return (t==='phaseCircle'||t==='minimalTurn')&&state.morph?.mode!=='fade';}
+        function spiralMorphLocksK(){const t=getSpiralMorphType();return t==='continuous'||t==='phase'||t==='minimalTurn';}
+        function spiralMorphUsesCorridorPhase(){const t=getSpiralMorphType();return (t==='phaseCircle'||t==='minimalTurn')||(t==='phase'&&state.morph?.mode!=='fade');}
+        function spiralMorphUsesCircleRebuild(){const t=getSpiralMorphType();return t==='phaseCircle'||t==='minimalTurn';}
+        function spiralMorphRestrictsTopologyParameters(){return getSpiralMorphType()!=='topology';}
 
         function spiralMorphUsesRetainedBezierRail(){
             const mode=state.morph?.mode;
-            return mode!=='fade'&&mode!=='light'&&mode!=='lightning';
+            if(mode==='light'||mode==='lightning')return false;
+            return spiralMorphForcesContinuousRail()||mode!=='fade';
         }
         function getEffectiveCircleSlideType(){return getSpiralMorphType()==='minimalTurn'?'minimal':(state.morph?.slideType||'sector');}
         window.__spiroSpiralMorphModeStatus=()=>{
             const type=getSpiralMorphType(),gpu=typeof __somataSpiralBezierMorphStatus==='function'?__somataSpiralBezierMorphStatus():null;
-            return{type,keepsContinuity:spiralMorphKeepsContinuity(),locksN:spiralMorphLocksN(),locksK:spiralMorphLocksK(),usesCorridorPhase:spiralMorphUsesCorridorPhase(),usesCircleRebuild:spiralMorphUsesCircleRebuild(),retainedBezierRail:spiralMorphUsesRetainedBezierRail(),interpolationMetric:(type==='continuous'||type==='torn')?'cartesian':(type==='minimalTurn'?'least-turn-polar':'polar'),gpuActive:gpu?.active||[],gpuReady:gpu?.ready===true};
+            const topologyTransport=type==='torn'?'appear-disappear':(type==='topology'?'unrestricted-retained-merge-split':((type==='phaseCircle')?'merge-split-no-fade':(type==='minimalTurn'?'constant-step-variable-N':(type==='phase'?'fixed-NK-step-phase':'fixed-topology'))));
+            const interpolationMetric=(type==='continuous'||type==='torn'||type==='topology')?'cartesian':(type==='minimalTurn'?'least-turn-polar':'polar');
+            return{type,strictContinuous:spiralMorphForcesContinuousRail(),keepsContinuity:spiralMorphKeepsContinuity(),locksN:spiralMorphLocksN(),locksK:spiralMorphLocksK(),unrestrictedParameters:type==='topology',phaseStepTransport:type==='phase',constantStepVariableN:type==='minimalTurn',topologyTransport,usesCorridorPhase:spiralMorphUsesCorridorPhase(),usesCircleRebuild:spiralMorphUsesCircleRebuild(),retainedBezierRail:spiralMorphUsesRetainedBezierRail(),interpolationMetric,gpuActive:gpu?.active||[],gpuReady:gpu?.ready===true};
         };
 
         function isSpiralLayerMorphEnabled() {
@@ -1257,7 +1303,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const tangentialEnabled = layer.spiralTangential !== false;
             if (tangentInput) {
                 tangentInput.checked = tangentialEnabled;
-                tangentInput.disabled = !spiralClosed;
+                tangentInput.disabled = false;
             }
             const seamRoundInput = document.getElementById('paramSpiralRoundSeams');
             if (seamRoundInput) {
@@ -1268,8 +1314,15 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const seamRow=document.getElementById('spiralRoundSeamsRow');
             tangentRow?.classList.toggle('hidden', !spiralModeActive);
             seamRow?.classList.toggle('hidden', !spiralModeActive);
-            tangentRow?.classList.toggle('spiral-setting-disabled', spiralModeActive && !spiralClosed);
+            tangentRow?.classList.remove('spiral-setting-disabled');
             seamRow?.classList.toggle('spiral-setting-disabled', spiralModeActive && !spiralClosed);
+            const spiralFillInput=document.getElementById('paramSpiralFillEnabled');
+            const spiralFillTypeRow=document.getElementById('spiralFillTypeRow');
+            const spiralFillTypeInput=document.getElementById('paramSpiralFillType');
+            const spiralFillEnabled=layer.spiralFillEnabled===true;
+            if(spiralFillInput)spiralFillInput.checked=spiralFillEnabled;
+            spiralFillTypeRow?.classList.toggle('hidden',!spiralFillEnabled);
+            if(spiralFillTypeInput&&document.activeElement!==spiralFillTypeInput)spiralFillTypeInput.value=layer.spiralFillType==='chopped'?'chopped':'interwinding';
 
             const lineLayerMode=(layer.lineLayerMode??layer.spiralLineType)==='segmented'?'segmented':'uniform';
             layer.lineLayerMode=lineLayerMode;layer.spiralLineType=lineLayerMode;
@@ -1377,6 +1430,22 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 btn.classList.toggle('active', on);
                 btn.setAttribute('aria-pressed', on ? 'true' : 'false');
             });
+            const rawProfileModeTransition = state.morph.profileModeTransition;
+            const profileModeTransition = rawProfileModeTransition === 'second' ? 'start' : (['phase','start','end'].includes(rawProfileModeTransition) ? rawProfileModeTransition : 'phase');
+            state.morph.profileModeTransition = profileModeTransition;
+            document.querySelectorAll('[data-profile-mode-transition]').forEach(btn => {
+                const on = btn.dataset.profileModeTransition === profileModeTransition;
+                btn.classList.toggle('active', on);
+                btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+            });
+            const transitionPct=Math.max(0,Math.min(100,Math.round(Number(state.morph.profileModeTransitionPercent) || 0)));
+            state.morph.profileModeTransitionPercent=transitionPct;
+            const transitionPctRow=document.getElementById('profileModeTransitionPercentRow');
+            transitionPctRow?.classList.toggle('hidden',profileModeTransition==='phase');
+            const transitionPctInput=document.getElementById('profileModeTransitionPercent');
+            if(transitionPctInput&&document.activeElement!==transitionPctInput)transitionPctInput.value=String(transitionPct);
+            const transitionPctValue=document.getElementById('profileModeTransitionPercentValue');
+            if(transitionPctValue)transitionPctValue.textContent=`${transitionPct}%`;
             const splinePointCount = getConfiguredSplinePointCount();
             const splinePointInput = document.getElementById('profileSplinePointCount');
             const splinePointText = document.getElementById('profileSplinePointCountText');
@@ -1385,6 +1454,52 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
 
             syncProfilePresetLibrarySelection(layer);
             syncSidebarToolStates();
+            syncBlueMorphParameterDecorations();
+        }
+
+        const BLUE_MORPH_PARAMETER_BINDINGS = Object.freeze([
+            {mainId:'paramN',option:'byVertices',checkboxId:'morphByVertices',minKey:'vertexMin',maxKey:'vertexMax',min:2,max:120,step:1,label:'N'},
+            {mainId:'paramK',option:'bySteps',checkboxId:'morphBySteps',minKey:'stepMin',maxKey:'stepMax',min:0,max:100,step:1,label:'K · % диапазона'},
+            {mainId:'paramRounding',option:'byRounding',checkboxId:'morphByRounding',minKey:'roundingMin',maxKey:'roundingMax',min:0,max:200,step:1,label:'Скругление'},
+            {mainId:'paramRadius',option:'bySize',checkboxId:'morphBySize',minKey:'radiusMin',maxKey:'radiusMax',min:20,max:500,step:1,label:'Радиус'},
+            {mainId:'paramRotation',option:'byRotation',checkboxId:'morphByRotation',minKey:'rotationMinPercent',maxKey:'rotationMaxPercent',min:0,max:100,step:1,label:'Поворот · % оборота'},
+            {mainId:'paramOpacity',option:'byOpacity',checkboxId:'morphByOpacity',minKey:'opacityMin',maxKey:'opacityMax',min:0,max:100,step:1,label:'Прозрачность'},
+            {mainId:'paramStrokeWidth',option:'byStrokeWidth',checkboxId:'morphByStrokeWidth',minKey:'strokeWidthMin',maxKey:'strokeWidthMax',min:.5,max:50,step:.1,label:'Толщина'},
+            {mainId:'paramFillOpacity',option:'byFillColor',checkboxId:'morphByFillColor',minKey:'fillOpacityMin',maxKey:'fillOpacityMax',min:0,max:100,step:1,label:'Прозрачность заливки'},
+            {mainId:'paramStrokeColor',option:'byColor',checkboxId:'morphByColor',label:'Цвет линии'},
+            {mainId:'paramFillColor',option:'byFillColor',checkboxId:'morphByFillColor',label:'Цвет заливки'}
+        ]);
+        let blueMorphParameterBindingsReady=false;
+        function blueMorphParameterRowFor(el){return el?.closest?.('.control-row')||el?.closest?.('.fill-settings-block')||null;}
+        function setBlueMorphRangeCss(host,lo,hi,min,max){
+            if(!host)return;const span=Math.max(1e-9,max-min),a=Math.max(0,Math.min(100,((lo-min)/span)*100)),b=Math.max(a,Math.min(100,((hi-min)/span)*100));host.style.setProperty('--morph-low',`${a}%`);host.style.setProperty('--morph-high',`${b}%`);
+        }
+        function ensureBlueMorphParameterBindings(){
+            if(blueMorphParameterBindingsReady)return;blueMorphParameterBindingsReady=true;
+            for(const spec of BLUE_MORPH_PARAMETER_BINDINGS){
+                const el=document.getElementById(spec.mainId);if(!el)continue;
+                const row=blueMorphParameterRowFor(el);if(!row)continue;row.dataset.blueMorphOption=spec.option;
+                let name=row.querySelector('.row-label > span:first-child')||row.querySelector('.hint-text')||row.querySelector('.fill-settings-title span');
+                if(name&&!name.dataset.blueMorphContextBound){
+                    name.dataset.blueMorphContextBound='1';name.classList.add('blue-morph-parameter-name');name.title=`ПКМ: включить/выключить «${spec.label}» в синем морфинге`;
+                    name.addEventListener('contextmenu',ev=>{ev.preventDefault();ev.stopPropagation();const cb=document.getElementById(spec.checkboxId);if(!cb)return;cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));syncBlueMorphParameterDecorations();});
+                }
+                if(el.type!=='range'||!spec.minKey)continue;
+                const host=document.createElement('span');host.className='blue-morph-range-host';host.dataset.morphMainId=spec.mainId;host.dataset.sliderMode='value';
+                el.parentNode.insertBefore(host,el);host.appendChild(el);el.classList.add('blue-morph-current-slider');
+                if(!el.dataset.blueMorphOriginalTabIndex)el.dataset.blueMorphOriginalTabIndex=String(el.tabIndex);
+                const low=document.createElement('input'),high=document.createElement('input');
+                for(const [node,which] of [[low,'min'],[high,'max']]){node.type='range';node.className=`blue-morph-dual blue-morph-dual-${which}`;node.min=String(spec.min);node.max=String(spec.max);node.step=String(spec.step);node.disabled=true;node.tabIndex=-1;node.setAttribute('aria-hidden','true');node.setAttribute('aria-label',`${spec.label}: ${which==='min'?'минимум':'максимум'} морфинга`);host.appendChild(node);}
+                const commit=(which)=>{let lo=Number(low.value),hi=Number(high.value);if(which==='min'&&lo>hi){hi=lo;high.value=String(hi);}if(which==='max'&&hi<lo){lo=hi;low.value=String(lo);}state.morph[spec.minKey]=lo;state.morph[spec.maxKey]=hi;setBlueMorphRangeCss(host,lo,hi,spec.min,spec.max);const a=document.getElementById(spec.checkboxId);if(a&&!a.checked){a.checked=true;a.dispatchEvent(new Event('change',{bubbles:true}));}const mirrorIds={vertexMin:'morphVertexMin',vertexMax:'morphVertexMax',stepMin:'morphStepMin',stepMax:'morphStepMax',roundingMin:'morphRoundingMin',roundingMax:'morphRoundingMax',rotationMinPercent:'morphRotationMin',rotationMaxPercent:'morphRotationMax',opacityMin:'morphOpacityMin',opacityMax:'morphOpacityMax',strokeWidthMin:'morphStrokeWidthMin',strokeWidthMax:'morphStrokeWidthMax',fillOpacityMin:'morphFillOpacityMin',fillOpacityMax:'morphFillOpacityMax'};for(const key of [spec.minKey,spec.maxKey]){const id=mirrorIds[key],m=document.getElementById(id);if(m&&document.activeElement!==m)m.value=String(state.morph[key]);}if(runtimeState.morph.active)activeRebaseMorphing();requestMainCanvasRender();};
+                low.addEventListener('input',()=>commit('min'));high.addEventListener('input',()=>commit('max'));low.addEventListener('change',()=>commit('min'));high.addEventListener('change',()=>commit('max'));
+            }
+            const profileGroup=document.getElementById('profileSettingsGroup');const profileTitle=profileGroup?.querySelector('.control-group-title > span');
+            if(profileGroup&&profileTitle&&!profileTitle.dataset.blueMorphContextBound){profileGroup.dataset.blueMorphOption='byShape';profileTitle.dataset.blueMorphContextBound='1';profileTitle.classList.add('blue-morph-parameter-name');profileTitle.title='ПКМ: включить/выключить профиль формы в синем морфинге';profileTitle.addEventListener('contextmenu',ev=>{ev.preventDefault();const cb=document.getElementById('morphByShape');if(cb){cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));syncBlueMorphParameterDecorations();}});}
+        }
+        function syncBlueMorphParameterDecorations(){
+            ensureBlueMorphParameterBindings();const live=runtimeState?.morph?.active===true;
+            for(const spec of BLUE_MORPH_PARAMETER_BINDINGS){const el=document.getElementById(spec.mainId),row=blueMorphParameterRowFor(el);if(!row)continue;const on=state.morph.options?.[spec.option]===true,rangeMode=on&&live;row.classList.toggle('blue-morph-enabled',on);row.classList.toggle('blue-morph-live',rangeMode);const host=el?.closest?.('.blue-morph-range-host');if(host&&spec.minKey){host.classList.toggle('morph-live',rangeMode);host.dataset.sliderMode=rangeMode?'morph-range':'value';const inputs=host.querySelectorAll('.blue-morph-dual');const originalTab=Number(el.dataset.blueMorphOriginalTabIndex);if(rangeMode){el.tabIndex=-1;el.setAttribute('aria-hidden','true');}else{el.tabIndex=Number.isFinite(originalTab)?originalTab:0;el.removeAttribute('aria-hidden');}for(const input of inputs){input.disabled=!rangeMode;input.tabIndex=rangeMode?0:-1;input.setAttribute('aria-hidden',rangeMode?'false':'true');}let lo=Number(state.morph[spec.minKey]),hi=Number(state.morph[spec.maxKey]);if(!Number.isFinite(lo))lo=spec.min;if(!Number.isFinite(hi))hi=spec.max;lo=Math.max(spec.min,Math.min(spec.max,lo));hi=Math.max(lo,Math.min(spec.max,hi));if(inputs[0]&&document.activeElement!==inputs[0])inputs[0].value=String(lo);if(inputs[1]&&document.activeElement!==inputs[1])inputs[1].value=String(hi);setBlueMorphRangeCss(host,lo,hi,spec.min,spec.max);}}
+            const pg=document.getElementById('profileSettingsGroup');if(pg){const on=state.morph.options?.byShape===true;pg.classList.toggle('blue-morph-enabled',on);pg.classList.toggle('blue-morph-live',on&&live);}
         }
 
         function cloneMasterLayerValue(value){
@@ -1392,12 +1507,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,cloneMasterLayerValue(v)]));
             return value;
         }
-        const MASTER_GEOMETRY_PROPS = new Set(['N','K','customSuborbits','chaosStar','chaosStepMinus','chaosStepPlus','chaosClosures','chaosSeed','closedLoop','lineJoinType','rounding','roundingMode','radius','radiusMultiplier','rotation','profileMode','profileNodes','splineRenderMode','spiralEnabled','spiralOrder','spiralClosed','spiralStep','spiralStepLinked','spiralTangential','spiralRoundSeams','geometryCircles']);
+        const MASTER_GEOMETRY_PROPS = new Set(['N','K','customSuborbits','chaosStar','chaosStepMinus','chaosStepPlus','chaosClosures','chaosSeed','closedLoop','lineJoinType','rounding','roundingMode','radius','radiusMultiplier','rotation','profileMode','profileNodes','splineRenderMode','spiralEnabled','spiralOrder','spiralClosed','spiralStep','spiralStepLinked','spiralTangential','spiralRoundSeams','spiralFillEnabled','spiralFillType','geometryCircles']);
         function mirrorMasterLayerProps(props){
             if(!Array.isArray(props)||!props.length)return;
             if(state.masterLayerEdit!==true&&!hasMultiLayerSelection())return;
             const source=state.layers.find(l=>l.id===state.activeLayerId);if(!source)return;
-            for(const layer of getLayerEditTargets()){
+            for(const layer of getLayerBroadcastTargets()){
                 if(layer===source)continue;
                 for(const prop of props){if(Object.prototype.hasOwnProperty.call(source,prop))layer[prop]=cloneMasterLayerValue(source[prop]);}
                 if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,props,'master-mirror');
@@ -1521,7 +1636,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const roots=[...new Set(paths.map(path=>path.split('.')[0]).filter(Boolean))];
 
             syncMasterPathsIntoBlueRuntime(source,paths,after);
-            for(const layer of getLayerEditTargets()){
+            for(const layer of getLayerBroadcastTargets()){
                 if(layer===source)continue;
                 ensureLayerEffectState(layer);
                 for(const path of paths)applyMasterPath(layer,path,masterPathValue(after,path));
@@ -2934,6 +3049,60 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
 
         document.addEventListener('pointerdown',e=>{const p=document.getElementById('appColorPicker');if(!p||p.classList.contains('hidden')||p.contains(e.target))return;if(e.button===2&&findColorInputForContextTarget(e.target))return;closeAppColorPicker(true);},true);
 
+        function normalizeOrangeMorphProfileGroup(value = state.minimalMorph?.mode) {
+            const raw = value === 'noLoops' ? 'closed' : String(value || 'standard');
+            return PROFILE_PRESET_GROUP_ORDER.includes(raw) ? raw : 'standard';
+        }
+
+        function normalizeOrangeMorphFamily(value = state.minimalMorph?.family) {
+            const raw = String(value || 'mix');
+            return ['mix','square','triangle','sine'].includes(raw) ? raw : 'mix';
+        }
+
+        function normalizedOrangeMorphProfileGroups() {
+            const mm = state.minimalMorph || (state.minimalMorph = {});
+            let groups = Array.isArray(mm.profileGroups)
+                ? mm.profileGroups.map(group => group === 'noLoops' ? 'closed' : group).filter(group => PROFILE_PRESET_GROUP_ORDER.includes(group))
+                : [];
+            groups = [...new Set(groups)];
+            if (!groups.length) groups = [normalizeOrangeMorphProfileGroup(mm.mode)];
+            if (!groups.length) groups = ['standard'];
+            mm.profileGroups = groups.slice();
+            // mode remains as a single-group legacy compatibility field for old projects/plugins.
+            mm.mode = groups[0];
+            return groups;
+        }
+
+        function syncOrangeMorphModeOptions() {
+            const select = document.getElementById('minimalMorphMode');
+            const groups = normalizedOrangeMorphProfileGroups();
+            const family = normalizeOrangeMorphFamily(state.minimalMorph?.family);
+            state.minimalMorph.family = family;
+            if (select) {
+                const signature = PROFILE_PRESET_GROUP_ORDER.map(group => `${group}:${PROFILE_PRESET_GROUP_LABELS[group] || group}`).join('|');
+                if (select.dataset.profileGroupsSignature !== signature) {
+                    const fragment = document.createDocumentFragment();
+                    PROFILE_PRESET_GROUP_ORDER.forEach(group => {
+                        const option = document.createElement('option');
+                        option.value = group;
+                        option.textContent = PROFILE_PRESET_GROUP_LABELS[group] || group;
+                        fragment.appendChild(option);
+                    });
+                    select.replaceChildren(fragment);
+                    select.dataset.profileGroupsSignature = signature;
+                }
+                select.value = groups[0];
+            }
+            const familySelect = document.getElementById('minimalMorphFamily');
+            if (familySelect) familySelect.value = family;
+            document.querySelectorAll('[data-orange-profile-group]').forEach(input => {
+                if (input instanceof HTMLInputElement) input.checked = groups.includes(input.dataset.orangeProfileGroup);
+            });
+            const labels={standard:'Стандарт',closed:'Замкнутые',loops:'С петлями',open:'Разомкнутые',mandala:'Мандала'};
+            const summary=document.getElementById('minimalMorphProfileGroupSummary');
+            if(summary)summary.textContent=groups.length===PROFILE_PRESET_GROUP_ORDER.length?'Все':groups.map(g=>labels[g]||g).join(', ');
+        }
+
         function syncRandomSettingsUI() {
             const values = {
                 randomByShape: state.randomOptions.byShape,
@@ -2961,6 +3130,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const minimalInstant = document.getElementById('minimalMorphInstant');
             const minimalDefaultActive = document.getElementById('minimalMorphDefaultActive');
             const minimalFadeRow = document.getElementById('minimalMorphFadeRow');
+            syncOrangeMorphModeOptions();
             if (minimalInterval) minimalInterval.value = formatDisplayNumber(isTapMorphSyncActive('minimal') ? getTapTempoIntervalSec(state.minimalMorph?.intervalSec ?? 5) : (state.minimalMorph?.intervalSec ?? 5), 2);
             if (minimalFade) minimalFade.value = formatDisplayNumber(state.minimalMorph?.fadeSec ?? 0.1, 1);
             if (minimalInstant) minimalInstant.checked = state.minimalMorph?.instantSwitch !== false;
@@ -3024,6 +3194,10 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     control.setAttribute('aria-pressed', on ? 'true' : 'false');
                 }
             });
+            const labels={standard:'Стандарт',closed:'Замкнутые',loops:'С петлями',open:'Разомкнутые',mandala:'Мандала'};
+            const summary=document.getElementById('morphProfileGroupSummary');
+            if(summary)summary.textContent=groups.length===MORPH_PROFILE_GROUP_KEYS.length?'Все':groups.map(g=>labels[g]||g).join(', ');
+            document.querySelectorAll('.morph-profile-group-check').forEach(el=>el.classList.toggle('browsed',el.querySelector('input')?.dataset.morphProfileGroup===activeProfilePresetGroup));
         }
 
         function syncMorphSplinePointButtons() {
@@ -3054,6 +3228,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 morphDiversity: state.morph.diversity,
                 morphVertexMin: state.morph.vertexMin,
                 morphVertexMax: state.morph.vertexMax,
+                morphVertexMultiplier: normalizeMorphVertexMultiplier(state.morph.vertexMultiplier),
                 morphRoundingMin: state.morph.roundingMin,
                 morphRoundingMax: state.morph.roundingMax,
                 morphStepMin: state.morph.stepMin,
@@ -3162,6 +3337,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             updateMorphShapeControlsEnabled();
             syncMorphIntervalQuickButtons();
             syncTapTimingIndicators();
+            syncBlueMorphParameterDecorations();
         }
 
         function syncMorphIntervalQuickButtons() {
@@ -3552,7 +3728,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             document.getElementById('btnMasterLayer')?.addEventListener('click',()=>{
                 state.masterLayerEdit = state.masterLayerEdit !== true;
                 if(!state.activeLayerId && state.layers[0])state.activeLayerId=state.layers[0].id;
-                if(state.masterLayerEdit===true)applyMasterLayerSnapshotNow();
+                // Do not synchronise layers when Master is merely enabled. Master only
+                // broadcasts the one setting/path that the user changes after activation.
                 updateLayerListUI();syncSidebarInputs();syncWebOutlineUI();syncSweepUI();syncSidebarToolStates();renderProfileEditor();requestMainCanvasRender();
             });
 
@@ -3699,6 +3876,20 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 mirrorMasterLayerProps(['spiralRoundSeams']);
                 if (runtimeState.morph.active) activeRebaseMorphing();
                 requestMainCanvasRender();
+            });
+            document.getElementById('paramSpiralFillEnabled')?.addEventListener('change', (e) => {
+                const layer=getActiveLayer();if(!layer)return;
+                layer.spiralFillEnabled=e.target.checked===true;
+                if(layer.spiralFillType!=='chopped'&&layer.spiralFillType!=='interwinding')layer.spiralFillType='interwinding';
+                try{FillMeshPreparer.reset?.();}catch(_){}
+                mirrorMasterLayerProps(['spiralFillEnabled']);
+                syncSidebarInputs();requestMainCanvasRender();
+            });
+            document.getElementById('paramSpiralFillType')?.addEventListener('change', (e) => {
+                const layer=getActiveLayer();if(!layer)return;
+                layer.spiralFillType=e.target.value==='interwinding'?'interwinding':'chopped';
+                try{FillMeshPreparer.reset?.();}catch(_){}
+                mirrorMasterLayerProps(['spiralFillType']);requestMainCanvasRender();
             });
             document.getElementById('btnDecN').addEventListener('click', () => {
                 const r=document.getElementById('paramN');if(r)applyCompactN((Number(r.value)||2)-1);
@@ -4119,6 +4310,26 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 });
             });
 
+            document.querySelectorAll('[data-profile-mode-transition]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const raw=btn.dataset.profileModeTransition;
+                    const next=['phase','start','end'].includes(raw)?raw:'phase';
+                    if (state.morph.profileModeTransition === next) return;
+                    state.morph.profileModeTransition = next;
+                    syncSidebarInputs();
+                    if(runtimeState.morph.active)activeRebaseMorphing();
+                    requestMainCanvasRender();
+                });
+            });
+            const setProfileModeTransitionPercent=(raw)=>{
+                state.morph.profileModeTransitionPercent=Math.max(0,Math.min(100,Math.round(Number(raw)||0)));
+                const txt=document.getElementById('profileModeTransitionPercentValue');if(txt)txt.textContent=`${state.morph.profileModeTransitionPercent}%`;
+                if(runtimeState.morph.active)activeRebaseMorphing();
+                requestMainCanvasRender();
+            };
+            document.getElementById('profileModeTransitionPercent')?.addEventListener('input',e=>setProfileModeTransitionPercent(e.target.value));
+            document.getElementById('profileModeTransitionPercent')?.addEventListener('change',e=>{setProfileModeTransitionPercent(e.target.value);syncSidebarInputs();});
+
             const applyProfileSplinePointCount = (rawValue) => {
                 const next = normalizeSplinePointCount(rawValue);
                 if (state.morph.splinePoints === next) {
@@ -4140,13 +4351,17 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             document.getElementById('profileSplinePointCount')?.addEventListener('change', e => applyProfileSplinePointCount(e.target.value));
 
             renderProfilePresetLibrary();
+            const browseProfileGroup=(btn,e=null)=>{
+                if(e?.target instanceof HTMLInputElement && e.target.matches('[data-morph-profile-group]'))return;
+                activeProfilePresetGroup = btn.dataset.profileGroup || 'standard';
+                const currentKey = getExactProfilePresetKey(getActiveLayer());
+                const currentBelongsHere = (PROFILE_PRESET_GROUPS[activeProfilePresetGroup] || []).includes(currentKey);
+                renderProfilePresetLibrary(currentBelongsHere ? currentKey : '');
+                syncMorphShapeToggleButtons();
+            };
             document.querySelectorAll('.profile-library-tab').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    activeProfilePresetGroup = btn.dataset.profileGroup || 'standard';
-                    const currentKey = getExactProfilePresetKey(getActiveLayer());
-                    const currentBelongsHere = (PROFILE_PRESET_GROUPS[activeProfilePresetGroup] || []).includes(currentKey);
-                    renderProfilePresetLibrary(currentBelongsHere ? currentKey : '');
-                });
+                btn.addEventListener('click', e=>browseProfileGroup(btn,e));
+                btn.addEventListener('keydown',e=>{if((e.key==='Enter'||e.key===' ')&&!(e.target instanceof HTMLInputElement)){e.preventDefault();browseProfileGroup(btn,e);}});
             });
 
             document.getElementById('profilePresetSelect').addEventListener('change', (e) => {
@@ -5088,17 +5303,14 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             };
 
             const chooseMorphVertexTarget = (currentN, roleIndex) => {
-                const minN = Math.max(2, Math.min(120, Math.round(Number(state.morph.vertexMin) || 4)));
-                const maxN = Math.max(minN, Math.min(120, Math.round(Number(state.morph.vertexMax) || 19)));
+                const range=normalizeMorphVertexRangeValues(state.morph.vertexMin,state.morph.vertexMax,state.morph.vertexMultiplier);
+                state.morph.vertexMultiplier=range.multiplier;state.morph.vertexMin=range.minN;state.morph.vertexMax=range.maxN;
                 const boundedCurrent = Math.max(2, Math.min(120, Math.round(Number(currentN) || 4)));
-                const nearby = [];
-                for (let n = minN; n <= maxN; n++) {
-                    if (n !== boundedCurrent && Math.abs(n - boundedCurrent) <= 6) nearby.push(n);
-                }
+                const nearby = range.allowed.filter(n=>n>=range.minN&&n<=range.maxN&&n!==boundedCurrent&&Math.abs(n-boundedCurrent)<=6);
                 if (nearby.length) return randomChoice(nearby);
-                const all = [];
-                for (let n = minN; n <= maxN; n++) if (n !== boundedCurrent) all.push(n);
-                return all.length ? randomChoice(all) : Math.max(minN, Math.min(maxN, boundedCurrent));
+                const all = range.allowed.filter(n=>n>=range.minN&&n<=range.maxN&&n!==boundedCurrent);
+                if(all.length)return randomChoice(all);
+                return range.allowed.reduce((best,n)=>Math.abs(n-boundedCurrent)<Math.abs(best-boundedCurrent)?n:best,range.minN);
             };
 
             const getActiveOrbitCount = (N, K, customSuborbits = null) => {
@@ -5179,7 +5391,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     const sourceDir = spiralDirection(currentEffective) || 1;
                     let magnitude = Math.abs(normalizeSpiralOrder(candidate, true));
                     if (magnitude < 1) magnitude = Math.max(1, Math.abs(normalizeSpiralOrder(currentEffective, true)) || 1);
-                    if (spiralMorphKeepsContinuity() && sourceIsSpiral) {
+                    if (spiralMorphKeepsContinuity() && spiralMorphRestrictsTopologyParameters() && sourceIsSpiral) {
                         candidate = magnitude * sourceDir;
                     } else {
                         const requestedDir = spiralDirection(candidate) || sourceDir;
@@ -5243,7 +5455,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     if(layer.chaosStar===true) targetSpiralEnabled=false;
                     const targetSpiralOrder = targetSpiralEnabled ? chooseMorphSpiralOrderTarget(layer, idx, spiralTargetSet) : 0;
 
-                    const protectSpiralContinuity = spiralMorphKeepsContinuity() && (sourceSpiralEnabled || targetSpiralEnabled);
+                    const morphSpiralType = getSpiralMorphType();
+                    const protectSpiralContinuity = spiralMorphKeepsContinuity() && spiralMorphRestrictsTopologyParameters() && (sourceSpiralEnabled || targetSpiralEnabled);
                     const lockSpiralN = protectSpiralContinuity && spiralMorphLocksN();
                     const lockSpiralK = protectSpiralContinuity && spiralMorphLocksK();
                     const sourceNodes = compactMorphProfileNodes(
@@ -5298,6 +5511,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     const kLo = Math.max(1, Math.min(kMaxPossible, Math.round(1 + (stepMinPct / 100) * (kMaxPossible - 1))));
                     const kHi = Math.max(kLo, Math.min(kMaxPossible, Math.round(1 + (stepMaxPct / 100) * (kMaxPossible - 1))));
                     const currentK = Math.max(1, Math.min(kMaxPossible, Number(layer.K) || 1));
+                    const currentSpiralStep = normalizeSpiralStep(layer.spiralStep ?? layer.K ?? 1, {...layer,N:targetN,K:currentK});
+                    const independentPhaseStep = protectSpiralContinuity && getSpiralMorphType()==='phase' && state.morph.options.bySteps;
+                    const phaseStepReference = Math.max(kLo, Math.min(kHi, Math.round(currentSpiralStep)));
+                    const targetPhaseStep = independentPhaseStep
+                        ? (state.morph.diversity ? randomIntExcept(kLo, kHi, phaseStepReference) : randomInt(kLo, kHi))
+                        : currentSpiralStep;
                     const targetK = (state.morph.options.bySteps && !lockSpiralK)
                         ? (state.morph.diversity ? randomIntExcept(kLo, kHi, currentK) : randomInt(kLo, kHi))
                         : currentK;
@@ -5325,14 +5544,16 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                         : currentRounding;
                     const currentRadius = Number(layer.radius) || 220;
                     const sizeVariation = getMorphSizeVariationFactor();
+                    const radiusLo=Math.max(20,Math.min(500,Number(state.morph.radiusMin??20)||20));
+                    const radiusHi=Math.max(radiusLo,Math.min(500,Number(state.morph.radiusMax??500)||500));
                     const roleTargetRadius = Math.round(targetMax * Math.max(0.24, roleRatio));
                     let targetRadius = currentRadius;
                     if (state.morph.options.bySize) {
                         if (state.morph.normalizeSizes !== false) {
-                            targetRadius = Math.max(20, Math.min(500, Math.round(currentRadius + (roleTargetRadius - currentRadius) * sizeVariation)));
+                            targetRadius = Math.max(radiusLo, Math.min(radiusHi, Math.round(currentRadius + (roleTargetRadius - currentRadius) * sizeVariation)));
                         } else {
                             const independentFactor = randomChoice([0.72,0.80,0.88,0.94,1.06,1.12,1.20,1.28]);
-                            targetRadius = Math.max(20, Math.min(500, Math.round(currentRadius * (1 + (independentFactor - 1) * sizeVariation))));
+                            targetRadius = Math.max(radiusLo, Math.min(radiusHi, Math.round(currentRadius * (1 + (independentFactor - 1) * sizeVariation))));
                         }
                     }
                     if (state.morph.diversity && state.morph.options.bySize && sizeVariation > 0 && Math.abs(targetRadius - currentRadius) < 0.001) {
@@ -5409,11 +5630,17 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                         rotation: targetRotation,
                         spiralEnabled: spiralTargetSet instanceof Set ? spiralTargetSet.has(idx) : isSpiralLayer(layer),
                         spiralOrder: targetSpiralOrder,
-                        spiralStep: normalizeSpiralStep((spiralMorphUsesCorridorPhase() && state.morph.options.bySteps) ? targetK : (layer.spiralStep ?? layer.K ?? 1), {...layer,N:targetN,K:targetK}),
-                        spiralStepLinked: spiralMorphUsesCorridorPhase() ? false : (layer.spiralStepLinked !== false),
+                        spiralStep: normalizeSpiralStep(
+                            independentPhaseStep
+                                ? targetPhaseStep
+                                : (morphSpiralType === 'minimalTurn'
+                                    ? currentSpiralStep
+                                    : ((spiralMorphUsesCorridorPhase() && state.morph.options.bySteps) ? targetK : currentSpiralStep)),
+                            {...layer,N:targetN,K:targetK}
+                        ),
+                        spiralStepLinked: (spiralMorphUsesCorridorPhase() || morphSpiralType === 'minimalTurn') ? false : (layer.spiralStepLinked !== false),
                         spiralClosed: layer.spiralClosed !== false,
                         spiralTangential: layer.spiralTangential === true,
-                    spiralRoundSeams: layer.spiralRoundSeams !== false,
                         spiralRoundSeams: layer.spiralRoundSeams !== false,
                         strokeColor: targetColor,
                         fill: targetFill,
@@ -5443,9 +5670,11 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     let targetRadius = currentRadius;
                     if (state.morph.options.bySize) {
                         const variation = getMorphSizeVariationFactor();
+                        const radiusLo=Math.max(20,Math.min(500,Number(state.morph.radiusMin??20)||20));
+                        const radiusHi=Math.max(radiusLo,Math.min(500,Number(state.morph.radiusMax??500)||500));
                         const factor = randomChoice([0.78, 0.86, 0.92, 1.08, 1.16, 1.24]);
                         const scaledFactor = 1 + (factor - 1) * variation;
-                        targetRadius = Math.max(20, Math.min(500, Math.round(currentRadius * scaledFactor)));
+                        targetRadius = Math.max(radiusLo, Math.min(radiusHi, Math.round(currentRadius * scaledFactor)));
                         if (state.morph.diversity && variation > 0 && Math.abs(targetRadius - currentRadius) < 1) {
                             targetRadius = Math.max(20, Math.min(500, currentRadius + (idx % 2 ? -18 : 18) * variation));
                         }
@@ -5508,7 +5737,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         }
 
         function createMorphPlaybackModule(deps) {
-            const { createRandomComposition, MorphInterpolation, MorphTargets, MorphGeometry } = deps;
+            const { createOrangeComposition, MorphInterpolation, MorphTargets, MorphGeometry } = deps;
             const { MORPH_SAMPLE_COUNT, MORPH_PROFILE_MAX_POINTS, getMorphSplinePointCount, cloneProfileNodes,
                 stripNearDuplicateProfilePoints, profileHasBacktrackingX, loopOrientationSign, polylineArcFractions,
                 sampleOpenPolylineAtFractions, resampleOpenPolylineExact, densifyProfilePreservingCorners,
@@ -5673,12 +5902,13 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 }
                 if(type==='phase'){
 
-                    if(state.morph?.mode==='circleSlide'){
-                        const tip=estimateSpiralOuterTipRotationDeltaDegrees(sourceLayer,targetLayer);
-                        if(Number.isFinite(tip))return tip;
-                        const planned=estimateCirclePlanRotationDeltaDegrees(sourceLayer,targetLayer);
-                        if(Number.isFinite(planned))return planned;
-                    }
+                    // Phase morph keeps N/K topology fixed and changes the effective spiral step.
+                    // Pin the actually visible outer tip first; this makes the optional rotation
+                    // compensation keep the outermost spiral visually stationary in every morph mode.
+                    const tip=estimateSpiralOuterTipRotationDeltaDegrees(sourceLayer,targetLayer);
+                    if(Number.isFinite(tip))return tip;
+                    const planned=estimateCirclePlanRotationDeltaDegrees(sourceLayer,targetLayer,'phase');
+                    if(Number.isFinite(planned))return planned;
                     const a=spiralHalfStepPhaseDegrees(sourceLayer),b=spiralHalfStepPhaseDegrees(targetLayer);
                     return authoredDelta+wrapSignedDegreesForSpiralCompensation(b-a,360);
                 }
@@ -6059,7 +6289,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                             runtimeState.morph.gpuPhasePreparePromise=null;
                             runtimeState.morph.gpuPhasePreparing=true; // 7.3.8: fail closed; never advance on stale/partial phase resources.
                             const detail={error:String(err?.stack||err),phaseSerial:prepSerial,lamp:window.__spiroLampGPUStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,spiral:window.__somataSpiralBezierMorphStatus?.()||null};
-                            try{somataGpuContractError?.('PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.4.9 FullGPU] PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',detail);}
+                            try{somataGpuContractError?.('PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.4.30 FullGPU] PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',detail);}
                         });
 
                         runtimeState.morph.cycleStart=performance.now();
@@ -6189,7 +6419,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                                 return true;
                             }).catch(err=>{
                                 const detail={error:String(err?.stack||err),phaseSerial:prepSerial,web:WebGPUWebMorphRenderer?.status?.()||null,corner:window.__spiroGpuWebCornerStatus?.()||null};
-                                try{somataGpuContractError?.('MORPH_WEB_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.4.9 FullGPU] MORPH_WEB_FULL_GPU_PREWARM_FAILED',detail);}
+                                try{somataGpuContractError?.('MORPH_WEB_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.4.30 FullGPU] MORPH_WEB_FULL_GPU_PREWARM_FAILED',detail);}
 
                             });
                         }
@@ -6208,7 +6438,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                         runtimeState.morph.gpuPhasePreparePromise=null;
                         runtimeState.morph.gpuPhasePreparing=true; // fail closed: no fallback clock.
                         const detail={error:String(err?.stack||err),phaseSerial:prepSerial};
-                        try{somataGpuContractError?.('MORPH_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.4.9 FullGPU] MORPH_FULL_GPU_PREWARM_FAILED',detail);}
+                        try{somataGpuContractError?.('MORPH_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.4.30 FullGPU] MORPH_FULL_GPU_PREWARM_FAILED',detail);}
                     });
                     runtimeState.morph.cycleStart=performance.now();
                 }else{
@@ -6902,7 +7132,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             activeRebaseMorphing = rebaseMorphCycle;
             window.__somataMorphFreezeContext=()=>({
                 blue:{active:runtimeState.morph?.active===true,paused:runtimeState.morph?.paused===true,mode:state.morph?.mode||null,progress:Number((runtimeState.morph?.progress||0).toFixed?.(4)??runtimeState.morph?.progress)||0,gpuPreparing:runtimeState.morph?.gpuPhasePreparing===true,prepareSerial:Number(runtimeState.morph?.gpuPhasePrepareSerial)||0},
-                minimal:{active:runtimeState.minimalMorph?.active===true,paused:runtimeState.minimalMorph?.paused===true},
+                minimal:{active:runtimeState.minimalMorph?.active===true,paused:runtimeState.minimalMorph?.paused===true,mode:state.minimalMorph?.mode||'standard'},
                 project:{active:runtimeState.projectMorph?.active===true,progress:Number((runtimeState.projectMorph?.progress||0).toFixed?.(4)??runtimeState.projectMorph?.progress)||0,transitionProgress:Number((runtimeState.projectMorph?.transitionProgress||0).toFixed?.(4)??runtimeState.projectMorph?.transitionProgress)||0,gpuPreparing:runtimeState.projectMorph?.gpuPhasePreparing===true,prepareSerial:Number(runtimeState.projectMorph?.gpuPhasePrepareSerial)||0},
                 spiral:{type:typeof getSpiralMorphType==='function'?getSpiralMorphType():null,corridorPhase:typeof spiralMorphUsesCorridorPhase==='function'?spiralMorphUsesCorridorPhase():false},
                 layers:Array.isArray(state.layers)?state.layers.length:0
@@ -7026,7 +7256,10 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 captureMorphOrigin(mmRt);
 
                 const liveSourceLayers = state.layers;
-                const targetLayers = preserveMinimalMorphEffects(createRandomComposition(state.randomLayerCount), liveSourceLayers);
+                const targetLayers = preserveMinimalMorphEffects(
+                    createOrangeComposition(state.randomLayerCount, state.minimalMorph?.mode),
+                    liveSourceLayers
+                );
 
                 mmRt.fadeStart = now;
                 mmRt.progress = 0;
@@ -7248,12 +7481,13 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 syncMorphIntervalQuickButtons();
                 state.morph.mode = document.getElementById('morphMode')?.value || 'circleSlide';
                 state.morph.spiralRotationCompensation = document.getElementById('morphSpiralRotationCompensation')?.checked === true;
-                let minN = Math.max(2, Math.min(120, parseInt(document.getElementById('morphVertexMin').value, 10) || 4));
-                let maxN = Math.max(minN, Math.min(120, parseInt(document.getElementById('morphVertexMax').value, 10) || 19));
-                state.morph.vertexMin = minN;
-                state.morph.vertexMax = maxN;
-                document.getElementById('morphVertexMin').value = minN;
-                document.getElementById('morphVertexMax').value = maxN;
+                const vertexRange=normalizeMorphVertexRangeValues(document.getElementById('morphVertexMin')?.value,document.getElementById('morphVertexMax')?.value,document.getElementById('morphVertexMultiplier')?.value);
+                state.morph.vertexMultiplier=vertexRange.multiplier;
+                state.morph.vertexMin = vertexRange.minN;
+                state.morph.vertexMax = vertexRange.maxN;
+                document.getElementById('morphVertexMin').value = vertexRange.minN;
+                document.getElementById('morphVertexMax').value = vertexRange.maxN;
+                if(document.getElementById('morphVertexMultiplier'))document.getElementById('morphVertexMultiplier').value=vertexRange.multiplier;
                 const roundingMinParsed = parseInt(document.getElementById('morphRoundingMin').value, 10);
                 const roundingMaxParsed = parseInt(document.getElementById('morphRoundingMax').value, 10);
                 let roundingMin = Math.max(0, Math.min(MAX_ROUNDING_PERCENT, Number.isFinite(roundingMinParsed) ? roundingMinParsed : 0));
@@ -7292,6 +7526,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 runtimeState.morph.progress=0;runtimeState.morph.geometryT=0;runtimeState.morph.geometryBlend=0;
                 try{invalidateGpuSpiralBezierMorphResources?.('new-morph-run');}catch(_){}
                 runtimeState.morph.active = true;
+                syncBlueMorphParameterDecorations();
                 armBlueMorphOwnerGuard();
                 runtimeState.morph.orbitCopyMemory = [];
                 runtimeState.morph.paused = false;
@@ -7534,20 +7769,15 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             document.getElementById('morphAllStrokeWidthValue')?.addEventListener('input', (e) => applyAllLayersStrokeWidth(e.target.value));
 
             const syncMorphVertexRange = (changedId) => {
-                let minN = Math.max(2, Math.min(120, parseInt(document.getElementById('morphVertexMin').value, 10) || 4));
-                let maxN = Math.max(2, Math.min(120, parseInt(document.getElementById('morphVertexMax').value, 10) || 19));
-                if (minN > maxN) {
-                    if (changedId === 'morphVertexMin') maxN = minN;
-                    else minN = maxN;
-                }
-                state.morph.vertexMin = minN;
-                state.morph.vertexMax = maxN;
-                document.getElementById('morphVertexMin').value = minN;
-                document.getElementById('morphVertexMax').value = maxN;
-                rebaseMorphCycle();
+                const range=normalizeMorphVertexRangeValues(document.getElementById('morphVertexMin')?.value,document.getElementById('morphVertexMax')?.value,document.getElementById('morphVertexMultiplier')?.value,changedId);
+                state.morph.vertexMultiplier=range.multiplier;state.morph.vertexMin=range.minN;state.morph.vertexMax=range.maxN;
+                const minEl=document.getElementById('morphVertexMin'),maxEl=document.getElementById('morphVertexMax'),mulEl=document.getElementById('morphVertexMultiplier');
+                if(minEl)minEl.value=range.minN;if(maxEl)maxEl.value=range.maxN;if(mulEl)mulEl.value=range.multiplier;
+                if(runtimeState.morph.active)rebaseMorphCycle();
             };
-            document.getElementById('morphVertexMin').addEventListener('change', () => syncMorphVertexRange('morphVertexMin'));
-            document.getElementById('morphVertexMax').addEventListener('change', () => syncMorphVertexRange('morphVertexMax'));
+            document.getElementById('morphVertexMin')?.addEventListener('change', () => syncMorphVertexRange('morphVertexMin'));
+            document.getElementById('morphVertexMax')?.addEventListener('change', () => syncMorphVertexRange('morphVertexMax'));
+            document.getElementById('morphVertexMultiplier')?.addEventListener('change', () => syncMorphVertexRange('morphVertexMultiplier'));
 
             const syncMorphSpiralLayerRange = (changedId) => {
                 let lo = Math.max(0, Math.min(64, Math.round(Number(document.getElementById('morphSpiralLayersMin')?.value) || 0)));
@@ -7883,6 +8113,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     state.morph.options[key] = e.target.checked;
                     if (key === 'byShape') updateMorphShapeControlsEnabled();
                     if (key === 'byFillColor') syncMorphSettingsUI();
+                    syncBlueMorphParameterDecorations();
                     rebaseMorphCycle();
                     renderMainCanvas();
                 });
@@ -7953,6 +8184,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     spiralClosed: l.spiralClosed !== false,
                     spiralTangential: l.spiralTangential !== false,
                     spiralRoundSeams: l.spiralRoundSeams !== false,
+                    spiralFillEnabled: l.spiralFillEnabled === true,
+                    spiralFillType: l.spiralFillType === 'chopped' ? 'chopped' : 'interwinding',
                     splineRenderMode: normalizeSplineRenderMode(l.splineRenderMode),
                     id: createLayerId()
                 }));
@@ -8059,13 +8292,15 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
 
             const createRandomLayer = ({ name, N, radius, color, profileKey, rotation, strokeWidth, glow, opacity, fill, rounding, kMode }) => {
                 const profile = PROFILE_PRESETS[profileKey] || PROFILE_PRESETS.line;
+                const profileMeta = PROFILE_PRESET_META[profileKey] || PROFILE_PRESET_META.line;
+                const profileClosed = typeof profileMeta?.closed === 'boolean' ? profileMeta.closed : true;
                 return {
                     ...createLayer(name),
                     visible: true,
                     N,
                     K: getKForMode(N, kMode),
                     customSuborbits: null,
-                    closedLoop: true,
+                    closedLoop: profileClosed,
                     lineJoinType: 'rounded',
                     rounding,
                     radius,
@@ -8106,30 +8341,74 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 [1.00, 0.74, 0.50, 0.32]
             ];
 
-            const buildRandomProfileSequence = (count, recipe, options = state.randomOptions || {}) => {
+            const orangeProfileCandidates = (profileGroups = normalizedOrangeMorphProfileGroups(), family = normalizeOrangeMorphFamily()) => {
+                const groups = Array.isArray(profileGroups) && profileGroups.length ? profileGroups : ['standard'];
+                const fam = normalizeOrangeMorphFamily(family);
+                let keys = [...new Set(groups.flatMap(group => PROFILE_PRESET_GROUPS[normalizeOrangeMorphProfileGroup(group)] || []))];
+                if (fam !== 'mix') keys = keys.filter(key => PROFILE_PRESET_META[key]?.family === fam);
+                if (!keys.length && fam !== 'mix') {
+                    keys = [...new Set(groups.flatMap(group => PROFILE_PRESET_GROUPS[normalizeOrangeMorphProfileGroup(group)] || []))];
+                }
+                return keys.length ? keys : (PROFILE_PRESET_GROUPS.standard || ['line']).slice();
+            };
+
+            const simplestProfileKeyForOrangePool = (profileGroups, family) => {
+                const keys = orangeProfileCandidates(profileGroups, family);
+                if (keys.includes('line')) return 'line';
+                return keys.slice().sort((a, b) => {
+                    const ap = PROFILE_PRESETS[a], bp = PROFILE_PRESETS[b];
+                    const an = Array.isArray(ap?.nodes) ? ap.nodes.length : 999;
+                    const bn = Array.isArray(bp?.nodes) ? bp.nodes.length : 999;
+                    return an - bn;
+                })[0] || 'line';
+            };
+
+            const buildRandomProfileSequence = (count, recipe, options = state.randomOptions || {}, profileGroups = normalizedOrangeMorphProfileGroups(), family = normalizeOrangeMorphFamily()) => {
+                const groups = Array.isArray(profileGroups) && profileGroups.length ? profileGroups.map(normalizeOrangeMorphProfileGroup) : ['standard'];
+                const fam = normalizeOrangeMorphFamily(family);
+                const groupPool = orangeProfileCandidates(groups, fam);
                 const base = recipe?.profiles || ['line', 'arc', 'sine'];
                 const result = [];
+                const legacyStandardMix = groups.length === 1 && groups[0] === 'standard' && fam === 'mix';
                 for (let i = 0; i < count; i++) {
                     const role = i === 0 ? 'outer' : (i === count - 1 ? 'inner' : 'middle');
                     if (options.onlyLine || options.byShape === false) {
-                        result.push('line');
+                        result.push(simplestProfileKeyForOrangePool(groups, fam));
+                        continue;
+                    }
+                    if (!legacyStandardMix) {
+                        const unused = groupPool.filter(key => !result.includes(key));
+                        result.push(randomChoice(unused.length ? unused : groupPool));
                         continue;
                     }
                     const recipeKey = base[i % base.length];
                     const shouldUseRecipe = Math.random() < (i === 0 ? 0.78 : 0.64);
                     let key = shouldUseRecipe ? recipeKey : getProfileForRole(role, result);
-                    if (result.includes(key) && count <= 4) {
-                        key = getProfileForRole(role, result);
-                    }
+                    if (result.includes(key) && count <= 4) key = getProfileForRole(role, result);
                     result.push(key);
                 }
                 return result;
             };
 
-            const makeRandomCandidate = (requestedCount = state.randomLayerCount || 3) => {
+            const randomDistinctPaletteColors = (paletteKey, count = 3) => {
+                const raw=(getPlaylistPaletteColors(paletteKey)||[]).filter(Boolean);
+                const unique=[];const seen=new Set();
+                for(const c of raw){const key=String(c).toLowerCase();if(seen.has(key))continue;seen.add(key);unique.push(c);}
+                const out=shuffle(unique).slice(0,Math.max(0,count));
+                let seedIndex=0;
+                while(out.length<count){
+                    const base=unique.length?unique[seedIndex%unique.length]:'#ffffff';seedIndex++;
+                    const rgb=hexToRgb(base),hsl=rgbToHsl(rgb.r,rgb.g,rgb.b);
+                    const h=(hsl.h+.137*seedIndex)%1,l=Math.max(.34,Math.min(.76,hsl.l+(seedIndex%2?.06:-.04)));
+                    const c=hslToHex(h,Math.max(.45,hsl.s),l),key=String(c).toLowerCase();if(seen.has(key))continue;seen.add(key);out.push(c);
+                }
+                return out;
+            };
+
+            const makeRandomCandidate = (requestedCount = state.randomLayerCount || 3, profileGroups = normalizedOrangeMorphProfileGroups(), family = normalizeOrangeMorphFamily()) => {
                 const count = Math.max(1, Math.min(8, Number(requestedCount) || 3));
                 const paletteKey=normalizePlaylistPaletteKey(state.randomOptions?.lineColorPalette,'standard');
-                const paletteBase = shuffle(getPlaylistPaletteColors(paletteKey));
+                const paletteBase = randomDistinctPaletteColors(paletteKey, Math.max(3,count));
                 const colors = Array.from({ length: count }, (_, idx) => {
                     if (idx < paletteBase.length) return paletteBase[idx];
                     const base = paletteBase[idx % paletteBase.length];
@@ -8141,7 +8420,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
 
                 const options = state.randomOptions || {};
                 const recipe = randomChoice(RANDOM_RECIPES);
-                const profiles = buildRandomProfileSequence(count, recipe, options);
+                const profiles = buildRandomProfileSequence(count, recipe, options, profileGroups, family);
                 const ratioSet = randomChoice(RANDOM_RATIO_SETS);
                 const outerR = randomInt(225, 265);
                 const baseRotation = randomInt(0, 359);
@@ -8228,13 +8507,15 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 return layers;
             };
 
-            const createRandomComposition = (requestedCount = state.randomLayerCount || 3) => {
+            const createRandomComposition = (requestedCount = state.randomLayerCount || 3, profileGroups = normalizedOrangeMorphProfileGroups(), family = normalizeOrangeMorphFamily()) => {
                 let best = null;
+                const normalizedGroups = Array.isArray(profileGroups) && profileGroups.length ? profileGroups.map(normalizeOrangeMorphProfileGroup) : ['standard'];
+                const normalizedFamily = normalizeOrangeMorphFamily(family);
                 const paletteKeyForLayers=normalizePlaylistPaletteKey(state.randomOptions?.lineColorPalette,'standard');
                 const count = Math.max(1, Math.min(8, Number(requestedCount) || 3));
                 const attempts = count <= 3 ? 16 : 20;
                 for (let i = 0; i < attempts; i++) {
-                    const candidate = makeRandomCandidate(count);
+                    const candidate = makeRandomCandidate(count, normalizedGroups, normalizedFamily);
                     if (!best || candidate.score > best.score) best = candidate;
                 }
                 const layers = (best?.layerSpecs || []).map(spec => {
@@ -8244,6 +8525,58 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     return layer;
                 });
                 return applyRandomSpiralLayers(layers);
+            };
+
+
+            const createMandalaComposition = (requestedCount = state.randomLayerCount || 3, family = normalizeOrangeMorphFamily()) => {
+                const count=Math.max(1,Math.min(8,Number(requestedCount)||3)),options=state.randomOptions||{};
+                const paletteKey=normalizePlaylistPaletteKey(options.lineColorPalette,'standard'),colors=randomDistinctPaletteColors(paletteKey,Math.max(3,count));
+                const symmetryPool=[8,10,12,14,16,18,20,24],N=randomChoice(symmetryPool),sector=360/Math.max(1,N),baseRotation=Math.round(randomInt(0,359)/sector)*sector;
+                const outerR=randomInt(230,270),ratios=[1,.82,.66,.52,.40,.30,.22,.16],fam=normalizeOrangeMorphFamily(family),mandalaAll=(PROFILE_PRESET_GROUPS.mandala?.length?PROFILE_PRESET_GROUPS.mandala:['arc','sine','triangle','double_peak','loop','line']),profileCycle=(fam==='mix'?mandalaAll:mandalaAll.filter(key=>PROFILE_PRESET_META[key]?.family===fam));
+                if(!profileCycle.length)profileCycle.push(...mandalaAll);
+                const layers=[];
+                for(let idx=0;idx<count;idx++){
+                    const role=idx===0?'outer':(idx===count-1?'inner':'middle'),profileKey=(options.onlyLine||options.byShape===false)?'line':profileCycle[idx%profileCycle.length];
+                    const kModes=['simple','petal','harmonic','star'],kMode=options.bySteps===false?'simple':kModes[idx%kModes.length];
+                    const radius=options.bySize===false?outerR:Math.max(24,Math.round(outerR*(ratios[idx]??Math.max(.1,1-idx*.12))));
+                    const rounding=options.byRounding===false?0:(idx===0?randomChoice([4,8,12]):randomChoice([8,12,16,20]));
+                    const layer=createRandomLayer({name:`Мандала ${idx+1}`,N,radius,color:options.byColor===false?colors[0]:colors[idx],profileKey,rotation:baseRotation+(idx%2?sector*.5:0),strokeWidth:idx===0?1.8:Math.max(1,1.6-idx*.08),glow:idx===0?6:Math.max(3,7-idx*.45),opacity:Math.max(72,98-idx*3),fill:false,rounding,kMode});
+                    layer.paletteKey=paletteKey;if(options.bySteps===false)layer.K=1;
+                    // The shared N and half-sector alternation keep radial axes coherent while K/profile vary.
+                    layers.push(layer);
+                }
+                return applyRandomSpiralLayers(layers);
+            };
+
+            const applyOrangeRandomPaletteColors = (layers) => {
+                if(!Array.isArray(layers)||!layers.length)return layers||[];
+                const options=state.randomOptions||{};
+                if(options.byColor===false)return layers;
+                const paletteKey=normalizePlaylistPaletteKey(options.lineColorPalette,'standard');
+                const colors=randomDistinctPaletteColors(paletteKey,Math.max(3,layers.length));
+                for(let i=0;i<layers.length;i++){
+                    const layer=layers[i];if(!layer)continue;
+                    const next=colors[i%colors.length]||layer.strokeColor||'#ffffff';
+                    const prior=layer.strokeColor;
+                    layer.strokeColor=next;layer.paletteKey=paletteKey;
+                    if(layer.fillMatchStroke===true){
+                        const alpha=getFillOpacityPercent(layer.fillColor||prior||next);
+                        layer.fillColor=colorWithPercentAlpha(next,alpha);
+                    }
+                }
+                return layers;
+            };
+
+            const createOrangeComposition = (requestedCount = state.randomLayerCount || 3, _legacyMode = state.minimalMorph?.mode) => {
+                const groups = normalizedOrangeMorphProfileGroups();
+                const family = normalizeOrangeMorphFamily(state.minimalMorph?.family);
+                const mandalaOnly = groups.length === 1 && groups[0] === 'mandala';
+                const layers=mandalaOnly
+                    ? createMandalaComposition(requestedCount, family)
+                    : createRandomComposition(requestedCount, groups, family);
+                // One shared final colour pass for both the dice and Orange Morph.
+                // This prevents profile-generation details from falling back to palette slots 0/1/2.
+                return applyOrangeRandomPaletteColors(layers);
             };
 
             const MorphInterpolation = createMorphInterpolationModule();
@@ -8265,7 +8598,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 chooseMorphSpiralOrderTarget, chooseMorphRotationDelta, buildMorphVisualTargets,
                 buildLightMorphVisualTargets } = MorphTargets;
 
-            const MorphPlayback = createMorphPlaybackModule({ createRandomComposition, MorphInterpolation, MorphTargets, MorphGeometry });
+            const MorphPlayback = createMorphPlaybackModule({ createOrangeComposition, MorphInterpolation, MorphTargets, MorphGeometry });
             const { prepareMorphCycle, applyFillMorphFrame, commitLightMorphTransient, getMorphLongPeriodDetailScale,
                 getLightMorphGeometryIntervalMs, updateLightMorphKeyframe, rebaseMorphCycle, animateMorph,
                 cloneMorphOriginLayers, captureMorphOrigin, restoreMorphOrigin, clearMorphOrigin, stopMorphing,
@@ -8283,7 +8616,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 stopMorphing();
                 state.randomLayerCount = Math.max(1, Math.min(8, parseInt(document.getElementById('randomLayerCount')?.value, 10) || state.randomLayerCount || 3));
                 if (document.getElementById('randomLayerCount')) document.getElementById('randomLayerCount').value = state.randomLayerCount;
-                state.layers = createRandomComposition(state.randomLayerCount);
+                state.layers = createOrangeComposition(state.randomLayerCount, state.minimalMorph?.mode);
                 state.activeLayerId = state.layers[0].id;
                 document.getElementById('presetSelect').value = '';
                 updateLayerListUI();
@@ -8317,6 +8650,29 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             document.getElementById('randomLayerCount').addEventListener('change', (e) => {
                 state.randomLayerCount = Math.max(1, Math.min(8, parseInt(e.target.value, 10) || 3));
                 e.target.value = state.randomLayerCount;
+            });
+            document.getElementById('minimalMorphMode')?.addEventListener('change', (e) => {
+                // Legacy hidden single-pool control: selecting it intentionally collapses Orange to one pool.
+                const group = normalizeOrangeMorphProfileGroup(e.target.value);
+                state.minimalMorph.profileGroups = [group];
+                state.minimalMorph.mode = group;
+                syncOrangeMorphModeOptions();
+                if(runtimeState.minimalMorph.active&&!runtimeState.minimalMorph.transitioning)runtimeState.minimalMorph.nextSwitchAt=performance.now();
+            });
+            document.getElementById('minimalMorphFamily')?.addEventListener('change', (e) => {
+                state.minimalMorph.family = normalizeOrangeMorphFamily(e.target.value);
+                e.target.value = state.minimalMorph.family;
+                if(runtimeState.minimalMorph.active&&!runtimeState.minimalMorph.transitioning)runtimeState.minimalMorph.nextSwitchAt=performance.now();
+            });
+            document.querySelectorAll('[data-orange-profile-group]').forEach(input => {
+                input.addEventListener('change', () => {
+                    let groups=[...document.querySelectorAll('[data-orange-profile-group]:checked')].map(el=>el.dataset.orangeProfileGroup).filter(group=>PROFILE_PRESET_GROUP_ORDER.includes(group));
+                    if(!groups.length){input.checked=true;groups=[normalizeOrangeMorphProfileGroup(input.dataset.orangeProfileGroup)];}
+                    state.minimalMorph.profileGroups=[...new Set(groups)];
+                    state.minimalMorph.mode=state.minimalMorph.profileGroups[0];
+                    syncOrangeMorphModeOptions();
+                    if(runtimeState.minimalMorph.active&&!runtimeState.minimalMorph.transitioning)runtimeState.minimalMorph.nextSwitchAt=performance.now();
+                });
             });
             document.getElementById('minimalMorphDefaultActive')?.addEventListener('change', (e) => {
                 state.minimalMorph.defaultActive = e.target.checked === true;
@@ -8625,57 +8981,57 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             document.getElementById('lampFreezeLight')?.addEventListener('change',e=>{
                 const enabled=e.target.checked===true;
                 state.lamps.freezeLight=enabled;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeLight=enabled;}
+                for(const cfg of getLampConfigTargets())cfg.freezeLight=enabled;
                 try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampFreezeTailSec')?.addEventListener('input',e=>{
                 const sec=Math.max(.05,Math.min(30,Number(e.target.value)||1.5));
                 state.lamps.freezeTailSec=sec;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeTailSec=sec;}
-                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}
+                for(const cfg of getLampConfigTargets())cfg.freezeTailSec=sec;
+                // Preserve the existing history: the renderer slews the effective tail length toward this target.
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampFreezeHardness')?.addEventListener('input',e=>{
                 const value=Math.max(0,Math.min(100,Number(e.target.value)||0));
                 state.lamps.freezeHardness=value;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeHardness=value;}
-                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}
+                for(const cfg of getLampConfigTargets())cfg.freezeHardness=value;
+                // Hardness changes the live envelope without destroying the accumulated trail.
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampFreezeColorMode')?.addEventListener('change',e=>{
                 const value=['lamp','line','fixed','hue'].includes(e.target.value)?e.target.value:'lamp';
                 state.lamps.freezeColorMode=value;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeColorMode=value;}
-                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}
+                for(const cfg of getLampConfigTargets())cfg.freezeColorMode=value;
+                // Recolour existing history in-place on the next feedback frame.
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampFreezeColor')?.addEventListener('input',e=>{
                 const value=String(e.target.value||'#00ffcc');state.lamps.freezeColor=value;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeColor=value;}
-                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}requestMainCanvasRender();
+                for(const cfg of getLampConfigTargets())cfg.freezeColor=value;
+                requestMainCanvasRender();
             });
             const applyFreezeHueDegrees=raw=>{
                 const value=Math.max(0,Math.min(180,Number(raw)||0));state.lamps.freezeHueDegrees=value;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeHueDegrees=value;}
-                try{LampGPURenderer?.resetFreezeTrail?.();}catch(_){}syncLampSettingsUI();requestMainCanvasRender();
+                for(const cfg of getLampConfigTargets())cfg.freezeHueDegrees=value;
+                syncLampSettingsUI();requestMainCanvasRender();
             };
             document.getElementById('lampFreezeHueDegrees')?.addEventListener('input',e=>applyFreezeHueDegrees(e.target.value));
             document.getElementById('lampFreezeHueDegreesNumber')?.addEventListener('change',e=>applyFreezeHueDegrees(e.target.value));
             document.getElementById('lampFreezeChromatic')?.addEventListener('change',e=>{
                 const value=e.target.checked===true;state.lamps.freezeChromatic=value;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeChromatic=value;}
+                for(const cfg of getLampConfigTargets())cfg.freezeChromatic=value;
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampFreezeChromaticColor')?.addEventListener('input',e=>{
                 const value=String(e.target.value||'#22d3ee');state.lamps.freezeChromaticColor=value;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeChromaticColor=value;}
+                for(const cfg of getLampConfigTargets())cfg.freezeChromaticColor=value;
                 requestMainCanvasRender();
             });
             document.getElementById('lampFreezeRain')?.addEventListener('change',e=>{
                 const enabled=e.target.checked===true;
                 state.lamps.freezeRain=enabled;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeRain=enabled;}
+                for(const cfg of getLampConfigTargets())cfg.freezeRain=enabled;
                 try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
                 syncLampSettingsUI();requestMainCanvasRender();
             });
@@ -8683,7 +9039,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 const parsed=Number(raw);if(!Number.isFinite(parsed))return;
                 const value=((parsed%360)+360)%360;
                 state.lamps.freezeRainDirectionVersion=2;state.lamps.freezeRainDegrees=value;
-                for(const layer of state.layers){ensureLayerEffectState(layer);const cfg=ensureLayerLampState(layer);cfg.freezeRainDirectionVersion=2;cfg.freezeRainDegrees=value;}
+                for(const cfg of getLampConfigTargets()){cfg.freezeRainDirectionVersion=2;cfg.freezeRainDegrees=value;}
                 try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
                 syncLampSettingsUI();requestMainCanvasRender();
             };
@@ -8692,28 +9048,28 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             document.getElementById('lampFreezeRainSource')?.addEventListener('change',e=>{
                 const value=e.target.value==='lamp'?'lamp':'core';
                 state.lamps.freezeRainSource=value;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeRainSource=value;}
+                for(const cfg of getLampConfigTargets())cfg.freezeRainSource=value;
                 try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampFreezeRainSpeed')?.addEventListener('input',e=>{
                 const value=Math.max(0,Math.min(100,Number(e.target.value)||0));
                 state.lamps.freezeRainSpeed=value;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeRainSpeed=value;}
+                for(const cfg of getLampConfigTargets())cfg.freezeRainSpeed=value;
                 try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampFreezeRainTailSec')?.addEventListener('input',e=>{
                 const sec=Math.max(.05,Math.min(30,Number(e.target.value)||1.5));
                 state.lamps.freezeRainTailSec=sec;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeRainTailSec=sec;}
+                for(const cfg of getLampConfigTargets())cfg.freezeRainTailSec=sec;
                 try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampFreezeRainHardness')?.addEventListener('input',e=>{
                 const value=Math.max(0,Math.min(100,Number(e.target.value)||0));
                 state.lamps.freezeRainHardness=value;
-                for(const layer of state.layers){ensureLayerEffectState(layer);ensureLayerLampState(layer).freezeRainHardness=value;}
+                for(const cfg of getLampConfigTargets())cfg.freezeRainHardness=value;
                 try{LampGPURenderer?.resetFreezeRain?.();}catch(_){}
                 syncLampSettingsUI();requestMainCanvasRender();
             });
@@ -9068,13 +9424,16 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.tunnel.paletteLagEnabled = false;
             state.tunnel.direction = 'toward';
             state.tunnel.fadeOversize = true;
-            state.tunnel.fadeOffsetSteps = 2;
+            state.tunnel.fadeOffsetSteps = 3;
             state.tunnel.vignetteAmount = TUNNEL_VIGNETTE_DEFAULT_PX;
             state.tunnel.vignetteUnit = 'px';
             state.tunnel.fadeDurationSec = 3;
             state.tunnel.optimizedCalculation = true;
             syncTunnelSettingsUI();
             state.minimalMorph.intervalSec = 5;
+            state.minimalMorph.mode = 'standard';
+            state.minimalMorph.family = 'mix';
+            state.minimalMorph.profileGroups = ['standard'];
             state.minimalMorph.defaultActive = false;
             runtimeState.minimalMorph.autoStartedByProject = false;
             state.minimalMorph.fadeSec = 0.1;
@@ -9123,6 +9482,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.morph.fadePercent = 0;
             state.morph.vertexMin = 4;
             state.morph.vertexMax = 19;
+            state.morph.vertexMultiplier = 1;
             state.morph.circleProfileOverflow = true;
             state.morph.strokeWidthMin = 0.8;
             state.morph.strokeWidthMax = 3.2;
@@ -9259,7 +9619,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             return {
                 format: 'SpiroStarProject',
                 extension: '.sproj',
-                version: 55,
+                version: 56,
                 savedAt: new Date().toISOString(),
                 settings: {
                     activeProjectPaletteKey: normalizePlaylistPaletteKey(state.activeProjectPaletteKey || state.morph?.lineColorPalette || 'standard','standard'),
@@ -9325,6 +9685,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                         diversity: state.morph.diversity,
                         vertexMin: state.morph.vertexMin,
                         vertexMax: state.morph.vertexMax,
+                        vertexMultiplier: normalizeMorphVertexMultiplier(state.morph.vertexMultiplier),
                         roundingMin: state.morph.roundingMin,
                         roundingMax: state.morph.roundingMax,
                         stepMin: state.morph.stepMin,
@@ -11213,6 +11574,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 spiralClosed: l.spiralClosed !== false,
                 spiralTangential: l.spiralTangential !== false,
                 spiralRoundSeams: l.spiralRoundSeams !== false,
+                spiralFillEnabled: l.spiralFillEnabled === true,
+                spiralFillType: l.spiralFillType === 'chopped' ? 'chopped' : 'interwinding',
                 lineProfile: ['round','slash','square','circle','cross'].includes(l.lineProfileStroke)
                     ? l.lineProfileStroke
                     : ((l.lineProfileApplication!=='graffiti' && ['round','slash','square','circle','cross'].includes(l.lineProfile)) ? l.lineProfile : defaults.lineProfileStroke),
@@ -11453,7 +11816,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 if (!settings.lamps.colorMode) state.lamps.colorMode = settings.lamps.rainbow ? 'rainbow' : settings.lamps.matchLineColor === false ? 'selected' : 'line';
             }
             for(const layer of state.layers){if(!layer.lamps||typeof layer.lamps!=='object')layer.lamps=cloneLampConfig(state.lamps);ensureLayerLampState(layer);}
-            try{LampGPURenderer?.resetFreezeLight?.();}catch(_){}
+            try{LampGPURenderer?.resetFreezeAll?.();}catch(_){}
             applyProjectCameraSettings(settings);
             state.motion = Object.assign({rotationEnabled:false,rotationSpeed:30,rotationMultiplier:1,rotationDirection:'ccw',rotationTunnelLag:0,rotationTunnelLagMultiplier:1,cameraEnabled:false,cameraSpeed:20,cameraMultiplier:1,cameraAmount:20,colorEnabled:false,colorSpeed:20,colorMultiplier:1,paletteKey:'standard',quickToggleCamera:false,quickToggleColor:false},(settings.motion&&typeof settings.motion==='object')?cloneData(settings.motion):{});
             normalizeMotionState();
@@ -11517,6 +11880,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 intervalSec: settings.morphIntervalSec,
                 vertexMin: settings.morphVertexMin,
                 vertexMax: settings.morphVertexMax,
+                vertexMultiplier: settings.morphVertexMultiplier,
                 roundingMin: settings.morphRoundingMin,
                 roundingMax: settings.morphRoundingMax,
                 stepMin: settings.morphStepMin,
@@ -11530,8 +11894,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             if (Number.isFinite(Number(m.intervalSec))) state.morph.intervalSec = Math.max(0.5, Math.min(60, Number(m.intervalSec)));
             state.morph.intervalMultiplier = Number.isFinite(Number(m.intervalMultiplier)) ? Math.max(0.015625, Math.min(64, Number(m.intervalMultiplier))) : 1;
             if (typeof m.diversity === 'boolean') state.morph.diversity = m.diversity;
-            if (Number.isFinite(Number(m.vertexMin))) state.morph.vertexMin = Math.max(2, Math.min(120, Number(m.vertexMin)));
-            if (Number.isFinite(Number(m.vertexMax))) state.morph.vertexMax = Math.max(state.morph.vertexMin, Math.min(120, Number(m.vertexMax)));
+            state.morph.vertexMultiplier=normalizeMorphVertexMultiplier(m.vertexMultiplier??state.morph.vertexMultiplier??1);
+            {const vertexRange=normalizeMorphVertexRangeValues(m.vertexMin??state.morph.vertexMin,m.vertexMax??state.morph.vertexMax,state.morph.vertexMultiplier);state.morph.vertexMin=vertexRange.minN;state.morph.vertexMax=vertexRange.maxN;}
             if (Number.isFinite(Number(m.roundingMin))) state.morph.roundingMin = Math.max(0, Math.min(MAX_ROUNDING_PERCENT, Number(m.roundingMin)));
             if (Number.isFinite(Number(m.roundingMax))) state.morph.roundingMax = Math.max(state.morph.roundingMin, Math.min(MAX_ROUNDING_PERCENT, Number(m.roundingMax)));
             if (Number.isFinite(Number(m.stepMin))) state.morph.stepMin = Math.max(0, Math.min(100, Number(m.stepMin)));
@@ -11552,6 +11916,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             else if (typeof m.fillHueReset === 'boolean') state.morph.fillHueHarmony = m.fillHueReset ? 'native' : 'all';
             if (Number.isFinite(Number(m.sizeVariation))) state.morph.sizeVariation = Math.round(Math.max(0, Math.min(100, Number(m.sizeVariation))));
             state.morph.sizeVariationMultiplier = Number.isFinite(Number(m.sizeVariationMultiplier)) ? Math.max(0, Number(m.sizeVariationMultiplier)) : (Number.isFinite(Number(m.sizeVariation)) ? 1 : state.morph.sizeVariationMultiplier);
+            if (Number.isFinite(Number(m.radiusMin))) state.morph.radiusMin=Math.max(20,Math.min(500,Number(m.radiusMin)));
+            if (Number.isFinite(Number(m.radiusMax))) state.morph.radiusMax=Math.max(state.morph.radiusMin??20,Math.min(500,Number(m.radiusMax)));
             
             if (typeof m.normalizeSizes === 'boolean') state.morph.normalizeSizes = m.normalizeSizes;
             state.morph.rotationMinPercent = Number.isFinite(Number(m.rotationMinPercent)) ? Math.round(Math.max(0, Math.min(100, Number(m.rotationMinPercent)))) : state.morph.rotationMinPercent;
@@ -11561,6 +11927,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             if (Number.isFinite(Number(m.fillOpacityMin))) state.morph.fillOpacityMin = Math.round(Math.max(0, Math.min(100, Number(m.fillOpacityMin))));
             if (Number.isFinite(Number(m.fillOpacityMax))) state.morph.fillOpacityMax = Math.round(Math.max(state.morph.fillOpacityMin, Math.min(100, Number(m.fillOpacityMax))));
             state.morph.splinePoints = normalizeSplinePointCount(m.splinePoints ?? state.morph.splinePoints ?? 12);
+            state.morph.profileModeTransition = m.profileModeTransition === 'second' ? 'start' : (['phase','start','end'].includes(m.profileModeTransition) ? m.profileModeTransition : 'phase');
+            state.morph.profileModeTransitionPercent = Math.max(0,Math.min(100,Math.round(Number(m.profileModeTransitionPercent ?? state.morph.profileModeTransitionPercent ?? 20)||0)));
             state.morph.spiralOrderMin = normalizeSpiralOrder(m.spiralOrderMin ?? state.morph.spiralOrderMin ?? -1, true);
             state.morph.spiralOrderMax = normalizeSpiralOrder(m.spiralOrderMax ?? state.morph.spiralOrderMax ?? 1, true);
             if (state.morph.spiralOrderMin > state.morph.spiralOrderMax) [state.morph.spiralOrderMin,state.morph.spiralOrderMax]=[state.morph.spiralOrderMax,state.morph.spiralOrderMin];
@@ -11610,6 +11978,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.randomOptions.lineColorPalette = normalizePlaylistPaletteKey(state.randomOptions.lineColorPalette,'standard');
             state.minimalMorph.defaultActive = settings.minimalMorph?.defaultActive === true;
             if (settings.minimalMorph && typeof settings.minimalMorph === 'object') {
+                const incomingOrangeGroups=Array.isArray(settings.minimalMorph.profileGroups)
+                    ? [...new Set(settings.minimalMorph.profileGroups.map(group=>group==='noLoops'?'closed':group).filter(group=>PROFILE_PRESET_GROUP_ORDER.includes(group)))]
+                    : [];
+                state.minimalMorph.profileGroups=incomingOrangeGroups.length?incomingOrangeGroups:[normalizeOrangeMorphProfileGroup(settings.minimalMorph.mode)];
+                state.minimalMorph.mode=state.minimalMorph.profileGroups[0]||'standard';
+                state.minimalMorph.family=normalizeOrangeMorphFamily(settings.minimalMorph.family);
                 if (Number.isFinite(Number(settings.minimalMorph.intervalSec))) state.minimalMorph.intervalSec = Math.max(0.5, Math.min(120, Number(settings.minimalMorph.intervalSec)));
                 if (Number.isFinite(Number(settings.minimalMorph.fadeSec))) state.minimalMorph.fadeSec = Math.max(0.1, Math.min(30, Number(settings.minimalMorph.fadeSec)));
                 if (typeof settings.minimalMorph.instantSwitch === 'boolean') state.minimalMorph.instantSwitch = settings.minimalMorph.instantSwitch;
@@ -11820,7 +12194,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         function buildShapeFileData() {
             return {
                 format: 'SpiroStarShapes',
-                version: '7.4.9',
+                version: '7.4.30',
                 savedAt: new Date().toISOString(),
                 layers: cloneData(state.layers)
             };
@@ -12238,7 +12612,15 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         });
         document.getElementById('btnSaveShape').addEventListener('click', saveCurrentShape);
 
-        const FACTORY_MORPH_SETTINGS = {intervalSec:5,intervalMultiplier:1,splinePoints:12,spiralOrderMin:-1,spiralOrderMax:1,spiralOrderLinked:false,spiralLayersMin:0,spiralLayersMax:1,chaosMorphEnabled:false,chaosMorphStepSpread:1,chaosMorphClosuresMax:3,preserveSpiralContinuity:true,spiralMorphType:'phaseCircle',spiralRotationCompensation:false,pauseOnSpace:false,diversity:false,vertexMin:4,vertexMax:19,roundingMin:0,roundingMax:30,stepMin:0,stepMax:100,monoOrbitTransforms:true,orbitPercentMin:0,orbitPercentMax:0,strokeWidthMin:.8,strokeWidthMax:3.2,opacityMin:70,opacityMax:100,fillLayersMin:0,fillLayersMax:1,fillHueMin:-15,fillHueMax:15,fillHueReset:true,fillHueHarmony:'native',lineColorPalette:'standard',cyclePalettes:false,morphGlobalHueOffset:false,globalHueOffsetRange:180,sizeVariation:100,sizeVariationMultiplier:1,normalizeSizes:true,rotationMinPercent:0,rotationMaxPercent:50,rotationMultiplier:.1,rotationRandomDirection:true,fillOpacityMin:10,fillOpacityMax:10,mode:'circleSlide',fadePercent:0,circleProfileOverflow:true,slideType:'sector',speedType:'linear',lightningWhite:true,lightningRandom:false,lightningColor:'#ffffff',lightningSegmentPercent:30,lightningGlow:18,options:{byShape:true,byVertices:true,bySteps:true,byRounding:false,byStrokeWidth:true,bySize:true,byColor:true,byFillColor:true,byOpacity:true,byRotation:true,bySpiralOrder:false,bySpiralLayers:false},shapeOptions:{noLoops:true,loops:false,closed:false,open:false,family:'mix',profileGroups:['standard'],profileGroup:'all',standardOnly:false}};
+        const FACTORY_MORPH_SETTINGS = {intervalSec:5,intervalMultiplier:1,splinePoints:12,profileModeTransition:'phase',profileModeTransitionPercent:20,defaultActive:false,spiralOrderMin:-1,spiralOrderMax:1,spiralOrderLinked:false,spiralLayersMin:0,spiralLayersMax:1,chaosMorphEnabled:false,chaosMorphStepSpread:1,chaosMorphClosuresMax:3,preserveSpiralContinuity:true,spiralMorphType:'phaseCircle',spiralRotationCompensation:false,pauseOnSpace:false,diversity:false,vertexMin:4,vertexMax:19,vertexMultiplier:1,roundingMin:0,roundingMax:30,stepMin:0,stepMax:100,monoOrbitTransforms:true,orbitPercentMin:0,orbitPercentMax:0,strokeWidthMin:.8,strokeWidthMax:3.2,opacityMin:70,opacityMax:100,fillLayersMin:0,fillLayersMax:1,fillHueMin:-15,fillHueMax:15,fillHueReset:true,fillHueHarmony:'native',lineColorPalette:'standard',cyclePalettes:false,morphGlobalHueOffset:false,globalHueOffsetRange:180,sizeVariation:100,sizeVariationMultiplier:1,radiusMin:20,radiusMax:500,normalizeSizes:true,rotationMinPercent:0,rotationMaxPercent:50,rotationMultiplier:.1,rotationRandomDirection:true,fillOpacityMin:10,fillOpacityMax:10,mode:'circleSlide',fadePercent:0,circleProfileOverflow:true,slideType:'sector',speedType:'linear',lightningWhite:true,lightningRandom:false,lightningColor:'#ffffff',lightningSegmentPercent:30,lightningGlow:18,options:{byShape:true,byVertices:true,bySteps:true,byRounding:false,byStrokeWidth:true,bySize:true,byColor:true,byFillColor:true,byOpacity:true,byRotation:true,bySpiralOrder:false,bySpiralLayers:false},shapeOptions:{noLoops:true,loops:false,closed:false,open:false,family:'mix',profileGroups:['standard'],profileGroup:'all',standardOnly:false}};
+
+        function resetMorphSettingsToFactory(){
+            for(const [key,value] of Object.entries(FACTORY_MORPH_SETTINGS))state.morph[key]=cloneData(value);
+            syncMorphSettingsUI();syncSidebarInputs();
+            if(runtimeState.morph.active)activeRebaseMorphing();
+            requestMainCanvasRender();
+        }
+        document.getElementById('btnResetMorphDefaults')?.addEventListener('click',e=>{e.stopPropagation();resetMorphSettingsToFactory();});
 
         function isDesktopPointerUI() {
             return window.matchMedia?.('(pointer:fine)').matches === true && window.innerWidth > 820;
@@ -13951,12 +14333,15 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.tunnel.defaultActive = false;
             state.tunnel.centerHiddenCopies = TUNNEL_CENTER_HIDDEN_DEFAULT;
             state.tunnel.fadeOversize = true;
-            state.tunnel.fadeOffsetSteps = 2;
+            state.tunnel.fadeOffsetSteps = 3;
             state.tunnel.vignetteAmount = TUNNEL_VIGNETTE_DEFAULT_PX;
             state.tunnel.vignetteUnit = 'px';
             state.tunnel.fadeDurationSec = 3;
             state.tunnel.optimizedCalculation = true;
             state.minimalMorph.intervalSec = 5;
+            state.minimalMorph.mode = 'standard';
+            state.minimalMorph.family = 'mix';
+            state.minimalMorph.profileGroups = ['standard'];
             state.minimalMorph.defaultActive = false;
             runtimeState.minimalMorph.autoStartedByProject = false;
             state.minimalMorph.fadeSec = 0.1;
@@ -14022,6 +14407,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.morph.fadePercent = 0;
             state.morph.vertexMin = 4;
             state.morph.vertexMax = 19;
+            state.morph.vertexMultiplier = 1;
             state.morph.circleProfileOverflow = true;
             state.morph.strokeWidthMin = 0.8;
             state.morph.strokeWidthMax = 3.2;

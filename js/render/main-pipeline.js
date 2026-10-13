@@ -43,7 +43,7 @@ function somataGpuContractError(code,ctx=null,details=null){
     }
     const key=`${payload.code}:${payload.layerIndex}`;const now=performance.now(),prev=somataFullGpuDiag.lastLogAt.get(key)||-1e9;
     const minLogGapMs=recoverable?5000:500;
-    if(now-prev>minLogGapMs){somataFullGpuDiag.lastLogAt.set(key,now);(recoverable?console.warn:console.error)(`[Somata 7.4.9 FullGPU] ${payload.code}`,payload);}
+    if(now-prev>minLogGapMs){somataFullGpuDiag.lastLogAt.set(key,now);(recoverable?console.warn:console.error)(`[Somata 7.4.30 FullGPU] ${payload.code}`,payload);}
     return false;
 }
 window.__somataFullGpuDiagnostics=()=>({strict:true,canvasFallbackAllowed:false,fastGpuAllowed:false,errors:somataFullGpuDiag.errors,warnings:somataFullGpuDiag.warnings,last:somataFullGpuDiag.last,lastAt:somataFullGpuDiag.lastAt,byCode:{...somataFullGpuDiag.byCode}});
@@ -187,7 +187,7 @@ const fillRuntimeDiagnostic={
     fillAlpha:0,fillContourCount:0,closedPathCount:0,openPathCount:0,hasClosedFillTopology:false,
     nativeCandidate:false,nativeComplete:false,gpuMaskEligible:false,lastUpdatedAt:0
 };
-let fillFailureSignature='';
+const fillFailureSignatures=new Set();
 function noteFillRuntime(frameCtx,patch={}){
     const c=frameCtx?._geometryContract||null,g=c?.geometry||null,mesh=frameCtx?._fillMeshShadow||null;
     Object.assign(fillRuntimeDiagnostic,{
@@ -208,7 +208,7 @@ function noteFillRuntime(frameCtx,patch={}){
 function noteFillFailureOnce(frameCtx,stage,reason){
     const msg=String(reason||'unknown Fill failure'),sig=`${frameCtx?.layer?.id||''}|${stage}|${msg}`;
     noteFillRuntime(frameCtx,{handled:false,stage:String(stage||'unknown'),backend:'none',reason:msg});
-    if(sig!==fillFailureSignature){fillFailureSignature=sig;console.error(`[SpiroStar Fill] NOT DRAWN @ ${stage}: ${msg}`,{...fillRuntimeDiagnostic});}
+    if(!fillFailureSignatures.has(sig)){fillFailureSignatures.add(sig);console.warn(`[SpiroStar Fill] NOT DRAWN @ ${stage}: ${msg}`,{...fillRuntimeDiagnostic});}
 }
 
 const somataGpuDiagnosticSignatures=new Map();
@@ -219,9 +219,9 @@ function somataGpuDiagnosticError(feature,stage,reason,frameCtx=null,extra=null)
     let rec=somataGpuDiagnosticSignatures.get(sig);if(rec){rec.count++;somataGpuRuntimeDiagnostic.repeats++;return fingerprint;}
     rec={count:1};somataGpuDiagnosticSignatures.set(sig,rec);
     const rt=typeof runtimeState!=='undefined'?runtimeState:null,fx=frameCtx?.effectsPlan||{},sweep=fx.sweep?.cfg||frameCtx?.effectLayer?.sweep||frameCtx?.layer?.sweep||null;
-    const payload={version:'7.4.9',errorId:fingerprint,feature:String(feature||'gpu'),stage:String(stage||'render'),reason:msg,frameId:Number(frameCtx?.frameId||frameCtx?.frame?.id)||0,layerId:frameCtx?.layer?.id||null,layerIndex:Number(frameCtx?.layerIndex??-1),mode:{blue:rt?.morph?.active===true,orange:rt?.minimalMorph?.active===true,green:rt?.projectMorph?.active===true,corridor:state?.tunnel?.active===true,morphMode:state?.morph?.mode||null},effects:{graffiti:frameCtx?.lineProfileApplication==='graffiti',web:fx.web?.enabled===true,sweep:fx.sweep?.enabled===true,lamps:fx.lamps?.enabled===true,particles:fx.particles?.enabled===true},sweep:sweep?{type:sweep.effectType||'glint',profile:(sweep.effectType==='lightning'?(sweep.lightningProfileShape||'current'):(sweep.profileShape||'current'))}:null,fallback:extra?.fallback||'skip-pass',recovered:extra?.recovered!==false,canvasFallbackBlocked:true,...(extra||{})};
+    const payload={version:'7.4.30',errorId:fingerprint,feature:String(feature||'gpu'),stage:String(stage||'render'),reason:msg,frameId:Number(frameCtx?.frameId||frameCtx?.frame?.id)||0,layerId:frameCtx?.layer?.id||null,layerIndex:Number(frameCtx?.layerIndex??-1),mode:{blue:rt?.morph?.active===true,orange:rt?.minimalMorph?.active===true,green:rt?.projectMorph?.active===true,corridor:state?.tunnel?.active===true,morphMode:state?.morph?.mode||null},effects:{graffiti:frameCtx?.lineProfileApplication==='graffiti',web:fx.web?.enabled===true,sweep:fx.sweep?.enabled===true,lamps:fx.lamps?.enabled===true,particles:fx.particles?.enabled===true},sweep:sweep?{type:sweep.effectType||'glint',profile:(sweep.effectType==='lightning'?(sweep.lightningProfileShape||'current'):(sweep.profileShape||'current'))}:null,fallback:extra?.fallback||'skip-pass',recovered:extra?.recovered!==false,canvasFallbackBlocked:true,...(extra||{})};
     somataGpuRuntimeDiagnostic.last=payload;somataGpuRuntimeDiagnostic.lastAt=performance.now();
-    console.error(`[Somata 7.4.9 ${fingerprint}] ${payload.feature}/${payload.stage}: ${msg}`,payload);return fingerprint;
+    const logger=extra?.recovered===true?console.warn:console.error;logger(`[Somata 7.4.30 ${fingerprint}] ${payload.feature}/${payload.stage}: ${msg}`,payload);return fingerprint;
 }
 window.__somataGpuRuntimeDiagnostics=()=>({last:somataGpuRuntimeDiagnostic.last,lastAt:somataGpuRuntimeDiagnostic.lastAt,repeats:somataGpuRuntimeDiagnostic.repeats,signatures:[...somataGpuDiagnosticSignatures.entries()].map(([signature,v])=>({errorId:`GPU-${somataGpuFingerprint(signature)}`,count:v.count,signature}))});
 
@@ -338,13 +338,27 @@ function tryRenderStrokeMarkerEffectGPU(frameCtx,opts={}){
     return ok;
 }
 
+const graffitiGlowRetryState=new WeakMap();
+function noteGraffitiContourGlowOutcome(frameCtx,handled){
+    const owner=frameCtx?.effectLayer||frameCtx?.layer;
+    if(handled===true){frameCtx._graffitiContourGlowPending=false;frameCtx._graffitiContourGlowCommitted=true;if(owner&&typeof owner==='object')graffitiGlowRetryState.delete(owner);return true;}
+    frameCtx._graffitiContourGlowPending=true;frameCtx._graffitiContourGlowCommitted=false;
+    if(owner&&typeof owner==='object'){
+        const now=performance.now();let rec=graffitiGlowRetryState.get(owner);
+        if(!rec||now-rec.windowStart>1500)rec={windowStart:now,attempts:0};
+        if(rec.attempts<3){rec.attempts++;graffitiGlowRetryState.set(owner,rec);try{requestMainCanvasRender?.();}catch(_){}}
+    }
+    return false;
+}
+
 function renderLayerGlowPass(frameCtx) {
+    frameCtx._glowDeferredForWebUnderBase=false;
     const effect=frameCtx.effectsPlan?.glow;
     const strictSpiralGlow=isStrictSpiralWebGPUFrame(frameCtx);
     if(!effect?.enabled)return;
     const graffitiCarrierGlow=frameCtx.lineProfileStrokeOnly===true&&frameCtx.lineProfileApplication==='graffiti';
 
-    if(frameCtx.lineProfileApplication==='graffiti'){frameCtx._graffitiContourGlowPending=true;renderBackendTelemetry.mark('glow','gpu','Graffiti contour Glow deferred to exact GPU ribbon');return;}
+    if(frameCtx.lineProfileApplication==='graffiti'){frameCtx._graffitiContourGlowPending=true;frameCtx._graffitiContourGlowCommitted=false;renderBackendTelemetry.mark('glow','gpu','Graffiti contour Glow deferred to exact GPU ribbon');return;}
 
     if(!strictSpiralGlow&&!(graffitiCarrierGlow&&frameCtx.morphFrameActive===true)&&canUseGpuOnlyCorridorLayerScene(frameCtx,graffitiCarrierGlow)){
         const residentBeforeGlow=getResidentGpuLayerScene(frameCtx),sceneAlreadyActive=Boolean(residentBeforeGlow?.texture);
@@ -397,7 +411,13 @@ function renderLayerGlowPass(frameCtx) {
         const ok=tryRenderStrokeMarkerEffectGPU(frameCtx,{mode:'glow',extraPx:Math.max(.5,effect.amount*.55*frameCtx.frame.dpr),alpha:effect.compositeAlpha,composite:'source-over'});
         if(ok){renderBackendTelemetry.mark('glow','gpu','GPU marker glow');return;}
     }
-    if(frameCtx._webgpuStrokeBatch?.sceneCombined&&frameCtx._webgpuStrokeBatch?.roles?.has?.('glow')){renderBackendTelemetry.mark('glow','gpu','Layer Scene');return;}
+    if(frameCtx._webgpuStrokeBatch?.sceneCombined&&frameCtx._webgpuStrokeBatch?.roles?.has?.('glow')){
+        if(frameCtx.effectsPlan?.web?.enabled===true&&!strictSpiralGlow){
+            frameCtx._glowDeferredForWebUnderBase=true;
+            renderBackendTelemetry.mark('glow','gpu','deferred until Web-under-Base materializes');
+        }else renderBackendTelemetry.mark('glow','gpu','Layer Scene');
+        return;
+    }
     if(frameCtx._webgpuStrokeBatch?.roles?.has?.('glow')&&WebGPUStrokeRenderer.compositeLayerBatch(frameCtx._webgpuStrokeBatch,'glow',mainCtx,'source-over')){renderBackendTelemetry.mark('glow','gpu','WebGPU stroke batch');return;}
     const {layer,drawLayerInstances}=frameCtx;
     const {w,h,dpr}=frameCtx.frame;
@@ -411,6 +431,21 @@ function renderLayerGlowPass(frameCtx) {
     somataGpuDiagnosticError('glow','render','GPU glow unavailable; pass skipped',frameCtx,{fallback:'skip-glow-pass',recovered:true});
     try{requestMainCanvasRender?.();}catch(_){}
 
+}
+
+function compositeDeferredWebUnderBaseGlow(frameCtx){
+    if(frameCtx?._glowDeferredForWebUnderBase!==true)return false;
+    frameCtx._glowDeferredForWebUnderBase=false;
+    const batch=frameCtx?._webgpuStrokeBatch;
+    if(batch?.roles?.has?.('glow')&&WebGPUStrokeRenderer.compositeLayerBatch?.(batch,'glow',mainCtx,'source-over')){
+        frameCtx._glowCommitted=true;
+        if(frameCtx.frame)frameCtx.frame.gpuMainCanvasHasContent=true;
+        renderBackendTelemetry.mark('glow','gpu','Web-under-Base preserved Glow');
+        return true;
+    }
+    somataGpuDiagnosticError('glow','web-order','Web-under-Base could not preserve the prepared Glow role',frameCtx,{fallback:'retry-next-frame',recovered:true});
+    try{requestMainCanvasRender?.();}catch(_){}
+    return false;
 }
 
 function distanceOriginToSegment(a,b){
@@ -551,9 +586,29 @@ function prepareLayerFillMaskGPU(frameCtx){
 }
 
 
+function getSpiralMorphBandFillMesh(frameCtx){
+    if(frameCtx?.geometryPlan?.dynamic!==true||!isSpiralLayer(frameCtx?.layer)||frameCtx?.layer?.spiralClosed===false)return null;
+    const t=Number.isFinite(Number(frameCtx?.blueMorphProvider?.geometryT))?Number(frameCtx.blueMorphProvider.geometryT):(Number.isFinite(Number(frameCtx?.geometryPlan?.progress))?Number(frameCtx.geometryPlan.progress):(Number(runtimeState?.morph?.geometryT)||0));
+    let paths=null;try{paths=typeof getGpuSpiralBezierMorphAuxPaths==='function'?getGpuSpiralBezierMorphAuxPaths(frameCtx.layerIndex,t):null;}catch(_){paths=null;}
+    if(!paths?.length)return null;
+    return FillMeshPreparer.prepareSpiralMorphBands?.(frameCtx,paths)||null;
+}
+
+function getSpiralInterwindingFillMesh(frameCtx){
+    if(!isSpiralLayer(frameCtx?.layer)||frameCtx?.layer?.spiralFillEnabled!==true||frameCtx?.layer?.spiralFillType!=='interwinding'||state.tunnel?.active!==true)return null;
+    let aux=null;if(frameCtx?.geometryPlan?.dynamic===true){const t=Number.isFinite(Number(frameCtx?.blueMorphProvider?.geometryT))?Number(frameCtx.blueMorphProvider.geometryT):(Number.isFinite(Number(frameCtx?.geometryPlan?.progress))?Number(frameCtx.geometryPlan.progress):(Number(runtimeState?.morph?.geometryT)||0));try{aux=typeof getGpuSpiralBezierMorphAuxPaths==='function'?getGpuSpiralBezierMorphAuxPaths(frameCtx.layerIndex,t):null;}catch(_){aux=null;}}
+    return FillMeshPreparer.prepareInterwindingCorridor?.(frameCtx,aux)||null;
+}
+
 function tryRenderLayerFillGPU(frameCtx){
     if(!FillGPURenderer.isAvailable())return false;
     const contract=getLayerGeometryContract(frameCtx),strictSpiralFill=isStrictSpiralWebGPUFrame(frameCtx);
+    if(contract?.fillRequested&&strictSpiralFill&&frameCtx?.geometryPlan?.dynamic===true){
+        const spiralMesh=getSpiralMorphBandFillMesh(frameCtx);
+        if(spiralMesh?.nativeComplete&&FillGPURenderer.renderMesh(frameCtx,spiralMesh,mainCtx)){
+            fillMaskValidationStats.gpuSuppression++;geometryContractStats.gpuFill++;geometryContractStats.nativeMeshFill++;return true;
+        }
+    }
     if(contract?.fillRequested&&FillMeshPreparer.canUseNative(frameCtx)){
         const mesh=frameCtx._nativeFillMeshCandidate||frameCtx._fillMeshShadow;
         if(mesh?.complete&&FillGPURenderer.renderMesh(frameCtx,mesh,mainCtx)){
@@ -662,7 +717,7 @@ function canDeferLayerSceneDirect(frameCtx,batch){
     return WebGPUFinalCompositeRenderer.canDeferLayerScene(frameCtx.frame,pathFxRequired||gpuBaseRequired);
 }
 
-const SOMATA_STRICT_SPIRAL_GPU_PRESENTATION=false; // 7.4.9: stability first; specialized Spiral rails may be used, but failure falls back to the general GPU path.
+const SOMATA_STRICT_SPIRAL_GPU_PRESENTATION=false; // 7.4.30: stability first; specialized Spiral rails may be used, but failure falls back to the general GPU path.
 const somataSpiralSceneDiag={
     internal:{frameId:0,ok:false,reason:'not-checked'},
     external:{frameId:0,ok:false,reason:'not-checked'},
@@ -883,7 +938,8 @@ function tryOpenGpuCorridorFillLayerScene(frameCtx){
     if(!contract?.fillRequested||state.tunnel?.active!==true)return{handled:false,required:false,reason:'not a Corridor Fill'};
     if(contract.nativeGpuFillEligible!==true)return{handled:false,required:true,reason:'Corridor Fill has no native GPU topology for this frame'};
 
-    const mesh=frameCtx?._corridorNativeFillPreflight||frameCtx?._fillMeshShadow||
+    const interwindingMesh=getSpiralInterwindingFillMesh(frameCtx);
+    const mesh=interwindingMesh||frameCtx?._corridorNativeFillPreflight||frameCtx?._fillMeshShadow||
         (frameCtx?.geometryPlan?.dynamic===true?getDynamicCorridorFillMesh(frameCtx):FillMeshPreparer.prepareFrame?.(frameCtx));
     if(!mesh?.nativeComplete||!mesh?.fanTriangleCount){
 
@@ -897,11 +953,11 @@ function tryOpenGpuCorridorFillLayerScene(frameCtx){
     const resident=WebGPUStrokeRenderer.getDeferredLayerSceneTexture?.(frameCtx.frameId);
     const target=resident?.texture?resident:WebGPUStrokeRenderer.getExternalLayerSceneTarget?.(frameCtx.frameId);
     if(!target?.texture)return{handled:false,required:true,reason:'GPU Layer Scene target unavailable'};
-    const rec=FillGPURenderer.encodeCorridorMeshCommandToTexture?.(target.texture,frameCtx,mesh,mainCtx);
+    const rec=mesh?.corridorBaked===true?FillGPURenderer.encodeMeshCommandToTexture?.(target.texture,frameCtx,mesh,mainCtx):FillGPURenderer.encodeCorridorMeshCommandToTexture?.(target.texture,frameCtx,mesh,mainCtx);
     if(!rec?.handled)return{handled:false,required:true,reason:rec?.reason||FillGPURenderer.status?.()?.nativeMesh?.lastError||'Corridor Fill encode failed'};
     if(rec.commandBuffer){
         let accepted=false;
-        if(resident?.texture)accepted=queueLayerSceneEffectCommand(frameCtx,4,rec.commandBuffer,'corridor-native-fill');
+        if(resident?.texture)accepted=queueLayerSceneEffectCommand(frameCtx,2,rec.commandBuffer,'corridor-native-fill');
         else accepted=WebGPUStrokeRenderer.deferExternalLayerScene?.(rec.commandBuffer,frameCtx.frameId,'corridor-native-fill')===true;
         if(!accepted)return{handled:false,required:true,reason:resident?.texture?'Corridor Fill command could not join resident Layer Scene':'Corridor Fill command could not become Layer Scene root'};
         frameCtx.frame.gpuLayerSceneDeferred=true;frameCtx.frame.gpuMainSceneEmpty=false;frameCtx._corridorLayerSceneActive=true;
@@ -919,7 +975,7 @@ function renderLayerBaseGeometryPass(frameCtx) {
     if(strictSpiralGpu){const d=somataSpiralSceneDiag.base;d.frameId=Number(frameCtx.frameId)||0;d.stage='base-enter';d.hasBatch=Boolean(batch);d.sceneCombined=batch?.sceneCombined===true;d.hasSceneTexture=Boolean(batch?.sceneTexture);d.roles=batch?.roles?[...batch.roles]:[];}
     const forceCanvasFill=shouldForceCanvasStaticFill(frameCtx);
 
-    const webNeedsUnderBase=frameCtx.effectsPlan?.web?.enabled===true&&!strictSpiralGpu;
+    const webNeedsUnderBase=false; // v7.4.30: Web always belongs above Base/Graffiti in the per-layer effect stack.
     noteFillRuntime(frameCtx,{handled:false,stage:'contract',backend:'none',reason:'',nativeCandidate:Boolean(frameCtx?._nativeFillMeshCandidate)});
     let layerSceneCompositeFailed=false;
     const fillPrepared=frameCtx?._webgpuFillPrepared;
@@ -1060,6 +1116,7 @@ function renderLayerBaseGeometryPass(frameCtx) {
                 }
             }
         }catch(err){frameCtx._webRenderedUnderBase=false;try{spiroPassIsolationNoteFailure?.('web-under-base',err,frameCtx);}catch(_){}}
+        compositeDeferredWebUnderBaseGlow(frameCtx);
     }
 
     if(canKeepGpuSceneOverCanvasFill&&batch?.roles?.has?.('base')&&WebGPUStrokeRenderer.deferLayerScene(batch,frameCtx.frameId)){
@@ -1262,8 +1319,8 @@ function renderLayerProfilePass(frameCtx) {
                 const g=frameCtx.effectsPlan?.glow;if(g?.enabled===true){const glowOpts={radiusPx:Math.max(.5,(Number(g.amount)||0)*.55*frameCtx.frame.dpr),alphaScale:Math.max(0,Number(g.compositeAlpha)||0),composite:'source-over'};const grec=effect.tunnelActive
                     ? WebGPUGraffitiMorphRenderer.encodeCorridorGlowToLayerScene?.(scene.texture,effect.prepared,graffitiStyleLayer,mainCtx,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,glowOpts)
                     : WebGPUGraffitiMorphRenderer.encodeGlowToLayerScene?.(scene.texture,effect.prepared,graffitiStyleLayer,Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),mainCtx,glowOpts,frameCtx);
-                    if(grec?.handled){if(grec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,19,grec.commandBuffer,effect.tunnelActive?'graffiti-morph-contour-glow-corridor':'graffiti-morph-contour-glow',grec.onSubmitted);renderBackendTelemetry.mark('glow','gpu','exact Morph Graffiti contour Glow');}
-                    else{const gst=WebGPUGraffitiMorphRenderer.status?.()||{},cst=typeof WebGPUGraffitiContourGlow!=='undefined'?WebGPUGraffitiContourGlow.status?.():null;noteProfileGpuFailure('graffiti','contour glow',gst.lastError||cst?.lastError||'Morph Graffiti contour Glow encode returned not handled',{renderer:gst,contourGlow:cst});}
+                    if(grec?.handled){noteGraffitiContourGlowOutcome(frameCtx,true);if(grec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,19,grec.commandBuffer,effect.tunnelActive?'graffiti-morph-contour-glow-corridor':'graffiti-morph-contour-glow',grec.onSubmitted);renderBackendTelemetry.mark('glow','gpu','exact Morph Graffiti contour Glow');}
+                    else{noteGraffitiContourGlowOutcome(frameCtx,false);const gst=WebGPUGraffitiMorphRenderer.status?.()||{},cst=typeof WebGPUGraffitiContourGlow!=='undefined'?WebGPUGraffitiContourGlow.status?.():null;noteProfileGpuFailure('graffiti','contour glow',gst.lastError||cst?.lastError||'Morph Graffiti contour Glow encode returned not handled',{renderer:gst,contourGlow:cst});}
                 }
                 rec=effect.tunnelActive
                     ? WebGPUGraffitiMorphRenderer.encodeCorridorToLayerScene(scene.texture,effect.prepared,graffitiStyleLayer,baseAlpha,mainCtx,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,'source-over')
@@ -1286,8 +1343,8 @@ function renderLayerProfilePass(frameCtx) {
             const g=frameCtx.effectsPlan?.glow;if(g?.enabled===true){const glowOpts={radiusPx:Math.max(.5,(Number(g.amount)||0)*.55*frameCtx.frame.dpr),alphaScale:Math.max(0,Number(g.compositeAlpha)||0),composite:'source-over'};const grec=effect.tunnelActive
                 ? WebGPUGraffitiRibbonRenderer.encodeCorridorGlowToLayerScene?.(scene.texture,effect.prepared,graffitiStyleLayer,mainCtx,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,glowOpts)
                 : WebGPUGraffitiRibbonRenderer.encodeGlowToLayerScene?.(scene.texture,effect.prepared,graffitiStyleLayer,Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),mainCtx,glowOpts);
-                if(grec?.handled){if(grec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,19,grec.commandBuffer,effect.tunnelActive?'graffiti-ribbon-contour-glow-corridor':'graffiti-ribbon-contour-glow');renderBackendTelemetry.mark('glow','gpu','exact Graffiti ribbon contour Glow');}
-                else{const gst=WebGPUGraffitiRibbonRenderer.status?.()||{},cst=typeof WebGPUGraffitiContourGlow!=='undefined'?WebGPUGraffitiContourGlow.status?.():null;noteProfileGpuFailure('graffiti','contour glow',gst.lastError||cst?.lastError||'Graffiti ribbon contour Glow encode returned not handled',{renderer:gst,contourGlow:cst});}
+                if(grec?.handled){noteGraffitiContourGlowOutcome(frameCtx,true);if(grec.commandBuffer)queueLayerSceneEffectCommand(frameCtx,19,grec.commandBuffer,effect.tunnelActive?'graffiti-ribbon-contour-glow-corridor':'graffiti-ribbon-contour-glow');renderBackendTelemetry.mark('glow','gpu','exact Graffiti ribbon contour Glow');}
+                else{noteGraffitiContourGlowOutcome(frameCtx,false);const gst=WebGPUGraffitiRibbonRenderer.status?.()||{},cst=typeof WebGPUGraffitiContourGlow!=='undefined'?WebGPUGraffitiContourGlow.status?.():null;noteProfileGpuFailure('graffiti','contour glow',gst.lastError||cst?.lastError||'Graffiti ribbon contour Glow encode returned not handled',{renderer:gst,contourGlow:cst});}
             }
             const rec=effect.tunnelActive
                 ? WebGPUGraffitiRibbonRenderer.encodeCorridorToLayerScene(scene.texture,effect.prepared,graffitiStyleLayer,baseAlpha,mainCtx,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,'source-over')
@@ -1304,7 +1361,7 @@ function renderLayerProfilePass(frameCtx) {
         const g=frameCtx.effectsPlan?.glow;if(g?.enabled===true){const glowOpts={radiusPx:Math.max(.5,(Number(g.amount)||0)*.55*frameCtx.frame.dpr),alphaScale:Math.max(0,Number(g.compositeAlpha)||0),composite:'source-over'};const grec=effect.tunnelActive
             ? WebGPUGraffitiRibbonRenderer.drawCorridorGlowToOverlay?.(effect.prepared,graffitiStyleLayer,mainCtx,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,glowOpts)
             : WebGPUGraffitiRibbonRenderer.drawGlowToOverlay?.(effect.prepared,graffitiStyleLayer,Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),mainCtx,glowOpts);
-            if(grec?.handled)renderBackendTelemetry.mark('glow','gpu','exact Graffiti overlay contour Glow');else{const gst=WebGPUGraffitiRibbonRenderer.status?.()||{},cst=typeof WebGPUGraffitiContourGlow!=='undefined'?WebGPUGraffitiContourGlow.status?.():null;noteProfileGpuFailure('graffiti','overlay contour glow',gst.lastError||cst?.lastError||'GPU overlay contour Glow unavailable',{renderer:gst,contourGlow:cst});}
+            if(grec?.handled){noteGraffitiContourGlowOutcome(frameCtx,true);renderBackendTelemetry.mark('glow','gpu','exact Graffiti overlay contour Glow');}else{noteGraffitiContourGlowOutcome(frameCtx,false);const gst=WebGPUGraffitiRibbonRenderer.status?.()||{},cst=typeof WebGPUGraffitiContourGlow!=='undefined'?WebGPUGraffitiContourGlow.status?.():null;noteProfileGpuFailure('graffiti','overlay contour glow',gst.lastError||cst?.lastError||'GPU overlay contour Glow unavailable',{renderer:gst,contourGlow:cst});}
         }
         const rec=effect.tunnelActive
             ? WebGPUGraffitiRibbonRenderer.drawCorridorToOverlay(effect.prepared,graffitiStyleLayer,baseAlpha,mainCtx,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,'source-over')
@@ -1542,6 +1599,7 @@ function resolveBlueMorphLayerProvider(frameCtx,renderFrame) {
     const specialSpiralGeometryRequested=specialSpiralEndpoint&&Boolean(snap.options.byVertices||snap.options.bySteps||snap.options.byShape||snap.monoOrbitTransforms||specialSpiralExtraGeometry);
 
     const retainedSpiralMode=Boolean(specialSpiralGeometryRequested&&typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail());
+    const strictContinuousSpiral=Boolean(retainedSpiralMode&&specialSpiralEndpoint&&typeof spiralMorphForcesContinuousRail==='function'&&spiralMorphForcesContinuousRail());
     const effectiveCircleMode=snap.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild())||retainedSpiralMode;
 
     const directChaosCircleMode=Boolean(!provider.lightMorphEnabled&&snap.active&&effectiveCircleMode&&(sourceChaos||targetChaos));
@@ -1555,7 +1613,7 @@ function resolveBlueMorphLayerProvider(frameCtx,renderFrame) {
     provider.progress=snap.geometryT;
     provider.byTopology=Boolean(snap.options.byVertices || snap.options.bySteps || snap.monoOrbitTransforms);
     if (snap.mode==='lightning') provider.kind='lightning';
-    else if (provider.geometryActive && snap.mode==='fade') provider.kind='blue-fade';
+    else if (provider.geometryActive && snap.mode==='fade' && !strictContinuousSpiral) provider.kind='blue-fade';
     else if (provider.geometryActive && provider.circleAngular && effectiveCircleMode &&
         (snap.options.byVertices || snap.options.bySteps || snap.options.byShape || snap.monoOrbitTransforms || specialSpiralExtraGeometry)) {
         provider.kind='blue-circle-slide';
@@ -1942,9 +2000,10 @@ function prepareMainLayerInstances(frameCtx, renderFrame) {
     const metricZoom=Math.max(.001,Number(state.zoom)||1),metricCombined=Math.abs(Number(frameCtx.combinedScale)||1);
     const metricRadiusBase=Math.max(0,Number(frameCtx.layerExtent)||0)*Math.max(.001,Number(frameCtx.audioScale)||1)*metricZoom;
     for(let mi=0;mi<metrics.length;mi++){const copy=frameCtx.visibleInstances.copies[mi];let m=metrics[mi];if(!m)m=metrics[mi]={screenScale:1,radiusPx:0};const cs=Math.abs(Number(copy?.scale)||0);m.screenScale=state.tunnel.active?Math.max(.000001,cs*metricCombined*metricZoom):Math.max(.001,metricCombined*metricZoom);m.radiusPx=state.tunnel.active?metricRadiusBase*cs:metricRadiusBase;}
+    const glowOwner=frameCtx.effectLayer||layer;
     const glowBase = frameCtx.minimalFadeEnabled
         ? Math.max(0, (Number(frameCtx.minimalSourceLayer?.glow)||0)*getLayerGlowMultiplier(frameCtx.minimalSourceLayer), (Number(frameCtx.minimalTargetLayer?.glow)||0)*getLayerGlowMultiplier(frameCtx.minimalTargetLayer))
-        : Math.max(0, (Number(layer.glow)||0)*getLayerGlowMultiplier(layer));
+        : Math.max(0, (Number(glowOwner?.glow)||0)*getLayerGlowMultiplier(glowOwner));
     frameCtx.glow = frameCtx.geometryPlan?.kind === 'lightning'
         ? 0
         : audioApplyNumeric('layer.glow',glowBase,layerIndex);
@@ -2077,9 +2136,9 @@ function resetLayerEffectsPlan(plan){
 }
 
 function resolveLayerGlowEffectProvider(frameCtx,plan){
-    const layer=frameCtx.layer,dpr=frameCtx.frame.dpr;
-    const intensityBase=Math.max(0,(Number.isFinite(Number(layer.glowIntensity))?Number(layer.glowIntensity):40)/100);
-    const intensity=intensityBase*getLayerGlowIntensityMultiplier(layer);
+    const layer=frameCtx.layer,glowOwner=frameCtx.effectLayer||layer,dpr=frameCtx.frame.dpr;
+    const intensityBase=Math.max(0,(Number.isFinite(Number(glowOwner?.glowIntensity))?Number(glowOwner.glowIntensity):40)/100);
+    const intensity=intensityBase*getLayerGlowIntensityMultiplier(glowOwner);
     const compositeAlpha=(frameCtx.minimalFadeEnabled?0.72:frameCtx.baseAlpha*0.72)*intensity;
     plan.amount=Math.max(0,Number(frameCtx.glow)||0);
     plan.compositeAlpha=compositeAlpha;
@@ -2371,7 +2430,7 @@ window.__somataSpiralAudit = (layerIndex=0) => {
     const rec=renderRuntime?.layerFrames?.[li]||null;
     const ctx=rec?.prepared?rec:null;
     return {
-        version:'7.4.9',gpuOnly:true,layerIndex:li,layerId:layer?.id||null,
+        version:'7.4.30',gpuOnly:true,layerIndex:li,layerId:layer?.id||null,
         spiral:Boolean(layer&&typeof isSpiralLayer==='function'&&isSpiralLayer(layer)),
         strictGpu:Boolean(ctx&&typeof isStrictSpiralWebGPUFrame==='function'&&isStrictSpiralWebGPUFrame(ctx)),
         corridor:state.tunnel?.active===true,
@@ -2469,12 +2528,15 @@ function renderPreparedMainLayer(frameCtx) {
         try{spiroGpuPreflightLayerPrerequisites?.(frameCtx);}catch(err){try{spiroPassIsolationNoteFailure?.('gpuPreflight',err,frameCtx);}catch(_){}}
         runPass('outline',()=>renderLayerOutlinePass(frameCtx));
         runPass('profile',()=>renderLayerProfilePass(frameCtx));
-        runPass('motion',()=>renderLayerMotionFxPass(frameCtx));
-        runPass('sweep',()=>renderLayerSweepPass(frameCtx));
-        runPass('particles',()=>renderLayerParticlePass(frameCtx));
-        runPass('sprite',()=>renderLayerSpritePass(frameCtx));
+        // Physical invocation order now matches the GPU phase order as well.  This matters on
+        // real drivers because a later pass must never force materialization before Web/Lamps
+        // have attached their commands to the same Layer Scene.
         runPass('web',()=>renderLayerWebPass(frameCtx));
         runPass('lamps',()=>renderLayerLampPass(frameCtx));
+        runPass('motion',()=>renderLayerMotionFxPass(frameCtx));
+        runPass('sweep',()=>renderLayerSweepPass(frameCtx));
+        runPass('sprite',()=>renderLayerSpritePass(frameCtx));
+        runPass('particles',()=>renderLayerParticlePass(frameCtx));
 
         const strictCarrierExpected=isStrictSpiralWebGPUFrame(frameCtx)&&frameCtx.lineDisplayEnabled===true&&
             frameCtx.lineProfileStrokeOnly!==true&&!(typeof isPathFxBaseReplacementActive==='function'&&isPathFxBaseReplacementActive(frameCtx));
@@ -2628,7 +2690,7 @@ function finishMainRenderFrame(renderStartedAt,renderFrame){
     let presented=false;
     if(somataGpuBackendAllowed()){
         try{presented=WebGPUFinalCompositeRenderer.render(renderFrame)===true;}catch(err){somataGpuContractError('FINAL_GPU_RENDER_EXCEPTION',renderFrame,{error:String(err?.stack||err)});}
-    }else somataGpuDiagnosticError('final','capability','WebGPU is unavailable; Somata 7.4.9 has no CPU renderer',renderFrame);
+    }else somataGpuDiagnosticError('final','capability','WebGPU is unavailable; Somata 7.4.30 has no CPU renderer',renderFrame);
     if(!presented){
         const rescue=recoverGpuPresentationToMainCanvas(renderFrame);
         if(rescue.ok){
@@ -2702,7 +2764,7 @@ window.__somataReport=()=>{
     const frame=renderRuntime?.frame||null;
     const spiral=Boolean(layer&&typeof isSpiralLayer==='function'&&isSpiralLayer(layer));
     const report={
-        version:'7.4.9',boot:window.__spiroAppBootComplete===true,now:Number(performance.now().toFixed(1)),
+        version:'7.4.30',boot:window.__spiroAppBootComplete===true,now:Number(performance.now().toFixed(1)),
         scheduler,
         layer:layer?{id:layer.id||null,visible:layer.visible!==false,spiral,lineVisible:typeof getLayerLineVisible==='function'?getLayerLineVisible(layer):null,opacity:Number(layer.opacity),fill:layer.fill===true,profileMode:layer.profileMode||null,splineRenderMode:layer.splineRenderMode||null}:null,
         frame:frame?{id:Number(frame.id)||0,strictSpiralGpuPresentRequired:frame.strictSpiralGpuPresentRequired===true,gpuLayerSceneDeferred:frame.gpuLayerSceneDeferred===true,gpuMainSceneEmpty:frame.gpuMainSceneEmpty===true,gpuMainCanvasHasContent:frame.gpuMainCanvasHasContent===true,gpuFrameSceneLayers:Number(frame.gpuFrameSceneLayers)||0,renderLayerCount:Number(frame.renderLayerCount)||0}:null,
@@ -2735,7 +2797,7 @@ window.__somataSpiralTrace=()=>{
     try{canonical=layer&&typeof getCanonicalLayerGeometry==='function'?getCanonicalLayerGeometry(layer):null;}catch(err){canonical={error:String(err?.message||err)};}
     const paths=Array.isArray(canonical?.paths)?canonical.paths:[];
     const pointCount=paths.reduce((n,p)=>n+(Array.isArray(p?.points)?p.points.length:0),0);
-    const out={version:'7.4.9',uiMode,mode,layer:authored,morph,canonical:canonical?{geometryKey:canonical.geometryKey||canonical.key||null,pathCount:paths.length,pointCount,closedPathCount:paths.filter(p=>p?.closed===true).length,openPathCount:paths.filter(p=>p?.closed!==true).length,spiralMetaClosedPoints:paths.reduce((n,p)=>n+(p?.points||[]).filter(q=>q?.__spiralClosed===true).length,0),error:canonical.error||null}:null,scene:{internal:{...somataSpiralSceneDiag.internal},base:{...somataSpiralSceneDiag.base}},webgpu:{hub:window.__spiroWebGPUHubStatus?.()||null,stroke:window.__spiroWebGPUStatus?.()||null,staticBezier:window.__spiroStaticSpiralBezierStatus?.()||null,bezier:window.__somataSpiralBezierMorphStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,profileArc:window.__spiroProfileArcMarkerStatus?.()||null,final:window.__spiroFinalGPUStatus?.()||null}};
+    const out={version:'7.4.30',uiMode,mode,layer:authored,morph,canonical:canonical?{geometryKey:canonical.geometryKey||canonical.key||null,pathCount:paths.length,pointCount,closedPathCount:paths.filter(p=>p?.closed===true).length,openPathCount:paths.filter(p=>p?.closed!==true).length,spiralMetaClosedPoints:paths.reduce((n,p)=>n+(p?.points||[]).filter(q=>q?.__spiralClosed===true).length,0),error:canonical.error||null}:null,scene:{internal:{...somataSpiralSceneDiag.internal},base:{...somataSpiralSceneDiag.base}},webgpu:{hub:window.__spiroWebGPUHubStatus?.()||null,stroke:window.__spiroWebGPUStatus?.()||null,staticBezier:window.__spiroStaticSpiralBezierStatus?.()||null,bezier:window.__somataSpiralBezierMorphStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,profileArc:window.__spiroProfileArcMarkerStatus?.()||null,final:window.__spiroFinalGPUStatus?.()||null}};
     console.log('[Somata Spiral trace]',out);return out;
 };
 

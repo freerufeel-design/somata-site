@@ -4,6 +4,8 @@ window.__spiroRegisterModule?.('js/render/fill-plan');
 var FillMeshPreparer = (() => {
     let cache = new WeakMap();
     let dynamicCache = new WeakMap();
+    let spiralMorphCache = new WeakMap();
+    let spiralInterwindingCache = new WeakMap();
     let evictedMeshes = [];
     const MAX_VARIANTS_PER_DRAW_DATA = 16;
     const EPS = 1e-8;
@@ -29,6 +31,7 @@ var FillMeshPreparer = (() => {
     }
 
     function renderedContourPoints(layer, contour) {
+        if(contour?.spiralBand===true&&Array.isArray(contour?.points))return cleanContourPoints(contour.points);
         const path = contour?.path;
         if (!path?.points?.length) return null;
         const sampler = createLampRenderedPathSampler();
@@ -39,6 +42,102 @@ var FillMeshPreparer = (() => {
             roundPolylineForDraw(sampler, path.points, true, rounding, path.cornerFlags || []);
         }
         return cleanContourPoints(sampler.points.length >= 3 ? sampler.points : path.points);
+    }
+
+
+    function sampleSpiralBranchPath(path) {
+        const cubics=Array.isArray(path?._bezierSegments)?path._bezierSegments:null;
+        if(cubics?.length){
+            const out=[];
+            const evalCubic=(seg,t)=>{const q=1-t,p0=seg.p0,c1=seg.c1,c2=seg.c2,p3=seg.p3;return{x:q*q*q*p0.x+3*q*q*t*c1.x+3*q*t*t*c2.x+t*t*t*p3.x,y:q*q*q*p0.y+3*q*q*t*c1.y+3*q*t*t*c2.y+t*t*t*p3.y};};
+            const subdiv=8;
+            for(let si=0;si<cubics.length;si++){const seg=cubics[si];if(!seg?.p0||!seg?.p3)continue;for(let j=0;j<subdiv;j++){if(si>0&&j===0)continue;out.push(evalCubic(seg,j/subdiv));}if(si===cubics.length-1)out.push(evalCubic(seg,1));}
+            return cleanContourPoints(out.length>=2?out:path?.points||[]);
+        }
+        const pts=(path?.points||[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y))).map(p=>({x:Number(p.x),y:Number(p.y)}));
+        return pts.length>=2?pts:null;
+    }
+
+    function getSpiralBandPaths(drawData, layer) {
+        if(!isSpiralLayer(layer)||layer?.spiralClosed===false||layer?.spiralFillEnabled!==true)return null;
+        const paths=(drawData?.paths||[]).filter(p=>p?.closed!==true&&Array.isArray(p?.points)&&p.points.length>=2);
+        if(paths.length<2||paths.length%2!==0)return null;
+        const sorted=paths.slice().sort((a,b)=>{const ai=Number(a?.spiralBranchIndex),bi=Number(b?.spiralBranchIndex);if(Number.isFinite(ai)&&Number.isFinite(bi))return ai-bi;return (Number(a?.orbitIndex)||0)-(Number(b?.orbitIndex)||0);});
+        return sorted;
+    }
+
+    function hasSpiralBandTopology(drawData, layer) {
+        const paths=getSpiralBandPaths(drawData,layer);
+        return Boolean(paths&&paths.length>=2&&paths.length%2===0);
+    }
+
+    function buildSpiralBandContours(drawData, layer) {
+        const paths=getSpiralBandPaths(drawData,layer);
+        if(!paths)return null;
+        const contours=[];
+        for(let i=0;i<paths.length;i+=2){
+            const a=sampleSpiralBranchPath(paths[i]),b=sampleSpiralBranchPath(paths[i+1]);
+            if(!a||!b||a.length<2||b.length<2)continue;
+            const points=[];for(const p of a)points.push({x:Number(p.x),y:Number(p.y)});for(let j=b.length-1;j>=0;j--)points.push({x:Number(b[j].x),y:Number(b[j].y)});
+            const clean=cleanContourPoints(points);if(clean?.length>=3)contours.push({path:{points:clean,closed:true},points:clean,closed:true,fillEligible:true,spiralBand:true,pairIndex:i/2});
+        }
+        return contours.length*2===paths.length?contours:null;
+    }
+
+    function transformSpiralFillPoint(p,copy,layer){
+        const sc=Math.max(.000001,Math.abs(Number(copy?.scale)||1));
+        let ang=0;try{ang=typeof getMotionTunnelLagRadians==='function'?(Number(getMotionTunnelLagRadians(copy,layer))||0):0;}catch(_){}
+        const c=Math.cos(ang),sn=Math.sin(ang),x=Number(p?.x)||0,y=Number(p?.y)||0;
+        return{x:(c*x-sn*y)*sc,y:(sn*x+c*y)*sc};
+    }
+    function branchDelta(path){
+        const meta=path?.points?.[0],d=Number(meta?.__spiralDelta);if(Number.isFinite(d))return d;
+        const pts=path?.points||[];if(pts.length<2)return 0;
+        const a=pts[0],b=pts[pts.length-1];let q=Math.atan2(Number(b.y)||0,Number(b.x)||0)-Math.atan2(Number(a.y)||0,Number(a.x)||0);
+        while(q>Math.PI)q-=Math.PI*2;while(q<=-Math.PI)q+=Math.PI*2;return q;
+    }
+    function buildFanMeshFromBands(layer,bands,frameCtx,semantic,flags={}){
+        if(!bands?.length)return null;
+        let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,totalEdges=0,totalPoints=0;
+        const cleanBands=[];
+        for(const raw of bands){const pts=cleanContourPoints(raw);if(!pts||pts.length<3)return null;cleanBands.push(pts);totalPoints+=pts.length;totalEdges+=pts.length;for(const q of pts){const x=Number(q.x),y=Number(q.y);if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;}}
+        if(!totalEdges||!Number.isFinite(minX)||!Number.isFinite(minY)||!Number.isFinite(maxX)||!Number.isFinite(maxY))return null;
+        let entry=spiralInterwindingCache.get(layer);if(!entry){entry={capacityFloats:0,storage:null,mesh:{dynamic:true,dynamicScreenSpace:false,revision:0,frameId:-1,fanData:null,fanFloatCount:0,fanTriangleCount:0,complete:false,nativeComplete:false,records:[]}};spiralInterwindingCache.set(layer,entry);}
+        const need=totalEdges*6;if(!entry.storage||entry.capacityFloats<need){let cap=Math.max(384,entry.capacityFloats||0);while(cap<need)cap=Math.ceil(cap*1.6);entry.capacityFloats=cap;entry.storage=new Float32Array(cap);}
+        const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1,out=entry.storage;let o=0;
+        for(const pts of cleanBands)for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];if(samePoint(a,b))continue;out[o++]=anchorX;out[o++]=anchorY;out[o++]=Number(a.x);out[o++]=Number(a.y);out[o++]=Number(b.x);out[o++]=Number(b.y);}
+        const mesh=entry.mesh;mesh.fanData=entry.storage;mesh.fanFloatCount=o;mesh.fanTriangleCount=Math.floor(o/6);mesh.complete=mesh.fanTriangleCount>0;mesh.nativeComplete=mesh.complete;mesh.frameId=Number(frameCtx?.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;mesh.anchor={x:anchorX,y:anchorY};mesh.totalVertices=totalPoints;mesh.totalTriangles=mesh.fanTriangleCount;mesh.spiralBandCount=cleanBands.length;mesh.spiralBandFill=true;mesh.semantic=semantic;Object.assign(mesh,flags);frameCtx._fillMeshShadow=mesh;return mesh;
+    }
+    function prepareInterwindingCorridor(frameCtx,auxPaths=null){
+        const layer=frameCtx?.layer;
+        if(!layer?.fill||layer?.spiralFillEnabled!==true||layer?.spiralFillType!=='interwinding'||layer?.spiralClosed===false||!isSpiralLayer(layer)||state?.tunnel?.active!==true)return null;
+        let paths;
+        if(Array.isArray(auxPaths)&&auxPaths.length){
+            paths=auxPaths.filter(p=>Array.isArray(p?.points)&&p.points.length>=2&&Number(p?.alpha??1)>.00001).slice();
+            const phase=(p,i)=>Number.isFinite(Number(p?.branchPhase))?((Number(p.branchPhase)%1)+1)%1:(Number.isFinite(Number(p?.spiralBranchIndex))?Number(p.spiralBranchIndex):i)/Math.max(1,paths.length);
+            paths.forEach((p,i)=>p.__interwindSort=phase(p,i));paths.sort((a,b)=>(Number(a.__interwindSort)||0)-(Number(b.__interwindSort)||0));
+        }else{
+            const drawData=frameCtx?.geometryPlan?.sourceData||frameCtx?.staticDrawData;paths=getSpiralBandPaths(drawData,layer);
+        }
+        if(!paths||paths.length<2||paths.length%2!==0)return null;
+        const samples=paths.map(sampleSpiralBranchPath);if(samples.some(p=>!p||p.length<2))return null;
+        const sourceCopies=Array.isArray(frameCtx?.visibleInstances?.copies)?frameCtx.visibleInstances.copies:[];
+        const sourceAlphas=frameCtx?.visibleInstances?.fillAlphas||frameCtx?.visibleInstances?.alphas||[];
+        const copies=sourceCopies.map((copy,i)=>({copy,alpha:Number(sourceAlphas[i]??1)})).filter(r=>r.alpha>.0005&&Number(r.copy?.scale)>0).sort((a,b)=>Number(b.copy.scale)-Number(a.copy.scale));
+        if(!copies.length)return null;
+        const n=paths.length,TWO=Math.PI*2,lags=copies.map(r=>{try{return typeof getMotionTunnelLagRadians==='function'?(Number(getMotionTunnelLagRadians(r.copy,layer))||0):0;}catch(_){return 0;}});
+        const rails=[];
+        for(let seed=0;seed<n;seed++){
+            const rail=[];let idx=seed;
+            for(let ci=0;ci<copies.length;ci++){
+                const pts=samples[idx],copy=copies[ci].copy;
+                for(let pi=0;pi<pts.length;pi++){const q=transformSpiralFillPoint(pts[pi],copy,layer);if(!rail.length||pi>0||Math.hypot(q.x-rail[rail.length-1].x,q.y-rail[rail.length-1].y)>1e-7)rail.push(q);}
+                if(ci+1<copies.length){const d=branchDelta(paths[idx]),shift=Math.round((d+lags[ci]-lags[ci+1])*n/TWO);idx=((idx+shift)%n+n)%n;}
+            }
+            rails.push(rail);
+        }
+        const bands=[];for(let i=0;i<n;i+=2){const a=rails[i],b=rails[i+1];if(!a?.length||!b?.length)return null;const pts=[];for(const q of a)pts.push(q);for(let j=b.length-1;j>=0;j--)pts.push(b[j]);bands.push(pts);}
+        return buildFanMeshFromBands(layer,bands,frameCtx,'interwinding Spiral Fill: neighboring rails are continued through Corridor periods before stencil fill',{spiralInterwindingFill:true,corridorBaked:true});
     }
 
     function keyFor(layer) {
@@ -59,11 +158,13 @@ var FillMeshPreparer = (() => {
         if (cached) { hits++; return cached; }
 
         const canonical = GeometryKernel.inspectStaticDrawData(drawData);
+        const spiralBandContours=buildSpiralBandContours(drawData,layer);
+        const sourceContours=spiralBandContours||canonical.fillContours||[];
         const records = [];
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         let totalPoints = 0, rejected = 0;
 
-        for (const contour of canonical.fillContours || []) {
+        for (const contour of sourceContours) {
             contoursSeen++;
             const points = renderedContourPoints(layer, contour);
             if (!points || points.length < 3) {
@@ -119,7 +220,9 @@ var FillMeshPreparer = (() => {
             complete,
             nativeComplete: complete,
             preparationComplexity: 'O(N)',
-            semantic: 'canonical linear stencil Fill: all contours share one stencil field and one color composite'
+            spiralBandFill:Boolean(spiralBandContours),
+            spiralBandCount:spiralBandContours?.length||0,
+            semantic: spiralBandContours ? 'closed even Spiral: alternating neighboring branch-pairs -> closed stencil bands' : 'canonical linear stencil Fill: all contours share one stencil field and one color composite'
         };
 
         variants.set(key, result);
@@ -134,11 +237,11 @@ var FillMeshPreparer = (() => {
 
     function prepareFrame(frameCtx) {
         const layer = frameCtx?.layer, plan = frameCtx?.geometryPlan || {};
-        if (!layer?.fill || plan.dynamic === true || isSpiralLayer(layer)) {
+        if (!layer?.fill || plan.dynamic === true) {
             skippedFrames++; return null;
         }
         const drawData = plan.sourceData || frameCtx.staticDrawData;
-        if (!drawData) { skippedFrames++; return null; }
+        if (!drawData || (isSpiralLayer(layer) && !hasSpiralBandTopology(drawData,layer))) { skippedFrames++; return null; }
         const fillPlan = prepareStatic(drawData, layer);
         frameCtx._fillMeshShadow = fillPlan;
         preparedFrames++;
@@ -148,7 +251,54 @@ var FillMeshPreparer = (() => {
     function canUseNative(frameCtx) {
         const fillPlan = frameCtx?._fillMeshShadow || prepareFrame(frameCtx), plan = frameCtx?.geometryPlan || {};
         return Boolean(fillPlan?.nativeComplete && fillPlan.fanTriangleCount > 0 && plan.dynamic !== true &&
-            !isSpiralLayer(frameCtx?.layer) && !state.fourierMode && !state.showRoundingGuides);
+            (!isSpiralLayer(frameCtx?.layer) || fillPlan?.spiralBandFill===true) && !state.fourierMode && !state.showRoundingGuides);
+    }
+
+    function prepareSpiralMorphBands(frameCtx, auxPaths) {
+        const layer=frameCtx?.layer;
+        if(!layer?.fill||layer?.spiralFillEnabled!==true||layer?.spiralClosed===false||!isSpiralLayer(layer)||!Array.isArray(auxPaths)||auxPaths.length<2)return null;
+        const sourceLayer=frameCtx?.blueMorphProvider?.sourceLayer||frameCtx?.sourceLayer||frameCtx?.geometryPlan?.sourceLayer||null;
+        const targetLayer=frameCtx?.blueMorphProvider?.targetLayer||frameCtx?.geometryPlan?.targetLayer||null;
+        const sourceClosed=sourceLayer?.spiralEnabled===true?sourceLayer.spiralClosed!==false:true;
+        const targetClosed=targetLayer?.spiralEnabled===true?targetLayer.spiralClosed!==false:true;
+        if(!sourceClosed||!targetClosed)return null;
+        const srcN=Math.max(2,Math.round(Number(sourceLayer?.N)||auxPaths.length));
+        const dstN=Math.max(2,Math.round(Number(targetLayer?.N)||auxPaths.length));
+        // Alternating bands are unambiguous through Morph only while both endpoint branch counts are even.
+        if((srcN&1)!==0||(dstN&1)!==0)return null;
+        const paths=auxPaths.filter(p=>Array.isArray(p?.points)&&p.points.length>=2&&Number(p?.alpha??1)>.00001).slice();
+        if(paths.length<2||paths.length%2!==0)return null;
+        const phaseKey=(p,idx)=>{
+            if(Number.isFinite(Number(p?.branchPhase)))return ((Number(p.branchPhase)%1)+1)%1;
+            const a=Number(p?.sourceBranchIndex),b=Number(p?.targetBranchIndex),sn=Math.max(1,Number(p?.sourceBranchCount)||srcN),dn=Math.max(1,Number(p?.targetBranchCount)||dstN);
+            if(Number.isFinite(a)&&Number.isFinite(b)){
+                const sa=((a/sn)%1+1)%1,db=((b/dn)%1+1)%1;let d=db-sa;d=((d+.5)%1+1)%1-.5;
+                return ((sa+d*.5)%1+1)%1;
+            }
+            if(Number.isFinite(a))return ((a/sn)%1+1)%1;
+            if(Number.isFinite(b))return ((b/dn)%1+1)%1;
+            return idx/Math.max(1,paths.length);
+        };
+        paths.forEach((p,i)=>{p.__fillSortKey=phaseKey(p,i);});
+        paths.sort((a,b)=>(Number(a.__fillSortKey)||0)-(Number(b.__fillSortKey)||0));
+
+        let totalEdges=0,totalPoints=0,minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+        const bands=[];
+        for(let i=0;i<paths.length;i+=2){
+            const ap=paths[i].points,bp=paths[i+1].points,pts=[];
+            for(const q of ap)pts.push(q);for(let j=bp.length-1;j>=0;j--)pts.push(bp[j]);
+            const clean=cleanContourPoints(pts);if(!clean||clean.length<3)return null;
+            bands.push(clean);totalPoints+=clean.length;totalEdges+=clean.length;
+            for(const q of clean){const x=Number(q.x),y=Number(q.y);if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;}
+        }
+        if(!totalEdges||!Number.isFinite(minX)||!Number.isFinite(minY)||!Number.isFinite(maxX)||!Number.isFinite(maxY))return null;
+        let entry=spiralMorphCache.get(layer);
+        if(!entry){entry={capacityFloats:0,storage:null,mesh:{dynamic:true,dynamicScreenSpace:false,spiralBandFill:true,revision:0,frameId:-1,fanData:null,fanFloatCount:0,fanTriangleCount:0,complete:false,nativeComplete:false,records:[],semantic:'dynamic retained Spiral alternating branch-pair Fill'}};spiralMorphCache.set(layer,entry);}
+        const need=totalEdges*6;if(!entry.storage||entry.capacityFloats<need){let cap=Math.max(192,entry.capacityFloats||0);while(cap<need)cap=Math.ceil(cap*1.6);entry.capacityFloats=cap;entry.storage=new Float32Array(cap);}
+        const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1,out=entry.storage;let o=0;
+        for(const pts of bands)for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];if(samePoint(a,b))continue;out[o++]=anchorX;out[o++]=anchorY;out[o++]=Number(a.x);out[o++]=Number(a.y);out[o++]=Number(b.x);out[o++]=Number(b.y);}
+        const mesh=entry.mesh;mesh.fanData=entry.storage;mesh.fanFloatCount=o;mesh.fanTriangleCount=Math.floor(o/6);mesh.complete=mesh.fanTriangleCount>0;mesh.nativeComplete=mesh.complete;mesh.frameId=Number(frameCtx?.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;mesh.anchor={x:anchorX,y:anchorY};mesh.totalVertices=totalPoints;mesh.totalTriangles=mesh.fanTriangleCount;mesh.spiralBandCount=bands.length;
+        frameCtx._fillMeshShadow=mesh;return mesh;
     }
 
     function prepareDynamicCommands(frameCtx, commands) {
@@ -220,7 +370,7 @@ var FillMeshPreparer = (() => {
     }
 
     function takeEvicted() { const out = evictedMeshes; evictedMeshes = []; return out; }
-    function reset() { cache = new WeakMap(); dynamicCache = new WeakMap(); evictedMeshes = []; }
+    function reset() { cache = new WeakMap(); dynamicCache = new WeakMap(); spiralMorphCache = new WeakMap(); spiralInterwindingCache = new WeakMap(); evictedMeshes = []; }
     function status() {
         return {
             builds, hits, contoursSeen, degenerateContours, variantEvictions,
@@ -232,7 +382,7 @@ var FillMeshPreparer = (() => {
             semantic: 'all static closed contours -> one GPU stencil field -> one layer color composite'
         };
     }
-    return { prepareStatic, prepareFrame, prepareDynamicCommands, canUseNative, takeEvicted, status, reset };
+    return { prepareStatic, prepareFrame, prepareDynamicCommands, prepareSpiralMorphBands, prepareInterwindingCorridor, canUseNative, hasSpiralBandTopology, buildSpiralBandContours, takeEvicted, status, reset };
 })();
 
 window.__spiroFillMeshPreparationStatus = () => FillMeshPreparer.status();
@@ -245,7 +395,7 @@ window.__spiroNativeFillPolicy = () => ({
     defaultFillRule: 'evenodd',
     requiresNativeComplete: true,
     preparationComplexity: 'O(N)',
-    excludes: ['dynamic-morph', 'spiral', 'fourier', 'rounding-guides'],
+    excludes: ['dynamic-morph', 'open/odd-branch spiral', 'fourier', 'rounding-guides'],
     fallbackOrder: ['native-webgpu-stencil', 'exact-rule-mask->webgpu', 'exact-rule-mask->webgl2', 'exact-canvas-fill'],
     layerSceneResident: true,
     visibleSemantics: 'source-over, premultiplied, 4x MSAA; one composite per layer'

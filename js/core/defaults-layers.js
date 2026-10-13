@@ -339,6 +339,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             if (Number.isFinite(Number(owner.lamps.brightnessMultiplier)) && Number(owner.lamps.brightnessMultiplier) !== 1) owner.lamps.brightness=Math.max(0,Math.min(200,(Number(owner.lamps.brightness)||0)*Number(owner.lamps.brightnessMultiplier)));
             delete owner.lamps.brightnessMultiplier;
             owner.lamps.webgl=true;
+            owner.lamps.blendMode=['lighter','screen','source-over','color-dodge','difference','color'].includes(String(owner.lamps.blendMode||'').toLowerCase())?String(owner.lamps.blendMode).toLowerCase():'lighter';
             delete owner.lamps.rasterized;
             delete owner.lamps.hd;
             if(typeof owner.lamps.freezeLight!=='boolean') owner.lamps.freezeLight=false;
@@ -566,6 +567,8 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 spiralClosed: true,
                 spiralTangential: true,
                 spiralRoundSeams: true,
+                spiralFillEnabled: false,
+                spiralFillType: 'interwinding',
                 profileNodes: [
                     { x: 0.0, y: 0.0 },
                     { x: 1.0, y: 0.0 }
