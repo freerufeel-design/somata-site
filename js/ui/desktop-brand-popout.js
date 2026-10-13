@@ -127,7 +127,7 @@ function openOutputWindow(){
         brandRuntime.popupBlocked++;
         if(!brandRuntime.lastError)brandRuntime.lastError='popup-blocked';
         setLocalPresentationHidden(false);
-        console.warn('[Somata 7.4.30] external output window was blocked; centered logo remains active');
+        console.warn('[Somata 7.5] external output window was blocked; centered logo remains active');
         return false;
     }
     brandRuntime.popout=w;

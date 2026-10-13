@@ -43,7 +43,7 @@ function somataGpuContractError(code,ctx=null,details=null){
     }
     const key=`${payload.code}:${payload.layerIndex}`;const now=performance.now(),prev=somataFullGpuDiag.lastLogAt.get(key)||-1e9;
     const minLogGapMs=recoverable?5000:500;
-    if(now-prev>minLogGapMs){somataFullGpuDiag.lastLogAt.set(key,now);(recoverable?console.warn:console.error)(`[Somata 7.4.30 FullGPU] ${payload.code}`,payload);}
+    if(now-prev>minLogGapMs){somataFullGpuDiag.lastLogAt.set(key,now);(recoverable?console.warn:console.error)(`[Somata 7.5 FullGPU] ${payload.code}`,payload);}
     return false;
 }
 window.__somataFullGpuDiagnostics=()=>({strict:true,canvasFallbackAllowed:false,fastGpuAllowed:false,errors:somataFullGpuDiag.errors,warnings:somataFullGpuDiag.warnings,last:somataFullGpuDiag.last,lastAt:somataFullGpuDiag.lastAt,byCode:{...somataFullGpuDiag.byCode}});
@@ -219,9 +219,9 @@ function somataGpuDiagnosticError(feature,stage,reason,frameCtx=null,extra=null)
     let rec=somataGpuDiagnosticSignatures.get(sig);if(rec){rec.count++;somataGpuRuntimeDiagnostic.repeats++;return fingerprint;}
     rec={count:1};somataGpuDiagnosticSignatures.set(sig,rec);
     const rt=typeof runtimeState!=='undefined'?runtimeState:null,fx=frameCtx?.effectsPlan||{},sweep=fx.sweep?.cfg||frameCtx?.effectLayer?.sweep||frameCtx?.layer?.sweep||null;
-    const payload={version:'7.4.30',errorId:fingerprint,feature:String(feature||'gpu'),stage:String(stage||'render'),reason:msg,frameId:Number(frameCtx?.frameId||frameCtx?.frame?.id)||0,layerId:frameCtx?.layer?.id||null,layerIndex:Number(frameCtx?.layerIndex??-1),mode:{blue:rt?.morph?.active===true,orange:rt?.minimalMorph?.active===true,green:rt?.projectMorph?.active===true,corridor:state?.tunnel?.active===true,morphMode:state?.morph?.mode||null},effects:{graffiti:frameCtx?.lineProfileApplication==='graffiti',web:fx.web?.enabled===true,sweep:fx.sweep?.enabled===true,lamps:fx.lamps?.enabled===true,particles:fx.particles?.enabled===true},sweep:sweep?{type:sweep.effectType||'glint',profile:(sweep.effectType==='lightning'?(sweep.lightningProfileShape||'current'):(sweep.profileShape||'current'))}:null,fallback:extra?.fallback||'skip-pass',recovered:extra?.recovered!==false,canvasFallbackBlocked:true,...(extra||{})};
+    const payload={version:'7.5',errorId:fingerprint,feature:String(feature||'gpu'),stage:String(stage||'render'),reason:msg,frameId:Number(frameCtx?.frameId||frameCtx?.frame?.id)||0,layerId:frameCtx?.layer?.id||null,layerIndex:Number(frameCtx?.layerIndex??-1),mode:{blue:rt?.morph?.active===true,orange:rt?.minimalMorph?.active===true,green:rt?.projectMorph?.active===true,corridor:state?.tunnel?.active===true,morphMode:state?.morph?.mode||null},effects:{graffiti:frameCtx?.lineProfileApplication==='graffiti',web:fx.web?.enabled===true,sweep:fx.sweep?.enabled===true,lamps:fx.lamps?.enabled===true,particles:fx.particles?.enabled===true},sweep:sweep?{type:sweep.effectType||'glint',profile:(sweep.effectType==='lightning'?(sweep.lightningProfileShape||'current'):(sweep.profileShape||'current'))}:null,fallback:extra?.fallback||'skip-pass',recovered:extra?.recovered!==false,canvasFallbackBlocked:true,...(extra||{})};
     somataGpuRuntimeDiagnostic.last=payload;somataGpuRuntimeDiagnostic.lastAt=performance.now();
-    const logger=extra?.recovered===true?console.warn:console.error;logger(`[Somata 7.4.30 ${fingerprint}] ${payload.feature}/${payload.stage}: ${msg}`,payload);return fingerprint;
+    const logger=extra?.recovered===true?console.warn:console.error;logger(`[Somata 7.5 ${fingerprint}] ${payload.feature}/${payload.stage}: ${msg}`,payload);return fingerprint;
 }
 window.__somataGpuRuntimeDiagnostics=()=>({last:somataGpuRuntimeDiagnostic.last,lastAt:somataGpuRuntimeDiagnostic.lastAt,repeats:somataGpuRuntimeDiagnostic.repeats,signatures:[...somataGpuDiagnosticSignatures.entries()].map(([signature,v])=>({errorId:`GPU-${somataGpuFingerprint(signature)}`,count:v.count,signature}))});
 
@@ -311,7 +311,8 @@ function prepareLayerStrokeWebGPUBatch(frameCtx){
     const includeCore=Boolean(outline?.enabled&&!outline.graffiti&&!markerProfile&&Math.max(0,Number(outline.coreInset)||0)>0);
     const sceneFillMask=fillPrepared?.authoritative===true?fillPrepared.mask:null;
     const sceneNativeFill=nativeFillCandidate&&FillGPURenderer.canEncodeMeshToTexture(frameCtx,frameCtx._nativeFillMeshCandidate)?frameCtx._nativeFillMeshCandidate:null;
-    const sceneOpt={uniformKey:String(frameCtx.layer?.id||`layer-${frameCtx.layerIndex}`),fillMask:sceneFillMask,fillStyle:fillPrepared?.fillStyle||fillContract?.fillStyle||null,nativeFillMesh:sceneNativeFill,nativeFillFrameCtx:sceneNativeFill?frameCtx:null,includeOutline,includeCore,outlineBehind:outlineMode==='outer'};
+    const webResident=frameCtx._webPassHandled===true&&Boolean(getResidentGpuLayerScene(frameCtx)?.texture);
+    const sceneOpt={uniformKey:String(frameCtx.layer?.id||`layer-${frameCtx.layerIndex}`),fillMask:sceneFillMask,fillStyle:fillPrepared?.fillStyle||fillContract?.fillStyle||null,nativeFillMesh:sceneNativeFill,nativeFillFrameCtx:sceneNativeFill?frameCtx:null,includeOutline,includeCore,outlineBehind:outlineMode==='outer',preserveExistingScene:webResident};
     const batch=WebGPUStrokeRenderer.renderLayerBatch(commands,specs,sceneOpt);if(batch?.roles?.size>=1)frameCtx._webgpuStrokeBatch=batch;return frameCtx._webgpuStrokeBatch;
 }
 
@@ -352,7 +353,6 @@ function noteGraffitiContourGlowOutcome(frameCtx,handled){
 }
 
 function renderLayerGlowPass(frameCtx) {
-    frameCtx._glowDeferredForWebUnderBase=false;
     const effect=frameCtx.effectsPlan?.glow;
     const strictSpiralGlow=isStrictSpiralWebGPUFrame(frameCtx);
     if(!effect?.enabled)return;
@@ -412,10 +412,7 @@ function renderLayerGlowPass(frameCtx) {
         if(ok){renderBackendTelemetry.mark('glow','gpu','GPU marker glow');return;}
     }
     if(frameCtx._webgpuStrokeBatch?.sceneCombined&&frameCtx._webgpuStrokeBatch?.roles?.has?.('glow')){
-        if(frameCtx.effectsPlan?.web?.enabled===true&&!strictSpiralGlow){
-            frameCtx._glowDeferredForWebUnderBase=true;
-            renderBackendTelemetry.mark('glow','gpu','deferred until Web-under-Base materializes');
-        }else renderBackendTelemetry.mark('glow','gpu','Layer Scene');
+        renderBackendTelemetry.mark('glow','gpu',frameCtx._webgpuStrokeBatch?.preserveExistingScene===true?'Layer Scene above resident Web':'Layer Scene');
         return;
     }
     if(frameCtx._webgpuStrokeBatch?.roles?.has?.('glow')&&WebGPUStrokeRenderer.compositeLayerBatch(frameCtx._webgpuStrokeBatch,'glow',mainCtx,'source-over')){renderBackendTelemetry.mark('glow','gpu','WebGPU stroke batch');return;}
@@ -431,21 +428,6 @@ function renderLayerGlowPass(frameCtx) {
     somataGpuDiagnosticError('glow','render','GPU glow unavailable; pass skipped',frameCtx,{fallback:'skip-glow-pass',recovered:true});
     try{requestMainCanvasRender?.();}catch(_){}
 
-}
-
-function compositeDeferredWebUnderBaseGlow(frameCtx){
-    if(frameCtx?._glowDeferredForWebUnderBase!==true)return false;
-    frameCtx._glowDeferredForWebUnderBase=false;
-    const batch=frameCtx?._webgpuStrokeBatch;
-    if(batch?.roles?.has?.('glow')&&WebGPUStrokeRenderer.compositeLayerBatch?.(batch,'glow',mainCtx,'source-over')){
-        frameCtx._glowCommitted=true;
-        if(frameCtx.frame)frameCtx.frame.gpuMainCanvasHasContent=true;
-        renderBackendTelemetry.mark('glow','gpu','Web-under-Base preserved Glow');
-        return true;
-    }
-    somataGpuDiagnosticError('glow','web-order','Web-under-Base could not preserve the prepared Glow role',frameCtx,{fallback:'retry-next-frame',recovered:true});
-    try{requestMainCanvasRender?.();}catch(_){}
-    return false;
 }
 
 function distanceOriginToSegment(a,b){
@@ -717,7 +699,7 @@ function canDeferLayerSceneDirect(frameCtx,batch){
     return WebGPUFinalCompositeRenderer.canDeferLayerScene(frameCtx.frame,pathFxRequired||gpuBaseRequired);
 }
 
-const SOMATA_STRICT_SPIRAL_GPU_PRESENTATION=false; // 7.4.30: stability first; specialized Spiral rails may be used, but failure falls back to the general GPU path.
+const SOMATA_STRICT_SPIRAL_GPU_PRESENTATION=false; // 7.5: stability first; specialized Spiral rails may be used, but failure falls back to the general GPU path.
 const somataSpiralSceneDiag={
     internal:{frameId:0,ok:false,reason:'not-checked'},
     external:{frameId:0,ok:false,reason:'not-checked'},
@@ -849,6 +831,31 @@ function getResidentGpuLayerScene(frameCtx){
     return rec?.texture?rec:null;
 }
 
+function stabilizeWebUnderBaseStack(frameCtx){
+    const resident=frameCtx?._webPassHandled===true?getResidentGpuLayerScene(frameCtx):null;
+    if(!resident?.texture)return false;
+    const batch=frameCtx._webgpuStrokeBatch,hiddenGraffiti=frameCtx.lineProfileStrokeOnly===true&&frameCtx.lineProfileApplication==='graffiti';
+    const canStayResident=Boolean(
+        (batch?.sceneCombined&&batch?.preserveExistingScene===true&&canDeferLayerSceneForFrame(frameCtx,batch))||
+        canUseGpuOnlyCorridorLayerScene(frameCtx,hiddenGraffiti)||
+        canUseGpuSpiralBezierLayerScene(frameCtx,hiddenGraffiti)
+    );
+    if(canStayResident)return true;
+    // Some older specialized Morph renderers still present directly to Canvas2D. Materialize Web
+    // once before them, then rebuild the batch with a clear root. This is the correctness fallback,
+    // not the steady-state path.
+    if(materializeDeferredLayerScene(frameCtx)){
+        frameCtx._webMaterializedUnderBase=true;frameCtx.frame.gpuMainCanvasHasContent=true;
+        prepareLayerStrokeWebGPUBatch(frameCtx);
+        renderBackendTelemetry.mark('web','gpu','Web materialized once before non-resident Line backend');
+        return false;
+    }
+    try{WebGPUStrokeRenderer.clearDeferredLayerScene?.();}catch(_){}
+    frameCtx.frame.gpuLayerSceneDeferred=false;clearLayerSceneEffectCommands(frameCtx.frame);try{requestMainCanvasRender?.();}catch(_){}
+    return false;
+}
+
+
 function getDynamicCorridorFillMesh(frameCtx){
     if(frameCtx?.geometryPlan?.dynamic!==true||state.tunnel?.active!==true)return null;
     if(frameCtx._corridorNativeFillPreflight?.dynamic===true&&Number(frameCtx._corridorNativeFillPreflight.frameId)===Number(frameCtx.frameId))return frameCtx._corridorNativeFillPreflight;
@@ -975,7 +982,6 @@ function renderLayerBaseGeometryPass(frameCtx) {
     if(strictSpiralGpu){const d=somataSpiralSceneDiag.base;d.frameId=Number(frameCtx.frameId)||0;d.stage='base-enter';d.hasBatch=Boolean(batch);d.sceneCombined=batch?.sceneCombined===true;d.hasSceneTexture=Boolean(batch?.sceneTexture);d.roles=batch?.roles?[...batch.roles]:[];}
     const forceCanvasFill=shouldForceCanvasStaticFill(frameCtx);
 
-    const webNeedsUnderBase=false; // v7.4.30: Web always belongs above Base/Graffiti in the per-layer effect stack.
     noteFillRuntime(frameCtx,{handled:false,stage:'contract',backend:'none',reason:'',nativeCandidate:Boolean(frameCtx?._nativeFillMeshCandidate)});
     let layerSceneCompositeFailed=false;
     const fillPrepared=frameCtx?._webgpuFillPrepared;
@@ -984,7 +990,23 @@ function renderLayerBaseGeometryPass(frameCtx) {
 
     const canKeepGpuSceneOverCanvasFill=Boolean(!strictSpiralGpu&&forceCanvasFill&&!forceCanvasBase&&batch?.sceneCombined&&canDeferLayerSceneDirect(frameCtx,batch));
 
-    if(!webNeedsUnderBase&&!forceCanvasBase&&!forceCanvasFill&&batch?.sceneCombined&&!needsOutOfSceneFill){
+    // 7.5 order contract: Web owns the transparent Layer Scene root. The prepared Line/Glow/Base
+    // batch loads that texture and is submitted as phase 5, so no readback/materialization is
+    // needed on the normal path: Web(1) < Base/Line(5) < Profile/Graffiti(10..20).
+    const residentWeb=frameCtx._webPassHandled===true?getResidentGpuLayerScene(frameCtx):null;
+    if(residentWeb?.texture&&batch?.sceneCombined&&batch?.preserveExistingScene===true&&!forceCanvasBase&&!forceCanvasFill&&!needsOutOfSceneFill&&canDeferLayerSceneForFrame(frameCtx,batch)){
+        const command=batch.commandBuffer;
+        if(command&&queueLayerSceneEffectCommand(frameCtx,5,command,'base-layer-scene')){
+            batch.commandBuffer=null;batch.submitted=true;
+            frameCtx.frame.gpuLayerSceneDeferred=true;frameCtx.frame.gpuMainSceneEmpty=false;
+            if(batch.roles?.has?.('base'))frameCtx._baseStrokeCommitted=true;
+            renderBackendTelemetry.mark('geometry','gpu','Line/Base appended above resident Web');
+            if(contract?.fillRequested&&sceneHasAuthoritativeFill)noteFillRuntime(frameCtx,{handled:true,stage:'web-root-layer-scene',backend:batch?.nativeFillInScene===true?'webgpu-native-scene':'webgpu-mask-scene',reason:''});
+            renderLayerGeometryCirclesPass(frameCtx);return;
+        }
+    }
+
+    if(!forceCanvasBase&&!forceCanvasFill&&batch?.sceneCombined&&!needsOutOfSceneFill){
         if(canDeferLayerSceneForFrame(frameCtx,batch)&&WebGPUStrokeRenderer.deferLayerScene(batch,frameCtx.frameId)){
             frameCtx.frame.gpuLayerSceneDeferred=true;frameCtx.frame.gpuMainSceneEmpty=strictSpiralGpu?frameCtx.frame.gpuMainCanvasHasContent!==true:false;
             if(batch.roles?.has?.('base'))frameCtx._baseStrokeCommitted=true;
@@ -1008,7 +1030,7 @@ function renderLayerBaseGeometryPass(frameCtx) {
         }
         layerSceneCompositeFailed=true;
         if(batch.roles?.has?.('glow'))WebGPUStrokeRenderer.compositeLayerBatch(batch,'glow',mainCtx,'source-over');
-    }else if(!webNeedsUnderBase&&!forceCanvasBase&&!forceCanvasFill&&batch?.sceneCombined&&needsOutOfSceneFill){
+    }else if(!forceCanvasBase&&!forceCanvasFill&&batch?.sceneCombined&&needsOutOfSceneFill){
 
         if(strictSpiralGpu){
             if(canDeferLayerSceneForFrame(frameCtx,batch)&&WebGPUStrokeRenderer.deferLayerScene(batch,frameCtx.frameId)){
@@ -1085,7 +1107,7 @@ function renderLayerBaseGeometryPass(frameCtx) {
     }
 
     const residentBeforeCorridorBase=getResidentGpuLayerScene(frameCtx);
-    if(!strictSpiralGpu&&(!fillHandled||Boolean(residentBeforeCorridorBase?.texture))&&!webNeedsUnderBase&&frameCtx.lineProfileStrokeOnly!==true&&canUseGpuOnlyCorridorLayerScene(frameCtx,false)){
+    if(!strictSpiralGpu&&(!fillHandled||Boolean(residentBeforeCorridorBase?.texture))&&frameCtx.lineProfileStrokeOnly!==true&&canUseGpuOnlyCorridorLayerScene(frameCtx,false)){
         const sceneAlreadyActive=Boolean(residentBeforeCorridorBase?.texture);
         const rec=encodeGpuOnlyCorridorLayerRole(frameCtx,'base',{effectMode:'base',alphaScale:Math.max(0,Math.min(1,Number(frameCtx.lineOpacityFactor??1))),composite:'source-over'},!sceneAlreadyActive);
         if(rec?.handled&&rec.commandBuffer){
@@ -1097,27 +1119,6 @@ function renderLayerBaseGeometryPass(frameCtx) {
         if(sceneAlreadyActive){if(strictSpiralGpu){somataGpuContractError('CORRIDOR_BASE_GPU_ENCODE_FAILED',frameCtx,{role:'base'});try{WebGPUStrokeRenderer.clearDeferredLayerScene?.();}catch(_){}frameCtx.frame.gpuLayerSceneDeferred=false;frameCtx._corridorLayerSceneActive=false;return;}materializeDeferredLayerScene(frameCtx);frameCtx._corridorLayerSceneActive=false;}
     }
 
-    if(webNeedsUnderBase){
-        try{
-            frameCtx._webRenderedUnderBase=false;frameCtx._webPassHandled=false;renderLayerWebPass(frameCtx);
-            const webHandled=frameCtx._webPassHandled===true;
-            if(frameCtx.frame?.gpuLayerSceneDeferred===true){
-                const materialized=materializeDeferredLayerScene(frameCtx);
-                if(materialized&&webHandled){
-                    frameCtx._webRenderedUnderBase=true;frameCtx.frame.gpuMainCanvasHasContent=true;
-                    renderBackendTelemetry.mark('web','gpu','GPU Web materialized under Base');
-                }else{
-                    frameCtx._webRenderedUnderBase=false;
-                    if(!materialized){
-                        try{WebGPUStrokeRenderer.clearDeferredLayerScene?.();}catch(_){}
-                        frameCtx.frame.gpuLayerSceneDeferred=false;clearLayerSceneEffectCommands(frameCtx.frame);
-                        try{requestMainCanvasRender?.();}catch(_){}
-                    }
-                }
-            }
-        }catch(err){frameCtx._webRenderedUnderBase=false;try{spiroPassIsolationNoteFailure?.('web-under-base',err,frameCtx);}catch(_){}}
-        compositeDeferredWebUnderBaseGlow(frameCtx);
-    }
 
     if(canKeepGpuSceneOverCanvasFill&&batch?.roles?.has?.('base')&&WebGPUStrokeRenderer.deferLayerScene(batch,frameCtx.frameId)){
         frameCtx.frame.gpuLayerSceneDeferred=true;frameCtx.frame.gpuMainSceneEmpty=false;
@@ -2430,7 +2431,7 @@ window.__somataSpiralAudit = (layerIndex=0) => {
     const rec=renderRuntime?.layerFrames?.[li]||null;
     const ctx=rec?.prepared?rec:null;
     return {
-        version:'7.4.30',gpuOnly:true,layerIndex:li,layerId:layer?.id||null,
+        version:'7.5',gpuOnly:true,layerIndex:li,layerId:layer?.id||null,
         spiral:Boolean(layer&&typeof isSpiralLayer==='function'&&isSpiralLayer(layer)),
         strictGpu:Boolean(ctx&&typeof isStrictSpiralWebGPUFrame==='function'&&isStrictSpiralWebGPUFrame(ctx)),
         corridor:state.tunnel?.active===true,
@@ -2498,8 +2499,12 @@ function renderPreparedMainLayer(frameCtx) {
         mainCtx.fillStyle = frameCtx.layer.fillColor || 'transparent';
         mainCtx.shadowBlur = 0;
 
+        const runPass=(name,fn,fallback=null)=>{const pt=renderPassProfiler.begin();try{if(typeof runSpiroIsolatedRenderPass==='function')return runSpiroIsolatedRenderPass(frameCtx,name,fn,fallback);fn();return{ok:true};}finally{renderPassProfiler.end(name,pt);}};
         try{preflightLayerPathFxReplacement(frameCtx);}catch(err){frameCtx._pathFxReplacementCommitted=false;frameCtx._pathFxPrequeuedSprite=false;frameCtx._pathFxPrequeuedMotion=false;try{spiroPassIsolationNoteFailure?.('pathFxPreflight',err,frameCtx);}catch(_){}}
+        // 7.5: Web is the physical bottom pass, before Line/Base/Graffiti batch preparation.
+        runPass('web',()=>renderLayerWebPass(frameCtx));
         try{prepareLayerStrokeWebGPUBatch(frameCtx);}catch(err){frameCtx._webgpuStrokeBatch=null;frameCtx._webgpuFillPrepared=null;try{spiroPassIsolationNoteFailure?.('strokeBatch',err,frameCtx);}catch(_){}}
+        try{stabilizeWebUnderBaseStack(frameCtx);}catch(err){try{spiroPassIsolationNoteFailure?.('webStack',err,frameCtx);}catch(_){}}
 
         try{ensureStrictSpiralEffectLayerSceneRoot(frameCtx);}catch(err){try{spiroPassIsolationNoteFailure?.('strictSpiralRootPreflight',err,frameCtx);}catch(_){}}
 
@@ -2520,7 +2525,6 @@ function renderPreparedMainLayer(frameCtx) {
         }
 
         try{ensureStrictSpiralEffectLayerSceneRoot(frameCtx);}catch(err){try{spiroPassIsolationNoteFailure?.('strictSpiralRoot',err,frameCtx);}catch(_){}}
-        const runPass=(name,fn,fallback=null)=>{const pt=renderPassProfiler.begin();try{if(typeof runSpiroIsolatedRenderPass==='function')return runSpiroIsolatedRenderPass(frameCtx,name,fn,fallback);fn();return{ok:true};}finally{renderPassProfiler.end(name,pt);}};
         runPass('glow',()=>renderLayerGlowPass(frameCtx));
 
         runPass('geometry',()=>renderLayerBaseGeometryPass(frameCtx),()=>renderLayerBaseGeometryPass(frameCtx));
@@ -2528,10 +2532,6 @@ function renderPreparedMainLayer(frameCtx) {
         try{spiroGpuPreflightLayerPrerequisites?.(frameCtx);}catch(err){try{spiroPassIsolationNoteFailure?.('gpuPreflight',err,frameCtx);}catch(_){}}
         runPass('outline',()=>renderLayerOutlinePass(frameCtx));
         runPass('profile',()=>renderLayerProfilePass(frameCtx));
-        // Physical invocation order now matches the GPU phase order as well.  This matters on
-        // real drivers because a later pass must never force materialization before Web/Lamps
-        // have attached their commands to the same Layer Scene.
-        runPass('web',()=>renderLayerWebPass(frameCtx));
         runPass('lamps',()=>renderLayerLampPass(frameCtx));
         runPass('motion',()=>renderLayerMotionFxPass(frameCtx));
         runPass('sweep',()=>renderLayerSweepPass(frameCtx));
@@ -2690,7 +2690,7 @@ function finishMainRenderFrame(renderStartedAt,renderFrame){
     let presented=false;
     if(somataGpuBackendAllowed()){
         try{presented=WebGPUFinalCompositeRenderer.render(renderFrame)===true;}catch(err){somataGpuContractError('FINAL_GPU_RENDER_EXCEPTION',renderFrame,{error:String(err?.stack||err)});}
-    }else somataGpuDiagnosticError('final','capability','WebGPU is unavailable; Somata 7.4.30 has no CPU renderer',renderFrame);
+    }else somataGpuDiagnosticError('final','capability','WebGPU is unavailable; Somata 7.5 has no CPU renderer',renderFrame);
     if(!presented){
         const rescue=recoverGpuPresentationToMainCanvas(renderFrame);
         if(rescue.ok){
@@ -2764,7 +2764,7 @@ window.__somataReport=()=>{
     const frame=renderRuntime?.frame||null;
     const spiral=Boolean(layer&&typeof isSpiralLayer==='function'&&isSpiralLayer(layer));
     const report={
-        version:'7.4.30',boot:window.__spiroAppBootComplete===true,now:Number(performance.now().toFixed(1)),
+        version:'7.5',boot:window.__spiroAppBootComplete===true,now:Number(performance.now().toFixed(1)),
         scheduler,
         layer:layer?{id:layer.id||null,visible:layer.visible!==false,spiral,lineVisible:typeof getLayerLineVisible==='function'?getLayerLineVisible(layer):null,opacity:Number(layer.opacity),fill:layer.fill===true,profileMode:layer.profileMode||null,splineRenderMode:layer.splineRenderMode||null}:null,
         frame:frame?{id:Number(frame.id)||0,strictSpiralGpuPresentRequired:frame.strictSpiralGpuPresentRequired===true,gpuLayerSceneDeferred:frame.gpuLayerSceneDeferred===true,gpuMainSceneEmpty:frame.gpuMainSceneEmpty===true,gpuMainCanvasHasContent:frame.gpuMainCanvasHasContent===true,gpuFrameSceneLayers:Number(frame.gpuFrameSceneLayers)||0,renderLayerCount:Number(frame.renderLayerCount)||0}:null,
@@ -2797,7 +2797,7 @@ window.__somataSpiralTrace=()=>{
     try{canonical=layer&&typeof getCanonicalLayerGeometry==='function'?getCanonicalLayerGeometry(layer):null;}catch(err){canonical={error:String(err?.message||err)};}
     const paths=Array.isArray(canonical?.paths)?canonical.paths:[];
     const pointCount=paths.reduce((n,p)=>n+(Array.isArray(p?.points)?p.points.length:0),0);
-    const out={version:'7.4.30',uiMode,mode,layer:authored,morph,canonical:canonical?{geometryKey:canonical.geometryKey||canonical.key||null,pathCount:paths.length,pointCount,closedPathCount:paths.filter(p=>p?.closed===true).length,openPathCount:paths.filter(p=>p?.closed!==true).length,spiralMetaClosedPoints:paths.reduce((n,p)=>n+(p?.points||[]).filter(q=>q?.__spiralClosed===true).length,0),error:canonical.error||null}:null,scene:{internal:{...somataSpiralSceneDiag.internal},base:{...somataSpiralSceneDiag.base}},webgpu:{hub:window.__spiroWebGPUHubStatus?.()||null,stroke:window.__spiroWebGPUStatus?.()||null,staticBezier:window.__spiroStaticSpiralBezierStatus?.()||null,bezier:window.__somataSpiralBezierMorphStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,profileArc:window.__spiroProfileArcMarkerStatus?.()||null,final:window.__spiroFinalGPUStatus?.()||null}};
+    const out={version:'7.5',uiMode,mode,layer:authored,morph,canonical:canonical?{geometryKey:canonical.geometryKey||canonical.key||null,pathCount:paths.length,pointCount,closedPathCount:paths.filter(p=>p?.closed===true).length,openPathCount:paths.filter(p=>p?.closed!==true).length,spiralMetaClosedPoints:paths.reduce((n,p)=>n+(p?.points||[]).filter(q=>q?.__spiralClosed===true).length,0),error:canonical.error||null}:null,scene:{internal:{...somataSpiralSceneDiag.internal},base:{...somataSpiralSceneDiag.base}},webgpu:{hub:window.__spiroWebGPUHubStatus?.()||null,stroke:window.__spiroWebGPUStatus?.()||null,staticBezier:window.__spiroStaticSpiralBezierStatus?.()||null,bezier:window.__somataSpiralBezierMorphStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,profileArc:window.__spiroProfileArcMarkerStatus?.()||null,final:window.__spiroFinalGPUStatus?.()||null}};
     console.log('[Somata Spiral trace]',out);return out;
 };
 

@@ -2138,17 +2138,18 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             return{path,pieces,reused:false};
         }
 
-        function buildExactLightningPaths(frameCtx) {
+        function buildExactLightningPaths(frameCtx,forcePreview=false) {
             const source=getLayerFrameAuxiliaryPaths(frameCtx),layer=frameCtx?.layer,cfg=frameCtx?.layerSweep||getLayerSweepConfig(layer);
             if(!Array.isArray(source)||!source.length||!layer)return source||[];
             const frameId=Number(frameCtx?.frameId)||Number(frameCtx?.frame?.id)||Number(frameGeometryRuntime?.frameId)||0;
+            const cacheStem=forcePreview===true?'_exactWebContour':'_exactLightningPaths',cacheFrameKey=cacheStem+'FrameId',cacheSourceKey=cacheStem+'Source',cacheValueKey=cacheStem+'Value';
 
-            if(frameCtx&&frameCtx._exactLightningPathsFrameId===frameId&&frameCtx._exactLightningPathsSource===source&&frameCtx._exactLightningPaths)return frameCtx._exactLightningPaths;
-            const round=getRoundingStrength(layer.rounding),behavior=normalizeLightningBehaviorValue(cfg?.lightningBehavior,'symmetric'),needsPreview=cfg?.lightningMode==='across'||behavior!=='symmetric';
+            if(frameCtx&&frameCtx[cacheFrameKey]===frameId&&frameCtx[cacheSourceKey]===source&&frameCtx[cacheValueKey])return frameCtx[cacheValueKey];
+            const round=getRoundingStrength(layer.rounding),behavior=normalizeLightningBehaviorValue(cfg?.lightningBehavior,'symmetric'),needsPreview=forcePreview===true||cfg?.lightningMode==='across'||behavior!=='symmetric';
             const dynamicSource=isCurrentFrameDynamicPathList(source)||Boolean(runtimeState.morph?.active&&state.morph?.mode!=='light')||frameCtx?.minimalFadeEnabled===true||frameCtx?.greenMorphEnabled===true;
             const staticCacheable=!dynamicSource&&!isSpiralLayer(layer);
             const staticKey=staticCacheable?`exactSplineV425|preview:${needsPreview?1:0}|${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode||'segments'}|r:${round.toFixed(5)}|fourier:${state.fourierMode?1:0}:${Math.round((Number(state.fourierStrength)||0)*100)/100}`:'';
-            if(staticCacheable){const variants=persistentExactLightningCache.get(source),hit=variants?.get(staticKey);if(hit){if(frameCtx){frameCtx._exactLightningPathsFrameId=frameId;frameCtx._exactLightningPathsSource=source;frameCtx._exactLightningPaths=hit;}return hit;}}
+            if(staticCacheable){const variants=persistentExactLightningCache.get(source),hit=variants?.get(staticKey);if(hit){if(frameCtx){frameCtx[cacheFrameKey]=frameId;frameCtx[cacheSourceKey]=source;frameCtx[cacheValueKey]=hit;}return hit;}}
 
             if(isSpiralLayer(layer)){
                 const hasExactCubics=source.some(path=>Array.isArray(path?._bezierSegments)&&path._bezierSegments.length);
@@ -2162,7 +2163,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     });
                     if(isCurrentFrameDynamicPathList(source))out._frameGeometryId=frameGeometryRuntime.frameId;
                     out._lightningRenderedRail=true;out._exactLightningSplineRail=true;
-                    if(frameCtx){frameCtx._exactLightningPathsFrameId=frameId;frameCtx._exactLightningPathsSource=source;frameCtx._exactLightningPaths=out;}return out;
+                    if(frameCtx){frameCtx[cacheFrameKey]=frameId;frameCtx[cacheSourceKey]=source;frameCtx[cacheValueKey]=out;}return out;
                 }
 
                 const out=source.map(path=>{
@@ -2172,7 +2173,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     return{...path,points:pts,cornerFlags:[]};
                 });
                 if(isCurrentFrameDynamicPathList(source))out._frameGeometryId=frameGeometryRuntime.frameId;
-                out._lightningRenderedRail=true;if(frameCtx){frameCtx._exactLightningPathsFrameId=frameId;frameCtx._exactLightningPathsSource=source;frameCtx._exactLightningPaths=out;}return out;
+                out._lightningRenderedRail=true;if(frameCtx){frameCtx[cacheFrameKey]=frameId;frameCtx[cacheSourceKey]=source;frameCtx[cacheValueKey]=out;}return out;
             }
             let morphInfo=null;
             if(runtimeState.morph?.active&&state.morph?.mode!=='light'){
@@ -2199,9 +2200,18 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(isCurrentFrameDynamicPathList(source))out._frameGeometryId=frameGeometryRuntime.frameId;
             out._lightningRenderedRail=true;out._exactLightningSplineRail=true;
             if(staticCacheable){let variants=persistentExactLightningCache.get(source);if(!variants){variants=new Map();persistentExactLightningCache.set(source,variants);}variants.set(staticKey,out);}
-            if(frameCtx){frameCtx._exactLightningPathsFrameId=frameId;frameCtx._exactLightningPathsSource=source;frameCtx._exactLightningPaths=out;}
+            if(frameCtx){frameCtx[cacheFrameKey]=frameId;frameCtx[cacheSourceKey]=source;frameCtx[cacheValueKey]=out;}
             return out;
         }
+        function buildExactWebContourPaths(frameCtx){
+            const out=buildExactLightningPaths(frameCtx,true);
+            if(Array.isArray(out)){
+                out._webBezierContourTruth=true;
+                for(const path of out)if(path&&typeof path==='object')path._webBezierContourTruth=true;
+            }
+            return out;
+        }
+
         function glintSegmentToCubic(seg,forceBreak=false){
             if(!seg)return null;const p0=seg.p0;if(!p0)return null;
             if(seg.type==='C')return{p0,c1:seg.p1,c2:seg.p2,p3:seg.p3,breakBefore:forceBreak||seg.breakBefore===true};
@@ -3322,7 +3332,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             data.pathBevel=null;data.pathRounding=null;data.animating=false;data.visualPathTables=null;data.cornerMetrics=null;data.persistentVectorRecord=null;data._branchPathCache=null;
             if(data.enabled&&paths?.length){
                 const owner=ensureLayerEffectState(effectLayer),cfg=owner?.web||getLayerWebConfig(effectLayer);data.owner=owner;data.transition=owner?webRuntime.transitionByLayer.get(owner.id):null;data.cfg=cfg;
-                data.visualPaths=getLayerFrameRoundedPaths(frameCtx);
+                data.visualPaths=buildExactWebContourPaths(frameCtx);
                 const branches=getWebBranchFlags(cfg);data.insideEnabled=branches.inside;data.outsideStraightEnabled=branches.outsideStraight;data.outsideArcEnabled=branches.outsideArc;
                 data.region=branches.inside?(branches.outsideArc?'combined':'inside'):(branches.outsideArc?'outside':'inside');
                 data.placementMode=['corners','selfIntersection','selfIntersectionCorridor'].includes(cfg.placementMode)?cfg.placementMode:'selfIntersection';

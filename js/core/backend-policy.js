@@ -16,7 +16,7 @@ function somataGpuFeatureReady(feature,frameCtx=null){const key=frameCtx?somataG
 function somataReportGpuBackendFailure(feature,reason,detail=null){
   const f=String(feature||'gpu'),message=String(reason||'GPU failure'),now=performance?.now?.()??Date.now(),key=`${f}:${message}`;
   somataGpuBackendRuntime.failures++;somataGpuBackendRuntime.last={feature:f,reason:message,detail:detail??null,at:Date.now()};somataGpuBackendRuntime.lastAt=now;somataGpuBackendRuntime.byFeature[f]=(somataGpuBackendRuntime.byFeature[f]||0)+1;
-  const prev=somataGpuBackendRuntime.lastLogAt.get(key)||-1e9;if(now-prev>1000){somataGpuBackendRuntime.lastLogAt.set(key,now);console.error('[Somata 7.4.30 GPU]',somataGpuBackendRuntime.last);}
+  const prev=somataGpuBackendRuntime.lastLogAt.get(key)||-1e9;if(now-prev>1000){somataGpuBackendRuntime.lastLogAt.set(key,now);console.error('[Somata 7.5 GPU]',somataGpuBackendRuntime.last);}
   return false;
 }
 function somataGpuFeatureWaitOrFallback(feature,reason='GPU feature unavailable',detail=null,timeoutMs=650,frameCtx=null,immediate=false){

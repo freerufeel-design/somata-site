@@ -31,7 +31,7 @@ function renderLayerParticlePass(frameCtx){
     if(!cfg?.enabled||frameCtx?.layer?.visible===false)return false;
     try{
 
-        // v7.4.30: particles are the top per-layer GPU phase. Keep them in the resident
+        // v7.5: particles are the top per-layer GPU phase. Keep them in the resident
         // Layer Scene whenever possible so finalGpuCanvas/output capture includes them.
         // Final composition interleaves Lamps at phase 50, Sweep at 60/61 and Particles at 70.
         if(frameCtx?.frame?.gpuLayerSceneDeferred!==true){

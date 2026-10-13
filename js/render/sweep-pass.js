@@ -198,7 +198,7 @@ function sweepProfileMode(cfg){const value=cfg?.effectType==='lightning'?cfg?.li
 function reportSweepGpuIssue(frameCtx,stage,reason,extra=null){
     try{renderBackendTelemetry.mark('sweep','gpu',`GPU pass skipped: ${stage}`);}catch(_){}
     if(typeof somataGpuDiagnosticError==='function')somataGpuDiagnosticError('sweep',stage,reason,frameCtx,{fallback:'skip-sweep-pass',recovered:true,...(extra||{})});
-    else console.error('[Somata 7.4.30 GPU][sweep]',stage,reason,{frameId:frameCtx?.frameId,layerIndex:frameCtx?.layerIndex,...(extra||{})});
+    else console.error('[Somata 7.5 GPU][sweep]',stage,reason,{frameId:frameCtx?.frameId,layerIndex:frameCtx?.layerIndex,...(extra||{})});
     try{requestMainCanvasRender?.();}catch(_){}
 }
 function renderLayerSweepPass(frameCtx){

@@ -1,0 +1,11 @@
+const fs=require('fs');
+const path=require('path');
+const assert=(c,m)=>{if(!c)throw new Error(m)};
+const src=fs.readFileSync(path.join(__dirname,'..','js/gpu/lightning-arc-renderer.js'),'utf8');
+assert(/const EXACT_BEZIER_RASTER_SUBDIV=4;/.test(src),'exact Lightning raster density must be reduced from 6x to balanced 4x');
+assert(!/drawBlurredHaloGroup/.test(src),'Lightning must not allocate/use the legacy separable-blur halo path during flashes');
+assert(!/WebGPUGraffitiContourGlow/.test(src),'Lightning renderer must not depend on Graffiti contour blur resources');
+assert(/drawAnalyticGroup\(haloStyles,false\)/.test(src),'Lightning halo must use the analytic GPU field for precharge/strike/afterglow');
+assert(/isReady:\(\)=>warmup\(\)/.test(src),'Lightning readiness must not block on an unrelated blur renderer');
+assert(/balanced 4x/.test(src),'Lightning status contract must document the 4x balanced raster policy');
+console.log('PASS Lightning impact path: analytic halo only, no blur dependency, exact Bézier raster 4x');

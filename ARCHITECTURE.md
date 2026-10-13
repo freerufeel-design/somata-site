@@ -1,7 +1,17 @@
-# Somata 7.4.30
+# Somata 7.5
 
-Somata 7.4 is a GPU-only visual renderer. There is no CPU/reference renderer and no CPU geometry/effect fallback. CPU-side JavaScript may still prepare compact geometry/metadata for GPU upload. If the final WebGPU compositor declines a current frame, a presentation-only bridge may copy the current GPU texture to the main surface; it must never retain stale pixels from an older frame.
+Somata 7.5 is a GPU-only visual renderer. There is no CPU/reference renderer and no CPU geometry/effect fallback. CPU-side JavaScript may still prepare compact geometry/metadata for GPU upload. If the final WebGPU compositor declines a current frame, a presentation-only bridge may copy the current GPU texture to the main surface; it must never retain stale pixels from an older frame.
 
+
+
+## 7.5 — test-first effect stack, Bézier Web truth, balanced Lightning
+
+- The required per-layer visual stack is now **Web → Line/Glow/Base + Graffiti → Lamps → Glint/Lightning → Particles**. Web owns the transparent resident Layer Scene at phase 1; the prepared Base/Line batch appends at phase 5 with `loadOp:'load'`, avoiding the old Web materialization/readback path on the normal GPU route. Graffiti remains below Lamps, Glint/Lightning stays at phase 60, and Particles stays at phase 70.
+- Static Web no longer derives its visible contour from the independent rounded-polyline helper. `prepareLayerFrameWebData()` consumes the same retained cubic Bézier rail/flattening truth used by exact contour effects. Web therefore follows the actual rendered curve rather than a separate approximation.
+- Lightning exact precision uses a balanced 4× direct cubic raster per Arc microsegment (previously 6×). Precharge, strike and afterglow all use the analytic GPU halo field; the legacy separable-blur/Graffiti-glow dependency is removed from Lightning impact frames.
+- Every settings checkbox is exercised by a native browser `click/change` audit. A checkbox must toggle, produce an observable state/UI effect, avoid uncaught errors, and not leave the scheduler stuck. The audit also has a 100 ms synchronous-handler guard; 7.5 reference headless runs stay at or below 7.2 ms worst-case and about 0.8 ms average.
+- The hidden `lineSpriteEnabled` checkbox was a Legacy no-op: Sprite enablement is derived from the selected line mode and the checkbox was never renderer-authoritative. 7.5 removes that control and its synchronization/listener code instead of preserving a dead compatibility switch.
+- New field regressions are test-first: `v75-effect-stack-order.js`, `v75-web-bezier-contour.js`, `v75-lightning-performance.js`, and `v75-checkbox-functional-coverage.js`. The clean 7.4.30 baseline fails these contracts before the runtime fixes are applied.
 
 ## 7.4.30 — Orange family/pools and Graffiti Lightning aftershock
 
@@ -22,8 +32,8 @@ Somata 7.4 is a GPU-only visual renderer. There is no CPU/reference renderer and
 
 1. Geometry selects static, Spiral, Corridor or one of the three Morph systems.
 2. `frameCtx.layer` owns frame geometry; `frameCtx.effectLayer` resolves the persistent authored layer by id and owns live effect settings.
-3. GPU passes consume that frame: base/fill, Graffiti/profile, Web, Lamps, Sweep/Glint, path motion/Sprite and Particles.
-4. Web/Sweep/Particles may create a transparent GPU Layer Scene when Base did not create one. Per-layer GPU phase order is Base/Graffiti → Web → Lamps → Sweep/Lightning → Particles; Lamps are interleaved into the resident Layer Scene so final output capture preserves the whole stack.
+3. GPU passes consume that frame: Web, base/fill + Graffiti/profile, Lamps, Sweep/Glint/Lightning, path motion/Sprite and Particles.
+4. Web owns/creates the transparent GPU Layer Scene when enabled; Sweep/Particles may create one when earlier phases did not. Per-layer GPU phase order is Web → Base/Line/Graffiti → Lamps → Glint/Lightning → Particles; Lamps are interleaved into the resident Layer Scene so final output capture preserves the whole stack.
 5. A pass failure is contained: it is logged with a `GPU-XXXXXXXX` id, that pass is skipped, and the shared scheduler remains alive.
 6. One shared scheduler owns continuous `requestAnimationFrame` rendering, with a Morph watchdog that does not depend solely on `renderPending`.
 
@@ -37,11 +47,11 @@ Somata 7.4 is a GPU-only visual renderer. There is no CPU/reference renderer and
 
 ## Deliberately removed
 
-CPU/reference renderer, backend selector, raster Graffiti worker/bitmap path, HD/raster lamp modes, raster lightning switches, historical runtime probes, old duplicated Sweep migration fields and legacy source layout.
+CPU/reference renderer, backend selector, raster Graffiti worker/bitmap path, HD/raster lamp modes, raster lightning switches, historical runtime probes, old duplicated Sweep migration fields, the hidden no-op `lineSpriteEnabled` checkbox, and legacy source layout.
 
 ## Preflight
 
-`tests/` is development-only and is never loaded by `index.html`. Before packaging, run `node tests/run-all.js`. The suite checks every JS file, browser load order, critical cross-module bindings, geometry invalidation, live effect ownership/profile switching, pass fault containment, and a render-impact matrix in which each core slider must change renderer-driving geometry/style/GPU input. Every effect case is followed by a scheduler liveness watchdog. Hardware WebGPU draw/present still requires a final smoke-test on a GPU-capable machine. Real hardware logs take precedence over headless assumptions.
+`tests/` is development-only and is never loaded by `index.html`. Before packaging, run `node tests/run-all.js`. The suite checks every JS file, browser load order, critical cross-module bindings, geometry invalidation, live effect ownership/profile switching, pass fault containment, every checkbox, and a render-impact matrix in which each core slider must change renderer-driving geometry/style/GPU input. Every effect case is followed by a scheduler liveness watchdog. Hardware WebGPU draw/present still requires a final smoke-test on a GPU-capable machine. Real hardware logs take precedence over headless assumptions.
 
 ## 7.4.29 — Freeze/Glow/static exposure correctness
 

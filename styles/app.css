@@ -5421,7 +5421,7 @@ html.app-pseudo-fullscreen #btnPseudoFullscreenExit {
     .desktop-brand-stage { display: none !important; }
 }
 
-/* v7.4.30 — independent Orange Morph family + multi-pool selector */
+/* v7.5 — independent Orange Morph family + multi-pool selector */
 .minimal-morph-family-row label{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;}
 .minimal-morph-family-row select{min-width:128px;max-width:170px;}
 .minimal-morph-pools-row{overflow:visible!important;}

@@ -1,4 +1,4 @@
-# Somata 7.4.29 — development preflight
+# Somata 7.5 — development preflight
 
 `tests/` is development-only and must never be loaded by `index.html`.
 
@@ -10,64 +10,50 @@ Run only:
 node tests/run-all.js
 ```
 
-`run-all.js` executes in this order:
+`run-all.js` executes the complete gate in this order:
 
-1. `static-modules.js` — syntax, assets, module registration, no removed Legacy/CPU paths.
-2. `contracts.js` — architecture invariants.
-3. `browser-preflight.js` — production scripts load in real `index.html` order and critical bindings execute.
-4. `desktop-logo.js` — desktop logo is visible/non-overlapping above 760 px and completely hidden on mobile.
-5. `runtime-user-actions.js` — real UI events and field regressions.
-6. `gpu-effect-scene-routing.js` — Web/Sweep GPU Layer Scene routing and initialization wait.
-7. `effects-stability.js` — Line, Graffiti, Spiral, Lamps, Web, Sweep, Lightning, Corridor, 3 Morphs, Particles, Audio, combined fault containment.
-8. `main-control-coverage.js` — every main UI control must have render-impact coverage.
-9. `effect-render-impact.js` — controls must change renderer-driving data and the next frame must arrive.
-10. `stability-soak.js` — fresh-browser repetitions of the desktop-output/user-action/routing/stability/impact suites.
+1. Static integrity and architecture contracts: `static-modules.js`, `contracts.js`, `browser-preflight.js`.
+2. 7.5 field regressions: `v75-effect-stack-order.js`, `v75-web-bezier-contour.js`, `v75-lightning-performance.js`.
+3. Desktop, Spiral/Morph and profile continuity suites.
+4. Real UI actions plus GPU scene routing and focused Graffiti/Lamp/Lightning regressions.
+5. Full effect stability and main-control coverage.
+6. `v75-checkbox-functional-coverage.js` — every settings checkbox is clicked through the real DOM event path; dead/disabled/no-op controls fail the build and synchronous handlers have a 100 ms stall guard.
+7. `effect-render-impact.js` — renderer-driving controls must change real geometry/style/GPU-bound plans and the next frame must arrive.
+8. `stability-soak.js` — fresh-browser repetitions of the critical UI/routing/Web/Lightning/checkbox/stability/render-impact suites.
 
-Do not package on any fail or timeout.
+Do not package on any fail or timeout. A wrapper timeout is not a PASS; run the interrupted constituent suite directly and require its own PASS marker.
 
-## Field regressions that must stay covered
+## 7.5 field regressions that must stay covered
 
+- Effect stack, bottom to top: **Web → Line/Glow/Base + Graffiti → Lamps → Glint/Lightning → Particles**. Web queues at resident phase 1; Base/Line appends at phase 5 without normal-path materialization; Graffiti remains below the phase-50 Lamp boundary; Glint/Lightning is phase 60; Particles is phase 70.
+- Web must follow the real rendered Bézier contour, not an independent rounded-polyline contour. The regression requires retained cubic truth, curved segments, dense adaptive preview geometry and a measurable departure from the legacy rounded path.
+- Lightning exact mode remains on the retained cubic Arc, but 7.5 uses a balanced 4× raster lattice and analytic halo for precharge/strike/afterglow. The legacy separable-blur and Graffiti-contour-glow dependency must not return.
+- Every settings checkbox must perform an observable intended action through native `click/change`, produce no uncaught exception, leave the scheduler alive and stay below the synchronous-handler stall guard. The hidden no-op `lineSpriteEnabled` control is deliberately removed.
 - RMB Geometry hides all authored lines immediately; second RMB restores the remembered set.
 - RMB Web and RMB Sweep become live immediately in a static scene.
 - LMB on a collapsed left rail expands it and opens the exact clicked section.
 - Geometry circles (`circumscribed / inscribed / median / key-points`) produce non-degenerate full-circle GPU commands.
 - Enabling Master preserves every layer as-is. A later edit broadcasts only the changed property/path to all layers; unrelated settings on each layer remain different.
 - Web `initializing=true` means wait + repaint, not encode error.
-- Web/Sweep can open a transparent GPU Layer Scene when Base did not create one.
-- Per-layer effect stack is fixed: Base/Graffiti → Web → Lamps → Sweep/Glint/Lightning → Particles. GPU phase order must not change when Morph or Corridor changes the scene route.
-- Lamps are interleaved into the resident Layer Scene between Web and Sweep using premultiplied/source-over semantics; particles remain the top resident phase so detachable Output capture sees the complete stack.
 - Rejected final GPU composite must present the current GPU scene or disable the stale final surface.
-- A transient missing Base stroke batch gets two repaint attempts before escalating to `console.error`; a persistent miss still reports diagnostics.
 - Blue Morph survives `open → spiral-closed → spiral-open → closed`, recovers from an rAF gap, and completes at least 3 cycles without starving `afterNextPaint` boundary commits.
 - Lightning owns an independent `Current profile / Line` selector. `Exact` uses the rounded/spline/Bézier carrier; `Simple` uses the raw unsmoothed polyline.
-- Corridor center hiding is count-based. `centerHiddenCopies=N` means N deepest copies are fully invisible at the phase boundary, but the next moving copy is already generated inside the center and fades in over exactly one corridor-copy spacing.
-- Corridor center reveal is applied to per-copy renderer alpha before line/glow/lamp/Web/Sweep/particle rendering. There must be no final-compositor center mask covering already-rendered glow.
-- The reveal spacing must change when Corridor spacing changes.
-- Adaptive brightness must use the persistent live lamp config during Morph; no per-frame config clone may reset exposure smoothing.
-- With exposure time > 0, adaptive factors must evolve continuously during Morph and converge toward the moving target instead of restarting the tween each frame. `0` means immediate response.
-- `Адаптировать яркость` ON keeps radius at 1 and changes brightness; OFF keeps brightness at 1 and changes radius.
+- Corridor center reveal is applied per instance before line/glow/lamp/Web/Sweep/particle rendering and follows real copy spacing.
+- Adaptive Lamp exposure uses the persistent live config and keeps continuous timing through Morph.
 
 ## Control coverage
 
-Required main controls:
-
-- Line/Geometry: 12.
-- Graffiti: 7.
-- Spiral: 5.
-- Lamps: 19.
-- Web: 7.
-- Glint: 11.
-- Lightning: 11.
-- Corridor: 4 (speed, spacing, hidden-center count, color shift).
-- Morph: Blue fade + Green center/sector softness; Orange is functional-path tested.
-- Particles: 9.
-- Audio: master amplitude + live route-strength controls.
-
-A new main control must first get a render-impact assertion; `main-control-coverage.js` must fail until it does.
+The existing render-impact matrix covers the main range controls for Line/Geometry, Graffiti, Spiral, Lamps, Web, Glint, Lightning, Corridor, Morph, Particles and Audio. The 7.5 checkbox audit adds all 129 settings checkboxes (including five data-driven Morph group checkboxes without IDs) on top of that matrix. A newly added range control must get a render-impact assertion; a newly added checkbox is automatically discovered and must have observable behavior or the build goes red.
 
 ## What “renders” means locally
 
-Local Chromium does not provide reliable hardware WebGPU. The gate therefore proves: real UI event → live state → non-empty finite geometry/effect plan → GPU-bound commands/queue input → next frame arrives → scheduler leaves `inFrame`; uncaught exceptions and paint errors stay zero. Real hardware logs override headless assumptions.
+Local Chromium does not provide reliable hardware WebGPU. The gate therefore proves: real UI event → live state → non-empty finite geometry/effect plan → GPU-bound commands/queue input → next frame arrives → scheduler leaves `inFrame`; uncaught exceptions and paint errors stay zero. Static Lightning performance contracts additionally prevent reintroduction of the expensive blur chain and 6× exact raster. Actual NVIDIA/AMD/Apple GPU pixels and true FPS remain the final authority.
+
+## 7.5 verification rule
+
+**field regression → reproducing red test on 7.4.30 → runtime fix → focused PASS → full old+new gate → package the exact bytes → unpack that ZIP fresh → run the gate again.**
+
+Historical sections below document earlier releases; their old stack descriptions are historical, not the active 7.5 contract.
 
 ## 7.4.9 additions
 

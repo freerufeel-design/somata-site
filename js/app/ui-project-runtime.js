@@ -1112,7 +1112,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             if(sp.enabled===true){owner.lineProfile='round';owner.lineProfileStroke='round';}
             document.getElementById('lineProfileSpriteLockHint')?.classList.toggle('hidden',sp.enabled!==true);
             const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=String(v);},chk=(id,v)=>{const e=document.getElementById(id);if(e)e.checked=v===true;},txt=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v;};
-            chk('lineSpriteEnabled',sp.enabled);set('lineSpriteType',sp.type);set('lineSpriteMode',normalizeLineSpritePlacement(sp.mode));set('lineSpriteEveryN',Math.max(2,Math.round(Number(sp.everyN)||2)));set('lineSpriteLength',100);set('lineSpriteAmplitude',0);set('lineSpriteWavelength',54);set('lineSpriteSpeed',0);set('lineSpriteWidth',Math.max(100,Number(sp.widthPercent)||preset.widthPercent));set('lineSpriteWidthMultiplier',Math.max(.01,Number(sp.widthMultiplier)||1));chk('lineSpriteMatchColor',sp.matchLineColor===true);set('lineSpriteColor',sp.color||preset.primary);set('lineSpriteSecondaryColor',sp.secondaryColor||preset.secondary);
+            set('lineSpriteType',sp.type);set('lineSpriteMode',normalizeLineSpritePlacement(sp.mode));set('lineSpriteEveryN',Math.max(2,Math.round(Number(sp.everyN)||2)));set('lineSpriteLength',100);set('lineSpriteAmplitude',0);set('lineSpriteWavelength',54);set('lineSpriteSpeed',0);set('lineSpriteWidth',Math.max(100,Number(sp.widthPercent)||preset.widthPercent));set('lineSpriteWidthMultiplier',Math.max(.01,Number(sp.widthMultiplier)||1));chk('lineSpriteMatchColor',sp.matchLineColor===true);set('lineSpriteColor',sp.color||preset.primary);set('lineSpriteSecondaryColor',sp.secondaryColor||preset.secondary);
             txt('lineSpriteEveryNText',String(Math.max(2,Math.round(Number(sp.everyN)||2))));txt('lineSpriteLengthText','100%');txt('lineSpriteAmplitudeText','0 px');txt('lineSpriteWavelengthText','—');txt('lineSpriteSpeedText','—');txt('lineSpriteWidthText',`${Math.round(Number(sp.widthPercent)||preset.widthPercent)}% × ${formatDisplayNumber(Math.max(.01,Number(sp.widthMultiplier)||1),2)}`);txt('lineSpriteColorText',`${sp.matchLineColor===true?(owner.strokeColor||'#ffffff'):(sp.color||preset.primary)} + ${sp.secondaryColor||preset.secondary}`);
             {const sparseSegment=sp.mode==='everyNth',sparsePath=sp.mode==='everyNthPath';document.getElementById('lineSpriteEveryNRow')?.classList.toggle('hidden',!(sparseSegment||sparsePath));const lbl=document.getElementById('lineSpriteEveryNLabel');if(lbl)lbl.textContent=sparseSegment?'Каждый N-й сегмент':'Каждый N-й контур';}document.getElementById('lineSpriteBlock')?.classList.toggle('gpu-line-fx-disabled',sp.enabled!==true);const sc=document.getElementById('lineSpriteColor');if(sc)sc.disabled=sp.matchLineColor===true;
             const customPreview=document.getElementById('lineSpriteCustomPreview'),builtinPreview=document.getElementById('lineSpriteBuiltinPreview'),previewName=document.getElementById('lineSpritePreviewName'),resetSpriteBtn=document.getElementById('lineSpriteResetBtn');
@@ -6289,7 +6289,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                             runtimeState.morph.gpuPhasePreparePromise=null;
                             runtimeState.morph.gpuPhasePreparing=true; // 7.3.8: fail closed; never advance on stale/partial phase resources.
                             const detail={error:String(err?.stack||err),phaseSerial:prepSerial,lamp:window.__spiroLampGPUStatus?.()||null,arc:window.__spiroGpuMorphArcStatus?.()||null,spiral:window.__somataSpiralBezierMorphStatus?.()||null};
-                            try{somataGpuContractError?.('PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.4.30 FullGPU] PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',detail);}
+                            try{somataGpuContractError?.('PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.5 FullGPU] PHASE_CIRCLE_FULL_GPU_PREWARM_FAILED',detail);}
                         });
 
                         runtimeState.morph.cycleStart=performance.now();
@@ -6419,7 +6419,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                                 return true;
                             }).catch(err=>{
                                 const detail={error:String(err?.stack||err),phaseSerial:prepSerial,web:WebGPUWebMorphRenderer?.status?.()||null,corner:window.__spiroGpuWebCornerStatus?.()||null};
-                                try{somataGpuContractError?.('MORPH_WEB_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.4.30 FullGPU] MORPH_WEB_FULL_GPU_PREWARM_FAILED',detail);}
+                                try{somataGpuContractError?.('MORPH_WEB_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.5 FullGPU] MORPH_WEB_FULL_GPU_PREWARM_FAILED',detail);}
 
                             });
                         }
@@ -6438,7 +6438,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                         runtimeState.morph.gpuPhasePreparePromise=null;
                         runtimeState.morph.gpuPhasePreparing=true; // fail closed: no fallback clock.
                         const detail={error:String(err?.stack||err),phaseSerial:prepSerial};
-                        try{somataGpuContractError?.('MORPH_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.4.30 FullGPU] MORPH_FULL_GPU_PREWARM_FAILED',detail);}
+                        try{somataGpuContractError?.('MORPH_FULL_GPU_PREWARM_FAILED',null,detail);}catch(_){console.error('[Somata 7.5 FullGPU] MORPH_FULL_GPU_PREWARM_FAILED',detail);}
                     });
                     runtimeState.morph.cycleStart=performance.now();
                 }else{
@@ -8874,7 +8874,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 WebGPUPathFxRenderer.warmup();WebGPUFinalCompositeRenderer.warmup();WebGPUStrokeRenderer.warmup();
                 ensureGpuPathFxAnimation();syncGpuLineFxUI(active);requestMainCanvasRender();
             };
-            ['lineSpriteEnabled','lineSpriteMode','lineSpriteEveryN','lineSpriteLength','lineSpriteAmplitude','lineSpriteWavelength','lineSpriteSpeed','lineSpriteWidth','lineSpriteWidthMultiplier','lineSpriteMatchColor','lineSpriteColor','lineSpriteSecondaryColor','lineMotionFxEnabled','lineMotionFxType','lineMotionFxReplaceBase','lineMotionFxAmplitude','lineMotionFxAmplitudeMultiplier','lineMotionFxWavelength','lineMotionFxWavelengthMultiplier','lineMotionFxSpeed','lineMotionFxWidth'].forEach(id=>{document.getElementById(id)?.addEventListener('input',updateGpuLineFxFromUI);document.getElementById(id)?.addEventListener('change',updateGpuLineFxFromUI);});
+            ['lineSpriteMode','lineSpriteEveryN','lineSpriteLength','lineSpriteAmplitude','lineSpriteWavelength','lineSpriteSpeed','lineSpriteWidth','lineSpriteWidthMultiplier','lineSpriteMatchColor','lineSpriteColor','lineSpriteSecondaryColor','lineMotionFxEnabled','lineMotionFxType','lineMotionFxReplaceBase','lineMotionFxAmplitude','lineMotionFxAmplitudeMultiplier','lineMotionFxWavelength','lineMotionFxWavelengthMultiplier','lineMotionFxSpeed','lineMotionFxWidth'].forEach(id=>{document.getElementById(id)?.addEventListener('input',updateGpuLineFxFromUI);document.getElementById(id)?.addEventListener('change',updateGpuLineFxFromUI);});
             const applyLineSpritePreset=(type)=>{
                 type=normalizeLineSpriteType(type);const preset=getLineSpritePreset(type),active=getActiveLayer();if(!active)return;const targets=(state.masterLayerEdit===true||hasMultiLayerSelection())?getLayerEditTargets():[active];
                 for(const layer of targets){ensureLayerEffectState(layer);layer.sprite={...normalizeLineSpriteConfig(layer.sprite),enabled:true,type,matchLineColor:false,color:preset.primary,secondaryColor:preset.secondary,widthPercent:preset.widthPercent,widthMultiplier:1,scaleVersion:431,imageDataUrl:'',imageName:''};layer.lineProfileApplication='stroke';layer.lineProfile='round';layer.lineProfileStroke='round';}
@@ -12194,7 +12194,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         function buildShapeFileData() {
             return {
                 format: 'SpiroStarShapes',
-                version: '7.4.30',
+                version: '7.5',
                 savedAt: new Date().toISOString(),
                 layers: cloneData(state.layers)
             };

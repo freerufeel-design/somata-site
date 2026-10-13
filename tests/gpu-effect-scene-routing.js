@@ -14,12 +14,14 @@ async function main(){
   assert(/fn compositeLamp\(dst:vec4<f32>,src:vec4<f32>,m:i32\)/.test(gpuCore)&&/lampBlendCode=Object\.freeze/.test(gpuCore),'Final compositor is not blend-aware for Lamps');
   assert(/encodeLampBlendIntoTarget\(rawLampSource\.texture,layerSource\.texture,rawLampSource\?\.blendMode/.test(gpuCore),'Lamp interleave between Web and Sweep ignores the selected blend mode');
   assert(/function compositeToMain\(\)\{[^}]*globalCompositeOperation=lampCanvasCompositeOperation\(frameBlendMode\)/.test(lampRenderer),'Lamp fallback presentation ignores the selected blend mode');
-  assert(/const webNeedsUnderBase=false/.test(pipeline),'Web can still enter the historical under-Base path');
+  assert(!/webNeedsUnderBase/.test(pipeline),'legacy Web-under-Base materialization switch still exists');
   const graffitiPhasePos=Math.max(pipeline.indexOf("queueLayerSceneEffectCommand(frameCtx,20,rec.commandBuffer,effect.tunnelActive?'graffiti-morph-corridor':'graffiti-morph'"),pipeline.indexOf("queueLayerSceneEffectCommand(frameCtx,20,rec.commandBuffer,effect.tunnelActive?'graffiti-variable-corridor':'graffiti-variable'"));
-  const webPhasePos=webPass.indexOf('queueLayerSceneEffectCommand(frameCtx,40');
+  const webPhasePos=webPass.indexOf('queueLayerSceneEffectCommand(frameCtx,1');
   const sweepPass=fs.readFileSync(path.join(__dirname,'..','js/render/sweep-pass.js'),'utf8');
   const particlePass=fs.readFileSync(path.join(__dirname,'..','js/render/particle-pass.js'),'utf8');
-  assert(graffitiPhasePos>=0&&webPhasePos>=0&&/SOMATA_SWEEP_PHASE=60/.test(sweepPass),'Graffiti/Web/Sweep phase markers missing');
+  assert(graffitiPhasePos>=0&&webPhasePos>=0&&/SOMATA_SWEEP_PHASE=60/.test(sweepPass),'Web/Graffiti/Glint phase markers missing');
+  assert(/queueLayerSceneEffectCommand\(frameCtx,5,(?:batch\.commandBuffer|command),'base-layer-scene'/.test(pipeline),'Base/Line is not appended above resident Web at phase 5');
+  assert(/preserveExistingScene/.test(gpuCore),'Base/Line Layer Scene cannot preserve resident Web');
   assert(/queueLayerSceneEffectCommand\(frameCtx,70/.test(particlePass),'Particles are not queued at the top resident phase');
   assert(/wantsLampInterleave/.test(gpuCore),'Lamp interleave between Web and Sweep is missing');
   const h=await createBrowserHarness({disableGpu:true,evalTimeoutMs:7000,loadDelayMs:300});
@@ -38,7 +40,7 @@ async function main(){
         WebGPUCanonicalSweepRenderer.encodeToLayerScene=()=>{sweepEncodes++;return{handled:true,commandBuffer:{kind:'sweep'}};};
         WebGPUParticleRenderer.encodeToLayerScene=()=>{particleEncodes++;return{handled:true,commandBuffer:{kind:'particles'}};};
 
-        const wctx=makeCtx(1200),wd=prepareLayerFrameWebData(wctx);wctx.effectsPlan.web={enabled:true,frameData:wd,paths:wd.paths,tunnelActive:false,footprint:null};wctx.frame.gpuLayerSceneDeferred=false;active=false;renderLayerWebPass(wctx);const web={began:begins.includes('web-effect'),deferred:wctx.frame.gpuLayerSceneDeferred===true,handled:wctx._webPassHandled===true,encoded:webEncodes>0,queued:(wctx.frame.gpuLayerSceneEffectCommands||[]).some(x=>x.label?.startsWith('web'))};
+        const wctx=makeCtx(1200),wd=prepareLayerFrameWebData(wctx);wctx.effectsPlan.web={enabled:true,frameData:wd,paths:wd.paths,tunnelActive:false,footprint:null};wctx.frame.gpuLayerSceneDeferred=false;active=false;renderLayerWebPass(wctx);const webQueue=wctx.frame.gpuLayerSceneEffectCommands||[];const web={began:begins.includes('web-effect'),deferred:wctx.frame.gpuLayerSceneDeferred===true,handled:wctx._webPassHandled===true,encoded:webEncodes>0,queued:webQueue.some(x=>x.label?.startsWith('web')),phase:webQueue.find(x=>x.label?.startsWith('web'))?.phase||0};
 
         active=false;begins=[];const sctx=makeCtx(1300),sd=prepareLayerFrameSweepData(sctx);sd.cfg.effectType='glint';sd.cfg.profileShape='line';sd.canonicalGPU=true;sd.bezierGlintGPU=false;if(!sd.prepared?.table)sd.prepared={table:buildPathLengthTable(sd.paths||[]),lenFrac:.2};if(!(sd.sweepW>0))sd.sweepW=2;if(!sd.glintVisual)sd.glintVisual={glowSize:0,strength:1,brightness:1,softness:0,opacity:1};sctx.effectsPlan.sweep={enabled:true,frameData:sd,paths:sd.paths,tunnelActive:false,footprint:null};sctx.frame.gpuLayerSceneDeferred=false;renderLayerSweepPass(sctx);const sweep={began:begins.includes('sweep-effect'),deferred:sctx.frame.gpuLayerSceneDeferred===true,encoded:sweepEncodes>0,queued:(sctx.frame.gpuLayerSceneEffectCommands||[]).some(x=>x.label==='sweep')};
         active=false;begins=[];l.particles.enabled=true;const pctx=makeCtx(1350);pctx.frame.gpuLayerSceneDeferred=false;renderLayerParticlePass(pctx);const particleQueue=pctx.frame.gpuLayerSceneEffectCommands||[];const particles={began:begins.includes('particle-effect'),deferred:pctx.frame.gpuLayerSceneDeferred===true,encoded:particleEncodes>0,phase:particleQueue.find(x=>x.label==='particles')?.phase||0};
@@ -48,7 +50,7 @@ async function main(){
         return{web,sweep,particles,warming};
       }finally{WebGPUStrokeRenderer.canUseExternalLayerScene=old.can;WebGPUStrokeRenderer.beginExternalLayerScene=old.begin;WebGPUStrokeRenderer.getDeferredLayerSceneTexture=old.get;WebGPUStrokeRenderer.compositeLayerBatch=old.compositeBatch;WebGPUWebThreadSceneRenderer.encodeToLayerScene=old.webEncode;WebGPUWebThreadSceneRenderer.status=old.webStatus;WebGPUWebThreadSceneRenderer.warmup=old.webWarmup;WebGPUCanonicalSweepRenderer.encodeToLayerScene=old.sweepEncode;WebGPUParticleRenderer.encodeToLayerScene=old.particleEncode;somataGpuBackendAllowed=old.gpuAllowed;}
     })()`);
-    assert(result.web.began&&result.web.deferred&&result.web.handled&&result.web.encoded&&result.web.queued,'Web did not create/use a transparent GPU Layer Scene root');
+    assert(result.web.began&&result.web.deferred&&result.web.handled&&result.web.encoded&&result.web.queued&&result.web.phase>=1&&result.web.phase<5,'Web did not create/use the bottom phase of a transparent GPU Layer Scene root');
     assert(result.sweep.began&&result.sweep.deferred&&result.sweep.encoded&&result.sweep.queued,'Sweep did not create/use a transparent GPU Layer Scene root');
     assert(result.particles.began&&result.particles.deferred&&result.particles.encoded&&result.particles.phase===70,'Particles did not create/use the top phase of a transparent GPU Layer Scene root');
     assert(result.warming.warmups>0&&result.warming.encodes===0,'Web warm-up state attempted an encode instead of waiting for initialization');
@@ -57,8 +59,8 @@ async function main(){
     console.log('PASS Sweep transparent GPU Layer Scene root',result.sweep);
     console.log('PASS Particle top GPU Layer Scene phase',result.particles);
     console.log('PASS Web initialization wait',result.warming);
-    console.log('PASS effect phases Base/Graffiti < Web < Lamps < Sweep < Particles');
-    console.log('PASS Web never uses the historical under-Base path');
+    console.log('PASS effect phases Web < Base/Line/Graffiti < Lamps < Glint/Lightning < Particles');
+    console.log('PASS Base/Line appends over resident Web without the historical materialization switch');
     console.log('GPU EFFECT SCENE ROUTING: 6/6 PASS');
   } finally {await h.close();}
 }

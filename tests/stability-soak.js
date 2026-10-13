@@ -4,6 +4,9 @@ const path=require('path');
 const root=__dirname;
 const cycles=Math.max(1,Number(process.env.SOMATA_SOAK_CYCLES)||2);
 const suites=[
+  ['v75-web-bezier-contour.js','PASS Web uses the real rendered Bézier contour'],
+  ['v75-lightning-performance.js','PASS Lightning impact path'],
+  ['v75-checkbox-functional-coverage.js','PASS checkbox functional coverage'],
   ['desktop-logo.js','DESKTOP LOGO + DETACHABLE OUTPUT: PASS'],
   ['spiral-morph-continuity.js','SPIRAL MORPH CONTINUITY: PASS'],
   ['spiral-stability-torture.js','SPIRAL STABILITY TORTURE: PASS'],

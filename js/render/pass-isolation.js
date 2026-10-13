@@ -14,7 +14,7 @@ function spiroPassIsolationNoteFailure(pass,err,frameCtx=null){
     try{window.__somataReportGpuBackendFailure?.(key,msg,{frameId:spiroPassIsolationRuntime.frameId,layer,repeat:prev.count});}catch(_){}
     let structured=false;
     try{if(typeof somataGpuDiagnosticError==='function'){somataGpuDiagnosticError(key,'pass-exception',msg,frameCtx,{fallback:'skip-pass',recovered:true,repeat:prev.count});structured=true;}}catch(_){}
-    if(!structured&&(!prev.loggedAt||now-prev.loggedAt>1200)){console.error(`[Somata 7.4.30 GPU pass] ${key} failed; pass skipped, frame loop remains alive`,{frameId:spiroPassIsolationRuntime.frameId,layer,repeat:prev.count,error:err});prev.loggedAt=now;}
+    if(!structured&&(!prev.loggedAt||now-prev.loggedAt>1200)){console.error(`[Somata 7.5 GPU pass] ${key} failed; pass skipped, frame loop remains alive`,{frameId:spiroPassIsolationRuntime.frameId,layer,repeat:prev.count,error:err});prev.loggedAt=now;}
 }
 function runSpiroIsolatedRenderPass(frameCtx,pass,fn){
     const snap=spiroCaptureTransientCanvasOverrides(mainCtx);let saved=false;try{mainCtx?.save?.();saved=true;}catch(_){}
