@@ -263,9 +263,29 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
         return built>0;
     }
     function uniformResource(key){let rec=uniformByKey.get(key);if(rec?.generation===hubGeneration)return rec;if(rec)try{rec.buffer.destroy();}catch(_){}rec={buffer:device.createBuffer({label:`particle uniforms ${key}`,size:176,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}),generation:hubGeneration,bindBySegment:new WeakMap(),bundleBySegment:new WeakMap(),staging:new Float32Array(44)};uniformByKey.set(key,rec);return rec;}
+    function topologyProfileParticleTable(frameCtx){
+        try{
+            if(typeof useTopologyVisualProfileRail!=='function'||!useTopologyVisualProfileRail(frameCtx))return null;
+            const table=typeof getLayerFrameAuthoritativePathFxTable==='function'?getLayerFrameAuthoritativePathFxTable(frameCtx):null;
+            return table?.segmentCount>0?table:null;
+        }catch(_){return null;}
+    }
+    function describeCarrier(frameCtx){
+        const profile=topologyProfileParticleTable(frameCtx);
+        if(profile)return{kind:'frame-contour-profile',frameId:Number(profile.frameId)||0,segmentCount:Number(profile.segmentCount)||0,pathCount:Number(profile.pathCount)||0,total:Number(profile.total)||0};
+        if(frameCtx?.geometryPlan?.kind==='green-morph')return{kind:'green-morph'};
+        try{const table=typeof getGpuMorphArcTableForFrame==='function'?getGpuMorphArcTableForFrame(frameCtx):null;if(table?.gpuArcResident)return{kind:'gpu-morph-arc'};}catch(_){}
+        return{kind:'pathfx'};
+    }
     function gpuParticleSource(frameCtx){
 
         try{const green=greenSegmentResource(frameCtx);if(green){prepareGreenSegmentResource(green);stats.greenMorphFrames++;stats.greenMorphCpuTablesAvoided++;return green;}}catch(_){}
+
+        // In ordinary Topology/Calm Morph the exact visual profile is FrameContour, not the
+        // endpoint-interpolated Morph Arc. Particles are a contour-following effect, so route
+        // them through the same current-frame carrier as Line/Web/Lamps. Strict Spiral never
+        // enters this branch and retains its exact GPU Arc.
+        try{const profileTable=topologyProfileParticleTable(frameCtx);if(profileTable){const rec=segmentResource(profileTable);if(rec){rec.frameContourProfile=true;stats.frameContourProfileFrames=(stats.frameContourProfileFrames||0)+1;return rec;}}}catch(_){}
 
         try{
             const table=typeof getGpuMorphArcTableForFrame==='function'?getGpuMorphArcTableForFrame(frameCtx):null;
@@ -276,7 +296,7 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
                 return{buffer:arc.segmentBuffer,metaBuffer:arc.metaBuffer,identity:arc,count:arc.segmentCount,morphArc:true,morphArcTable:table,cubicBuffer:arc.morphRec?.cubicBuffer||null,bezierSubdiv:Math.max(1,Number(arc.subdiv)||1),exactBezierArc:true};
             }
         }catch(_){}
-        const strictSpiral=typeof isStrictSpiralWebGPUFrame==='function'?isStrictSpiralWebGPUFrame(frameCtx):Boolean(state?.fourierMode!==true&&[frameCtx?.layer,frameCtx?.geometryPlan?.sourceLayer,frameCtx?.geometryPlan?.targetLayer].some(l=>l&&typeof isSpiralLayer==='function'&&isSpiralLayer(l)));
+        const strictSpiral=globalThis.SomataGeometryPolicy?.isStrict?.(frameCtx)===true;
         if(strictSpiral){stats.morphArcCpuTablesAvoided++;return null;}
         let table=null;try{table=getLayerFramePathFxTable(frameCtx);}catch(_){return null;}
         return segmentResource(table);
@@ -290,15 +310,35 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
         if(tunnelActive){if(!Array.isArray(copies)||!copies.length)return[];const out=[];for(let i=0;i<copies.length;i++){const alpha=Math.max(0,Math.min(1,Number(alphas?.[i]??1)||0));if(alpha>.0001)out.push({copy:copies[i],index:i,alpha});}return out;}
         return[{copy:null,index:-1,alpha:Math.max(0,Math.min(1,Number(alphas?.[0]??1)||0))}];
     }
+    function particleVisualScalars(cfg,frameCtx,dpr=1,copyAlpha=1){
+        const px=Math.max(.1,Number(dpr)||1),alpha=Math.max(0,Math.min(1,Number(copyAlpha)||0));
+        return{
+            density:Math.max(0,Math.min(8192,Math.round(cfg.density*cfg.densityMultiplier))),
+            speed:Math.max(0,cfg.speedPercent*cfg.speedMultiplier/100),
+            sizePx:cfg.sizePx*px,
+            opacity:(cfg.opacity/100)*alpha,
+            mode:{flow:0,cornerFade:1,spiralZ:2}[cfg.mode]??0,
+            style:{stardust:0,flame:1,laser:2,feather:3,eye:4,plasma:5}[cfg.style]??0,
+            spiralRadius:cfg.spiralRadiusPx*cfg.spiralRadiusMultiplier*px,
+            twinkle:cfg.twinkle/100,
+            scatter:Math.min(280,(cfg.scatter/100)*cfg.scatterMultiplier*Math.max(10,cfg.sizePx*8)*px),
+            sizeVariation:Math.min(3,(cfg.sizeVariation/100)*cfg.sizeVariationMultiplier),
+            spiralTurns:cfg.spiralTurns
+        };
+    }
+    function describeInput(frameCtx){
+        const cfg=normalizeParticleConfig(liveParticleLayer(frameCtx)?.particles);if(!cfg?.enabled)return null;
+        return Object.freeze(particleVisualScalars(cfg,frameCtx,Math.max(.1,Number(frameCtx?.frame?.dpr)||1),1));
+    }
     function prepareLayerItem(frameCtx,ctx,requireOverlay=false,copyDesc=null,sharedRec=null){
         const cfg=normalizeParticleConfig(liveParticleLayer(frameCtx)?.particles);if((requireOverlay&&!frameActive)||!ready||!cfg.enabled||frameCtx?.layer?.visible===false){stats.skipped++;return null;}const rec=sharedRec||gpuParticleSource(frameCtx);if(!rec)return null;
         ctx.save();try{if(copyDesc?.copy){applyMotionTunnelLag(ctx,copyDesc.copy,frameCtx.layer);const copyScale=Number(copyDesc.copy.scale);ctx.scale(Number.isFinite(copyScale)?copyScale:1,Number.isFinite(copyScale)?copyScale:1);}applyLayerFrameEffectTransform(ctx,frameCtx);}catch(_){}const tr=ctx.getTransform();ctx.restore();
         const lineColor=copyDesc?.copy&&cfg.colorMode==='line'&&typeof getTunnelCopyColor==='function'?getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor||frameCtx.layer?.strokeColor||'#ffffff',copyDesc.copy,frameCtx.tunnelPaletteProfile):null;
-        const colors=effectColors(cfg,frameCtx.layer,lineColor),baseKey=frameCtx.layer?.id||`layer-${frameCtx.layerIndex}`,key=copyDesc?.copy?`${baseKey}|corridor:${copyDesc.index}`:baseKey,ur=uniformResource(key),u=ur.staging,mode={flow:0,cornerFade:1,spiralZ:2}[cfg.mode]??0,style={stardust:0,flame:1,laser:2,feather:3,eye:4,plasma:5}[cfg.style]??0;u.fill(0);stats.uniformAllocationsAvoided++;
-        const viewportW=Math.max(1,Number(mainCanvas?.width)||width||1),viewportH=Math.max(1,Number(mainCanvas?.height)||height||1),dpr=Math.max(.1,Number(frameCtx?.frame?.dpr)||1),density=Math.max(0,Math.min(8192,Math.round(cfg.density*cfg.densityMultiplier))),speed=Math.max(0,cfg.speedPercent*cfg.speedMultiplier/100),copyAlpha=Math.max(0,Math.min(1,Number(copyDesc?.alpha??1)||0));
-        u[0]=viewportW;u[1]=viewportH;u[2]=rec.count;u[3]=density;u[4]=Number(tr.a)||1;u[5]=Number(tr.c)||0;u[6]=Number(tr.e)||0;u[8]=Number(tr.b)||0;u[9]=Number(tr.d)||1;u[10]=Number(tr.f)||0;
-        u[12]=(Number(frameCtx?.frame?.now)||performance.now())/1000;u[13]=cfg.sizePx*dpr;u[14]=speed;u[15]=(cfg.opacity/100)*copyAlpha;u[16]=mode;u[17]=style;u[18]=cfg.spiralRadiusPx*cfg.spiralRadiusMultiplier*dpr;u[19]=cfg.twinkle/100;
-        for(let i=0;i<4;i++)u.set(colors[i]||colors[0],[20,24,28,32][i]);u[37]=Math.min(280,(cfg.scatter/100)*cfg.scatterMultiplier*Math.max(10,cfg.sizePx*8)*dpr);u[38]=Math.min(3,(cfg.sizeVariation/100)*cfg.sizeVariationMultiplier);u[39]=rec.greenMorph?1:0;u[40]=cfg.spiralTurns;u[41]=Math.max(1,Number(rec.bezierSubdiv)||1);u[42]=rec.exactBezierArc===true&&rec.cubicBuffer?1:0;
+        const colors=effectColors(cfg,frameCtx.layer,lineColor),baseKey=frameCtx.layer?.id||`layer-${frameCtx.layerIndex}`,key=copyDesc?.copy?`${baseKey}|corridor:${copyDesc.index}`:baseKey,ur=uniformResource(key),u=ur.staging;u.fill(0);stats.uniformAllocationsAvoided++;
+        const viewportW=Math.max(1,Number(mainCanvas?.width)||width||1),viewportH=Math.max(1,Number(mainCanvas?.height)||height||1),dpr=Math.max(.1,Number(frameCtx?.frame?.dpr)||1),copyAlpha=Math.max(0,Math.min(1,Number(copyDesc?.alpha??1)||0)),visual=particleVisualScalars(cfg,frameCtx,dpr,copyAlpha);
+        u[0]=viewportW;u[1]=viewportH;u[2]=rec.count;u[3]=visual.density;u[4]=Number(tr.a)||1;u[5]=Number(tr.c)||0;u[6]=Number(tr.e)||0;u[8]=Number(tr.b)||0;u[9]=Number(tr.d)||1;u[10]=Number(tr.f)||0;
+        u[12]=(Number(frameCtx?.frame?.now)||performance.now())/1000;u[13]=visual.sizePx;u[14]=visual.speed;u[15]=visual.opacity;u[16]=visual.mode;u[17]=visual.style;u[18]=visual.spiralRadius;u[19]=visual.twinkle;
+        for(let i=0;i<4;i++)u.set(colors[i]||colors[0],[20,24,28,32][i]);u[37]=visual.scatter;u[38]=visual.sizeVariation;u[39]=rec.greenMorph?1:0;u[40]=visual.spiralTurns;u[41]=Math.max(1,Number(rec.bezierSubdiv)||1);u[42]=rec.exactBezierArc===true&&rec.cubicBuffer?1:0;
         device.queue.writeBuffer(ur.buffer,0,u);const identity=rec.identity||rec;let bind=ur.bindBySegment?.get(identity);if(!bind){bind=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:ur.buffer}},{binding:1,resource:{buffer:rec.buffer}},{binding:2,resource:{buffer:rec.metaBuffer}},{binding:3,resource:{buffer:rec.cubicBuffer||dummyCubicBuffer}}]});ur.bindBySegment?.set(identity,bind);stats.bindBuilds++;}else stats.bindReuses++;const count=u[3]|0,bundle=particleBundle(ur,identity,bind,count);
         return{bind,bundle,count,greenRec:rec.greenMorph?rec:null,morphArcTable:rec.morphArcTable||null,rec,copyIndex:copyDesc?.index??-1};
     }
@@ -339,7 +379,7 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
             stats.frames++;stats.overlayFrames++;canvas.style.display=queue.length?'block':'none';queue.length=0;lastDecision.reason='webgpu-overlay';return true;
         }catch(err){lastError=String(err?.message||err);stats.errors++;canvas.style.display='none';queue.length=0;return false;}
     }
-    function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost,attempted,initializing,lastError,lastDecision:{...lastDecision},stats:{...stats},contract:'Particle motion, corridor copies, twinkle alpha, visual-Z helix, scatter, size variation, procedural sprite shading and rasterization are WebGPU-instanced. Particles render into the resident Layer Scene at the top effect phase whenever possible; the transparent overlay is only a compatibility path. Topology blue Morph reuses the exact resident GPU Arc, and advanced/smooth green Morph evaluates current arc + cumulative lengths with a parallel same-frame GPU prefix scan. No CPU dynamic rail is materialised.'};}
-    return{warmup,isReady:()=>warmup(),prewarmGreenPlans,beginOverlayFrame,encodeToLayerScene,queueLayer,flush,status};
+    function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost,attempted,initializing,lastError,lastDecision:{...lastDecision},stats:{...stats},contract:'Particle motion, corridor copies, twinkle alpha, visual-Z helix, scatter, size variation, procedural sprite shading and rasterization are WebGPU-instanced. Particles render into the resident Layer Scene at the top effect phase whenever possible; the transparent overlay is only a compatibility path. Topology/Calm blue Morph follows the authoritative current-frame FrameContour profile rail; other eligible blue Morph reuses the exact resident GPU Arc, and advanced/smooth green Morph evaluates current arc + cumulative lengths with a parallel same-frame GPU prefix scan. No CPU dynamic rail is materialised.'};}
+    return{warmup,isReady:()=>warmup(),prewarmGreenPlans,beginOverlayFrame,encodeToLayerScene,queueLayer,describeInput,describeCarrier,flush,status};
 })();
 window.__spiroParticleGPUStatus=()=>WebGPUParticleRenderer.status();

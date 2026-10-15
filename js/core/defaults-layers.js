@@ -1,7 +1,7 @@
 
 
 window.__spiroRegisterModule?.('js/core/defaults-layers');
-        const DEFAULT_WEB_CONFIG = Object.freeze({ type:'bevel', style:'web', region:'inside', inside:true, outsideStraight:false, outsideArc:false, placementMode:'selfIntersection', oscillating:false, oscillationStrength:10, oscillationStrengthMultiplier:1, oscillationMultiplier:1, angleThreshold:60, width:0.6, widthRelative:false, widthPercent:40, matchLineColor:false, color:'#ffffff', secondaryColor:'#00ffff', sunDegrees:20, distance:20, depthMultiplier:1, spacing:10, angleVariation:6 });
+        const DEFAULT_WEB_CONFIG = Object.freeze({ type:'bevel', style:'web', region:'inside', inside:true, outsideStraight:false, outsideArc:false, placementMode:'corners', oscillating:false, oscillationStrength:10, oscillationStrengthMultiplier:1, oscillationMultiplier:1, angleThreshold:60, width:0.6, widthRelative:false, widthPercent:40, matchLineColor:false, color:'#ffffff', secondaryColor:'#00ffff', sunDegrees:20, distance:60, depthMultiplier:1, spacing:10, angleVariation:6 });
         const DEFAULT_SWEEP_CONFIG = Object.freeze({ enabled:false, effectType:'lightning', profileShape:'current', coreBlendMode:'normal', glowBlendMode:'normal', flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode:'whole', direction:'forward', speed:0.25, speedMultiplier:1, syncMusic:true, lengthPercent:18, widthPercent:75, everyN:2, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningProfileShape:'current', lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:true, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', lightningSegmentPercent:100, lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningWidthPercent:64, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningPreGlowIntensity:50, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase:0, currentVelocity:0, lastUpdate:0, cycleCount:0 });
 
         function normalizeSweepFlashMode(value){return value==='spectral'?'spectral':'moving';}
@@ -107,10 +107,19 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
         const effectStateReadyLayers = new WeakSet();
         const effectStateOwnerCache = new WeakMap();
         function getPersistentEffectLayer(layer) {
-            if (!layer) return getRuntimeLayerById(state.activeLayerId) || null;
+            // Effects are authored/live state, not Morph display geometry. During Morph the
+            // runtime layer lookup intentionally points at display snapshots, so using it first
+            // makes a real UI toggle read the previous snapshot for one or more frames. Always
+            // resolve an id against authored state.layers before considering a display fallback.
+            if (!layer) {
+                const authored=Array.isArray(state?.layers)?state.layers.find(item=>item?.id===state.activeLayerId):null;
+                return authored || getRuntimeLayerById(state.activeLayerId) || null;
+            }
             if (layer.id) {
-                const persistent = getRuntimeLayerById(layer.id);
-                if (persistent) return persistent;
+                const authored=Array.isArray(state?.layers)?state.layers.find(item=>item===layer||item?.id===layer.id):null;
+                if (authored) return authored;
+                const runtime = getRuntimeLayerById(layer.id);
+                if (runtime) return runtime;
             }
             return layer;
         }
@@ -453,14 +462,56 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             const raw=typeof layerOrRule==='string'?layerOrRule:layerOrRule?.fillRule;
             return raw==='nonzero'?'nonzero':'evenodd';
         }
+        function normalizeLayerFillType(layerOrType) {
+            const raw=typeof layerOrType==='string'?layerOrType:layerOrType?.fillType;
+            return raw==='accumulation'||raw==='fade'||raw==='fadeSmooth'?raw:'normal';
+        }
+        function getLayerFillType(layer) {
+            return normalizeLayerFillType(layer);
+        }
+        function normalizeLayerFillFadeDirection(layerOrDirection) {
+            const raw=typeof layerOrDirection==='string'?layerOrDirection:layerOrDirection?.fillFadeDirection;
+            return raw==='toCenter'?'toCenter':'fromCenter';
+        }
+        function getLayerFillFadeDirection(layer) {
+            return normalizeLayerFillFadeDirection(layer);
+        }
+        function getLayerFillFadeHardness(layer) {
+            const v=Number(layer?.fillFadeHardness);
+            return Number.isFinite(v)?Math.max(0,Math.min(100,v)):50;
+        }
+        function getLayerFillAccumulationSeconds(layer) {
+            const v=Number(layer?.fillAccumulationSeconds);
+            return Number.isFinite(v)?Math.max(.1,Math.min(120,v)):5;
+        }
         function getLayerFillRule(layer) {
             return normalizeLayerFillRule(layer);
+        }
+        function getLayerFillModeChoice(layer) {
+            const type=getLayerFillType(layer);
+            if(type==='accumulation'||type==='fade'||type==='fadeSmooth')return type;
+            return getLayerFillRule(layer)==='nonzero'?'dense':'mathematical';
         }
         function setLayerFillRule(layer, rule) {
             if(!layer)return 'evenodd';
             layer.fillRule=normalizeLayerFillRule(rule);
             if(typeof invalidateLayerEffect==='function')invalidateLayerEffect(layer,'fill-rule');
             return layer.fillRule;
+        }
+        function setLayerFillModeChoice(layer, mode) {
+            if(!layer)return 'mathematical';
+            const raw=String(mode||'');
+            if(raw==='dense'){
+                layer.fillType='normal';layer.fillRule='nonzero';
+            }else if(raw==='mathematical'){
+                layer.fillType='normal';layer.fillRule='evenodd';
+            }else if(raw==='accumulation'||raw==='fade'||raw==='fadeSmooth'){
+                layer.fillType=raw;layer.fillRule=normalizeLayerFillRule(layer);
+            }else{
+                layer.fillType='normal';layer.fillRule=normalizeLayerFillRule(layer);
+            }
+            if(typeof invalidateLayerEffect==='function')invalidateLayerEffect(layer,'fill-mode');
+            return getLayerFillModeChoice(layer);
         }
         function fillCanvasGeometry(ctx, layer, path=null) {
             if(!ctx?.fill)return;
@@ -556,6 +607,10 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 fill: true,
                 fillMatchStroke: true,
                 fillRule: 'evenodd',
+                fillType: 'normal',
+                fillAccumulationSeconds: 5,
+                fillFadeDirection: 'fromCenter',
+                fillFadeHardness: 50,
                 fillColor: '#00ffcc08',
                 graffitiPaletteKey: 'standard',
                 profileMode: 'segments',

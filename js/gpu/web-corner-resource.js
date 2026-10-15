@@ -257,7 +257,11 @@ async function ensureGpuWebCornerPipelines(){
         };gpuWebCornerRuntime.ready=true;gpuWebCornerRuntime.lastError='';try{requestMainCanvasRender?.();}catch(_){}return true;
     }catch(err){gpuWebCornerRuntime.ready=false;gpuWebCornerRuntime.lastError=String(err?.message||err);return false;}})();gpuWebCornerRuntime.initializing=task;try{return await task;}finally{if(gpuWebCornerRuntime.initializing===task)gpuWebCornerRuntime.initializing=null;}
 }
-function warmupGpuWebCornerResource(){if(gpuWebCornerRuntime.ready)return true;if(!gpuWebCornerRuntime.initializing)void ensureGpuWebCornerPipelines();return false;}
+function warmupGpuWebCornerResource(){
+    const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;
+    if(gpuWebCornerRuntime.ready&&gpuWebCornerRuntime.generation!==gen)gpuWebCornerReset(null,-1);
+    if(gpuWebCornerRuntime.ready)return true;if(!gpuWebCornerRuntime.initializing)void ensureGpuWebCornerPipelines();return false;
+}
 
 function gpuWebCornerStateFor(morphRec,countOverride=null){
     const d=gpuWebCornerRuntime.device,key=Number(morphRec.layerIndex)||0,count=Math.max(1,Number(countOverride)||morphRec.segmentCount),sig=`${String(morphRec.topologySignature||morphRec.segmentCount)}|bez:${count}|state6`;let st=gpuWebCornerRuntime.layerStates.get(key);
@@ -306,7 +310,7 @@ function getGpuWebCornerResourceForFrame(frameCtx){
     gpuWebCornerRuntime.stats.requests++;if(!frameCtx||typeof getGpuMorphArcTableForFrame!=='function')return null;const table=getGpuMorphArcTableForFrame(frameCtx);if(!table?.gpuArcResident||!warmupGpuWebCornerResource())return null;const arcRec=table._gpuMorphArcResource,resource=buildGpuWebCornerResource(arcRec);return resource?{table,resource}:null;
 }
 function encodeGpuWebCornerResource(rec,table,encoder,threshold=60,nowMs=0,spacing=10,depthPercent=20,depthMultiplier=1,copyCount=1,frameCtx=null,cornerMode=false,jitterStrength=0,oscillating=false,oscillationPhase=0,oscillationStrength=0){
-    if(!rec?.ready||!table||!encoder)return false;const arcReady=typeof spiroGpuPrepareArcForLayerScene==='function'?spiroGpuPrepareArcForLayerScene(frameCtx,table,encoder):(typeof encodeGpuMorphArcTable==='function'&&encodeGpuMorphArcTable(table,encoder));if(!arcReady)return false;
+    const currentGen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(!rec?.ready||!table||!encoder||rec.generation!==gpuWebCornerRuntime.generation||gpuWebCornerRuntime.generation!==currentGen||rec.arcRec?.generation!==currentGen)return false;const arcReady=typeof spiroGpuPrepareArcForLayerScene==='function'?spiroGpuPrepareArcForLayerScene(frameCtx,table,encoder):(typeof encodeGpuMorphArcTable==='function'&&encodeGpuMorphArcTable(table,encoder));if(!arcReady)return false;
     const u=rec.uniformData;u.fill(0);u[0]=Math.max(1,Math.min(179,Number(threshold)||60));u[1]=8;u[2]=Math.max(0,Number(nowMs)||0);u[3]=rec.candidateCount;u[4]=Math.max(1,Number(copyCount)||1);u[5]=Math.max(.1,Number(spacing)||10);{const frac=Math.max(0,Math.min(1,(Number(depthPercent)||0)/100));u[6]=cornerMode===true?-(frac+1e-7):frac;}u[7]=Math.max(0,Number(depthMultiplier)||0);u[8]=Math.max(0,Number(jitterStrength)||0);u[9]=oscillating===true?1:0;u[10]=Number(oscillationPhase)||0;u[11]=Math.min(8,Math.max(0,Number(oscillationStrength)||0));u[12]=Math.max(1,Number(rec.arcRec?.subdiv)||1);u[13]=rec.hasAuthoredCornerMarkers===true?1:0;gpuWebCornerRuntime.device.queue.writeBuffer(rec.uniformBuffer,0,u.buffer,0,64);gpuWebCornerRuntime.device.queue.writeBuffer(rec.threadCountBuffer,0,gpuWebCornerZeroCounter.buffer,0,4);
     let pass=encoder.beginComputePass({label:`SpiroStar Web orientation L${rec.morphRec.layerIndex}`});pass.setPipeline(gpuWebCornerRuntime.pipelines.area);pass.setBindGroup(0,rec.areaBind);pass.dispatchWorkgroups(rec.morphRec.pathCount);pass.end();gpuWebCornerRuntime.stats.areaDispatches++;
     pass=encoder.beginComputePass({label:`SpiroStar Web corner classify L${rec.morphRec.layerIndex}`});pass.setPipeline(gpuWebCornerRuntime.pipelines.classify);pass.setBindGroup(0,rec.classifyBind);pass.dispatchWorkgroups(Math.ceil(rec.candidateCount/GPU_WEB_CORNER_WG));pass.end();gpuWebCornerRuntime.stats.classifyDispatches++;

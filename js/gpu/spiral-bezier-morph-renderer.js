@@ -8,7 +8,7 @@ const WebGPUSpiralBezierMorphRenderer = (() => {
     let width=0,height=0,generation=-1,ready=false,initializing=null,lastError='not-initialized';
     const resources=new Map(),retiredResources=[],staticVisualResources=new Map();
     let retireTimer=0;
-    const stats={phaseBuilds:0,layerBuilds:0,staticVisualBuilds:0,staticVisualHits:0,uploads:0,uploadSkips:0,frames:0,baseFrames:0,glowFrames:0,fusedFrames:0,corridorFrames:0,deferredLayerSceneFrames:0,directFrameSceneFrames:0,cubics:0,gpuSegments:0,arcSubdiv:ARC_SUBDIV,cubicComputeDispatches:0,cubicComputeReuses:0,tangentRepairDispatches:0,fastRailDispatches:0,fastRailReuses:0,fastRailSegments:0,auxFrames:0,auxHits:0,auxPoints:0,retired:0,fallbacks:0,errors:0,gpuSceneUnavailable:0};
+    const stats={phaseBuilds:0,layerBuilds:0,staticVisualBuilds:0,staticVisualHits:0,uploads:0,uploadSkips:0,frames:0,baseFrames:0,glowFrames:0,fusedFrames:0,corridorFrames:0,deferredLayerSceneFrames:0,directFrameSceneFrames:0,cubics:0,gpuSegments:0,arcSubdiv:ARC_SUBDIV,cubicComputeDispatches:0,cubicComputeReuses:0,tangentRepairDispatches:0,fastRailDispatches:0,fastRailReuses:0,fastRailSegments:0,auxFrames:0,auxHits:0,auxPoints:0,carrierMappedFrames:0,carrierMappedUploads:0,carrierMappedUploadSkips:0,carrierProfilePrepares:0,carrierIdentityCubics:0,carrierMappedFallbacks:0,carrierRotationalBuilds:0,carrierRotationalReuses:0,retired:0,fallbacks:0,errors:0,gpuSceneUnavailable:0};
     const decision={eligible:false,reason:'not-requested',layerIndex:-1,frameId:-1};
     const uniformBytes=new ArrayBuffer(80),uf=new Float32Array(uniformBytes),uu=new Uint32Array(uniformBytes);
     const TWO_PI=Math.PI*2;
@@ -190,8 +190,13 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
     function lineCubics(points){const out=[];for(let i=0;i<points.length-1;i++){const p0=points[i],p3=points[i+1],c1={x:p0.x+(p3.x-p0.x)/3,y:p0.y+(p3.y-p0.y)/3},c2={x:p0.x+2*(p3.x-p0.x)/3,y:p0.y+2*(p3.y-p0.y)/3};out.push({p0:{...p0},c1,c2,p3:{...p3},widthScale0:Math.max(.02,Number(p0.widthScale)||1),widthScale1:Math.max(.02,Number(p3.widthScale)||1)});}return out;}
     function endpointCubics(path,layer){
         const points=path?.points||[];if(points.length<2)return [];
-        if(Array.isArray(path?._bezierSegments)&&path._bezierSegments.length)return path._bezierSegments;
-        if(Array.isArray(points?._spiroRetainedCubics)&&points._spiroRetainedCubics.length)return points._spiroRetainedCubics;
+        // A fresh carrier path was just constructed by geometry-gpu-core. Its retained
+        // cubics have already passed periodic finalization and rounded-join repair, so
+        // cloning/finalizing all controls again here only creates garbage on every frame.
+        if(path?.__carrierMapped===true&&Array.isArray(path?._bezierSegments)&&path._bezierSegments.length){stats.carrierIdentityCubics++;return path._bezierSegments;}
+        const exact=(src)=>{let c=(src||[]).map(q=>({...q,p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}}));if(c.length&&typeof __spiroFinalizePeriodicSpiralBezierCarrier==='function')c=__spiroFinalizePeriodicSpiralBezierCarrier(c,points);if(c.length&&(Number(layer?.rounding)||0)>0&&typeof __spiroRepairRoundedSpiralBezierJoins==='function')c=__spiroRepairRoundedSpiralBezierJoins(c);return c;};
+        if(Array.isArray(path?._bezierSegments)&&path._bezierSegments.length)return exact(path._bezierSegments);
+        if(Array.isArray(points?._spiroRetainedCubics)&&points._spiroRetainedCubics.length)return exact(points._spiroRetainedCubics);
         const smooth=layer?.profileMode==='spline'&&path?.spiralProfileSplineBaked!==true;
         const round=path?.spiralProfileRoundingBaked===true?0:Math.max(0,Math.min(2,Number(typeof getRoundingStrength==='function'?getRoundingStrength(layer?.rounding):layer?.rounding)||0));
         if(typeof buildSpiralBezierSegments==='function'){const c=buildSpiralBezierSegments(points,round,path?.cornerFlags||[],smooth);if(c?.length)return c;}
@@ -253,10 +258,11 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         const globalPhaseK=bestK,shift=globalPhaseK*TWO_PI;for(let i=0;i<n;i++)dp[i].a+=shift;
         return globalPhaseK;
     }
-    function packPairCubics(srcCubics,dstCubics,srcPresent,dstPresent,out,offset,morphType='phaseCircle',forceCartesianPath=false){
+    function packPairCubics(srcCubics,dstCubics,srcPresent,dstPresent,out,offset,spiralTransport='phaseCircle',profileMorphMode=String(state?.morph?.mode||'circleSlide'),forceCartesianPath=false){
         const n=Math.min(srcCubics.length,dstCubics.length);if(!n)return offset;const sp=polarSequence(srcCubics),dp=polarSequence(dstCubics);
-        if(morphType==='minimalTurn')alignMinimalTurnPolarAngles(sp,dp);else{const shift=Math.round((sp[0].a-dp[0].a)/TWO_PI)*TWO_PI;for(const p of dp)p.a+=shift;}
-        const at=(arr,i,slot)=>arr[i*3+slot],minimal=morphType==='minimalTurn',forceCartesian=morphType==='continuous'||morphType==='torn'||morphType==='topology';
+        if(spiralTransport==='minimalTurn')alignMinimalTurnPolarAngles(sp,dp);else{const shift=Math.round((sp[0].a-dp[0].a)/TWO_PI)*TWO_PI;for(const p of dp)p.a+=shift;}
+        if(profileMorphMode==='calm'){const lim=Math.PI*4;for(let i=0;i<Math.min(sp.length,dp.length);i++){const d=dp[i].a-sp[i].a;dp[i].a=sp[i].a+Math.max(-lim,Math.min(lim,d));}}
+        const at=(arr,i,slot)=>arr[i*3+slot],minimal=spiralTransport==='minimalTurn',forceCartesian=profileMorphMode==='topology'||spiralTransport==='continuous'||spiralTransport==='topology';
 
         let pathMaxRadius=1e-9;for(let i=0;i<n;i++){const S=[at(sp,i,0),at(sp,i,1),at(sp,i,2),at(sp,i,3)],D=[at(dp,i,0),at(dp,i,1),at(dp,i,2),at(dp,i,3)];for(let k=0;k<4;k++)pathMaxRadius=Math.max(pathMaxRadius,S[k].r,D[k].r);}
         let pathMaxPolarTurn=0,pathNearOriginTurn=0,visibleTurnEnergy=0,visibleTurnWeight=0,outerMaxTurn=0,outerTurnEnergy=0,outerTurnWeight=0,outerSignedTurn=0;for(let i=0;i<n;i++){const S=[at(sp,i,0),at(sp,i,1),at(sp,i,2),at(sp,i,3)],D=[at(dp,i,0),at(dp,i,1),at(dp,i,2),at(dp,i,3)];for(let k=0;k<4;k++){const signed=D[k].a-S[k].a,turn=Math.abs(signed),r=Math.max(S[k].r,D[k].r);pathMaxPolarTurn=Math.max(pathMaxPolarTurn,turn);if(Math.min(S[k].r,D[k].r)<pathMaxRadius*.006)pathNearOriginTurn=Math.max(pathNearOriginTurn,turn);const w=Math.max(.01,r/pathMaxRadius);visibleTurnEnergy+=turn*turn*w;visibleTurnWeight+=w;if(r>=pathMaxRadius*.28){outerMaxTurn=Math.max(outerMaxTurn,turn);outerTurnEnergy+=turn*turn*w;outerSignedTurn+=signed*w;outerTurnWeight+=w;}}}
@@ -269,17 +275,17 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         // stays polar for all ordinary <= 180° moves and falls back only when a winding
         // mismatch makes a least-turn polar path impossible.
         const impossiblePolarWinding=pathMaxPolarTurn>Math.PI+1e-5||pathNearOriginTurn>Math.PI*.85;
-        const phaseCircleSpinRisk=morphType==='phaseCircle'&&(
+        const phaseCircleSpinRisk=spiralTransport==='phaseCircle'&&(
             impossiblePolarWinding||
             (coherentOuterTurn>Math.PI*.92&&outerTurnRms>Math.PI*.72)||
             (outerMaxTurn>Math.PI*1.05&&visibleTurnRms>Math.PI*.70)
         );
-        const phaseSpinRisk=morphType==='phase'&&impossiblePolarWinding;
+        const phaseSpinRisk=spiralTransport==='phase'&&impossiblePolarWinding;
         const minimalSpinRisk=minimal&&impossiblePolarWinding;
         const pathCartesianFallback=forceCartesian||forceCartesianPath||phaseCircleSpinRisk||phaseSpinRisk||minimalSpinRisk;
         for(let i=0;i<n;i++){const s0=at(sp,i,0),s1=at(sp,i,1),s2=at(sp,i,2),s3=at(sp,i,3),d0=at(dp,i,0),d1=at(dp,i,1),d2=at(dp,i,2),d3=at(dp,i,3);const s=srcCubics[i],d=dstCubics[i],o=offset*FLOATS_PER_CUBIC;
             const localMaxPolarTurn=Math.max(Math.abs(d0.a-s0.a),Math.abs(d1.a-s1.a),Math.abs(d2.a-s2.a),Math.abs(d3.a-s3.a));
-            out[o]=s0.r;out[o+1]=s0.a;out[o+2]=s1.r;out[o+3]=s1.a;out[o+4]=s2.r;out[o+5]=s2.a;out[o+6]=s3.r;out[o+7]=s3.a;out[o+8]=d0.r;out[o+9]=d0.a;out[o+10]=d1.r;out[o+11]=d1.a;out[o+12]=d2.r;out[o+13]=d2.a;out[o+14]=d3.r;out[o+15]=d3.a;out[o+16]=Math.max(.02,Number(s.widthScale0)||1);out[o+17]=Math.max(.02,Number(s.widthScale1)||1);out[o+18]=Math.max(.02,Number(d.widthScale0)||1);out[o+19]=Math.max(.02,Number(d.widthScale1)||1);const strictContinuous=morphType==='phaseCircle'||morphType==='minimalTurn',continuousPresence=strictContinuous||(morphType!=='torn'&&state?.morph?.mode!=='fade');out[o+20]=continuousPresence?1:(srcPresent?1:0);out[o+21]=continuousPresence?1:(dstPresent?1:0);out[o+22]=pathCartesianFallback?1:0;out[o+23]=(i===0?1:0)+(i===n-1?2:0);offset++;}return offset;
+            out[o]=s0.r;out[o+1]=s0.a;out[o+2]=s1.r;out[o+3]=s1.a;out[o+4]=s2.r;out[o+5]=s2.a;out[o+6]=s3.r;out[o+7]=s3.a;out[o+8]=d0.r;out[o+9]=d0.a;out[o+10]=d1.r;out[o+11]=d1.a;out[o+12]=d2.r;out[o+13]=d2.a;out[o+14]=d3.r;out[o+15]=d3.a;out[o+16]=Math.max(.02,Number(s.widthScale0)||1);out[o+17]=Math.max(.02,Number(s.widthScale1)||1);out[o+18]=Math.max(.02,Number(d.widthScale0)||1);out[o+19]=Math.max(.02,Number(d.widthScale1)||1);const strictContinuous=spiralTransport==='phaseCircle'||spiralTransport==='minimalTurn',continuousPresence=strictContinuous||(spiralTransport!=='torn'&&profileMorphMode!=='fade');out[o+20]=continuousPresence?1:(srcPresent?1:0);out[o+21]=continuousPresence?1:(dstPresent?1:0);out[o+22]=pathCartesianFallback?1:0;out[o+23]=(i===0?1:0)+(i===n-1?2:0);offset++;}return offset;
     }
     function minimalTurnPathReference(path){
         const pts=path?.points||[];let fallback=0;
@@ -348,30 +354,179 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         for(const pair of pairs||[]){pair._sourceRetainedMetrics=srcMetrics.get(pair.src)||null;pair._targetRetainedMetrics=dstMetrics.get(pair.dst)||null;pair.minimalTurnStablePairing=true;}
         return pairs||[];
     }
+    function splitCubicRailToCountExact(cubics,count,allowIdentity=false){
+        const src=Array.isArray(cubics)?cubics:[],target=Math.max(0,Math.round(Number(count)||0));
+        if(!src.length||target<src.length)return null;
+        if(target===src.length)return allowIdentity?src:src.map(q=>({...q,p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}}));
+        const pieces=new Array(src.length).fill(1),extras=target-src.length;
+        if(extras>0){
+            const lengths=src.map(q=>cubicApproxLength(q)),total=Math.max(1e-9,lengths.reduce((a,b)=>a+b,0));
+            const remainders=[];let assigned=0;
+            for(let i=0;i<src.length;i++){
+                const raw=extras*lengths[i]/total,whole=Math.floor(raw);pieces[i]+=whole;assigned+=whole;remainders.push({i,r:raw-whole});
+            }
+            remainders.sort((a,b)=>b.r-a.r||a.i-b.i);
+            for(let k=0;k<extras-assigned;k++)pieces[remainders[k%remainders.length].i]++;
+        }
+        const out=[];
+        for(let i=0;i<src.length;i++){
+            const q=src[i],n=pieces[i],lw0=Math.log(Math.max(.02,Number(q.widthScale0)||1)),lw1=Math.log(Math.max(.02,Number(q.widthScale1)||1));
+            for(let j=0;j<n;j++){
+                const a=j/n,b=(j+1)/n,r=cubicSubsegment(q,a,b);
+                r.widthScale0=Math.exp(lw0+(lw1-lw0)*a);r.widthScale1=Math.exp(lw0+(lw1-lw0)*b);out.push(r);
+            }
+        }
+        return out.length===target?out:null;
+    }
+    function carrierLayerSpec(layer,branchIndex){
+        try{if(typeof __spiroGetSpiralCarrierSpec==='function')return __spiroGetSpiralCarrierSpec(layer,branchIndex);}catch(_){}
+        const N=Math.max(2,Math.round(Number(layer?.N)||4)),R=typeof getEffectiveLayerRadius==='function'?getEffectiveLayerRadius(layer,220):Math.max(1,Number(layer?.radius)||220),rot=((Number(layer?.rotation)||0)*Math.PI)/180,bi=Number.isFinite(Number(branchIndex))?Number(branchIndex):0,angle=bi/N*TWO_PI+rot-Math.PI/2,order=typeof getEffectiveSpiralOrder==='function'?getEffectiveSpiralOrder(layer):(Number(layer?.spiralOrder)||1),dir=order<0?-1:1,step=typeof getEffectiveSpiralStep==='function'?getEffectiveSpiralStep(layer):(Number(layer?.spiralStep ?? layer?.K)||1),ratio=typeof getSpiralClosureRatio==='function'?getSpiralClosureRatio():1.1,exp=Math.max(1e-9,Math.abs(order)||1),targetScale=Math.pow(Math.max(1.0000001,ratio),exp);
+        return{anchor:{x:R*Math.cos(angle),y:R*Math.sin(angle)},radius:R,N,step,order,direction:dir,delta:TWO_PI*step/N*dir,targetScale,logScale:Math.log(targetScale),tangential:layer?.spiralTangential===true,closed:layer?.spiralClosed!==false,roundSeams:layer?.spiralRoundSeams!==false};
+    }
+    function copyProfileNodesForCarrier(srcLayer,dstLayer,t,scratch){
+        const u=clamp(Number(t)||0,0,1),sa=Array.isArray(srcLayer?.profileNodes)&&srcLayer.profileNodes.length?srcLayer.profileNodes:[{x:0,y:0},{x:1,y:0}],da=Array.isArray(dstLayer?.profileNodes)&&dstLayer.profileNodes.length?dstLayer.profileNodes:sa;
+        if(u<=1e-9)return sa.map(p=>({...p,x:Number(p?.x)||0,y:Number(p?.y)||0}));
+        if(u>=1-1e-9)return da.map(p=>({...p,x:Number(p?.x)||0,y:Number(p?.y)||0}));
+        const n=Math.max(sa.length,da.length),out=scratch||[];while(out.length<n)out.push({x:0,y:0});out.length=n;
+        for(let i=0;i<n;i++){
+            const a=sa[Math.min(i,sa.length-1)]||sa[sa.length-1],b=da[Math.min(i,da.length-1)]||da[da.length-1]||a,p=out[i];
+            p.x=(Number(a?.x)||0)+((Number(b?.x)||0)-(Number(a?.x)||0))*u;p.y=(Number(a?.y)||0)+((Number(b?.y)||0)-(Number(a?.y)||0))*u;
+            p.__profileCorner=u<.5?(a?.__profileCorner===true):(b?.__profileCorner===true);p.__profileKeyCorner=u<.5?(a?.__profileKeyCorner===true):(b?.__profileKeyCorner===true);
+        }
+        return out;
+    }
+    function buildCarrierMappedLayer(rec,t){
+        const src=rec.sourceLayer,dst=rec.targetLayer,u=clamp(Number(t)||0,0,1),transport=String(rec.spiralTransport||'phaseCircle'),layer=rec.carrierFrameLayer||(rec.carrierFrameLayer={});Object.assign(layer,src);
+        const sn=Math.max(2,Number(src?.N)||4),dn=Math.max(2,Number(dst?.N)||sn),sk=Math.max(1,Number(src?.K)||1),dk=Math.max(1,Number(dst?.K)||sk);
+        let frameN=sn,frameK=sk;
+        if(transport==='phase'){frameN=sn;frameK=sk+(dk-sk)*u;}
+        else if(transport==='minimalTurn'){frameN=sn+(dn-sn)*u;frameK=sk;}
+        else if(transport==='continuous'){frameN=sn;frameK=sk;}
+        else {frameN=sn+(dn-sn)*u;frameK=sk+(dk-sk)*u;}
+        layer.N=Math.max(2,Math.round(frameN));layer.K=Math.max(1,Math.round(frameK));
+        const sr=typeof getEffectiveLayerRadius==='function'?getEffectiveLayerRadius(src,220):Math.max(1,Number(src?.radius)||220),dr=typeof getEffectiveLayerRadius==='function'?getEffectiveLayerRadius(dst,sr):Math.max(1,Number(dst?.radius)||sr),radius=sr+(dr-sr)*u;layer.radius=radius;layer.radiusMultiplier=1;
+        layer.rotation=(Number(src?.rotation)||0)+((Number(dst?.rotation)||0)-(Number(src?.rotation)||0))*u;
+        layer.rounding=(Number(src?.rounding)||0)+((Number(dst?.rounding)||0)-(Number(src?.rounding)||0))*u;
+        layer.lineJoinType=u<.5?(src?.lineJoinType||'rounded'):(dst?.lineJoinType||src?.lineJoinType||'rounded');
+        layer.spiralEnabled=true;layer.spiralClosed=src?.spiralClosed===dst?.spiralClosed?(src?.spiralClosed!==false):(u<.5?src?.spiralClosed!==false:dst?.spiralClosed!==false);layer.spiralTangential=src?.spiralTangential===dst?.spiralTangential?(src?.spiralTangential===true):(u<.5?src?.spiralTangential===true:dst?.spiralTangential===true);layer.spiralRoundSeams=src?.spiralRoundSeams===dst?.spiralRoundSeams?(src?.spiralRoundSeams!==false):(u<.5?src?.spiralRoundSeams!==false:dst?.spiralRoundSeams!==false);
+        const so=Number(src?.spiralOrder)||0,to=Number(dst?.spiralOrder)||0;layer.spiralOrder=so+(to-so)*u;const ss=typeof getEffectiveSpiralStep==='function'?getEffectiveSpiralStep(src):(Number(src?.spiralStep ?? src?.K)||1),ts=typeof getEffectiveSpiralStep==='function'?getEffectiveSpiralStep(dst):(Number(dst?.spiralStep ?? dst?.K)||ss);
+        if(transport==='continuous'||transport==='minimalTurn')layer.spiralStep=ss;
+        else layer.spiralStep=ss+(ts-ss)*u;
+        layer.spiralStepLinked=false;
+        let mode;
+        try{mode=typeof MorphRendering!=='undefined'&&typeof MorphRendering.resolveMorphProfileModeForRender==='function'?MorphRendering.resolveMorphProfileModeForRender(src?.profileMode,dst?.profileMode,u):(u<.5?(src?.profileMode||'segments'):(dst?.profileMode||src?.profileMode||'segments'));}catch(_){mode=u<.5?(src?.profileMode||'segments'):(dst?.profileMode||src?.profileMode||'segments');}
+        layer.profileMode=mode;layer.profileNodes=copyProfileNodesForCarrier(src,dst,u,rec.carrierProfileScratch||(rec.carrierProfileScratch=[]));
+        try{if(typeof setPreSampledSplineLayer==='function'&&typeof isPreSampledSplineLayer==='function'){const sampled=mode==='spline'&&((u<=1e-9&&isPreSampledSplineLayer(src))||(u>=1-1e-9&&isPreSampledSplineLayer(dst))||(u>1e-9&&u<1-1e-9&&isPreSampledSplineLayer(src)&&isPreSampledSplineLayer(dst)));setPreSampledSplineLayer(layer,sampled);}}catch(_){ }
+        let preparedProfile=null;try{if(typeof __spiroPrepareSpiralCarrierProfile==='function'){preparedProfile=__spiroPrepareSpiralCarrierProfile(layer,{profileNodes:layer.profileNodes,roundingFrac:typeof getRoundingStrength==='function'?getRoundingStrength(layer.rounding):Math.max(0,Number(layer.rounding)||0)/100});if(preparedProfile)stats.carrierProfilePrepares++;}}catch(_){preparedProfile=null;}
+        return{layer,radius,frameN,frameK,preparedProfile};
+    }
+    function carrierAnchorAt(specS,specD,t,cartesian){
+        const u=clamp(Number(t)||0,0,1),a=specS.anchor,b=specD.anchor;
+        if(cartesian)return{x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u};
+        const ar=Math.hypot(a.x,a.y),br=Math.hypot(b.x,b.y),aa=Math.atan2(a.y,a.x),ba=Math.atan2(b.y,b.x),d=shortestAngleDelta(aa,ba),r=ar+(br-ar)*u,ang=aa+d*u;return{x:r*Math.cos(ang),y:r*Math.sin(ang)};
+    }
+    function rotateScaleCarrierPoint(p,delta,scale){const c=Math.cos(delta),q=Math.sin(delta),x=Number(p?.x)||0,y=Number(p?.y)||0,s=Math.max(1e-9,Number(scale)||1);return{x:(c*x-q*y)*s,y:(q*x+c*y)*s};}
+    function carrierEndpoint(spec){return rotateScaleCarrierPoint(spec?.anchor||{x:0,y:0},Number(spec?.delta)||0,Math.max(1e-9,Number(spec?.targetScale)||1));}
+    function unwrapAngleNear(angle,reference){let a=Number(angle)||0,r=Number(reference)||0;while(a-r>Math.PI)a-=TWO_PI;while(a-r<-Math.PI)a+=TWO_PI;return a;}
+    function carrierFrameSpec(rec,r,t){
+        const u=clamp(Number(t)||0,0,1),s=r.sourceCarrier,d=r.targetCarrier,transport=String(rec.spiralTransport||'phaseCircle');
+        const sn=Math.max(2,Number(s?.N)||2),dn=Math.max(2,Number(d?.N)||sn),ss=Math.max(1e-9,Number(s?.step)||1),ds=Math.max(1e-9,Number(d?.step)||ss);
+        const sdir=(Number(s?.direction)||1)<0?-1:1,ddir=(Number(d?.direction)||sdir)<0?-1:1,dir=sdir===ddir?sdir:(u<.5?sdir:ddir);
+        let N=sn,step=ss,anchor,delta,targetScale,end,metric='polar-keypoints';
+        if(transport==='continuous'){
+            N=sn;step=ss;anchor=carrierAnchorAt(s,d,u,true);delta=TWO_PI*step/N*dir;targetScale=Math.exp((Number(s?.logScale)||0)+((Number(d?.logScale)||0)-(Number(s?.logScale)||0))*u);metric='cartesian-anchor-fixed-NK';
+        }else if(transport==='phase'){
+            N=sn;step=ss+(ds-ss)*u;anchor=carrierAnchorAt(s,d,u,false);delta=TWO_PI*step/N*dir;targetScale=Math.exp((Number(s?.logScale)||0)+((Number(d?.logScale)||0)-(Number(s?.logScale)||0))*u);metric='fixed-N-variable-K-polar';
+        }else if(transport==='phaseCircle'){
+            N=sn+(dn-sn)*u;step=ss+(ds-ss)*u;anchor=carrierAnchorAt(s,d,u,false);delta=TWO_PI*step/Math.max(2,N)*dir;targetScale=Math.exp((Number(s?.logScale)||0)+((Number(d?.logScale)||0)-(Number(s?.logScale)||0))*u);metric='phase-circle-clone-merge';
+        }else if(transport==='minimalTurn'){
+            N=sn+(dn-sn)*u;step=ss;anchor=carrierAnchorAt(s,d,u,false);delta=TWO_PI*step/Math.max(2,N)*dir;targetScale=Math.exp((Number(s?.logScale)||0)+((Number(d?.logScale)||0)-(Number(s?.logScale)||0))*u);metric='constant-step-least-turn';
+        }else if(transport==='topology'){
+            const sa=s?.anchor||{x:0,y:0},da=d?.anchor||sa,se=carrierEndpoint(s),de=carrierEndpoint(d);
+            anchor={x:(Number(sa.x)||0)+((Number(da.x)||0)-(Number(sa.x)||0))*u,y:(Number(sa.y)||0)+((Number(da.y)||0)-(Number(sa.y)||0))*u};
+            end={x:(Number(se.x)||0)+((Number(de.x)||0)-(Number(se.x)||0))*u,y:(Number(se.y)||0)+((Number(de.y)||0)-(Number(se.y)||0))*u};
+            const ar=Math.max(1e-9,Math.hypot(anchor.x,anchor.y)),er=Math.max(1e-9,Math.hypot(end.x,end.y)),ref=(Number(s?.delta)||0)+((Number(d?.delta)||0)-(Number(s?.delta)||0))*u,raw=Math.atan2(end.y,end.x)-Math.atan2(anchor.y,anchor.x);
+            delta=unwrapAngleNear(raw,ref);targetScale=er/ar;N=sn+(dn-sn)*u;step=Math.abs(delta)*Math.max(2,N)/TWO_PI;metric='cartesian-start-end-keypoints';
+        }else{
+            anchor=carrierAnchorAt(s,d,u,false);delta=(Number(s?.delta)||0)+((Number(d?.delta)||0)-(Number(s?.delta)||0))*u;targetScale=Math.exp((Number(s?.logScale)||0)+((Number(d?.logScale)||0)-(Number(s?.logScale)||0))*u);metric='legacy';
+        }
+        if(!end)end=rotateScaleCarrierPoint(anchor,delta,targetScale);
+        const tangential=s?.tangential===d?.tangential?s?.tangential:(u<.5?s?.tangential:d?.tangential);
+        return{anchor,end,delta,targetScale,N,step,direction:dir,tangential:Boolean(tangential),metric};
+    }
+    function rotateCarrierCubics(cubics,angle){
+        const c=Math.cos(angle),sn=Math.sin(angle),rot=(p)=>({x:c*(Number(p?.x)||0)-sn*(Number(p?.y)||0),y:sn*(Number(p?.x)||0)+c*(Number(p?.y)||0)});
+        return(cubics||[]).map(q=>{const p0=rot(q.p0),c1=rot(q.c1),c2=rot(q.c2),p3=rot(q.p3);return{...q,p0,c1,c2,p3};});
+    }
+    function ensureCarrierMappedCurrent(rec,t){
+        if(!rec?.carrierMapped)return null;const tt=resolveEffectT(rec,t);if(Number.isFinite(rec.carrierCpuT)&&Math.abs(rec.carrierCpuT-tt)<1e-12&&rec.carrierPacked&&rec.carrierCurrentByPath)return rec.carrierPacked;
+        const packed=rec.carrierPacked||(rec.carrierPacked=new Float32Array(rec.cubicCount*8)),byPath=rec.carrierCurrentByPath||(rec.carrierCurrentByPath=[]),frames=rec.carrierFrameSpecs||(rec.carrierFrameSpecs=[]);byPath.length=0;frames.length=0;
+        const built=buildCarrierMappedLayer(rec,tt),layer=built.layer,radius=built.radius;let global=0,overflow=false;
+        // 7.7 performance: for the circular Spiral transports every branch is the same
+        // profile/carrier rail rotated around the origin. Build that expensive rail once per
+        // compatible group and rotate the exact Bezier control points for sibling branches.
+        // This preserves the 7.6 carrier/profile geometry byte-for-byte up to FP rotation noise,
+        // while restoring the branch sharing that made 7.5 fast. Topology stays explicit because
+        // its start/end key points are intentionally Cartesian and need not be rotational copies.
+        const rotationalTemplates=new Map();
+        const canRotateTemplate=rec.spiralTransport!=='topology'&&rec.spiralTransport!=='torn';
+        for(let pi=0;pi<rec.carrierRecords.length;pi++){
+            const r=rec.carrierRecords[pi];let cubics;
+            if(tt<=1e-9){cubics=r.sc;frames.push(carrierFrameSpec(rec,r,0));}
+            else if(tt>=1-1e-9){cubics=r.dc;frames.push(carrierFrameSpec(rec,r,1));}
+            else{
+                const frame=carrierFrameSpec(rec,r,tt);frames.push(frame);
+                const ar=Math.hypot(Number(frame.anchor?.x)||0,Number(frame.anchor?.y)||0);
+                const key=canRotateTemplate?`${r.count}|${r.profileTargetCount||0}|${Number(frame.delta).toPrecision(14)}|${Number(frame.targetScale).toPrecision(14)}|${frame.tangential?1:0}|${layer.spiralClosed!==false?1:0}|${layer.spiralRoundSeams!==false?1:0}`:'';
+                const templ=key?rotationalTemplates.get(key):null;
+                if(templ&&Math.abs(ar-templ.radius)<=Math.max(1e-7,templ.radius*1e-9)){
+                    const da=Math.atan2(Number(frame.anchor.y)||0,Number(frame.anchor.x)||0)-templ.angle;
+                    cubics=rotateCarrierCubics(templ.cubics,da);stats.carrierRotationalReuses=(stats.carrierRotationalReuses||0)+1;
+                }else{
+                    let path=null;try{if(typeof __spiroBuildSpiralCarrierPath==='function')path=__spiroBuildSpiralCarrierPath(layer,frame.anchor,{radius,delta:frame.delta,targetScale:frame.targetScale,tangential:frame.tangential,closed:layer.spiralClosed!==false,roundSeams:layer.spiralRoundSeams!==false,roundingFrac:typeof getRoundingStrength==='function'?getRoundingStrength(layer.rounding):Math.max(0,Number(layer.rounding)||0)/100,profileNodes:layer.profileNodes,preparedProfile:built.preparedProfile,branchIndex:r.currentBranchIndex,profileTargetCount:r.profileTargetCount});}catch(_){ }
+                    const raw=path?endpointCubics(path,layer):[];cubics=splitCubicRailToCountExact(raw,r.count,path?.__carrierMapped===true);
+                    if(cubics&&key){rotationalTemplates.set(key,{cubics,angle:Math.atan2(Number(frame.anchor.y)||0,Number(frame.anchor.x)||0),radius:ar});stats.carrierRotationalBuilds=(stats.carrierRotationalBuilds||0)+1;}
+                }
+                if(!cubics){overflow=true;cubics=r.sc.map((q,j)=>{const d=r.dc[Math.min(j,r.dc.length-1)]||q,lerp=(a,b)=>a+(b-a)*tt;return{p0:{x:lerp(q.p0.x,d.p0.x),y:lerp(q.p0.y,d.p0.y)},c1:{x:lerp(q.c1.x,d.c1.x),y:lerp(q.c1.y,d.c1.y)},c2:{x:lerp(q.c2.x,d.c2.x),y:lerp(q.c2.y,d.c2.y)},p3:{x:lerp(q.p3.x,d.p3.x),y:lerp(q.p3.y,d.p3.y)},widthScale0:Math.exp(Math.log(Math.max(.02,Number(q.widthScale0)||1))*(1-tt)+Math.log(Math.max(.02,Number(d.widthScale0)||1))*tt),widthScale1:Math.exp(Math.log(Math.max(.02,Number(q.widthScale1)||1))*(1-tt)+Math.log(Math.max(.02,Number(d.widthScale1)||1))*tt)};});}
+            }
+            byPath.push(cubics);for(const q of cubics){const o=global*8;packed[o]=q.p0.x;packed[o+1]=q.p0.y;packed[o+2]=q.c1.x;packed[o+3]=q.c1.y;packed[o+4]=q.c2.x;packed[o+5]=q.c2.y;packed[o+6]=q.p3.x;packed[o+7]=q.p3.y;global++;}
+        }
+        if(global!==rec.cubicCount)return null;rec.carrierCpuT=tt;rec.carrierOverflow=overflow;return packed;
+    }
+
     function buildLayerCpuResource(layerIndex){
         const srcLayer=runtimeState.morph?.renderSourceLayers?.[layerIndex],dstLayer=runtimeState.morph?.renderTargetLayers?.[layerIndex];if(!srcLayer||!dstLayer)return null;
         if(!(srcLayer.spiralEnabled===true||dstLayer.spiralEnabled===true))return null;if(state?.fourierMode===true)return null;
-        const morphType=typeof getSpiralMorphType==='function'?getSpiralMorphType():String(state?.morph?.spiralMorphType||'phaseCircle');
-        let srcPaths=buildOrbitPolylines(srcLayer)||[],dstPaths=buildOrbitPolylines(dstLayer)||[];if(!srcPaths.length||!dstPaths.length)return null;const pairs=morphType==='minimalTurn'?pairMinimalTurnSpiralPaths(srcPaths,dstPaths,srcLayer,dstLayer):stableSpiralPairs(srcPaths,dstPaths,srcLayer,dstLayer);if(!pairs.length)return null;
+        const spiralTransport=typeof getSpiralMorphType==='function'?getSpiralMorphType():String(state?.morph?.spiralMorphType||'phaseCircle');
+        const profileMorphMode=String(state?.morph?.mode||'circleSlide');
+        const carrierMappedEligible=srcLayer?.spiralEnabled===true&&dstLayer?.spiralEnabled===true&&spiralTransport!=='torn'&&profileMorphMode!=='fade';
+        let srcPaths=buildOrbitPolylines(srcLayer)||[],dstPaths=buildOrbitPolylines(dstLayer)||[];if(!srcPaths.length||!dstPaths.length)return null;const pairs=spiralTransport==='minimalTurn'?pairMinimalTurnSpiralPaths(srcPaths,dstPaths,srcLayer,dstLayer):stableSpiralPairs(srcPaths,dstPaths,srcLayer,dstLayer);if(!pairs.length)return null;
 
         const records=[];let cubicCount=0;
         for(let pairIndex=0;pairIndex<pairs.length;pairIndex++){
             const pair=pairs[pairIndex],sourceMetrics=pair._sourceRetainedMetrics||null,targetMetrics=pair._targetRetainedMetrics||null,rawSc=sourceMetrics?.cubics||endpointCubics(pair.src,srcLayer),rawDc=targetMetrics?.cubics||endpointCubics(pair.dst,dstLayer);if(!rawSc.length||!rawDc.length)continue;
 
             const sourceRawArcMap=sourceMetrics?.map||buildRailArcMap(rawSc),targetRawArcMap=targetMetrics?.map||buildRailArcMap(rawDc),sourceRawKnotFractions=sourceRawArcMap.knots,targetRawKnotFractions=targetRawArcMap.knots;
-            const crossFamily=Boolean(srcLayer?.spiralEnabled===true)!==Boolean(dstLayer?.spiralEnabled===true),crossFamilyCartesianTransport=crossFamily&&(morphType==='phaseCircle'||morphType==='minimalTurn'||morphType==='phase'||morphType==='topology');
+            const crossFamily=Boolean(srcLayer?.spiralEnabled===true)!==Boolean(dstLayer?.spiralEnabled===true),crossFamilyCartesianTransport=crossFamily&&(spiralTransport==='phaseCircle'||spiralTransport==='minimalTurn'||spiralTransport==='phase'||spiralTransport==='topology');
 
-            const eq=equalizeCubicRailsByArc(rawSc,rawDc,sourceRawArcMap,targetRawArcMap),sc=eq.source,dc=eq.target,n=Math.min(sc.length,dc.length);if(!n)continue;
-            const sp=cubicRailPoints(sc),dp=cubicRailPoints(dc),sourceClosure=periodicClosureSpec(pair.src,rawSc,srcLayer),targetClosure=periodicClosureSpec(pair.dst,rawDc,dstLayer);records.push({pair,sp,dp,sc:sc.slice(0,n),dc:dc.slice(0,n),count:n,closed:Boolean(pair?.src?.closed&&pair?.dst?.closed),sourceClosure,targetClosure,periodic:Boolean(sourceClosure.periodic&&targetClosure.periodic),sourceRawCubics:rawSc,targetRawCubics:rawDc,sourceRawKnotFractions,targetRawKnotFractions,sourceLampKeyFractions:authoredFlagFractions(pair.src,sourceRawArcMap,'key'),targetLampKeyFractions:authoredFlagFractions(pair.dst,targetRawArcMap,'key'),sourceCornerFractions:authoredFlagFractions(pair.src,sourceRawArcMap,'corner'),targetCornerFractions:authoredFlagFractions(pair.dst,targetRawArcMap,'corner'),sourcePathLength:sourceRawArcMap.total,targetPathLength:targetRawArcMap.total,knotFractions:eq.fractions.slice(0,n+1),arcEqualized:true,crossFamilyCartesianTransport});cubicCount+=n;
+            let sc,dc,n,commonFractions,arcEqualized=false,exactSubdivisionOnly=false;
+            if(carrierMappedEligible||spiralTransport==='torn'){
+                n=Math.max(rawSc.length,rawDc.length);sc=splitCubicRailToCountExact(rawSc,n);dc=splitCubicRailToCountExact(rawDc,n);
+                if(sc&&dc){exactSubdivisionOnly=true;commonFractions=cubicKnotFractions(sc);}else{const eq=equalizeCubicRailsByArc(rawSc,rawDc,sourceRawArcMap,targetRawArcMap);sc=eq.source;dc=eq.target;n=Math.min(sc.length,dc.length);commonFractions=eq.fractions.slice(0,n+1);arcEqualized=true;}
+            }else{
+                const eq=equalizeCubicRailsByArc(rawSc,rawDc,sourceRawArcMap,targetRawArcMap);sc=eq.source;dc=eq.target;n=Math.min(sc.length,dc.length);commonFractions=eq.fractions.slice(0,n+1);arcEqualized=true;
+            }
+            if(!n||!sc?.length||!dc?.length)continue;
+            const sp=cubicRailPoints(sc),dp=cubicRailPoints(dc),sourceClosure=periodicClosureSpec(pair.src,rawSc,srcLayer),targetClosure=periodicClosureSpec(pair.dst,rawDc,dstLayer);records.push({pair,sp,dp,sc:sc.slice(0,n),dc:dc.slice(0,n),count:n,closed:Boolean(pair?.src?.closed&&pair?.dst?.closed),sourceClosure,targetClosure,periodic:Boolean(sourceClosure.periodic&&targetClosure.periodic),sourceRawCubics:rawSc,targetRawCubics:rawDc,sourceRawKnotFractions,targetRawKnotFractions,sourceLampKeyFractions:authoredFlagFractions(pair.src,sourceRawArcMap,'key'),targetLampKeyFractions:authoredFlagFractions(pair.dst,targetRawArcMap,'key'),sourceCornerFractions:authoredFlagFractions(pair.src,sourceRawArcMap,'corner'),targetCornerFractions:authoredFlagFractions(pair.dst,targetRawArcMap,'corner'),sourcePathLength:sourceRawArcMap.total,targetPathLength:targetRawArcMap.total,knotFractions:commonFractions||cubicKnotFractions(sc),arcEqualized,exactSubdivisionOnly,crossFamilyCartesianTransport});cubicCount+=n;
         }
-        if(!cubicCount)return null;const data=new Float32Array(cubicCount*FLOATS_PER_CUBIC);let ci=0;for(const r of records)ci=packPairCubics(r.sc,r.dc,r.pair.sourcePathPresent!==false,r.pair.targetPathPresent!==false,data,ci,morphType,r.crossFamilyCartesianTransport===true);
+        if(!cubicCount)return null;const data=new Float32Array(cubicCount*FLOATS_PER_CUBIC);let ci=0;for(const r of records)ci=packPairCubics(r.sc,r.dc,r.pair.sourcePathPresent!==false,r.pair.targetPathPresent!==false,data,ci,spiralTransport,profileMorphMode,r.crossFamilyCartesianTransport===true);
         const topologyMergeSplitCount=records.reduce((n,r)=>n+((r.pair.sourcePathPresent!==false)!==(r.pair.targetPathPresent!==false)?1:0),0);
         let cartesianFallbackCubics=0,maxPackedPolarTurn=0;for(let i=0;i<cubicCount;i++){const o=i*FLOATS_PER_CUBIC;if(data[o+22]>.5)cartesianFallbackCubics++;for(let k=0;k<4;k++)maxPackedPolarTurn=Math.max(maxPackedPolarTurn,Math.abs(data[o+9+k*2]-data[o+1+k*2]));}
         const pathCount=records.length,cpuSegmentMeta=new Uint32Array(cubicCount*4),cpuPathSegmentRanges=new Uint32Array(pathCount*4),pathRanges=new Uint32Array(pathCount*4),cpuPathPeriodic=new Uint32Array(pathCount),cpuEndpointPathLengths=new Float32Array(pathCount*2),cpuPathKnotFractions=new Array(pathCount),cpuPathLampKeyFractions=new Array(pathCount),cpuPathCornerFractions=new Array(pathCount),cpuPathClosure=new Float32Array(pathCount*8);let seg=0,pointBase=0,maxEndpointClosureError=0,maxEndpointTangentClosureError=0;
         for(let pi=0;pi<records.length;pi++){
             const rec0=records[pi],n=rec0.sc.length,po=pi*4;cpuPathSegmentRanges[po]=seg;cpuPathSegmentRanges[po+1]=n;cpuPathSegmentRanges[po+2]=pointBase;cpuPathSegmentRanges[po+3]=n+1;
             pathRanges[po]=pointBase;pathRanges[po+1]=n+1;pathRanges[po+2]=rec0.closed?1:0;pathRanges[po+3]=pi;
-            const co=pi*8,sc0=rec0.sourceClosure||{},dc0=rec0.targetClosure||{};cpuPathClosure[co]=Number(sc0.delta)||0;cpuPathClosure[co+1]=Number(sc0.logScale)||0;cpuPathClosure[co+2]=Number(dc0.delta)||0;cpuPathClosure[co+3]=Number(dc0.logScale)||0;cpuPathClosure[co+4]=sc0.periodic?1:0;cpuPathClosure[co+5]=dc0.periodic?1:0;cpuPathClosure[co+6]=(morphType==='phaseCircle'||morphType==='minimalTurn'||(morphType!=='torn'&&state?.morph?.mode!=='fade'))?1:0;cpuPathClosure[co+7]=(sc0.tangentProtected?1:0)+(dc0.tangentProtected?2:0);maxEndpointClosureError=Math.max(maxEndpointClosureError,Number(sc0.error)||0,Number(dc0.error)||0);maxEndpointTangentClosureError=Math.max(maxEndpointTangentClosureError,sc0.tangentProtected?(Number(sc0.tangentError)||0):0,dc0.tangentProtected?(Number(dc0.tangentError)||0):0);
+            const co=pi*8,sc0=rec0.sourceClosure||{},dc0=rec0.targetClosure||{};cpuPathClosure[co]=Number(sc0.delta)||0;cpuPathClosure[co+1]=Number(sc0.logScale)||0;cpuPathClosure[co+2]=Number(dc0.delta)||0;cpuPathClosure[co+3]=Number(dc0.logScale)||0;cpuPathClosure[co+4]=sc0.periodic?1:0;cpuPathClosure[co+5]=dc0.periodic?1:0;cpuPathClosure[co+6]=(sc0.periodic&&dc0.periodic)?1:0;cpuPathClosure[co+7]=(sc0.tangentProtected?1:0)+(dc0.tangentProtected?2:0);maxEndpointClosureError=Math.max(maxEndpointClosureError,Number(sc0.error)||0,Number(dc0.error)||0);maxEndpointTangentClosureError=Math.max(maxEndpointTangentClosureError,sc0.tangentProtected?(Number(sc0.tangentError)||0):0,dc0.tangentProtected?(Number(dc0.tangentError)||0):0);
 
             cpuPathPeriodic[pi]=(sc0.periodic&&dc0.periodic&&cpuPathClosure[co+6]>.5)?1:0;
             cpuEndpointPathLengths[pi*2]=Math.max(1e-9,Number(rec0.sourcePathLength)||cubicRailLength(rec0.sc));cpuEndpointPathLengths[pi*2+1]=Math.max(1e-9,Number(rec0.targetPathLength)||cubicRailLength(rec0.dc));
@@ -381,12 +536,14 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
             cpuPathCornerFractions[pi]={source:rec0.sourceCornerFractions||[],target:rec0.targetCornerFractions||[]};
             for(let j=0;j<n;j++,seg++){const o=seg*4,sq=rec0.sc[j],dq=rec0.dc[j];let flags=0;const s0=sq?.__profileCorner0===true,s1=sq?.__profileCorner1===true,t0=dq?.__profileCorner0===true,t1=dq?.__profileCorner1===true;if(s0)flags|=0x01000000;if(s1)flags|=0x02000000;if(t0)flags|=0x04000000;if(t1)flags|=0x08000000;if(s0||t0)flags|=0x40000000;if(s1||t1)flags|=0x80000000;cpuSegmentMeta[o]=pointBase+j;cpuSegmentMeta[o+1]=pointBase+j+1;cpuSegmentMeta[o+2]=pi;cpuSegmentMeta[o+3]=flags>>>0;}pointBase+=n+1;
         }
+        const carrierMapped=carrierMappedEligible;
+        let carrierFirst=0;for(let ri=0;ri<records.length;ri++){const r=records[ri],sbi=Number(r.pair?.src?.spiralBranchIndex),dbi=Number(r.pair?.dst?.spiralBranchIndex);r.firstSegment=carrierFirst;carrierFirst+=r.count;r.sourceCarrier=carrierLayerSpec(srcLayer,Number.isFinite(sbi)?sbi:ri);r.targetCarrier=carrierLayerSpec(dstLayer,Number.isFinite(dbi)?dbi:ri);r.currentBranchIndex=Number.isFinite(sbi)?sbi:(Number.isFinite(dbi)?dbi:ri);r.profileTargetCount=0;}
         const auxPairs=records.map((r,pairIndex)=>({source:r.sp,target:r.dp,sourcePresent:r.pair.sourcePathPresent!==false,targetPresent:r.pair.targetPathPresent!==false,closed:r.closed===true,points:[],pairIndex,sourceBranchIndex:Number(r.pair?.src?.spiralBranchIndex),targetBranchIndex:Number(r.pair?.dst?.spiralBranchIndex),sourceBranchCount:Math.max(2,Math.round(Number(srcLayer?.N)||records.length)),targetBranchCount:Math.max(2,Math.round(Number(dstLayer?.N)||records.length)),branchPhase:0}));const allClosed=records.length>0&&records.every(r=>r.closed===true);
-        const interpolationMetric=(morphType==='continuous'||morphType==='torn'||morphType==='topology')?'cartesian':(morphType==='minimalTurn'?'least-turn-polar':'polar');
-        return{layerIndex,phaseSerial:Number(runtimeState.morph?.gpuPhasePrepareSerial)||0,morphType,interpolationMetric,sourceSpline:srcLayer?.profileMode==='spline',targetSpline:dstLayer?.profileMode==='spline',data,cubicCount,segmentCount:cubicCount,pathCount,pointCount:pointBase,allClosed,topologyMergeSplitCount,continuousTopologyTransport:morphType==='phaseCircle'||morphType==='minimalTurn'||(morphType!=='torn'&&state?.morph?.mode!=='fade'),stableSpiralPairing:records.every(r=>r.pair?.stableSpiralPairing===true),cartesianFallbackCubics,maxPackedPolarTurn,topologySignature:`spiral-bezier:${morphType}:${layerIndex}:${pathCount}:${cubicCount}:${srcLayer?.profileMode==='spline'?'S':'G'}${dstLayer?.profileMode==='spline'?'S':'G'}:${records.map(r=>r.closed?1:0).join('')}`,cpuSegmentMeta,cpuPathSegmentRanges,cpuPathRanges:pathRanges,cpuPathPeriodic,cpuEndpointPathLengths,cpuPathKnotFractions,cpuPathLampKeyFractions,cpuPathCornerFractions,cpuPathClosure,maxEndpointClosureError,maxEndpointTangentClosureError,pathRanges,auxPairs,buffer:null,bind:null,uniformBase:null,uniformGlow:null,uniformBaseBind:null,uniformGlowBind:null,cubicBuffer:null,cubicUniformBuffer:null,cubicBind:null,pathRangeBuffer:null,segmentMetaBuffer:null,pathSegmentRangeBuffer:null,pathClosureBuffer:null,closureBind:null,tangentRepairBind:null,bezierVisualRail:true,bezierSubdiv:SUBDIV,arcSubdiv:ARC_SUBDIV,specialSpiralBezierRail:true,exactEndpointCubics:true,gpuOnlySpiralEffects:true,copyBuffer:null,copyBind:null,copyCapacity:0,copyData:new Float32Array(0),copyPackedFrameId:-1,copyPackedCount:0,copyPackedMultiColor:false,auxT:NaN,lastCubicT:NaN,currentCubicsCommittedFrameId:-1,currentCubicsCommittedT:NaN,currentCubicsRootProducerFrameId:-1,currentCubicsRootProducerT:NaN,ready:false};
+        const interpolationMetric=spiralTransport==='topology'?'cartesian-keypoints':(spiralTransport==='continuous'?'cartesian':(spiralTransport==='minimalTurn'?'least-turn-polar':(spiralTransport==='torn'?(profileMorphMode==='topology'?'cartesian':'profile-mode'):(profileMorphMode==='calm'?'polar-calm':'polar'))));
+        return{layerIndex,sourceLayer:srcLayer,targetLayer:dstLayer,carrierMapped,carrierRecords:records,carrierCpuT:NaN,carrierPacked:null,carrierCurrentByPath:null,carrierOverflow:false,carrierUploadedT:NaN,carrierUploadedGeneration:-1,phaseSerial:Number(runtimeState.morph?.gpuPhasePrepareSerial)||0,morphType:spiralTransport,spiralTransport,profileMorphMode,interpolationMetric,sourceSpline:srcLayer?.profileMode==='spline',targetSpline:dstLayer?.profileMode==='spline',data,cubicCount,segmentCount:cubicCount,pathCount,pointCount:pointBase,allClosed,topologyMergeSplitCount,continuousTopologyTransport:spiralTransport==='phaseCircle'||spiralTransport==='minimalTurn'||(spiralTransport!=='torn'&&profileMorphMode!=='fade'),stableSpiralPairing:records.every(r=>r.pair?.stableSpiralPairing===true),exactSubdivisionOnly:records.every(r=>r.exactSubdivisionOnly===true),arcEqualizedRecords:records.filter(r=>r.arcEqualized===true).length,cartesianFallbackCubics,maxPackedPolarTurn,topologySignature:`spiral-bezier:${profileMorphMode}:${spiralTransport}:${layerIndex}:${pathCount}:${cubicCount}:${srcLayer?.profileMode==='spline'?'S':'G'}${dstLayer?.profileMode==='spline'?'S':'G'}:${records.map(r=>r.closed?1:0).join('')}`,cpuSegmentMeta,cpuPathSegmentRanges,cpuPathRanges:pathRanges,cpuPathPeriodic,cpuEndpointPathLengths,cpuPathKnotFractions,cpuPathLampKeyFractions,cpuPathCornerFractions,cpuPathClosure,maxEndpointClosureError,maxEndpointTangentClosureError,pathRanges,auxPairs,buffer:null,bind:null,uniformBase:null,uniformGlow:null,uniformBaseBind:null,uniformGlowBind:null,cubicBuffer:null,cubicUniformBuffer:null,cubicBind:null,pathRangeBuffer:null,segmentMetaBuffer:null,pathSegmentRangeBuffer:null,pathClosureBuffer:null,closureBind:null,tangentRepairBind:null,bezierVisualRail:true,bezierSubdiv:SUBDIV,arcSubdiv:ARC_SUBDIV,specialSpiralBezierRail:true,exactEndpointCubics:true,gpuOnlySpiralEffects:true,copyBuffer:null,copyBind:null,copyCapacity:0,copyData:new Float32Array(0),copyPackedFrameId:-1,copyPackedCount:0,copyPackedMultiColor:false,auxT:NaN,lastCubicT:NaN,currentCubicsCommittedFrameId:-1,currentCubicsCommittedT:NaN,currentCubicsRootProducerFrameId:-1,currentCubicsRootProducerT:NaN,ready:false};
     }
     async function preparePhase(){
-        if(!(state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild())||(typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()))){retireCurrentResources('prepare-ineligible');return 0;}
+        if(!(state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()))){retireCurrentResources('prepare-ineligible');return 0;}
         if(!await ensureReady()){retireCurrentResources('prepare-unavailable');return 0;}
         const nextResources=new Map();let built=0;
         try{
@@ -457,6 +614,15 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         if(!rec?.ready||!rec.cubicBind||!effectCubicPipeline||!encoder)return false;
         const tt=resolveEffectT(rec,t),raw=rec.cubicUniformStaging||(rec.cubicUniformStaging=new ArrayBuffer(32)),u32=rec.cubicUniformU32||(rec.cubicUniformU32=new Uint32Array(raw)),f32=rec.cubicUniformF32||(rec.cubicUniformF32=new Float32Array(raw));
         u32[0]=rec.cubicCount>>>0;f32[4]=tt;f32[5]=resolveProfileModeTransitionT(rec,tt);f32[6]=rec.sourceSpline===true?1:0;f32[7]=rec.targetSpline===true?1:0;device.queue.writeBuffer(rec.cubicUniformBuffer,0,raw);
+        if(rec.carrierMapped===true){
+            const packed=ensureCarrierMappedCurrent(rec,tt);if(!packed){stats.carrierMappedFallbacks++;return false;}
+            // queue.writeBuffer is queue-ordered, not encoder-local.  Web/Lightning/Fill/Glow/Base
+            // may all ask for the same current rail in one frame; upload it once and let every
+            // consumer read the same resident cubic buffer, just as the 7.5 GPU path did.
+            if(Number.isFinite(rec.carrierUploadedT)&&Math.abs(rec.carrierUploadedT-tt)<1e-12&&rec.carrierUploadedGeneration===generation){stats.carrierMappedUploadSkips++;}
+            else{device.queue.writeBuffer(rec.cubicBuffer,0,packed.buffer,packed.byteOffset,packed.byteLength);stats.uploads+=packed.byteLength;stats.carrierMappedUploads+=packed.byteLength;stats.carrierMappedFrames++;rec.carrierUploadedT=tt;rec.carrierUploadedGeneration=generation;}
+            rec.lastCubicT=tt;return true;
+        }
         let pass=encoder.beginComputePass({label:`Somata Spiral shared effect cubics L${rec.layerIndex}`});pass.setPipeline(effectCubicPipeline);pass.setBindGroup(0,rec.cubicBind);pass.dispatchWorkgroups(Math.ceil(rec.cubicCount/128));pass.end();
         if(rec.closureBind&&closurePipeline&&rec.pathCount>0){pass=encoder.beginComputePass({label:`Somata 7.5 Spiral periodic closure L${rec.layerIndex}`});pass.setPipeline(closurePipeline);pass.setBindGroup(0,rec.closureBind);pass.dispatchWorkgroups(Math.ceil(rec.pathCount/64));pass.end();}
         if(rec.tangentRepairBind&&tangentRepairPipeline&&rec.cubicCount>1){pass=encoder.beginComputePass({label:`Somata 7.5 Spiral topology tangent repair L${rec.layerIndex}`});pass.setPipeline(tangentRepairPipeline);pass.setBindGroup(0,rec.tangentRepairBind);pass.dispatchWorkgroups(Math.ceil(Math.max(0,rec.cubicCount-1)/128));pass.end();stats.tangentRepairDispatches++;}
@@ -479,7 +645,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         if(!frameCtx)return'no-frame';
         const hiddenGraffitiGlow=mode==='glow'&&frameCtx.lineProfileStrokeOnly===true&&frameCtx.lineProfileApplication==='graffiti';
         if(state?.fourierMode===true)return'fourier';if(state?.showRoundingGuides)return'rounding-guides';if(frameCtx.lineProfileStrokeOnly&&!hiddenGraffitiGlow)return'profile-replaces-base';if(mode==='base'&&!frameCtx.lineDisplayEnabled)return'line-hidden';
-        if(frameCtx.morphFrameActive){if(frameCtx.geometryProvider!==frameCtx.blueMorphProvider)return'another-provider';if(frameCtx.geometryPlan?.kind!=='blue-circle-slide')return'kind-'+String(frameCtx.geometryPlan?.kind||'unknown');const rec=getResource(frameCtx.layerIndex);if(!rec?.ready)return'resource-not-ready';return'';}
+        if(frameCtx.morphFrameActive){if(frameCtx.geometryProvider!==frameCtx.blueMorphProvider)return'another-provider';if(frameCtx.geometryPlan?.kind!=='blue-circle-slide'&&frameCtx.geometryPlan?.kind!=='blue-prepared')return'kind-'+String(frameCtx.geometryPlan?.kind||'unknown');const rec=getResource(frameCtx.layerIndex);if(!rec?.ready)return'resource-not-ready';return'';}
 
         if(typeof isSpiralLayer!=='function'||!isSpiralLayer(frameCtx.layer))return'not-static-spiral';
         if(frameCtx.geometryPlan?.dynamic===true)return'static-dynamic-geometry';
@@ -495,21 +661,10 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
     }
     function rgba(style){try{return GPUColorCache.rgba(style||'#fff');}catch(_){return[1,1,1,1];}}
     function spiralCenterShadeSpec(frameCtx){
-        if(state?.tunnel?.active!==true)return{enabled:false,hidden:0,startRadius:0,endRadius:0};
-        const hidden=Math.max(0,Math.min(32,Math.round(Number(state?.tunnel?.centerHiddenCopies)||0)));
-        if(hidden<=0)return{enabled:false,hidden:0,startRadius:0,endRadius:0};
-        const sampleCopy=frameCtx?.visibleInstances?.copies?.[0]||null;
-        let range=null;
-        try{if(typeof getTunnelCenterRevealRange==='function')range=getTunnelCenterRevealRange(state.tunnel,sampleCopy?.stepRatio);}catch(_){}
-        if(!range){
-            const minScale=Math.max(.01,Number(state?.tunnel?.minScale)||.055),ratio=Math.max(1.000001,Number(sampleCopy?.stepRatio)||(typeof getTunnelStepRatio==='function'?Number(getTunnelStepRatio()):1.1)||1.1),firstVisibleIndex=hidden-2,endScale=minScale*Math.pow(ratio,firstVisibleIndex),startScale=endScale/ratio;
-            range={startScale,endScale,spacingScale:Math.max(1e-9,endScale-startScale)};
-        }
-        const lightScale=Math.max(.001,Math.abs(Number(frameCtx?.lightMorphScale)||1));
-        const localExtent=Math.max(1,(Number(frameCtx?.layerExtent)||1)/lightScale);
-        const startRadius=Math.max(0,localExtent*Math.max(0,Number(range.startScale)||0));
-        const endRadius=Math.max(startRadius+1e-6,localExtent*Math.max(0,Number(range.endScale)||0));
-        return{enabled:true,hidden,startRadius,endRadius,localExtent,startScale:Number(range.startScale)||0,endScale:Number(range.endScale)||0};
+        // 7.6.5: no radial geometry mask. The Corridor's per-copy reveal
+        // alpha is the single owner of center emergence, so a Spiral crossing the
+        // center is not cut a second time and unrelated crossings are untouched.
+        return{enabled:false,mode:'copy-alpha',hidden:Math.max(0,Math.min(32,Math.round(Number(state?.tunnel?.centerHiddenCopies)||0))),startRadius:0,endRadius:0};
     }
     function centerShadeAlphaForRadius(radius,spec){
         if(!spec?.enabled)return 1;const a=Number(spec.startRadius)||0,b=Math.max(a+1e-9,Number(spec.endRadius)||0),q=clamp(((Number(radius)||0)-a)/(b-a),0,1);return q*q*(3-2*q);
@@ -517,7 +672,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
     function packCopies(frameCtx,rec){
         const fid=Number(frameCtx?.frameId)||0;if(rec.copyBuffer&&rec.copyPackedFrameId===fid)return rec.copyPackedCount;
         const corridor=state.tunnel?.active===true,copies=corridor?frameCtx.visibleInstances?.copies:[{scale:1}],alphas=corridor?frameCtx.visibleInstances?.alphas:[1],src=Array.isArray(copies)&&copies.length?copies:[{scale:1}],centerShade=spiralCenterShadeSpec(frameCtx);rec.lastCenterShade=centerShade;ensureCopyCapacity(rec,src.length);let k=0,firstStyle=null,multiColor=false;
-        for(let i=0;i<src.length;i++){const cp=src[i]||{};let ca=clamp(Number(alphas?.[i]??1),0,1);if(centerShade.enabled){const centerA=clamp(Number(cp?.centerRevealAlpha??1),0,1);if(centerA>.00001)ca=clamp(ca/centerA,0,1);}if(ca<=.0001)continue;const sc=corridor?Math.max(.000001,Math.abs(Number(cp.scale)||0)):1,ang=corridor&&typeof getMotionTunnelLagRadians==='function'?getMotionTunnelLagRadians(cp,frameCtx.layer):0,cs=Math.cos(ang),sn=Math.sin(ang);const style=corridor&&typeof getTunnelCopyColor==='function'?getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,cp,frameCtx.tunnelPaletteProfile):(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#fff'),styleKey=String(style||''),c=rgba(style),o=k*12;if(firstStyle===null)firstStyle=styleKey;else if(styleKey!==firstStyle)multiColor=true;rec.copyData[o]=sc*cs;rec.copyData[o+1]=-sc*sn;rec.copyData[o+2]=ca;rec.copyData[o+3]=sc;rec.copyData[o+4]=sc*sn;rec.copyData[o+5]=sc*cs;rec.copyData[o+6]=c[0];rec.copyData[o+7]=c[1];rec.copyData[o+8]=c[2];rec.copyData[o+9]=c[3];k++;}
+        for(let i=0;i<src.length;i++){const cp=src[i]||{};let ca=clamp(Number(alphas?.[i]??1),0,1);if(ca<=.0001)continue;const sc=corridor?Math.max(.000001,Math.abs(Number(cp.scale)||0)):1,ang=corridor&&typeof getMotionTunnelLagRadians==='function'?getMotionTunnelLagRadians(cp,frameCtx.layer):0,cs=Math.cos(ang),sn=Math.sin(ang);const style=corridor&&typeof getTunnelCopyColor==='function'?getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,cp,frameCtx.tunnelPaletteProfile):(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#fff'),styleKey=String(style||''),c=rgba(style),o=k*12;if(firstStyle===null)firstStyle=styleKey;else if(styleKey!==firstStyle)multiColor=true;rec.copyData[o]=sc*cs;rec.copyData[o+1]=-sc*sn;rec.copyData[o+2]=ca;rec.copyData[o+3]=sc;rec.copyData[o+4]=sc*sn;rec.copyData[o+5]=sc*cs;rec.copyData[o+6]=c[0];rec.copyData[o+7]=c[1];rec.copyData[o+8]=c[2];rec.copyData[o+9]=c[3];k++;}
         if(k){device.queue.writeBuffer(rec.copyBuffer,0,rec.copyData.buffer,0,k*48);stats.uploads+=k*48;}else stats.uploadSkips++;
         rec.copyPackedFrameId=fid;rec.copyPackedCount=k;rec.copyPackedMultiColor=multiColor;return k;
     }
@@ -550,7 +705,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         if(target.deferred){
             let accepted=false;
             if(target.resident===true){
-                const phase=Number.isFinite(Number(opts.layerScenePhase))?Number(opts.layerScenePhase):(opts.mode==='glow'?3:5);
+                const phase=Number.isFinite(Number(opts.layerScenePhase))?Number(opts.layerScenePhase):(typeof somataEffectPhase==='function'?somataEffectPhase('geometry',opts.mode==='glow'?10:20):(opts.mode==='glow'?3:5));
                 accepted=typeof queueLayerSceneEffectCommand==='function'&&queueLayerSceneEffectCommand(frameCtx,phase,cmd,opts.layerSceneLabel||`spiral-bezier-${opts.mode||'effect'}`)===true;
             }else accepted=WebGPUStrokeRenderer.deferExternalLayerScene?.(cmd,frameCtx.frameId,'spiral-bezier-morph')===true;
             if(accepted){
@@ -589,6 +744,11 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
     }
     function auxiliaryPaths(layerIndex,t){
         const rec=getResource(layerIndex);if(!rec?.ready||!rec?.pathCount)return null;const tt=resolveEffectT(rec,t);if(Number.isFinite(rec.auxT)&&Math.abs(rec.auxT-tt)<1e-12){stats.auxHits++;return rec.auxPairs;}
+        if(rec.carrierMapped===true){
+            if(!ensureCarrierMappedCurrent(rec,tt))return null;const subdiv=6,cubicAt=(p0,c1,c2,p3,q)=>{const z=1-q,z2=z*z,q2=q*q;return{x:z2*z*p0.x+3*z2*q*c1.x+3*z*q2*c2.x+q2*q*p3.x,y:z2*z*p0.y+3*z2*q*c1.y+3*z*q2*c2.y+q2*q*p3.y};};
+            for(let pi=0;pi<rec.pathCount;pi++){const pair=rec.auxPairs[pi],cubics=rec.carrierCurrentByPath?.[pi]||[],need=cubics.length*subdiv+1;while(pair.points.length<need)pair.points.push({x:0,y:0,widthScale:1});pair.points.length=need;let w=0;for(let j=0;j<cubics.length;j++){const q=cubics[j],q0=j===0?0:1,l0=Math.log(Math.max(.02,Number(q.widthScale0)||1)),l1=Math.log(Math.max(.02,Number(q.widthScale1)||1));for(let sj=q0;sj<=subdiv;sj++){const u=sj/subdiv,p=cubicAt(q.p0,q.c1,q.c2,q.p3,u),dst=pair.points[w++];dst.x=p.x;dst.y=p.y;dst.widthScale=Math.exp(l0+(l1-l0)*u);}}pair.points.length=w;pair.closed=false;pair.alpha=1;const sn=Math.max(1,Number(pair.sourceBranchCount)||rec.pathCount),dn=Math.max(1,Number(pair.targetBranchCount)||rec.pathCount),sa=Number.isFinite(pair.sourceBranchIndex)?(((pair.sourceBranchIndex/sn)%1)+1)%1:NaN,da=Number.isFinite(pair.targetBranchIndex)?(((pair.targetBranchIndex/dn)%1)+1)%1:NaN;if(Number.isFinite(sa)&&Number.isFinite(da)){let d=da-sa;d=((d+.5)%1+1)%1-.5;pair.branchPhase=((sa+d*tt)%1+1)%1;}else pair.branchPhase=Number.isFinite(sa)?sa:(Number.isFinite(da)?da:pi/Math.max(1,rec.pathCount));}
+            rec.auxT=tt;stats.auxFrames++;stats.auxPoints+=rec.auxPairs.reduce((n,p)=>n+p.points.length,0);return rec.auxPairs;
+        }
         const subdiv=6,data=rec.data,ranges=rec.cpuPathSegmentRanges,profileT=resolveProfileModeTransitionT(rec,tt),mixedMode=rec.sourceSpline!==rec.targetSpline;
         const polarXY=(r,a)=>({x:r*Math.cos(a),y:r*Math.sin(a)}),mixPolar=(sr,sa,dr,da,cart=false)=>{if(cart){const s=polarXY(sr,sa),d=polarXY(dr,da);return{x:s.x+(d.x-s.x)*tt,y:s.y+(d.y-s.y)*tt};}const r=sr+(dr-sr)*tt,a=sa+(da-sa)*tt;return{x:r*Math.cos(a),y:r*Math.sin(a)};};
         const rot=(v,a)=>{const c=Math.cos(a),q=Math.sin(a);return{x:c*v.x-q*v.y,y:q*v.x+c*v.y};};
@@ -609,8 +769,10 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         }
         rec.auxT=tt;stats.auxFrames++;stats.auxPoints+=rec.auxPairs.reduce((n,p)=>n+p.points.length,0);return rec.auxPairs;
     }
-    function status(){const active=[...resources.entries()].map(([layerIndex,r])=>({layerIndex,morphType:r.morphType||'',interpolationMetric:r.interpolationMetric||'',cubicCount:r.cubicCount||0,pathCount:r.pathCount||0,topologyMergeSplitCount:r.topologyMergeSplitCount||0,continuousTopologyTransport:r.continuousTopologyTransport===true,cartesianFallbackCubics:r.cartesianFallbackCubics||0,maxPackedPolarTurn:Number(r.maxPackedPolarTurn)||0,ready:r.ready===true,periodicPaths:r.cpuPathClosure?Array.from({length:r.pathCount||0},(_,pi)=>r.cpuPathClosure[pi*8+4]>0.5&&r.cpuPathClosure[pi*8+5]>0.5).filter(Boolean).length:0,maxEndpointClosureError:Number(r.maxEndpointClosureError)||0,maxEndpointTangentClosureError:Number(r.maxEndpointTangentClosureError)||0}));return{supported:!!globalThis.navigator?.gpu,ready,initializing:Boolean(initializing),generation,lastError,resources:resources.size,active,staticVisualResources:staticVisualResources.size,stats:{...stats},lastDecision:{...decision},contract:'Somata keeps one canonical retained-cubic Spiral truth. Spiral branch correspondence is circular-order-preserving before retained merge/split, preventing cross-wired branch fields during N/K changes. Non-torn Spiral topology changes use visible merge/split transport with no alpha disappearance; Phase keeps N/K fixed and moves effective step; Phase-circle permits N/K merge/split; Minimal-turn keeps spiral step/K constant while N changes with least-turn polar transport; Topological permits unrestricted parameter changes and uses retained Cartesian merge/split transport. Any impossible >180 degree winding correspondence is transported on the same retained cubic in Cartesian space instead of spinning through extra revolutions. Spiral Corridor center shading is radial in geometry space rather than whole-copy alpha only. Periodic position is preserved exactly; C1 seam repair is applied only to tangential or explicitly filleted seams.'};}
-    return{warmup,isReady:()=>ready,preparePhase,invalidate,park,getResource,isEligible,reason,render,renderGlowAndBase,auxiliaryPaths,status,debugBuildCpuResource:buildLayerCpuResource,debugCenterShadeSpec:spiralCenterShadeSpec,debugCenterShadeAlpha:centerShadeAlphaForRadius};
+    function debugCarrierMappedPlan(layerIndex=0,t=0){const rec=buildLayerCpuResource(layerIndex);if(!rec)return null;const packed=rec.carrierMapped?ensureCarrierMappedCurrent(rec,t):null;return{carrierMapped:rec.carrierMapped===true,carrierOverflow:rec.carrierOverflow===true,cubicCount:rec.cubicCount,pathCount:rec.pathCount,interpolationMetric:rec.interpolationMetric,exactSubdivisionOnly:rec.exactSubdivisionOnly===true,arcEqualizedRecords:Number(rec.arcEqualizedRecords)||0,packed:packed?Array.from(packed):null,carrierFrames:(rec.carrierFrameSpecs||[]).map(f=>({anchor:{...f.anchor},end:{...f.end},delta:Number(f.delta)||0,targetScale:Number(f.targetScale)||1,N:Number(f.N)||0,step:Number(f.step)||0,direction:Number(f.direction)||1,metric:f.metric||''})),paths:(rec.carrierCurrentByPath||[]).map(path=>path.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3},widthScale0:Number(q.widthScale0)||1,widthScale1:Number(q.widthScale1)||1}))),sourcePaths:(rec.carrierRecords||[]).map(r=>r.sc.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}}))),targetPaths:(rec.carrierRecords||[]).map(r=>r.dc.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}})))};}
+    function debugCarrierAdvanceBench(layerIndex=0,samples=60){const rec=buildLayerCpuResource(layerIndex);if(!rec?.carrierMapped)return null;const n=Math.max(1,Math.min(600,Math.round(Number(samples)||60)));const t0=performance.now();let checksum=0;for(let i=0;i<n;i++){const t=(i+.5)/n,packed=ensureCarrierMappedCurrent(rec,t);if(!packed)return null;checksum+=packed[0]||0;}const ms=performance.now()-t0;return{samples:n,ms,msPerSample:ms/n,cubicCount:rec.cubicCount,pathCount:rec.pathCount,bytesPerRail:rec.cubicCount*8*4,checksum,carrierOverflow:rec.carrierOverflow===true};}
+    function status(){const active=[...resources.entries()].map(([layerIndex,r])=>({layerIndex,morphType:r.morphType||'',spiralTransport:r.spiralTransport||r.morphType||'',profileMorphMode:r.profileMorphMode||'',interpolationMetric:r.interpolationMetric||'',carrierMapped:r.carrierMapped===true,carrierOverflow:r.carrierOverflow===true,cubicCount:r.cubicCount||0,pathCount:r.pathCount||0,topologyMergeSplitCount:r.topologyMergeSplitCount||0,continuousTopologyTransport:r.continuousTopologyTransport===true,exactSubdivisionOnly:r.exactSubdivisionOnly===true,arcEqualizedRecords:Number(r.arcEqualizedRecords)||0,cartesianFallbackCubics:r.cartesianFallbackCubics||0,maxPackedPolarTurn:Number(r.maxPackedPolarTurn)||0,ready:r.ready===true,periodicPaths:r.cpuPathClosure?Array.from({length:r.pathCount||0},(_,pi)=>r.cpuPathClosure[pi*8+4]>0.5&&r.cpuPathClosure[pi*8+5]>0.5).filter(Boolean).length:0,maxEndpointClosureError:Number(r.maxEndpointClosureError)||0,maxEndpointTangentClosureError:Number(r.maxEndpointTangentClosureError)||0}));return{supported:!!globalThis.navigator?.gpu,ready,initializing:Boolean(initializing),generation,lastError,resources:resources.size,active,staticVisualResources:staticVisualResources.size,stats:{...stats},lastDecision:{...decision},contract:'Somata 7.8.3 keeps the late-7.7.9 exact carrier/profile constructor for Spiral, no arc resampling, and one upload per t. Circular Spiral transports reuse an exact rotational carrier template across sibling branches; Topology and Torn stay explicit per-branch. Web and Lightning are 7.5-reference consumers: strict Spiral effects may only consume the exact specialized visible Spiral rail and never the generic shared morph rail. Continuous fixes N/K; Phase fixes N and transports K as the phase step; Phase-circle adds no-fade branch clone/merge; Minimal-turn keeps the step constant while N branches clone/merge; Topology linearly transports both key endpoints; Torn uses exact Bezier subdivision only. Every spiral-to-spiral rail keeps periodic closure. Corridor center reveal remains whole-copy alpha; constant-step Corridor copy phase is synchronized to the exact current carrier delta; Glow follows the retained Spiral rail, and Glow/Base share the same packed copy transforms.'};}
+    return{warmup,isReady:()=>ready,preparePhase,invalidate,park,getResource,isEligible,reason,render,renderGlowAndBase,auxiliaryPaths,status,debugBuildCpuResource:buildLayerCpuResource,debugCarrierMappedPlan,debugCarrierAdvanceBench,debugCenterShadeSpec:spiralCenterShadeSpec,debugCenterShadeAlpha:centerShadeAlphaForRadius};
 })();
 window.prepareGpuSpiralBezierMorphResources=()=>WebGPUSpiralBezierMorphRenderer.preparePhase();
 window.invalidateGpuSpiralBezierMorphResources=(reason)=>WebGPUSpiralBezierMorphRenderer.invalidate(reason);
@@ -618,5 +780,7 @@ window.parkGpuSpiralBezierMorphResources=(reason)=>WebGPUSpiralBezierMorphRender
 window.getGpuSpiralBezierMorphAuxPaths=(layerIndex,t)=>WebGPUSpiralBezierMorphRenderer.auxiliaryPaths(layerIndex,t);
 window.__somataSpiralBezierMorphStatus=()=>WebGPUSpiralBezierMorphRenderer.status();
 window.__somataSpiralMorphCpuPlan=(layerIndex=0)=>WebGPUSpiralBezierMorphRenderer.debugBuildCpuResource(layerIndex);
+window.__somataSpiralCarrierMorphPlan=(layerIndex=0,t=0)=>WebGPUSpiralBezierMorphRenderer.debugCarrierMappedPlan(layerIndex,t);
+window.__somataSpiralCarrierAdvanceBench=(layerIndex=0,samples=60)=>WebGPUSpiralBezierMorphRenderer.debugCarrierAdvanceBench(layerIndex,samples);
 
 (()=>{if(!globalThis.navigator?.gpu||globalThis.isSecureContext!==true)return;const kick=()=>{try{WebGPUSpiralBezierMorphRenderer.warmup?.();}catch(_){}};if(typeof requestIdleCallback==='function')requestIdleCallback(kick,{timeout:350});else setTimeout(kick,0);})();

@@ -136,7 +136,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 const rec={at:roundFreezeMs(at),...payload};morphFreezeHistory.push(rec);if(morphFreezeHistory.length>32)morphFreezeHistory.shift();
                 lastMorphFreezeAt=at;lastMorphFreezeKey=key;
 
-                console.warn('[Somata Morph Freeze]',payload);
+                console.error('[Somata Morph Freeze]',payload);
                 try{window.__somataDiagNote?.('morph.freeze',`${payload.code}: ${payload.cause}`);}catch(_){ }
                 return payload;
             };
@@ -306,7 +306,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 isMorphActive() { return hasMorphActivity(); },
                 reportMorphFreeze(code,detail={}) { return reportMorphFreeze(code,detail); },
                 freezeStats() { return {count:morphFreezeCount,externalRafGapCount,lastExternalRafGap,thresholds:{gapMs:MORPH_FREEZE_GAP_MS,workMs:MORPH_FREEZE_WORK_MS,renderMs:MORPH_RENDER_FREEZE_MS,watchdogReportMs:MORPH_WATCHDOG_REPORT_MS,longTaskMs:MORPH_FREEZE_LONG_TASK_MS},last:morphFreezeHistory.at(-1)||null,history:morphFreezeHistory.slice()}; },
-                stats() { return { activeTasks: tasks.size, frameCount, paintCount, paintErrors, lastPaintError, inFrame, rafPending: Boolean(raf), renderPending, lastTickAt, lastInvalidateAt, lastScheduledPaintAt, invalidateCount, watchdogArmed:Boolean(watchdogTimer), watchdogRecoveries, watchdogLastRecoveryAt, lastTickDurationMs:roundFreezeMs(lastTickDurationMs), morphFreezeCount, externalRafGapCount, lastExternalRafGap, fpsLimit, fpsFrameIntervalMs:roundFreezeMs(1000/Math.max(FPS_LIMIT_MIN,fpsLimit)), fpsGateSkips }; }
+                stats() { return { activeTasks: tasks.size, frameCount, paintCount, paintErrors, lastPaintError, inFrame, rafPending: Boolean(raf), renderPending, lastTickAt, lastInvalidateAt, lastScheduledPaintAt, invalidateCount, watchdogArmed:Boolean(watchdogTimer), watchdogRecoveries, watchdogLastRecoveryAt, lastTickDurationMs:roundFreezeMs(lastTickDurationMs), lastTask:lastTaskTiming.name||null, lastTaskMs:roundFreezeMs(lastTaskTiming.ms), lastPaintMs:roundFreezeMs(lastPaintTiming.ms), morphFreezeCount, externalRafGapCount, lastExternalRafGap, fpsLimit, fpsFrameIntervalMs:roundFreezeMs(1000/Math.max(FPS_LIMIT_MIN,fpsLimit)), fpsGateSkips }; }
             };
         })();
         function applyFpsLimit(value, persist = true) {

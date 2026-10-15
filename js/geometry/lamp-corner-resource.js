@@ -46,10 +46,10 @@ function evaluateGpuLampCornerResource(resource,t,maxPoints=GPU_LAMP_CORNER_MAX,
             if(best&&bestCost<.34){const oldKey=best[0];e=best[1];used.add(oldKey);lampMotionRuntime.corners.delete(oldKey);lampMotionRuntime.corners.set(canonical,e);used.add(canonical);gpuLampCornerRuntime.stats.legacyIdentityMigrations++;}
             else{e={pathIndex:target.pathIndex,s:target.fraction,targetS:target.fraction,level:0,last:now,lastSeen:now};lampMotionRuntime.corners.set(canonical,e);used.add(canonical);}
         }
-        e.pathIndex=target.pathIndex;e.targetS=target.fraction;e.target=Math.max(0,Math.min(1,Number(target.strength)||0));e.lastSeen=now;
+        e.pathIndex=target.pathIndex;e.targetS=target.fraction;e.target=1;e.lastSeen=now;
     }
     for(const [key,e] of existing)if(!used.has(key))e.target=0;const out=[];
-    for(const [key,e] of lampMotionRuntime.corners){if(!key.startsWith(prefix))continue;const path=resource.paths[e.pathIndex];if(!path){e.target=0;continue;}const rawDt=Math.max(0,now-(e.last||now)),dt=rawDt>1250?0:rawDt;e.last=now;const inertiaMs=lampCornerInertiaMs(state.lamps),targetLevel=Math.max(0,Math.min(1,Number(e.target)||0));e.level=moveLampLevel(e.level,targetLevel,dt,inertiaMs);e.s=gpuLampCornerAdvanceFraction(e.s,e.targetS,path,dt);if(Math.abs(e.level-targetLevel)>.002)lampAdaptiveFrame.needsSettle=true;const p=gpuLampCornerPointAtFraction(path,e.s);if(p&&e.level>.002)out.push({...p,pathIndex:e.pathIndex,lampLevel:e.level,lampId:key,lampSeed:lampHash32(key)});}
+    for(const [key,e] of lampMotionRuntime.corners){if(!key.startsWith(prefix))continue;const path=resource.paths[e.pathIndex];if(!path){e.target=0;continue;}const rawDt=Math.max(0,now-(e.last||now)),dt=rawDt>1250?0:rawDt;e.last=now;const inertiaMs=lampCornerInertiaMs(ensureLayerLampState?.(layer)||state.lamps),targetLevel=Math.max(0,Math.min(1,Number(e.target)||0));e.level=moveLampLevel(e.level,targetLevel,dt,inertiaMs);e.s=gpuLampCornerAdvanceFraction(e.s,e.targetS,path,dt);if(Math.abs(e.level-targetLevel)>.002)lampAdaptiveFrame.needsSettle=true;const p=gpuLampCornerPointAtFraction(path,e.s);if(p&&e.level>.002)out.push({...p,pathIndex:e.pathIndex,lampLevel:e.level,lampId:key,lampSeed:lampHash32(key)});}
     gpuLampCornerRuntime.stats.frameOutputs+=out.length;return capLampPointList(out,maxPoints);
 }
 function prepareGpuMorphCornerLampFrame(frameCtx,maxPoints=GPU_LAMP_CORNER_MAX){

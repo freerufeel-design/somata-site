@@ -1083,7 +1083,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return { geometryT: u, closureMix: u };
         }
 
-        function drawAngularAnchorMorph(ctx, layer, sourceLayer, targetLayer, t, alpha, slideType) {
+        function drawAngularAnchorMorph(ctx, layer, sourceLayer, targetLayer, t, alpha, slideType, movementMode = 'angular') {
             const plan = getCircleMorphPlan(sourceLayer, targetLayer, slideType);
             if (!plan.pathPlans.length) return;
 
@@ -1130,9 +1130,18 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     currentPathPlan = pp;
                     const vertexPts = pp.vertexPts;
                     for (let i = 0; i < vertexPts.length; i++) {
-                        const angle = pp.from[i] + pp.delta[i] * t;
-                        vertexPts[i].x = R * Math.cos(angle);
-                        vertexPts[i].y = R * Math.sin(angle);
+                        const a0 = pp.from[i];
+                        const a1 = a0 + pp.delta[i];
+                        if (movementMode === 'linear') {
+                            const ax = R * Math.cos(a0), ay = R * Math.sin(a0);
+                            const bx = R * Math.cos(a1), by = R * Math.sin(a1);
+                            vertexPts[i].x = ax + (bx - ax) * t;
+                            vertexPts[i].y = ay + (by - ay) * t;
+                        } else {
+                            const angle = a0 + pp.delta[i] * t;
+                            vertexPts[i].x = R * Math.cos(angle);
+                            vertexPts[i].y = R * Math.sin(angle);
+                        }
                     }
                     if (vertexPts.length < 2) continue;
                     const collapseReferenceLength = R * pp.collapseFactor;
@@ -1238,9 +1247,18 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 currentPathPlan = pp;
                 const vertexPts = pp.vertexPts;
                 for (let i = 0; i < vertexPts.length; i++) {
-                    const angle = pp.from[i] + pp.delta[i] * geometryT;
-                    vertexPts[i].x = R * Math.cos(angle);
-                    vertexPts[i].y = R * Math.sin(angle);
+                    const a0 = pp.from[i];
+                    const a1 = a0 + pp.delta[i];
+                    if (movementMode === 'linear') {
+                        const ax = R * Math.cos(a0), ay = R * Math.sin(a0);
+                        const bx = R * Math.cos(a1), by = R * Math.sin(a1);
+                        vertexPts[i].x = ax + (bx - ax) * geometryT;
+                        vertexPts[i].y = ay + (by - ay) * geometryT;
+                    } else {
+                        const angle = a0 + pp.delta[i] * geometryT;
+                        vertexPts[i].x = R * Math.cos(angle);
+                        vertexPts[i].y = R * Math.sin(angle);
+                    }
                 }
                 if (vertexPts.length < 2) continue;
                 const collapseReferenceLength = R * pp.collapseFactor;
@@ -1256,7 +1274,16 @@ window.__spiroRegisterModule?.('js/geometry/morph');
         function drawCircleSlideMorph(ctx, layer, sourceLayer, targetLayer, t, alpha) {
             drawAngularAnchorMorph(
                 ctx, layer, sourceLayer, targetLayer, t, alpha,
-                (typeof getEffectiveCircleSlideType==='function' ? getEffectiveCircleSlideType() : (state.morph.slideType || 'minimal'))
+                (typeof getEffectiveCircleSlideType==='function' ? getEffectiveCircleSlideType() : (state.morph.slideType || 'minimal')),
+                'angular'
+            );
+        }
+
+        function drawLinearAnchorMorph(ctx, layer, sourceLayer, targetLayer, t, alpha) {
+            drawAngularAnchorMorph(
+                ctx, layer, sourceLayer, targetLayer, t, alpha,
+                (typeof getEffectiveCircleSlideType==='function' ? getEffectiveCircleSlideType() : (state.morph.slideType || 'minimal')),
+                'linear'
             );
         }
 
@@ -1598,6 +1625,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             getMorphClosureTransitionPlan,
             drawAngularAnchorMorph,
             drawCircleSlideMorph,
+            drawLinearAnchorMorph,
             drawFadeMorph,
             interpolateMorphPolarAngle,
             getMorphReferenceVertexOffset,

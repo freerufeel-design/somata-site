@@ -60,7 +60,6 @@ window.__spiroRegisterModule?.('js/effects/motion');
             const geometry=isGeometryMorphActive(),linear=isLinearMotionMorphActive();
             return {active:geometry||linear,geometry,linear};
         }
-        function isAnyMorphLikeAnimationActive(){return getMorphActivityState().active;}
         window.__spiroMorphActivity=()=>getMorphActivityState();
         function toggleMotionQuickGroup(){
             const m=normalizeMotionState(),targets=getMotionRotationTargets();if(!targets.length)return false;
@@ -80,12 +79,19 @@ window.__spiroRegisterModule?.('js/effects/motion');
             if(!state.tunnel?.active||runtimeState?.morph?.active!==true||!layer)return 0;
             const phaseMode=typeof spiralMorphUsesCorridorPhase==='function'&&spiralMorphUsesCorridorPhase();
             if(!phaseMode||typeof isSpiralLayer!=='function'||!isSpiralLayer(layer))return 0;
-            const n=Math.max(2,Math.round(Number(layer.N)||4));
-            const step=typeof getEffectiveSpiralStep==='function'?Number(getEffectiveSpiralStep(layer)):(Number(layer.spiralStep)||Number(layer.K)||1);
-            const order=typeof getEffectiveSpiralOrder==='function'?Number(getEffectiveSpiralOrder(layer)):(Number(layer.spiralOrder)||1);
-            const direction=order<0?-1:1;
+            // 7.6.7: use the exact continuous-N carrier delta that the retained Spiral
+            // renderer uses for this Morph frame.  Falling back to the presentation layer's
+            // rounded N re-opens Corridor seams during constant-step clone/merge.
+            let delta=NaN;
+            try{delta=Number(window.__spiroCurrentSpiralMorphCorridorDelta?.(layer));}catch(_){delta=NaN;}
+            if(!Number.isFinite(delta)){
+                const n=Math.max(2,Number(layer.N)||4);
+                const step=typeof getEffectiveSpiralStep==='function'?Number(getEffectiveSpiralStep(layer)):(Number(layer.spiralStep)||Number(layer.K)||1);
+                const order=typeof getEffectiveSpiralOrder==='function'?Number(getEffectiveSpiralOrder(layer)):(Number(layer.spiralOrder)||1);
+                delta=((Math.PI*2*step)/n)*(order<0?-1:1);
+            }
             const copyId=Number.isFinite(Number(copy?.copyId))?Number(copy.copyId):Math.round(Number(copy?.position)||0);
-            return copyId*((Math.PI*2*step)/n)*direction;
+            return copyId*delta;
         }
         function getMotionTunnelLagRadians(copy,layer){
             let angle=getSpiralMorphTunnelPhaseRadians(copy,layer);

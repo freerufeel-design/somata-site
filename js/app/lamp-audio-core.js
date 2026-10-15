@@ -2,7 +2,7 @@
 
 window.__spiroRegisterModule?.('js/app/lamp-audio-core');
 
-        const lampMotionRuntime = { snap:new Map(), calm:new Map(), corners:new Map(), arbitraryCounts:new Map(), arbitraryPathCounts:new Map(), blueMorph:new Map(), linearGates:new Map(), topologyLinearPlans:new Map(), lastCleanup:0 };
+        const lampMotionRuntime = { snap:new Map(), profileAttach:new Map(), calm:new Map(), corners:new Map(), arbitraryCounts:new Map(), arbitraryPathCounts:new Map(), blueMorph:new Map(), linearGates:new Map(), topologyLinearPlans:new Map(), lastCleanup:0 };
 
         function lampVisualNow(){
             const n=Number(renderRuntime?.active?renderRuntime.now:NaN);
@@ -143,7 +143,8 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     rt.assignments.set(key,stable);
                 }
                 const age=Math.max(0,now-(Number(stable.handoffAt)||0));
-                const u=linearMode?1:(stable.handoffAt?Math.max(0,Math.min(1,age/HANDOFF_MS)):1);
+                const profileArcAttached=p?.__lampVisualProfileAttached===true;
+                const u=(linearMode||profileArcAttached)?1:(stable.handoffAt?Math.max(0,Math.min(1,age/HANDOFF_MS)):1);
                 const ease=u*u*(3-2*u);
                 const targetX=Number(p?.x)||0,targetY=Number(p?.y)||0,sx=Number(stable.fromX)||0,sy=Number(stable.fromY)||0;
                 const x=u<1?sx+(targetX-sx)*ease:targetX,y=u<1?sy+(targetY-sy)*ease:targetY;
@@ -389,7 +390,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         function cleanupLampRuntime(now=lampVisualNow()) {
             if(now-lampMotionRuntime.lastCleanup<1200)return;
             lampMotionRuntime.lastCleanup=now;
-            for(const map of [lampMotionRuntime.snap,lampMotionRuntime.calm,lampMotionRuntime.corners]){
+            for(const map of [lampMotionRuntime.snap,lampMotionRuntime.profileAttach,lampMotionRuntime.calm,lampMotionRuntime.corners]){
                 for(const [key,v] of map){if(now-(v.lastSeen||now)>2200 && (v.level===undefined||v.level<.005))map.delete(key);}
             }
         }
@@ -463,7 +464,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 e.pathIndex=target.pathIndex;
                 e.targetS=target.fraction;
 
-                e.target=animate?Math.max(0,Math.min(1,Number(target.strength)||0)):1;
+                e.target=1; // Corner inertia is the attack/release time to full brightness during Morph; static corners are immediate.
                 e.lastSeen=now;
             }
 
@@ -500,6 +501,46 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             return points.map((p,index)=>{
                 const pi=Number.isInteger(p?.pathIndex)?p.pathIndex:-1;
                 const path=(pi>=0&&attachmentPaths[pi])?attachmentPaths[pi]:null;
+                const authoritativeVisualRail=attachmentPaths?.__somataFrameContour===true;
+
+                // FrameContour segment subdivision is the actual visible profile subdivision,
+                // not the canonical topology segment numbering used to preserve lamp identity.
+                // Never reuse a frozen canonical render-segment parameter on it. Project the
+                // identity point onto the corresponding visible contour (or globally if needed).
+                if(authoritativeVisualRail&&runtimeState.morph?.active&&(state.morph.mode==='topology'||state.morph.mode==='calm')){
+                    // Topology identity and visual attachment are separate concerns.  The old
+                    // nearest-point projection could jump to a different nearby branch of the
+                    // spline from one frame to the next.  Once a lamp owns a profile path, keep
+                    // an arc coordinate on that path and move along the rail itself.  Linear
+                    // topology already publishes a continuous lampAttachFraction, so use it
+                    // directly rather than solving nearest geometry again.
+                    let visualPath=path,visualPathIndex=pi;
+                    if(!visualPath){
+                        const hit=typeof nearestPointOnLampPathsWithIndex==='function'?nearestPointOnLampPathsWithIndex(p,attachmentPaths,null):null;
+                        if(Number.isInteger(hit?.pathIndex)&&hit.pathIndex>=0){visualPathIndex=hit.pathIndex;visualPath=attachmentPaths[visualPathIndex];}
+                    }
+                    if(!visualPath?.points?.length)return {...p,pathIndex:pi,vertexIndex:p?.vertexIndex};
+                    const identity=String(p?.lampId??`${visualPathIndex}:${Number.isInteger(p?.vertexIndex)?p.vertexIndex:index}`);
+                    const key=`${layerKey}:profile-arc:${identity}`;
+                    let rt=lampMotionRuntime.profileAttach.get(key);
+                    const direct=Number(p?.lampAttachFraction);
+                    let targetS;
+                    if(Number.isFinite(direct)){
+                        targetS=visualPath.closed?((direct%1)+1)%1:Math.max(0,Math.min(1,direct));
+                    }else{
+                        const ref=Number.isFinite(Number(rt?.targetS))?Number(rt.targetS):(Number.isFinite(Number(p?.lampContourFraction))?Number(p.lampContourFraction):NaN);
+                        const near=nearestLampFractionOnPathStable(p,visualPath,ref);
+                        targetS=near.fraction;
+                    }
+                    if(!rt){rt={pathIndex:visualPathIndex,s:targetS,targetS,last:now,lastSeen:now};lampMotionRuntime.profileAttach.set(key,rt);}
+                    const rawDt=Math.max(0,now-(rt.last||now)),dt=rawDt>1250?0:rawDt;rt.last=now;rt.lastSeen=now;rt.pathIndex=visualPathIndex;rt.targetS=targetS;
+                    // A published topology attach fraction is already a continuous morph
+                    // coordinate.  Corner/fallback points instead chase their target fraction
+                    // with bounded arc motion so they cannot teleport across a crossing.
+                    rt.s=Number.isFinite(direct)?targetS:advanceLampPathFractionLinear(rt.s,targetS,visualPath,dt);
+                    const q=lampPointAtFraction(visualPath,rt.s);
+                    return q?{...p,...q,pathIndex:visualPathIndex,vertexIndex:p?.vertexIndex,lampContourFraction:rt.s,__lampVisualProfileAttached:true}:({...p,pathIndex:visualPathIndex,vertexIndex:p?.vertexIndex,__lampVisualProfileAttached:true});
+                }
 
                 if(runtimeState.morph?.active && getLampEvaluationConfig()?.morphMotionMode==='linear' && (state.morph.mode==='topology'||state.morph.mode==='calm') && p?.lampFixedSegmentBound===true && path){
                     const q=lampPointAtRenderSegmentParam(path,Number(p?.lampAttachRenderSegmentParam));
@@ -601,7 +642,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const layer=state.layers[layerIndex];
             const currentPaths=preparedPaths || (typeof getCurrentMorphCpuPaths==='function'
                 ? getCurrentMorphCpuPaths(layerIndex,t,'arbitrary-lamps')
-                : ((state.morph.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()))
+                : ((state.morph.mode==='circleSlide')
                     ? (isChaosCircleMorphPair(layerIndex) ? buildCurrentChaosCircleMorphPaths(layerIndex,t) : buildCurrentCircleMorphPaths(layerIndex,t))
                     : buildCurrentMorphPaths(layerIndex,t)));
 
@@ -1002,7 +1043,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const u=Math.max(0,Math.min(1,Number(t)||0)),layerKey=String(base?.id||layerIndex),out=[];
             const makeKey=(p,pathIndex,keyIndex,side)=>({x:Number(p?.x)||0,y:Number(p?.y)||0,keyIndex,lampSeed:lampHash32(`${layerKey}:${side}:${pathIndex}:${keyIndex}`)});
 
-            if((state.morph.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()))){
+            if((state.morph.mode==='circleSlide')){
                 const plan=isChaosCircleMorphPair(layerIndex)?getChaosCircleMorphPlan(src,dst,state.morph.slideType||'sector'):getCircleMorphPlan(src,dst,state.morph.slideType||'sector');
                 const rs=getEffectiveLayerRadius(src,220),rd=getEffectiveLayerRadius(dst,rs),R=rs+(rd-rs)*u;
                 for(let pathIndex=0;pathIndex<(plan?.pathPlans?.length||0);pathIndex++){
@@ -1284,7 +1325,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 const pts=collectLinearGeometryLampPoints(layerIndex,t,maxPoints,rawPaths);
                 if(pts?.length)return pts;
             }
-            const circleMode=(state.morph.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()));
+            const circleMode=(state.morph.mode==='circleSlide');
             return circleMode
                 ? (isChaosCircleMorphPair(layerIndex)?collectChaosCircleVertexLampPoints(layerIndex,t,maxPoints):collectCircleVertexLampPoints(layerIndex,t,maxPoints))
                 : collectTopologyVertexLampPoints(layerIndex,t,maxPoints);
@@ -1293,7 +1334,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             let mode=getLampEvaluationConfig()?.positionMode||'key';
             if(mode==='circumference')mode='key'; // legacy project migration
             const base=state.layers[layerIndex];
-            const circleMode=(state.morph.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()));
+            const circleMode=(state.morph.mode==='circleSlide');
             const trueLinearTopology = getLampEvaluationConfig()?.morphMotionMode==='linear' && (state.morph.mode==='topology'||state.morph.mode==='calm');
             const rawPaths=preparedPaths || (trueLinearTopology
                 ? buildCurrentMorphPathsForLamps(layerIndex,t)
@@ -1305,31 +1346,38 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const circumferenceMode=false;
             const attach=isLampContourAttachmentEnabled();
             const morphRenderInfo=getLampMorphRenderInfo(layerIndex,t,base);
-            const attachmentPaths=attach ? buildLampRenderedAttachmentPaths(lampRawPaths,base,morphRenderInfo) : lampRawPaths;
+            // preparedRoundedPaths is an optional authoritative visual attachment rail.
+            // In current 7.8 Topology/Calm this is FrameContour.paths: the exact local-space
+            // profile carrier recorded from the Line command stream. v505 identity stays intact,
+            // while the final lamp coordinate is attached to the profile the user actually sees.
+            const authoritativeAttachment=attach&&Array.isArray(preparedRoundedPaths)&&preparedRoundedPaths.length?preparedRoundedPaths:null;
+            const attachmentPaths=attach ? (authoritativeAttachment||buildLampRenderedAttachmentPaths(lampRawPaths,base,morphRenderInfo)) : lampRawPaths;
+            const finalizeMorphLampPoints=(points,{forceNearest=false}={})=>{
+                let out=capLampPointList(points||[],maxPoints);
+                if(!out.length)return out;
+                // On the authoritative Topology/Calm profile rail, identity must be
+                // stabilised BEFORE profile attachment.  Otherwise a new raw topology
+                // slot at the next Morph cycle creates a fresh arc state and appears as
+                // a teleport before blue identity handoff catches up.
+                if(authoritativeAttachment){
+                    out=preserveBlueMorphLampIdentity(layerIndex,out);
+                    return attach?projectLampPointsToCurrentPolygon(out,attachmentPaths,base,true,forceNearest):out;
+                }
+                if(attach)out=projectLampPointsToCurrentPolygon(out,attachmentPaths,base,true,forceNearest);
+                return preserveBlueMorphLampIdentity(layerIndex,out);
+            };
 
             if(getLampEvaluationConfig()?.morphMotionMode==='linear' && mode==='key'){
                 let exact=collectTrueLinearKeyLampPoints(layerIndex,t,maxPoints);
-                if(exact.length){
-                    if(attach) exact=projectLampPointsToCurrentPolygon(exact,attachmentPaths,base,true,circumferenceMode);
-
-                    return preserveBlueMorphLampIdentity(layerIndex,capLampPointList(exact,maxPoints));
-                }
+                if(exact.length)return finalizeMorphLampPoints(exact,{forceNearest:circumferenceMode});
             }
             if(getLampEvaluationConfig()?.morphMotionMode==='ghost' && mode==='key' && rawPaths?.length){
                 let exact=collectLinearGeometryLampPoints(layerIndex,t,maxPoints,rawPaths);
-                if(exact.length){
-                    if(attach) exact=projectLampPointsToCurrentPolygon(exact,attachmentPaths,base,true,circumferenceMode);
-                    return preserveBlueMorphLampIdentity(layerIndex,dedupeLampPoints(exact,maxPoints));
-                }
+                if(exact.length)return finalizeMorphLampPoints(dedupeLampPoints(exact,maxPoints),{forceNearest:circumferenceMode});
             }
             if(['linear','ghost'].includes(getLampEvaluationConfig()?.morphMotionMode) && mode==='corners' && rawPaths?.length){
-                let keyPoints=collectMorphKeyPointsForCornerMode(layerIndex,t,maxPoints,rawPaths);
-                let exactCorners=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints);
-                let combined=mergeLampKeyAndCornerPoints(keyPoints,exactCorners,maxPoints);
-                if(combined.length){
-                    if(attach) combined=projectLampPointsToCurrentPolygon(combined,attachmentPaths,base,true);
-                    return preserveBlueMorphLampIdentity(layerIndex,combined);
-                }
+                let exactCorners=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints,true);
+                if(exactCorners.length)return finalizeMorphLampPoints(exactCorners);
             }
             if(mode==='arbitrary') return collectArbitraryMorphLampPoints(layerIndex,t,Math.max(600,maxPoints),attachmentPaths); // v308: IDs/fractions are already contour-stable; no straight-line handoff
             if(mode==='key'){
@@ -1347,16 +1395,12 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     : collectTopologyVertexLampPoints(layerIndex,t,maxPoints);
                 if(pts.length){
                     if(getLampEvaluationConfig()?.calmMode===true && !attach)return preserveBlueMorphLampIdentity(layerIndex,pts);
-                    if(attach) pts=projectLampPointsToCurrentPolygon(pts,attachmentPaths,base,true,circumferenceMode);
-                    return preserveBlueMorphLampIdentity(layerIndex,pts);
+                    return finalizeMorphLampPoints(pts,{forceNearest:circumferenceMode});
                 }
             }
             if(mode==='corners') {
-                const keyPoints=collectMorphKeyPointsForCornerMode(layerIndex,t,maxPoints,rawPaths);
-                const bendPoints=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints);
-                let points=mergeLampKeyAndCornerPoints(keyPoints,bendPoints,maxPoints);
-                if(attach)points=projectLampPointsToCurrentPolygon(points,attachmentPaths,base,true);
-                return preserveBlueMorphLampIdentity(layerIndex,points);
+                const points=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints,true);
+                return finalizeMorphLampPoints(points);
             }
             return [];
         }
@@ -1758,7 +1802,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         function prepareLayerFrameProfileData(frameCtx){
             if(!frameCtx)return null;
             if(frameCtx.profilePreparedReady)return frameCtx.profilePrepared;
-            const layer=frameCtx.layer,effectLayer=frameCtx.effectLayer||(typeof getLayerEffectOwner==='function'?getLayerEffectOwner(layer):ensureLayerEffectState(layer))||layer,paths=getLayerFrameAuxiliaryPaths(frameCtx),rounded=layer?.profileMode==='spline'?buildHighPrecisionGlintPaths(frameCtx):getLayerFrameRoundedPaths(frameCtx);
+            const layer=frameCtx.layer,effectLayer=frameCtx.effectLayer||(typeof getLayerEffectOwner==='function'?getLayerEffectOwner(layer):ensureLayerEffectState(layer))||layer,paths=getLayerFrameAuthoritativePaths(frameCtx),sharedContour=paths?.__somataFrameContour===true,rounded=sharedContour?paths:(layer?.profileMode==='spline'?buildHighPrecisionGlintPaths(frameCtx):getLayerFrameRoundedPaths(frameCtx));
             let data=frameCtx.profileData;
             if(!data)data=frameCtx.profileData={};
             const application=['stroke','graffiti'].includes(effectLayer?.lineProfileApplication)?effectLayer.lineProfileApplication:'stroke';
@@ -2522,7 +2566,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const dynamicFramePaths=frameGeometryRuntime.active && Number(paths?._frameGeometryId)===frameGeometryRuntime.frameId;
             if(dynamicFramePaths){
                 const scratch=getLightningDynamicScratch(layer);
-                const visible=paths?._lightningRenderedRail===true?paths:prepareWebVisiblePaths(paths,layer);
+                const visible=(paths?.__somataFrameContour===true||paths?._lightningRenderedRail===true)?paths:prepareWebVisiblePaths(paths,layer);
                 const exact=paths?._exactLightningSplineRail===true?exactLightningSelection(visible,layer,cfg,layerIndex):null;
                 const pieces=exact?.pieces||getLightningModePieces(visible,layer,scratch,cfg,layerIndex);
                 const data=scratch.data;
@@ -2534,7 +2578,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
 
             let cached=lightningPreparedCache.get(paths);
             if(cached&&cached.layer===layer&&cached.signature===signature){cached.now=now;cached.prechargeT=NaN;cached.prechargePath=null;lightningPreparedFrame=cached;return cached;}
-            const visible=paths?._lightningRenderedRail===true?paths:prepareWebVisiblePaths(paths,layer);
+            const visible=(paths?.__somataFrameContour===true||paths?._lightningRenderedRail===true)?paths:prepareWebVisiblePaths(paths,layer);
             const exact=paths?._exactLightningSplineRail===true?exactLightningSelection(visible,layer,cfg,layerIndex):null;
             const pieces=exact?.pieces||getLightningModePieces(visible,layer,null,cfg,layerIndex);
             const data={now,paths,layer,signature,visible,pieces,exactRanges:exact?.ranges||null,strikePath:exact?.strikePath||lightningPiecesPath(pieces),prechargeT:NaN,prechargePath:null};
@@ -2621,7 +2665,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         }
 
         function getPreparedCanonicalSweepFrame(paths,layer,phase,now,cfg=currentSweepConfig(layer),layerIndex=-1){
-            const visible=prepareWebVisiblePaths(paths,layer),table=buildPathLengthTable(visible);
+            const visible=paths?.__somataFrameContour===true?paths:prepareWebVisiblePaths(paths,layer),table=buildPathLengthTable(visible);
             const lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg?.lengthPercent)||18,layerIndex)/100));return{now,paths,layer,visible,table,canonicalGPU:true,mode:cfg?.mode,phase,layerIndex,lenFrac};
         }
 
@@ -2629,7 +2673,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const signature=[effectiveGlintType(cfg),cfg.mode,cfg.lengthPercent,cfg.everyN,layer?.N,layer?.K,phase].join('|');
             const hit=sweepPreparedFrame;
             if(hit&&hit.now===now&&hit.paths===paths&&hit.layer===layer&&hit.signature===signature)return hit;
-            const visible=prepareWebVisiblePaths(paths,layer);
+            const visible=paths?.__somataFrameContour===true?paths:prepareWebVisiblePaths(paths,layer);
             const scratch=resetEffectPieceScratch(sweepGeometryScratch),pieces=scratch.pieces;
             const lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg.lengthPercent)||18,layerIndex)/100));
             if(visible?.length){
@@ -2654,7 +2698,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         function prepareLayerFrameSweepData(frameCtx){
             if(!frameCtx)return null;
             if(frameCtx.sweepPreparedReady)return frameCtx.sweepPrepared;
-            const layer=frameCtx.layer,cfg=frameCtx.layerSweep||getLayerSweepConfig(layer),paths=getLayerFrameAuxiliaryPaths(frameCtx),now=frameCtx.now||performance.now();
+            const layer=frameCtx.layer,cfg=frameCtx.layerSweep||getLayerSweepConfig(layer),paths=getLayerFrameAuthoritativePaths(frameCtx),sharedContour=paths?.__somataFrameContour===true,now=frameCtx.now||performance.now();
             let data=frameCtx.sweepData;if(!data)data=frameCtx.sweepData={};
             data.cfg=cfg;data.layerIndex=frameCtx.layerIndex;data.paths=paths;data.now=now;data.prepared=null;data.phase=0;data.lightningPhase=0;data.lightningVector=null;data.lightningSpectralPrepared=null;data.lightningSpectralCfg=null;data.lightningSpectralVisual=null;data.lightningSpectralW=0;data.sweepW=0;data.glintVisual=null;data.vectorPath=null;data.bezierGlintGPU=false;data.canonicalGPU=false;data.gpuMorphArc=false;
             if(cfg?.enabled===true&&paths?.length){
@@ -2663,7 +2707,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     // Simple Lightning intentionally follows the raw polyline carrier (no rounding).
                     // Exact Lightning uses the same rounded/spline/Bézier geometry path as the line renderer.
                     const exactLightning=normalizeLightningPrecisionValue(cfg.lightningPrecision)==='exact';
-                    const lightningPaths=exactLightning?buildExactLightningPaths(frameCtx):paths;
+                    // Exactness controls Lightning sampling/rendering, not the base shape. When the
+                    // ordinary FrameContour exists, Lightning must never rebuild a second contour.
+                    const lightningPaths=sharedContour?paths:(exactLightning?buildExactLightningPaths(frameCtx):paths);
                     data.paths=lightningPaths;
                     data.lightningPhase=getLightningMotionPhase(now,cfg,frameCtx.layerIndex);
                     data.prepared=getPreparedLightningFrame(lightningPaths,layer,now,cfg,frameCtx.layerIndex);
@@ -2676,11 +2722,11 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 }else{
                     const glintType=effectiveGlintType(cfg);
                     if(glintType==='high'||glintType==='chaotic'||glintType==='spectral'){
-                        const exactPaths=buildExactLightningPaths(frameCtx),bezierPrepared=buildBezierGlintPrepared(frameCtx,exactPaths,cfg,phase,now,frameCtx.layerIndex);
+                        const exactPaths=sharedContour?paths:buildExactLightningPaths(frameCtx),bezierPrepared=buildBezierGlintPrepared(frameCtx,exactPaths,cfg,phase,now,frameCtx.layerIndex);
                         if(bezierPrepared){data.paths=exactPaths;data.prepared=bezierPrepared;data.bezierGlintGPU=true;data.canonicalGPU=false;}
                     }
                     if(!data.bezierGlintGPU){
-                        const glintPaths=isHighPrecisionGlint(cfg)?buildHighPrecisionGlintPaths(frameCtx):paths;data.paths=glintPaths;
+                        const glintPaths=sharedContour?paths:(isHighPrecisionGlint(cfg)?buildHighPrecisionGlintPaths(frameCtx):paths);data.paths=glintPaths;
                         const nativeCanonical=WebGPUCanonicalSweepRenderer.canUse(cfg,state.tunnel?.active===true);data.prepared=nativeCanonical?getPreparedCanonicalSweepFrame(glintPaths,layer,phase,now,cfg,frameCtx.layerIndex):getPreparedSweepFrame(glintPaths,layer,phase,now,cfg,frameCtx.layerIndex);data.canonicalGPU=nativeCanonical;
                         if(typeof Path2D!=='undefined'&&data.prepared?.pieces?.length){const vp=new Path2D();for(const pts of data.prepared.pieces){if(!pts?.length)continue;vp.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)vp.lineTo(pts[i].x,pts[i].y);}data.vectorPath=vp;}
                     }
@@ -2946,7 +2992,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 const t = Number.isFinite(runtimeState.morph.geometryT) ? runtimeState.morph.geometryT : 0;
                 const current = typeof getCurrentMorphCpuPaths==='function'
                     ? getCurrentMorphCpuPaths(layerIndex,t,'auxiliary-paths')
-                    : ((state.morph.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()))
+                    : ((state.morph.mode==='circleSlide')
                         ? (isChaosCircleMorphPair(layerIndex) ? buildCurrentChaosCircleMorphPaths(layerIndex,t) : buildCurrentCircleMorphPaths(layerIndex,t))
                         : buildCurrentMorphPaths(layerIndex, t));
                 if (current?.length) return finish(current);
@@ -3041,7 +3087,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             }
             return /^#[0-9a-f]{6}$/i.test(cfg?.color||'')?cfg.color:'#ffffff';
         }
-        const webRuntime = { corners:new Map(), lastCleanup:0, pendingByLayer:new Map(), desiredVisibilityByLayer:new Map(), transitionByLayer:new Map(), nextCornerTrackId:1 };
+        const webRuntime = { corners:new Map(), lastCleanup:0, pendingByLayer:new Map(), desiredVisibilityByLayer:new Map(), transitionByLayer:new Map(), stableCornerTemplatesByLayer:new Map(), nextCornerTrackId:1 };
 
         function hasActiveMorphForWebSwitch() {
             return Boolean(runtimeState.morph?.active || runtimeState.minimalMorph?.active);
@@ -3059,6 +3105,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     for(const key of Array.from(webRuntime.corners.keys()))if(String(key).startsWith(`${owner.id}:`))webRuntime.corners.delete(key);
                     webRuntime.transitionByLayer.delete(owner.id);
                     webRuntime.desiredVisibilityByLayer.delete(owner.id);
+                    webRuntime.stableCornerTemplatesByLayer.delete(owner.id);
                 }
             }
             if(Object.prototype.hasOwnProperty.call(patch,'type')){
@@ -3142,7 +3189,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(!best){
                 const id=webRuntime.nextCornerTrackId++;
                 bestKey=`${lid}:dyn:${pathIndex}:${id}`;
-                best={growth:0,last:now,lastSeen:now,trackedDynamic:true,layerId:lid,pathIndex,anchorU:u,anchorX:px,anchorY:py,seenFrame:frameId};
+                best={growth:0,last:now,lastSeen:now,trackedDynamic:true,fresh:true,layerId:lid,pathIndex,anchorU:u,anchorX:px,anchorY:py,seenFrame:frameId};
                 webRuntime.corners.set(bestKey,best);
             }
             best.seenFrame=frameId;best.lastSeen=now;best.anchorU=u;best.anchorX=px;best.anchorY=py;
@@ -3235,7 +3282,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 const qx=seg.a.x+vx*u,qy=seg.a.y+vy*u,dx=qx-px,dy=qy-py,sq=dx*dx+dy*dy;
                 if(sq<bestSq){bestSq=sq;bestDistance=seg.start+seg.len*u;bestX=qx;bestY=qy;}
             }
-            out.distance=bestDistance;out.x=bestX;out.y=bestY;return out;
+            out.distance=bestDistance;out.x=bestX;out.y=bestY;out.sq=bestSq;return out;
         }
         function pointAtWrappedWebDistance(table,distance,out){
             const total=Number(table?.total)||0;
@@ -3247,11 +3294,19 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         function buildWebCornerMetrics(corners,tables,visualPaths){
             const metrics=new Array(corners?.length||0),groups=new Map();
             for(let i=0;i<metrics.length;i++){
-                const c=corners[i],table=tables?.[c.pathIndex],path=visualPaths?.[c.pathIndex];
-                if(!(table?.total>4)){metrics[i]=null;continue;}
-                const near=nearestWebDistanceOnTable(table,c.x,c.y,{distance:0,x:0,y:0});
-                const m={distance:near.distance,x:near.x,y:near.y,total:table.total,closed:path?.closed===true,cornerSpan:0};
-                metrics[i]=m;let g=groups.get(c.pathIndex);if(!g){g=[];groups.set(c.pathIndex,g);}g.push(i);
+                const c=corners[i];let best=null,bestPathIndex=-1,bestTable=null,bestPath=null;
+                // FrameContour may join several stroke commands into one visible path, while
+                // semantic anchorPaths can still have a different path partition/order. Never
+                // trust c.pathIndex as the visual Line path index: project onto the nearest
+                // authoritative Line carrier instead.
+                for(let pi=0;pi<(tables?.length||0);pi++){
+                    const table=tables?.[pi],path=visualPaths?.[pi];if(!(table?.total>4))continue;
+                    const near=nearestWebDistanceOnTable(table,c.x,c.y,{distance:0,x:0,y:0,sq:Infinity});
+                    if(!best||near.sq<best.sq){best=near;bestPathIndex=pi;bestTable=table;bestPath=path;}
+                }
+                if(!best||bestPathIndex<0){metrics[i]=null;continue;}
+                const m={distance:best.distance,x:best.x,y:best.y,total:bestTable.total,closed:bestPath?.closed===true,cornerSpan:0,pathIndex:bestPathIndex,semanticPathIndex:c.pathIndex};
+                metrics[i]=m;let g=groups.get(bestPathIndex);if(!g){g=[];groups.set(bestPathIndex,g);}g.push(i);
             }
             for(const indices of groups.values()){
                 indices.sort((a,b)=>metrics[a].distance-metrics[b].distance);
@@ -3273,7 +3328,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
 
                     m.roundCenterX=Number(c?.x)||m.x;m.roundCenterY=Number(c?.y)||m.y;m.rounded=false;
                     const displaced=Math.hypot(m.x-(Number(c?.x)||m.x),m.y-(Number(c?.y)||m.y));
-                    if(m.closed&&m.cornerSpan>3&&displaced>.5){const probe=Math.max(1.5,Math.min(m.cornerSpan*.32,total*.035)),pa=pointAtWrappedWebDistance(tables[c.pathIndex],m.distance-probe,{x:0,y:0}),pb=pointAtWrappedWebDistance(tables[c.pathIndex],m.distance+probe,{x:0,y:0});const ax=pa.x,ay=pa.y,bx=m.x,by=m.y,cx=pb.x,cy=pb.y,den=2*(ax*(by-cy)+bx*(cy-ay)+cx*(ay-by));if(Math.abs(den)>1e-5){const aa=ax*ax+ay*ay,bb=bx*bx+by*by,cc=cx*cx+cy*cy,ux=(aa*(by-cy)+bb*(cy-ay)+cc*(ay-by))/den,uy=(aa*(cx-bx)+bb*(ax-cx)+cc*(bx-ax))/den,rr=Math.hypot(ux-bx,uy-by);if(Number.isFinite(rr)&&rr<Math.max(8,m.cornerSpan*4)){m.roundCenterX=ux;m.roundCenterY=uy;m.rounded=true;}}}
+                    if(m.closed&&m.cornerSpan>3&&displaced>.5){const probe=Math.max(1.5,Math.min(m.cornerSpan*.32,total*.035)),pa=pointAtWrappedWebDistance(tables[m.pathIndex],m.distance-probe,{x:0,y:0}),pb=pointAtWrappedWebDistance(tables[m.pathIndex],m.distance+probe,{x:0,y:0});const ax=pa.x,ay=pa.y,bx=m.x,by=m.y,cx=pb.x,cy=pb.y,den=2*(ax*(by-cy)+bx*(cy-ay)+cx*(ay-by));if(Math.abs(den)>1e-5){const aa=ax*ax+ay*ay,bb=bx*bx+by*by,cc=cx*cx+cy*cy,ux=(aa*(by-cy)+bb*(cy-ay)+cc*(ay-by))/den,uy=(aa*(cx-bx)+bb*(ax-cx)+cc*(bx-ax))/den,rr=Math.hypot(ux-bx,uy-by);if(Number.isFinite(rr)&&rr<Math.max(8,m.cornerSpan*4)){m.roundCenterX=ux;m.roundCenterY=uy;m.rounded=true;}}}
                 }
             }
             return metrics;
@@ -3323,19 +3378,81 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             let variants=persistentWebVectorCache.get(paths);if(!variants){variants=new Map();persistentWebVectorCache.set(paths,variants);}let rec=variants.get(key);if(!rec){rec={paths:Object.create(null),gpuCommandCaches:Object.create(null)};variants.set(key,rec);}else{if(!rec.paths)rec.paths=Object.create(null);if(!rec.gpuCommandCaches)rec.gpuCommandCaches=Object.create(null);}return rec;
         }
 
+        function buildCurrentWebCornerTopologyPaths(frameCtx,layer,t){
+            if(!layer)return[];
+            if(runtimeState?.morph?.active!==true)return typeof buildTopologyLampAnchorPaths==='function'?(buildTopologyLampAnchorPaths(layer)||[]):[];
+            const li=Number(frameCtx?.layerIndex)||0,src=runtimeState.morph.renderSourceLayers?.[li]||layer,dst=runtimeState.morph.renderTargetLayers?.[li]||layer;
+            const sp=typeof buildTopologyLampAnchorPaths==='function'?(buildTopologyLampAnchorPaths(src)||[]):[],dp=typeof buildTopologyLampAnchorPaths==='function'?(buildTopologyLampAnchorPaths(dst)||[]):[];
+            const pairs=(sp.length&&dp.length&&typeof pairMorphPaths==='function')?pairMorphPaths(sp,dp):[];if(!pairs.length)return sp.length?sp:dp;
+            const u=Math.max(0,Math.min(1,Number(t)||0)),transport=typeof getSpiralMorphType==='function'?String(getSpiralMorphType()||''):String(state?.morph?.spiralMorphType||''),polar=transport!=='topology'&&String(state?.morph?.mode||'')!=='topology';
+            const out=[];
+            for(const pair of pairs){
+                const a=pair?.src||pair?.dst,b=pair?.dst||pair?.src,ap=a?.points||[],bp=b?.points||[];if(ap.length<2||bp.length<2)continue;
+                const n=Math.max(3,ap.length,bp.length),closed=true,off=(typeof getMorphReferenceVertexOffset==='function'?getMorphReferenceVertexOffset(pair,bp.length,closed,dst?.N||src?.N||n):0)||0,pts=new Array(n);
+                for(let i=0;i<n;i++){
+                    const f=i/n,pa=sampleLampTopologyPath(a,f)||ap[i%ap.length],fb=((f+off/Math.max(1,bp.length))%1+1)%1,pb=sampleLampTopologyPath(b,fb)||bp[i%bp.length];
+                    if(polar){const ar=Math.hypot(Number(pa?.x)||0,Number(pa?.y)||0),br=Math.hypot(Number(pb?.x)||0,Number(pb?.y)||0),aa=Math.atan2(Number(pa?.y)||0,Number(pa?.x)||0),ba=Math.atan2(Number(pb?.y)||0,Number(pb?.x)||0),ang=typeof interpolateMorphPolarAngle==='function'?interpolateMorphPolarAngle(aa,ba,u):aa+signedAngleDelta(aa,ba)*u,r=ar+(br-ar)*u;pts[i]={x:r*Math.cos(ang),y:r*Math.sin(ang)};}
+                    else pts[i]={x:(Number(pa?.x)||0)+((Number(pb?.x)||0)-(Number(pa?.x)||0))*u,y:(Number(pa?.y)||0)+((Number(pb?.y)||0)-(Number(pa?.y)||0))*u};
+                }
+                out.push({points:pts,closed:true});
+            }
+            return out;
+        }
+
+        function snapshotStableWebCornerTemplates(corners,paths){
+            const out=[];
+            for(const c of corners||[]){
+                const pi=Math.max(0,Number(c?.pathIndex)||0),path=paths?.[pi],pts=path?.points||[],n=pts.length;if(n<3)continue;
+                const idx=Math.max(0,Math.min(n-1,Number(c?.pointIndex)||0)),fraction=path?.closed===true?idx/n:(n<=1?0:idx/(n-1));
+                out.push({pathIndex:pi,fraction,cornerOrdinal:Number.isFinite(Number(c?.cornerOrdinal))?Number(c.cornerOrdinal):idx});
+                if(out.length>=220)break;
+            }
+            return out;
+        }
+        function restoreStableWebCorners(templates,paths){
+            const out=[];
+            for(const t of templates||[]){
+                const pi=Math.max(0,Number(t?.pathIndex)||0),path=paths?.[pi],pts=path?.points||[],closed=path?.closed===true,n=pts.length;if(n<3)continue;
+                const f=Math.max(0,Math.min(1,Number(t?.fraction)||0));let i=closed?Math.round(f*n)%n:Math.round(f*(n-1));i=Math.max(0,Math.min(n-1,i));if(!closed&&(i<=0||i>=n-1))continue;
+                const p=pts[i],prev=pts[(i-1+n)%n],next=pts[(i+1)%n];const inX=(Number(p?.x)||0)-(Number(prev?.x)||0),inY=(Number(p?.y)||0)-(Number(prev?.y)||0),outX=(Number(next?.x)||0)-(Number(p?.x)||0),outY=(Number(next?.y)||0)-(Number(p?.y)||0),inLen=Math.hypot(inX,inY),outLen=Math.hypot(outX,outY);if(inLen<1e-4||outLen<1e-4)continue;
+                const areaSign=closed?(webSignedArea(pts)>=0?1:-1):0,cross=inX*outY-inY*outX,signedTurn=closed?cross*areaSign:cross,dot=Math.max(-1,Math.min(1,(inX*outX+inY*outY)/(inLen*outLen))),turnDeg=Math.acos(dot)*180/Math.PI;
+                out.push({x:Number(p.x)||0,y:Number(p.y)||0,turnDeg,target:1,concave:closed?signedTurn<0:false,convex:closed?signedTurn>0:true,pathIndex:pi,pointIndex:i,cornerOrdinal:Number.isFinite(Number(t?.cornerOrdinal))?Number(t.cornerOrdinal):i,prevX:Number(prev.x)||0,prevY:Number(prev.y)||0,nextX:Number(next.x)||0,nextY:Number(next.y)||0,inLen,outLen,uxPrev:((Number(prev.x)||0)-(Number(p.x)||0))/inLen,uyPrev:((Number(prev.y)||0)-(Number(p.y)||0))/inLen,uxNext:((Number(next.x)||0)-(Number(p.x)||0))/outLen,uyNext:((Number(next.y)||0)-(Number(p.y)||0))/outLen,__morphContinuity:true});
+                if(out.length>=220)break;
+            }
+            return out;
+        }
+        function stabilizeWebCornersDuringMorph(owner,placementMode,corners,paths,threshold){
+            if(!owner?.id)return corners||[];
+            if(placementMode!=='corners'){webRuntime.stableCornerTemplatesByLayer.delete(owner.id);return corners||[];}
+            const list=Array.isArray(corners)?corners:[],morphActive=Boolean(runtimeState?.morph?.active||runtimeState?.minimalMorph?.active||runtimeState?.projectMorph?.active),thr=Number(threshold)||0;
+            if(list.length){const templates=snapshotStableWebCornerTemplates(list,paths);if(templates.length)webRuntime.stableCornerTemplatesByLayer.set(owner.id,{threshold:thr,templates});return list;}
+            if(!morphActive)return list;
+            const rec=webRuntime.stableCornerTemplatesByLayer.get(owner.id);if(!rec?.templates?.length||Math.abs((Number(rec.threshold)||0)-thr)>1e-6)return list;
+            return restoreStableWebCorners(rec.templates,paths);
+        }
+
         function prepareLayerFrameWebData(frameCtx){
             if(!frameCtx)return null;
             if(frameCtx.webPreparedReady)return frameCtx.webPrepared;
-            const layer=frameCtx.layer,effectLayer=frameCtx.effectLayer||(typeof getLayerEffectOwner==='function'?getLayerEffectOwner(layer):ensureLayerEffectState(layer))||layer,paths=getLayerFrameAuxiliaryPaths(frameCtx);
+            const layer=frameCtx.layer,effectLayer=frameCtx.effectLayer||(typeof getLayerEffectOwner==='function'?getLayerEffectOwner(layer):ensureLayerEffectState(layer))||layer;
+            const sharedRecord=SomataFrameContourService?.current?.(frameCtx)||SomataFrameContourService?.get?.(frameCtx)||null;
+            const sharedWebView=sharedRecord?SomataFrameContourService?.webView?.(frameCtx):null;
+            // 7.8.3 contract: logical/key vertices drive corner detection, but all Web placement,
+            // distance and clipping use the actual Line carrier from FrameContour. The semantic
+            // path partition is allowed to differ; corner metrics project to the nearest Line path.
+            const paths=sharedWebView?.anchorPaths||getLayerFrameAuthoritativePaths(frameCtx),sharedContour=Boolean(sharedWebView?.record);
             let data=frameCtx.webData;if(!data)data=frameCtx.webData={};
-            data.enabled=getLayerWebEnabled(effectLayer)===true;data.layerIndex=frameCtx.layerIndex;data.paths=paths;data.visualPaths=null;data.clipPath=null;data.insideClipPath=null;data.outsideClipPath=null;data.cfg=null;data.corners=[];data.spacing=0;data.depthPercent=0;data.depthMultiplier=1;data.jitterStrength=0;data.region='inside';data.insideEnabled=true;data.outsideStraightEnabled=false;data.outsideArcEnabled=false;data.placementMode='selfIntersection';data.oscillating=false;data.oscillationStrength=10;data.oscillationStrengthMultiplier=1;data.oscillationMultiplier=1;data.oscillationPhase=0;data.color='#ffffff';data.secondaryColor='#00ffff';data.sunDegrees=20;data.width=0;data.renderWidth=0;data.threadAlpha=.88;data.haloRadius=1;data.shadowBlur=1;data.style='web';data.now=frameCtx.now||performance.now();data.owner=null;data.transition=null;data.visibilityFactor=1;
+            data.enabled=getLayerWebEnabled(effectLayer)===true;data.layerIndex=frameCtx.layerIndex;data.paths=paths;data.visualPaths=null;data.clipPath=null;data.insideClipPath=null;data.outsideClipPath=null;data.cfg=null;data.corners=[];data.spacing=0;data.depthPercent=60;data.depthMultiplier=1;data.jitterStrength=0;data.region='inside';data.insideEnabled=true;data.outsideStraightEnabled=false;data.outsideArcEnabled=false;data.placementMode='corners';data.oscillating=false;data.oscillationStrength=10;data.oscillationStrengthMultiplier=1;data.oscillationMultiplier=1;data.oscillationPhase=0;data.color='#ffffff';data.secondaryColor='#00ffff';data.sunDegrees=20;data.width=0;data.renderWidth=0;data.threadAlpha=.88;data.haloRadius=1;data.shadowBlur=1;data.style='web';data.now=frameCtx.now||performance.now();data.owner=null;data.transition=null;data.visibilityFactor=1;
             data.pathBevel=null;data.pathRounding=null;data.animating=false;data.visualPathTables=null;data.cornerMetrics=null;data.persistentVectorRecord=null;data._branchPathCache=null;
             if(data.enabled&&paths?.length){
                 const owner=ensureLayerEffectState(effectLayer),cfg=owner?.web||getLayerWebConfig(effectLayer);data.owner=owner;data.transition=owner?webRuntime.transitionByLayer.get(owner.id):null;data.cfg=cfg;
-                data.visualPaths=buildExactWebContourPaths(frameCtx);
+                // Web is one contour with two roles: anchor paths preserve semantic corners; visualPaths
+                // is the actual current-frame Line carrier. This keeps 7.5 corner semantics without
+                // reintroducing a second visual rail that can drift away from Line.
+                data.visualPaths=sharedContour?(sharedWebView.visualPaths||paths):buildExactWebContourPaths(frameCtx);
                 const branches=getWebBranchFlags(cfg);data.insideEnabled=branches.inside;data.outsideStraightEnabled=branches.outsideStraight;data.outsideArcEnabled=branches.outsideArc;
                 data.region=branches.inside?(branches.outsideArc?'combined':'inside'):(branches.outsideArc?'outside':'inside');
-                data.placementMode=['corners','selfIntersection','selfIntersectionCorridor'].includes(cfg.placementMode)?cfg.placementMode:'selfIntersection';
+                data.placementMode=['corners','selfIntersection','selfIntersectionCorridor'].includes(cfg.placementMode)?cfg.placementMode:'corners';
                 data.oscillating=cfg.oscillating===true;
                 data.oscillationStrength=Math.max(0,Math.min(100,Number.isFinite(Number(cfg.oscillationStrength))?Number(cfg.oscillationStrength):10));
                 data.oscillationStrengthMultiplier=Math.max(.015625,Math.min(64,Number.isFinite(Number(cfg.oscillationStrengthMultiplier))?Number(cfg.oscillationStrengthMultiplier):1));
@@ -3353,10 +3470,24 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     data.visualPathTables[pi]=vp?.points?.length>2?buildSinglePathLengthTable(vp,webStaticPaths):null;
                 }
                 const threshold=audioApplyNumeric('web.angleThreshold',Number(cfg.angleThreshold)||60,frameCtx.layerIndex);
-                data.corners=(data.placementMode==='corners'||cfg.style==='spiderSun')?getPersistentWebKinkCorners(paths,threshold,8):getPersistentWebCorners(paths,threshold,8);
+                // 7.7: first use the exact 7.5 corner collector on the current line topology.
+                // The new exact Spiral carrier can be C1-smooth at authored vertices, so if that scan has
+                // no corners, recover only the moving key topology and project those corners back onto the
+                // exact visual rail. This keeps 7.5 Web identity without endpoint snapping during Morph.
+                const collectWebCorners=(source)=>(data.placementMode==='corners'||cfg.style==='spiderSun')?getPersistentWebKinkCorners(source,threshold,8):getPersistentWebCorners(source,threshold,8);
+                data.corners=collectWebCorners(paths);
+                if(typeof isSpiralLayer==='function'&&isSpiralLayer(layer)&&!data.corners.length){
+                    const mt=Math.max(0,Math.min(1,Number(runtimeState?.morph?.geometryT)||0)),keyTopology=buildCurrentWebCornerTopologyPaths(frameCtx,layer,mt);
+                    if(keyTopology?.length)data.corners=collectWebCorners(keyTopology);
+                }
+                // Corner mode must not blink off for isolated Morph frames when the instantaneous
+                // interpolated angle crosses the threshold. Keep the last valid semantic corner set
+                // and re-project it to the current authoritative Line carrier. Static geometry still
+                // obeys the threshold exactly; continuity fallback exists only while a Morph owns time.
+                data.corners=stabilizeWebCornersDuringMorph(owner,data.placementMode,data.corners,paths,threshold);
                 data.cornerMetrics=buildWebCornerMetrics(data.corners,data.visualPathTables,data.visualPaths);
                 data.spacing=Math.max(1,Math.min(80,audioApplyNumeric('web.spacing',Number(cfg.spacing)||10,frameCtx.layerIndex)));
-                data.depthPercent=Math.max(0,Math.min(100,audioApplyNumeric('web.distance',Number.isFinite(Number(cfg.distance))?Number(cfg.distance):20,frameCtx.layerIndex)));
+                data.depthPercent=Math.max(0,Math.min(100,audioApplyNumeric('web.distance',Number.isFinite(Number(cfg.distance))?Number(cfg.distance):60,frameCtx.layerIndex)));
                 data.depthMultiplier=Math.max(0,Number.isFinite(Number(cfg.depthMultiplier))?Number(cfg.depthMultiplier):1);
                 const variation=Math.max(0,Math.min(45,audioApplyNumeric('web.angleVariation',Number(cfg.angleVariation)||0,frameCtx.layerIndex)));
                 data.jitterStrength=Math.sin(variation*Math.PI/180)*.9;
@@ -3390,11 +3521,11 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(!corners.length)return;
             const type=forcedType ? (forcedType==='rounding'?'rounding':'bevel') : (cfg.type==='rounding'?'rounding':'bevel');
             const spacing=prepared?.spacing||Math.max(1,Math.min(80,audioApplyNumeric('web.spacing',Number(cfg.spacing)||10,layerIndex)));
-            const depthPercent=Number.isFinite(prepared?.depthPercent)?prepared.depthPercent:Math.max(0,Math.min(100,audioApplyNumeric('web.distance',Number.isFinite(Number(cfg.distance))?Number(cfg.distance):20,layerIndex)));
+            const depthPercent=Number.isFinite(prepared?.depthPercent)?prepared.depthPercent:Math.max(0,Math.min(100,audioApplyNumeric('web.distance',Number.isFinite(Number(cfg.distance))?Number(cfg.distance):60,layerIndex)));
             const depthMultiplier=Number.isFinite(prepared?.depthMultiplier)?prepared.depthMultiplier:Math.max(0,Number.isFinite(Number(cfg.depthMultiplier))?Number(cfg.depthMultiplier):1);
             const jitterStrength=Number.isFinite(prepared?.jitterStrength)?prepared.jitterStrength:Math.sin(Math.max(0,Math.min(45,audioApplyNumeric('web.angleVariation',Number(cfg.angleVariation)||0,layerIndex)))*Math.PI/180)*.9;
             const now=prepared?.now||performance.now();
-            const placementMode=['corners','selfIntersection','selfIntersectionCorridor'].includes(prepared?.placementMode||cfg.placementMode)?(prepared?.placementMode||cfg.placementMode):'selfIntersection';
+            const placementMode=['corners','selfIntersection','selfIntersectionCorridor'].includes(prepared?.placementMode||cfg.placementMode)?(prepared?.placementMode||cfg.placementMode):'corners';
             const oscillating=(prepared?.oscillating??cfg.oscillating)===true,oscStrength=Math.max(0,Math.min(100,Number(prepared?.oscillationStrength??cfg.oscillationStrength??10))),oscStrengthMultiplier=Math.max(.015625,Math.min(64,Number(prepared?.oscillationStrengthMultiplier??cfg.oscillationStrengthMultiplier??1))),oscStrengthEffective=Math.min(8,(oscStrength/100)*oscStrengthMultiplier),oscMultiplier=Math.max(.015625,Math.min(64,Number(prepared?.oscillationMultiplier??cfg.oscillationMultiplier??1)));
             const webCycleSec=typeof getTapMorphIntervalSec==='function'?getTapMorphIntervalSec(Number(state?.morph?.intervalSec)||5,'full'):(Number(state?.morph?.intervalSec)||5),webCycleMs=Math.max(100,webCycleSec*1000);
             const oscillationPhase=Number.isFinite(Number(prepared?.oscillationPhase))?Number(prepared.oscillationPhase):((now%webCycleMs)/webCycleMs)*Math.PI*2*oscMultiplier;
@@ -3424,9 +3555,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             for(let ci=0;ci<corners.length;ci++){
                 const c=corners[ci];
                 const wantsConcave=branch==='outsideStraight';if(wantsConcave?c.concave!==true:c.concave===true)continue;
-                const visualPath=prepared?.visualPaths?.[c.pathIndex]||paths?.[c.pathIndex],closed=visualPath?.closed===true;
-                const table=prepared?.visualPathTables?.[c.pathIndex]||(visualPath?.points?.length>2?buildPathLengthTable([visualPath]):null),useContour=Boolean(table?.total>4);
-                const metric=prepared?.cornerMetrics?.[ci]||null;
+                const metric=prepared?.cornerMetrics?.[ci]||null,visualPathIndex=Number.isInteger(metric?.pathIndex)?metric.pathIndex:c.pathIndex;
+                const visualPath=prepared?.visualPaths?.[visualPathIndex]||paths?.[visualPathIndex],closed=visualPath?.closed===true;
+                const table=prepared?.visualPathTables?.[visualPathIndex]||(visualPath?.points?.length>2?buildPathLengthTable([visualPath]):null),useContour=Boolean(table?.total>4);
                 let localMax=0,anchorDistance=0,anchorX=c.x,anchorY=c.y;
                 if(metric&&useContour){anchorDistance=metric.distance;anchorX=metric.x;anchorY=metric.y;}
                 else if(useContour){const near=nearestWebDistanceOnTable(table,c.x,c.y);anchorDistance=near.distance;anchorX=near.x;anchorY=near.y;}
@@ -3438,12 +3569,12 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     const visibleSpan=metric?.cornerSpan>0?metric.cornerSpan:Math.max(0,Math.min(Number(c.inLen)||0,Number(c.outLen)||0));
                     localMax=Math.max(0,Math.min(useContour?table.total*.499:Infinity,visibleSpan*pct*depthMultiplier));
                 }
-                if(localMax<1)continue;
+                if(localMax<.25)continue;
                 const maxCount=Math.max(1,Math.min(96,Math.floor(localMax/spacing)));
                 let rt;const dynamicWebPaths=isCurrentFrameDynamicPathList(paths)||isCurrentFrameDynamicPathList(prepared?.visualPaths);
-                if(dynamicWebPaths&&useContour){rt=resolveDynamicWebCornerRuntime(layer?.id||'layer',c.pathIndex,anchorDistance/table.total,anchorX,anchorY,table.total,now);}
-                else{const key=`${layer?.id||'layer'}:${c.pathIndex}:${c.cornerOrdinal}`;rt=webRuntime.corners.get(key);if(!rt){rt={growth:0,last:now,lastSeen:now};webRuntime.corners.set(key,rt);}}
-                const rawDt=Math.max(0,(now-rt.last)/1000),dt=rawDt>1.25?0:rawDt;rt.last=now;rt.lastSeen=now;const target=placementMode==='corners'?1:Math.max(0,Math.min(1,c.target));
+                if(dynamicWebPaths&&useContour){rt=resolveDynamicWebCornerRuntime(layer?.id||'layer',visualPathIndex,anchorDistance/table.total,anchorX,anchorY,table.total,now);}
+                else{const key=`${layer?.id||'layer'}:${c.pathIndex}:${c.cornerOrdinal}`;rt=webRuntime.corners.get(key);if(!rt){rt={growth:0,last:now,lastSeen:now,fresh:true};webRuntime.corners.set(key,rt);}}
+                const rawDt=Math.max(0,(now-rt.last)/1000),dt=rawDt>1.25?0:rawDt;rt.last=now;rt.lastSeen=now;const target=placementMode==='corners'?1:Math.max(0,Math.min(1,c.target));if(placementMode==='corners'&&rt.fresh===true){rt.growth=1;rt.fresh=false;}
                 const visibilityTransition=prepared?.transition?.kind==='visibility';
                 if(visibilityTransition){
 
@@ -3472,9 +3603,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 for(let ti=0;ti<maxCount;ti++){
                     const life=totalPhase-ti;if(life<=.001)continue;
                     const isStraight=branch==='outsideStraight',tg=isStraight?1:webSmoothstep01(life);
-                    const base=Math.min(localMax,spacing*(ti+1)),rnd=webHashSigned(c.pathIndex,c.cornerOrdinal,ti,137),asym=rnd*jitterStrength;
+                    const base=Math.min(localMax,spacing*(ti+1)),rnd=webHashSigned(visualPathIndex,c.cornerOrdinal,ti,137),asym=rnd*jitterStrength;
                     let rawDa=Math.max(.25,Math.min(localMax,base*(1+asym*.55))),rawDb=Math.max(.25,Math.min(localMax,base*(1-asym*.55)));
-                    const threadPhase=webHashSigned(c.pathIndex,c.cornerOrdinal,ti,911)*Math.PI,wave=Math.sin(oscillationPhase+threadPhase);
+                    const threadPhase=webHashSigned(visualPathIndex,c.cornerOrdinal,ti,911)*Math.PI,wave=Math.sin(oscillationPhase+threadPhase);
                     if(isStraight&&oscillating&&oscStrength>0){const slide=Math.min(.78,.035+.245*oscStrengthEffective)*wave;rawDa=Math.max(.25,Math.min(localMax,rawDa*(1+slide)));rawDb=Math.max(.25,Math.min(localMax,rawDb*(1-slide)));animating=true;}
                     const da=rawDa*tg,db=rawDb*tg;let ax,ay,bx,by;
                     if(useContour){const a=pointAtWrappedWebDistance(table,anchorDistance-da,webDrawScratch.pointA),b=pointAtWrappedWebDistance(table,anchorDistance+db,webDrawScratch.pointB);ax=a.x;ay=a.y;bx=b.x;by=b.y;}
@@ -3691,20 +3822,20 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const showWeb = document.getElementById('showWeb'); if (showWeb) showWeb.checked = state.masterLayerEdit===true ? getEffectTargets().every(l=>webRuntime.desiredVisibilityByLayer.has(l.id)?webRuntime.desiredVisibilityByLayer.get(l.id)===true:l.showWeb===true) : (desiredVisibility===undefined?getLayerWebEnabled(effectLayer):desiredVisibility===true);
             const type=document.getElementById('webType'),styleSel=document.getElementById('webStyle'),inside=document.getElementById('webInside'),outsideStraight=document.getElementById('webOutsideStraight'),outsideArc=document.getElementById('webOutsideArc'),placement=document.getElementById('webPlacementMode'),osc=document.getElementById('webOscillating'),os=document.getElementById('webOscillationStrength'),osmult=document.getElementById('webOscillationStrengthMultiplier'),omult=document.getElementById('webOscillationMultiplier'),a=document.getElementById('webAngleThreshold'),w=document.getElementById('webWidth'),wr=document.getElementById('webWidthRelative'),wp=document.getElementById('webWidthPercent'),wc=document.getElementById('webColor'),wmc=document.getElementById('webMatchLineColor'),wsc=document.getElementById('webSecondaryColor'),wsd=document.getElementById('webSunDegrees'),d=document.getElementById('webDistance'),dm=document.getElementById('webDepthMultiplier'),sp=document.getElementById('webSpacing'),av=document.getElementById('webAngleVariation');
             if(type)type.value=(pendingWebSwitch.type || web.type)==='rounding'?'rounding':'bevel';
-            const branches=getWebBranchFlags(web),placementValue=['corners','selfIntersection','selfIntersectionCorridor'].includes(web.placementMode)?web.placementMode:'selfIntersection';
+            const branches=getWebBranchFlags(web),placementValue=['corners','selfIntersection','selfIntersectionCorridor'].includes(web.placementMode)?web.placementMode:'corners';
             if(styleSel)styleSel.value=['web','laser','spiderSun'].includes(web.style)?web.style:'web';if(inside)inside.checked=branches.inside;if(outsideStraight)outsideStraight.checked=branches.outsideStraight;if(outsideArc)outsideArc.checked=branches.outsideArc;if(placement)placement.value=placementValue;if(osc)osc.checked=web.oscillating===true;if(os)os.value=Math.max(0,Math.min(100,Number.isFinite(Number(web.oscillationStrength))?Number(web.oscillationStrength):10));if(osmult)osmult.value=String(Math.max(.015625,Math.min(64,Number(web.oscillationStrengthMultiplier)||1)));if(omult)omult.value=String(Math.max(.015625,Math.min(64,Number(web.oscillationMultiplier)||1)));
-            if(a)a.value=web.angleThreshold;if(w)w.value=web.width;if(wr)wr.checked=web.widthRelative===true;if(wp){wp.value=web.widthPercent??40;wp.disabled=web.widthRelative!==true;}if(wmc)wmc.checked=web.matchLineColor===true;if(wc){wc.value=web.color||'#ffffff';wc.disabled=web.matchLineColor===true;}if(wsc)wsc.value=web.secondaryColor||'#00ffff';if(wsd)wsd.value=Math.max(5,Math.min(90,Number(web.sunDegrees)||20));if(d)d.value=Math.max(0,Math.min(100,Number.isFinite(Number(web.distance))?Number(web.distance):20));if(dm)dm.value=Math.max(0,Number(web.depthMultiplier)||0);if(sp)sp.value=web.spacing;if(av)av.value=web.angleVariation;
+            if(a)a.value=web.angleThreshold;if(w)w.value=web.width;if(wr)wr.checked=web.widthRelative===true;if(wp){wp.value=web.widthPercent??40;wp.disabled=web.widthRelative!==true;}if(wmc)wmc.checked=web.matchLineColor===true;if(wc){wc.value=web.color||'#ffffff';wc.disabled=web.matchLineColor===true;}if(wsc)wsc.value=web.secondaryColor||'#00ffff';if(wsd)wsd.value=Math.max(5,Math.min(90,Number(web.sunDegrees)||20));if(d)d.value=Math.max(0,Math.min(100,Number.isFinite(Number(web.distance))?Number(web.distance):60));if(dm)dm.value=Math.max(0,Number(web.depthMultiplier)||0);if(sp)sp.value=web.spacing;if(av)av.value=web.angleVariation;
             const at=document.getElementById('webAngleText'),wt=document.getElementById('webWidthText'),dt=document.getElementById('webDistanceText'),dmt=document.getElementById('webDepthMultiplierText'),st=document.getElementById('webSpacingText'),vt=document.getElementById('webVariationText'),ost=document.getElementById('webOscillationStrengthText'),osmt=document.getElementById('webOscillationStrengthMultiplierText'),omt=document.getElementById('webOscillationMultiplierText'),wsdt=document.getElementById('webSunDegreesText');
             if(at)at.textContent=`${Math.round(Number(web.angleThreshold)||60)}°`;
             if(wt)wt.textContent=web.widthRelative===true?`${Math.round(Number(web.widthPercent)||40)}% линии`:`${(Number(web.width)||.6).toFixed(1)} px`;
-            if(dt)dt.textContent=`${Math.round(Math.max(0,Math.min(100,Number.isFinite(Number(web.distance))?Number(web.distance):20)))}%`;
+            if(dt)dt.textContent=`${Math.round(Math.max(0,Math.min(100,Number.isFinite(Number(web.distance))?Number(web.distance):60)))}%`;
             if(dmt)dmt.textContent=`×${Math.max(0,Number(web.depthMultiplier)||0).toFixed(2)}`;
             if(st)st.textContent=`${Math.round(Number(web.spacing)||10)} px`;
             if(vt)vt.textContent=`${Math.round(Number(web.angleVariation)||0)}°`;
             if(ost)ost.textContent=`${Math.round(Math.max(0,Math.min(100,Number.isFinite(Number(web.oscillationStrength))?Number(web.oscillationStrength):10)))}%`;
             if(osmt){const m=Math.max(.015625,Math.min(64,Number(web.oscillationStrengthMultiplier)||1));osmt.textContent=`×${m.toFixed(m<1?3:(m%1?2:0)).replace(/0+$/,'').replace(/\.$/,'')}`;}if(wsdt)wsdt.textContent=`${Math.round(Math.max(5,Math.min(90,Number(web.sunDegrees)||20)))}°`;document.getElementById('webSecondaryColorRow')?.classList.toggle('hidden',web.style!=='laser');document.getElementById('webSunDegreesRow')?.classList.toggle('hidden',web.style!=='spiderSun');if(omt){const m=Math.max(.015625,Math.min(64,Number(web.oscillationMultiplier)||1));omt.textContent=`×${m.toFixed(m<1?3:(m%1?2:0)).replace(/0+$/,'').replace(/\.$/,'')}`;}
             const osr=document.getElementById('webOscillationStrengthRow'),osmr=document.getElementById('webOscillationStrengthMultiplierRow'),omr=document.getElementById('webOscillationMultiplierRow');if(osr)osr.classList.toggle('disabled',web.oscillating!==true);if(osmr)osmr.classList.toggle('disabled',web.oscillating!==true);if(omr)omr.classList.toggle('disabled',web.oscillating!==true);
-            const badge=document.getElementById('webModeBadge');if(badge){const names=[];if(branches.inside)names.push('внутренняя');if(branches.outsideStraight)names.push('внешняя прямая');if(branches.outsideArc)names.push('внешняя дуговая');const rr=names.length?names.join(' + '):'ветви выключены',pp={corners:'углы',selfIntersection:'самопересечения',selfIntersectionCorridor:'самопересечения + коридор'}[placementValue]||'самопересечения';badge.textContent=`${rr} · ${pp}`;}
+            const badge=document.getElementById('webModeBadge');if(badge){const names=[];if(branches.inside)names.push('внутренняя');if(branches.outsideStraight)names.push('внешняя прямая');if(branches.outsideArc)names.push('внешняя дуговая');const rr=names.length?names.join(' + '):'ветви выключены',pp={corners:'углы',selfIntersection:'самопересечения',selfIntersectionCorridor:'самопересечения + коридор'}[placementValue]||'углы';badge.textContent=`${rr} · ${pp}`;}
             const oe=document.getElementById('paramLineOutlineEnabled'), oc=document.getElementById('paramLineOutlineColor'), or=document.getElementById('paramLineOutlineWidth'), on=document.getElementById('numLineOutlineWidth'), ot=document.getElementById('lineOutlineWidthText');
             if(oe)oe.checked=outline.enabled===true;if(oc)oc.value=outline.color||'#ffffff';if(or)or.value=outline.width;if(on)on.value=outline.width;if(ot)ot.textContent=`${Number(outline.width||1.5).toFixed(1)} px`;
             const om={outer:'paramLineOutlineOuter',inner:'paramLineOutlineInner',median:'paramLineOutlineMedian'};for(const [mode,id] of Object.entries(om)){const el=document.getElementById(id);if(el)el.checked=outline.mode===mode;}

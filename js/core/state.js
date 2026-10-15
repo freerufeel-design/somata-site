@@ -5,7 +5,7 @@ window.__spiroRegisterModule?.('js/core/state');
             layers: [],
             activeLayerId: null,
             layerIsolation: null,
-            zoom: window.matchMedia('(max-width: 760px)').matches ? 0.9 : 1.0,
+            zoom: window.matchMedia('(max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse)').matches ? 0.9 : 1.0,
             panX: 0,
             panY: 0,
             isPanning: false,
@@ -30,6 +30,9 @@ window.__spiroRegisterModule?.('js/core/state');
             masterLayerEdit: false,
             sidebarFeatureToggleMemory: {},
             graffitiDefaultActive: false,
+            // Artistic compositor order, bottom -> top. Technical passes inside the
+            // geometry group keep their own invariant order.
+            effectOrder: ['fill','web','geometry','lamps','sweep','pathfx','particles'],
 
             forceAllLinesHidden: false,
             geometryWebGL: true,
@@ -38,7 +41,7 @@ window.__spiroRegisterModule?.('js/core/state');
             showWeb: false,
             lightningRateSync: true,
             sweep: { enabled: false, effectType: 'lightning', profileShape:'current', coreBlendMode:'normal', glowBlendMode:'normal',  flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode: 'whole', direction: 'forward', speed: 0.25, speedMultiplier: 1, syncMusic: true, lengthPercent: 18, widthPercent: 75, everyN: 2, color: '#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningProfileShape:'current', lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:true, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc',  lightningSegmentPercent:100,  lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningWidthPercent:64, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningPreGlowIntensity:50, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase: 0, currentVelocity: 0, lastUpdate: 0, cycleCount:0, raf: 0 },
-            web: { type:'bevel', style:'web', region:'inside', inside:true, outsideStraight:false, outsideArc:false, placementMode:'selfIntersection', oscillating:false, oscillationStrength:10, oscillationStrengthMultiplier:1, oscillationMultiplier:1, angleThreshold:60, width:0.6, widthRelative:false, widthPercent:40, color:'#ffffff', secondaryColor:'#00ffff', sunDegrees:20, distance:20, depthMultiplier:1, spacing:10, angleVariation:6 },
+            web: { type:'bevel', style:'web', region:'inside', inside:true, outsideStraight:false, outsideArc:false, placementMode:'corners', oscillating:false, oscillationStrength:10, oscillationStrengthMultiplier:1, oscillationMultiplier:1, angleThreshold:60, width:0.6, widthRelative:false, widthPercent:40, color:'#ffffff', secondaryColor:'#00ffff', sunDegrees:20, distance:60, depthMultiplier:1, spacing:10, angleVariation:6 },
             lineOutline: { enabled: false, color: '#ffffff', width: 1.5, mode:'outer' },
             lamps: {
                 positionMode: 'key',
@@ -478,7 +481,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 'sourceColorHsl','targetColorHsl','sourceFillColorHsl','targetFillColorHsl','sourceFillIndices',
                 'lightningCycleColor','lastEditorPaint','lastSidebarPaint','manualProfileEditing','webUiHoldStart',
                 'boundaryPaintPending','lampCycleSerial','suppressPaletteCycleOnce','sourceGlobalHueOffset','targetGlobalHueOffset','frameGlobalHueOffset','frameLayers','phaseSerial','phaseReason','pausedByGreenProject','_sourceGeometryPool',
-                '_targetGeometryPool'
+                '_targetGeometryPool','profileCarrierPlans','gpuPhaseWarming','gpuPhaseWarmSerial','gpuSpecializedSpiralReady'
             ]
         });
 
@@ -521,7 +524,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 lastFrameUpdate:0, sourceColorHsl:[], targetColorHsl:[], sourceFillColorHsl:[],
                 targetFillColorHsl:[], sourceFillIndices:[], lightningCycleColor:'#ffffff', lastEditorPaint:0,
                 lastSidebarPaint:0, manualProfileEditing:false, webUiHoldStart:0, boundaryPaintPending:false,
-                lampCycleSerial:0, suppressPaletteCycleOnce:false, sourceGlobalHueOffset:0, targetGlobalHueOffset:0, frameGlobalHueOffset:0, frameLayers:[], phaseSerial:0, phaseReason:'init', pausedByGreenProject:false, _sourceGeometryPool:[], _targetGeometryPool:[]
+                lampCycleSerial:0, suppressPaletteCycleOnce:false, sourceGlobalHueOffset:0, targetGlobalHueOffset:0, frameGlobalHueOffset:0, frameLayers:[], phaseSerial:0, phaseReason:'init', pausedByGreenProject:false, _sourceGeometryPool:[], _targetGeometryPool:[], profileCarrierPlans:[], gpuPhaseWarming:false, gpuPhaseWarmSerial:0, gpuSpecializedSpiralReady:false
             }
         });
 

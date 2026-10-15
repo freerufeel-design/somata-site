@@ -83,8 +83,9 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
 
             const sl=runtimeState.morph?.renderSourceLayers?.[layerIndex],dl=runtimeState.morph?.renderTargetLayers?.[layerIndex],strictSpiral=state?.fourierMode!==true&&[sl,dl].some(l=>l&&typeof isSpiralLayer==='function'&&isSpiralLayer(l));
 
-            if(strictSpiral){morphCpuPathDemandRuntime.strictSpiralBlocks++;return noteMorphCpuPathDemand('spiral-gpu-only',purpose,layerIndex,t,[]);}
-            if((state.morph?.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()))){
+            const retainedGpuReady=strictSpiral&&typeof currentGpuBezierMorphResource==='function'&&currentGpuBezierMorphResource(layerIndex)?.ready===true;
+            if(strictSpiral&&retainedGpuReady){morphCpuPathDemandRuntime.strictSpiralBlocks++;return noteMorphCpuPathDemand('spiral-gpu-only',purpose,layerIndex,t,[]);}
+            if(state.morph?.mode==='circleSlide'){
                 const chaos=typeof isChaosCircleMorphPair==='function'&&isChaosCircleMorphPair(layerIndex);
                 let paths=[];
 
@@ -178,6 +179,11 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             ctx.profilePrepared=null;ctx.profilePreparedReady=false;ctx.sweepPrepared=null;ctx.sweepPreparedReady=false;
 
             ctx._geometryCircleFrameData=undefined;
+            // GPU stroke commands are frame-resident for dynamic geometry. The context itself is
+            // pooled, so clear the previous frame carrier before Fill/Base planning starts. Static
+            // commands still keep their own persistent cache inside getFrameGLStrokeCommands().
+            ctx._glStrokeCommands=null;ctx._glStrokeCommandFrameId=-1;ctx._glStrokeCommandHiddenGraffitiCarrier=false;
+            ctx._frameContourRecord=null;
             ctx.webPrepared=null;ctx.webPreparedReady=false;ctx.lampInstances=null;ctx.lampInstancesReady=false;
             ctx.minimalSourceLayer=null;ctx.minimalTargetLayer=null;ctx.morphFrameActive=false;ctx.lightMorphEnabled=false;ctx.forcedLampMorph=false;ctx.greenLampDisplay=false;
             ctx.lampDisplayEnabled=false;ctx.greenMorphEnabled=false;ctx.greenFadeEnabled=false;ctx.greenFadeT=0;ctx.greenFramePaths=null;ctx.greenSourcePaths=null;ctx.greenTargetPaths=null;ctx.greenSourceLayer=null;ctx.greenTargetLayer=null;
@@ -187,7 +193,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             resetMainLayerGeometryPlan(ctx.geometryPlan || (ctx.geometryPlan={}));
             resetLayerEffectsPlan(ctx.effectsPlan || (ctx.effectsPlan={}));
 
-            ctx._baseStrokeCommitted=false;ctx._baseFillCommitted=false;ctx._fusedMorphBackend='';
+            ctx._baseStrokeCommitted=false;ctx._baseFillCommitted=false;ctx._fillBelowWebResolved=false;ctx._fillRenderedBelowWeb=false;ctx._suppressLateFillForWeb=false;ctx._fusedMorphBackend='';
             ctx.layerLampConfig=null;ctx.lightningStroke=null;ctx.lineCap='round';ctx.lineJoin='round';ctx.miterLimit=6;ctx.prepared=false;
             return ctx;
         }
@@ -251,6 +257,19 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             table._rangeReadyFrameId=-1;table._rangeReadySegmentCount=-1;table._rangeReadyTotal=-1;
             pathFxTypedTableStats.builds++;pathFxTypedTableStats.segmentsWritten+=write;pathFxTypedTableStats.objectSegmentsAvoided+=write;return table;
         }
+
+        function getLayerFrameAuthoritativePathFxTable(ctx){
+            if(!ctx)return buildPathLengthTable([]);
+            let owner=ctx,guard=0;while(owner?.__somataFeatureParent&&guard++<8)owner=owner.__somataFeatureParent;
+            const fid=Number(owner.frameId)||Number(frameGeometryRuntime.frameId)||0;
+            if(owner._authoritativePathFxTableFrameId===fid&&owner._authoritativePathFxTable){pathFxTypedTableStats.frameHits++;return owner._authoritativePathFxTable;}
+            let paths=null;try{paths=SomataFrameContourService?.paths?.(owner)||null;}catch(_){paths=null;}
+            if(!Array.isArray(paths)||!paths.length)return getLayerFramePathFxTable(owner);
+            owner._authoritativePathFxTable=buildPathFxTypedTable(paths,owner._authoritativePathFxTable,fid);
+            owner._authoritativePathFxTableFrameId=fid;owner._authoritativePathFxSourcePaths=paths;
+            return owner._authoritativePathFxTable;
+        }
+        window.getLayerFrameAuthoritativePathFxTable=getLayerFrameAuthoritativePathFxTable;
 
         function getLayerFramePathFxTable(ctx){
             if(!ctx)return buildPathLengthTable([]);
@@ -559,13 +578,14 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                 const layerIndex=Math.max(0,getRuntimeLayerIndex(layer));
                 const rawPaths=drawData?.paths||[];
 
-                const keyPoints=buildLampCircumferenceAnchors(layer,drawData,maxPoints);
                 let bendPoints=collectSmoothCornerLampPoints(layerIndex,rawPaths,maxPoints,false);
                 if(isLampContourAttachmentEnabled()){
                     const visiblePaths=buildLampRenderedAttachmentPaths(rawPaths,layer);
                     bendPoints=projectLampPointsToCurrentPolygon(bendPoints,visiblePaths,layer,true);
                 }
-                return mergeLampKeyAndCornerPoints(keyPoints,bendPoints,maxPoints);
+                // Corner mode is exclusive: key-point lamps belong to the Key mode and
+                // must not be duplicated underneath/alongside bend lamps.
+                return capLampPointList(bendPoints,maxPoints);
             }
             return buildLampCircumferenceAnchors(layer,prepared,maxPoints);
         }

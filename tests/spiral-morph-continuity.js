@@ -36,7 +36,7 @@ async function main(){
             }
           }
         }
-        return{morphType:p.morphType,interpolationMetric:p.interpolationMetric||'',paths:p.pathCount,cubics:p.cubicCount,mergeSplit:p.topologyMergeSplitCount||0,continuousTopology:p.continuousTopologyTransport===true,cartesianFallbackCubics:p.cartesianFallbackCubics||0,maxPackedPolarTurn:p.maxPackedPolarTurn||0,finite,presenceBoth,spinSafe,maxPolarTurn,maxSeam,maxFrameStepNorm};
+        return{morphType:p.morphType,interpolationMetric:p.interpolationMetric||'',paths:p.pathCount,cubics:p.cubicCount,mergeSplit:p.topologyMergeSplitCount||0,continuousTopology:p.continuousTopologyTransport===true,exactSubdivisionOnly:p.exactSubdivisionOnly===true,arcEqualizedRecords:Number(p.arcEqualizedRecords)||0,cartesianFallbackCubics:p.cartesianFallbackCubics||0,maxPackedPolarTurn:p.maxPackedPolarTurn||0,finite,presenceBoth,spinSafe,maxPolarTurn,maxSeam,maxFrameStepNorm};
       };
       const configureBase=()=>{
         if(runtimeState.morph.active)document.getElementById('btnMorph').click();
@@ -59,7 +59,7 @@ async function main(){
           const pairs=MorphGeometry.pairMorphPaths(buildOrbitPolylines(s),buildOrbitPolylines(d));let best=null;
           for(const pair of pairs){const sp=pair?.src?.points||[],dp=pair?.dst?.points||[];if(!sp.length||!dp.length)continue;const a=sp[sp.length-1],b=dp[dp.length-1],r=Math.max(Math.hypot(a.x,a.y),Math.hypot(b.x,b.y)),delta=wrapDeg((Math.atan2(b.y,b.x)-Math.atan2(a.y,a.x))*180/Math.PI);if(!best||r>best.r)best={r,delta};}
           const phaseDeg=Number(runtimeState.morph.spiralRotationCompensationPhaseDeg)||0;compensation={outerTipDelta:best?.delta??NaN,phaseDeg,residual:wrapDeg((best?.delta??0)-phaseDeg),anchor:runtimeState.morph.spiralRotationCompensationAnchorIndex};
-          const oldTunnel=state.tunnel.active;state.tunnel.active=true;const mid={...s,spiralStep:(Number(s.spiralStep)+Number(d.spiralStep))/2,spiralStepLinked:false};const actual=getSpiralMorphTunnelPhaseRadians({copyId:1,position:1},mid),expected=Math.PI*2*Number(mid.spiralStep)/Number(mid.N);tunnelPhase={actual,expected,error:Math.abs(actual-expected)};state.tunnel.active=oldTunnel;
+          const oldTunnel=state.tunnel.active,oldT=runtimeState.morph.geometryT;state.tunnel.active=true;runtimeState.morph.geometryT=.5;const mid={...s,spiralStep:(Number(s.spiralStep)+Number(d.spiralStep))/2,spiralStepLinked:false};const actual=getSpiralMorphTunnelPhaseRadians({copyId:1,position:1},s),expected=Math.PI*2*Number(mid.spiralStep)/Number(mid.N);tunnelPhase={actual,expected,error:Math.abs(actual-expected)};runtimeState.morph.geometryT=oldT;state.tunnel.active=oldTunnel;
         }
         const out={type,source:{N:s.N,K:s.K,step:s.spiralStep,order:s.spiralOrder},target:{N:d.N,K:d.K,step:d.spiralStep,order:d.spiralOrder},status,plan,compensation,tunnelPhase};
         document.getElementById('btnMorph').click();
@@ -77,8 +77,8 @@ async function main(){
 
       // Shape-morph stress: deliberately different retained profiles.  The non-torn modes
       // must still be one finite, seam-free rail and must never encode an unguarded >180°
-      // polar spin.  Phase keeps N/K while changing only effective step; the two circle-like
-      // modes also exercise simultaneous profile + N/K topology change.
+      // polar spin.  Phase keeps N while K itself is the transported phase step; the two
+      // branch-changing modes also exercise simultaneous profile + N/K topology change.
       const shapeStress={};
       for(const type of ['continuous','phase','phaseCircle','minimalTurn','topology','torn']){
         const src={...state.layers[0],id:'shape-src',visible:true,spiralEnabled:true,spiralOrder:1,spiralClosed:true,spiralTangential:true,spiralRoundSeams:true,closedLoop:false,N:12,K:1,spiralStep:1,spiralStepLinked:false,radius:220,rotation:12,rounding:0,profileMode:'segments',profileNodes:[{x:0,y:0},{x:.15,y:.58},{x:.42,y:-.38},{x:.72,y:.33},{x:1,y:0}]};
@@ -108,9 +108,10 @@ async function main(){
     assert(continuous.status?.keepsContinuity&&continuous.status?.locksN&&continuous.status?.locksK,'continuous spiral morph must lock N/K and remain continuity protected');
     assert(continuous.target.N===continuous.source.N&&continuous.target.K===continuous.source.K,'continuous spiral morph changed N/K topology');
 
-    assert(phase.status?.keepsContinuity&&phase.status?.locksN&&phase.status?.locksK&&phase.status?.phaseStepTransport,'phase mode must use fixed N/K topology plus independent step transport');
-    assert(phase.target.N===phase.source.N&&phase.target.K===phase.source.K,'phase mode changed N/K instead of changing spiral step');
-    assert(Math.abs(phase.target.step-phase.source.step)>1,'phase mode did not produce a real spiral-step change');
+    assert(phase.status?.keepsContinuity&&phase.status?.locksN&&!phase.status?.locksK&&phase.status?.phaseKTransport,'phase mode must keep N fixed while transporting K itself as the phase step');
+    assert(phase.target.N===phase.source.N&&phase.target.K!==phase.source.K,'phase mode must keep N fixed and change K');
+    assert(Math.abs(phase.target.step-phase.target.K)<1e-9&&Math.abs(phase.target.step-phase.source.step)>1,'phase mode did not transport K through the actual spiral step');
+    assert(phase.plan?.mergeSplit===0,'fixed-N Phase introduced branch clone/merge instead of pure winding transport');
     assert(phase.compensation&&Math.abs(phase.compensation.residual)<1e-4,'rotation compensation does not pin the outer spiral tip');
     assert(phase.tunnelPhase&&phase.tunnelPhase.error<1e-9,'corridor/next-copy phase is not derived continuously from the current spiral step');
 
@@ -134,11 +135,12 @@ async function main(){
     assert(topological.status?.unrestrictedParameters===true&&!topological.status?.locksN&&!topological.status?.locksK,'topological mode still reports blocked Spiral parameters');
     assert(topological.target.N!==topological.source.N&&topological.target.K!==topological.source.K,'topological mode did not change N/K');
     assert(Math.sign(topological.target.order)===-1&&Math.sign(topological.source.order)===1,'topological mode still blocks Spiral order direction changes');
-    assert(topological.plan?.continuousTopology&&topological.plan?.presenceBoth&&topological.plan?.interpolationMetric==='cartesian','topological mode is not retained continuous Cartesian transport');
+    assert(topological.plan?.continuousTopology&&topological.plan?.presenceBoth&&topological.plan?.interpolationMetric==='cartesian-keypoints','topological mode is not retained continuous keypoint-Cartesian transport');
     assert(phaseCircleTopology.target.N!==phaseCircleTopology.source.N&&phaseCircleTopology.target.K!==phaseCircleTopology.source.K,'topological Spiral morph did not change N/K');
     assert(phaseCircleTopology.plan.mergeSplit>0&&phaseCircleTopology.plan.continuousTopology&&phaseCircleTopology.plan.presenceBoth,'topological Spiral N/K change is not a no-fade merge/split');
     assert(torn.target.N!==torn.source.N&&torn.target.K!==torn.source.K,'torn mode did not exercise topology change');
     assert(torn.plan&&!torn.plan.presenceBoth,'torn mode unexpectedly lost its intentional appear/disappear topology behavior');
+    assert(torn.plan.exactSubdivisionOnly&&torn.plan.arcEqualizedRecords===0,'torn mode must preserve authored Beziers by exact subdivision only; arc resampling/equalization is forbidden');
 
     for(const type of ['continuous','phase','phaseCircle','minimalTurn','topology']){
       const p=shapeStress[type];
@@ -149,9 +151,10 @@ async function main(){
       assert(p.maxFrameStepNorm<0.12,`${type} shape morph frame displacement is too abrupt (${p.maxFrameStepNorm})`);
     }
     assert(shapeStress.phaseCircle.mergeSplit>0,'phase-circle shape + topology stress did not exercise Spiral merge/split');
-    assert(shapeStress.topology.mergeSplit>0&&shapeStress.topology.interpolationMetric==='cartesian','topological shape + N/K/order stress did not exercise retained Cartesian merge/split');
+    assert(shapeStress.topology.mergeSplit>0&&shapeStress.topology.interpolationMetric==='cartesian-keypoints','topological shape + N/K/order stress did not exercise retained keypoint-Cartesian merge/split');
     assert(shapeStress.torn&&shapeStress.torn.finite,'torn shape morph did not produce a finite plan');
-    assert(centerShade?.spec?.enabled===true&&centerShade.spec.endRadius>centerShade.spec.startRadius&&centerShade.inside<1e-9&&centerShade.feather>0&&centerShade.feather<1&&centerShade.outside>0.999,'Spiral center shading is not a radial geometry-space feather');
+    assert(shapeStress.torn.exactSubdivisionOnly&&shapeStress.torn.arcEqualizedRecords===0,'torn shape stress reintroduced arc resampling');
+    assert(centerShade?.spec?.enabled===false&&centerShade.spec.mode==='copy-alpha'&&centerShade.inside===1&&centerShade.feather===1&&centerShade.outside===1,'Spiral still owns a radial geometry-space center mask instead of Corridor copy alpha');
     assert(outerAnchor&&outerAnchor.index===1&&outerAnchor.id==='spiral-outer-test'&&outerAnchor.radius===320&&outerAnchor.participants===2,'rotation compensation is not anchored to the outermost visible Spiral layer');
 
     const exc=uncaughtExceptions(h.events).slice(baseline);

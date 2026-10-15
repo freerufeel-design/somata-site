@@ -10,7 +10,21 @@ async function createBrowserHarness({disableGpu=true,loadDelayMs=300,evalTimeout
   const chrome=findChromium(),port=9300+Math.floor(Math.random()*500),profile=path.join('/tmp',`somata-tests-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const args=['--headless=new','--no-sandbox',`--remote-debugging-port=${port}`,'--remote-allow-origins=*',`--user-data-dir=${profile}`,'about:blank'];if(disableGpu)args.splice(1,0,'--disable-gpu');
   const proc=cp.spawn(chrome,args,{stdio:'ignore'});let ws=null,id=0;const pending=new Map(),events=[];
-  const close=async()=>{try{ws?.close();}catch(_){}try{proc.kill('SIGTERM');}catch(_){}try{fs.rmSync(profile,{recursive:true,force:true});}catch(_){}};
+  const waitForExit=ms=>proc.exitCode!==null?Promise.resolve(true):Promise.race([
+    new Promise(resolve=>proc.once('exit',()=>resolve(true))),
+    sleep(ms).then(()=>false)
+  ]);
+  const close=async()=>{
+    try{ws?.close();}catch(_){}
+    if(proc.exitCode===null){
+      try{proc.kill('SIGTERM');}catch(_){}
+      if(!(await waitForExit(1200))&&proc.exitCode===null){
+        try{proc.kill('SIGKILL');}catch(_){}
+        await waitForExit(800);
+      }
+    }
+    try{fs.rmSync(profile,{recursive:true,force:true});}catch(_){}
+  };
   try{
     let ready=false;for(let i=0;i<80;i++){try{await fetchJson(`http://127.0.0.1:${port}/json/version`);ready=true;break;}catch{await sleep(100);}}if(!ready)throw new Error('Chromium DevTools did not start');
     const target=await fetchJson(`http://127.0.0.1:${port}/json/new?about:blank`,{method:'PUT'});ws=new WebSocket(target.webSocketDebuggerUrl);await withTimeout(new Promise((res,rej)=>{ws.onopen=res;ws.onerror=rej;}),3000,'DevTools websocket open',close);

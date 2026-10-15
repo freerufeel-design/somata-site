@@ -269,7 +269,7 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             const fillAlpha=getFillOpacityUnit(layer.fillColor,DEFAULT_FILL_OPACITY_PERCENT);
 
             const spiral=isSpiralLayer(layer);
-            let fillConfigured=getLayerLineVisible(layer)&&layer.fill===true&&fillAlpha>.00001;
+            let fillConfigured=layer.fill===true&&fillAlpha>.00001;
             const dynamic=plan.dynamic===true;
 
             const li=Math.max(0,Math.floor(Number(frameCtx.layerIndex)||0));
@@ -293,8 +293,14 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             const corridor=state.tunnel?.active===true;
 
             const dynamicCorridorNative=fillRequested&&dynamic&&corridor&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerGeometry);
+            // Dynamic Fill must use the same current-frame geometry carrier as the Line.
+            // Ordinary Morph records its frame-resident stroke commands once and the Fill adapter
+            // turns those exact closed subpaths into the native stencil mesh. Retained Spiral keeps
+            // its own band adapter because its authoritative geometry lives on the Spiral rail.
+            const dynamicFrameNative=fillRequested&&dynamic&&!corridor&&!spiralEndpoint&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&Boolean(frameCtx.drawLayerInstances);
+            const dynamicSpiralNative=fillRequested&&dynamic&&!corridor&&spiralEndpoint&&dynamicSpiralBandTopology&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides;
             const staticNativeFillTopology=!dynamic&&(hasStaticFillTopology&&!spiralEndpoint||spiralBandFillTopology);
-            const nativeGpuFillEligible=fillRequested&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(!corridor||!tunnelColorShiftIsActive())&&(staticNativeFillTopology||dynamicCorridorNative);
+            const nativeGpuFillEligible=fillRequested&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(!corridor||!tunnelColorShiftIsActive())&&(staticNativeFillTopology||dynamicFrameNative||dynamicSpiralNative||dynamicCorridorNative);
             const gpuMaskEligible=fillRequested&&hasStaticFillTopology&&!dynamic&&!spiralEndpoint&&!corridor&&!unsupportedFillKind&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerFillInstances);
             const contract={
                 kind:String(plan.kind||'static'),
@@ -305,7 +311,7 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
                 fillRequested,
                 fillAlpha,
                 fillStyle:layer.fillColor||layer.strokeColor||'#ffffff',
-                gpuMaskEligible,nativeGpuFillEligible,dynamicCorridorNative,
+                gpuMaskEligible,nativeGpuFillEligible,dynamicFrameNative,dynamicSpiralNative,dynamicCorridorNative,
                 exactCanvasFillRequired:fillRequested&&!gpuMaskEligible&&!nativeGpuFillEligible,
                 topologyStable:dynamic!==true,
                 geometry

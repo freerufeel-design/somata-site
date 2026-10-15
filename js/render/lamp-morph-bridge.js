@@ -10,6 +10,31 @@ function gpuMorphLampPositionMode(frameCtx){
     const cfg=frameCtx?.layerLampConfig||frameCtx?.effectsPlan?.lamps?.baseConfig||(typeof ensureLayerLampState==='function'?ensureLayerLampState(frameCtx?.layer):null)||state?.lamps||{};
     const mode=cfg?.positionMode||state?.lamps?.positionMode||'key';return mode==='circumference'?'key':mode;
 }
+function lampContourAttachmentEnabledForFrame(frameCtx){
+    const cfg=frameCtx?.layerLampConfig||frameCtx?.effectsPlan?.lamps?.baseConfig||(typeof ensureLayerLampState==='function'?ensureLayerLampState(frameCtx?.effectLayer||frameCtx?.layer):null)||state?.lamps||{};
+    if(typeof cfg.snapToContour==='boolean')return cfg.snapToContour;
+    if(typeof cfg.snapToPolygon==='boolean'&&typeof cfg.stickToRounding==='boolean')return cfg.snapToPolygon||cfg.stickToRounding;
+    if(typeof cfg.snapToPolygon==='boolean')return cfg.snapToPolygon;
+    if(typeof cfg.stickToRounding==='boolean')return cfg.stickToRounding;
+    return true;
+}
+function useCanonicalV505TopologyLampAttachment(frameCtx){
+    try{
+        if(typeof useTopologyVisualProfileRail==='function'){
+            if(!useTopologyVisualProfileRail(frameCtx))return false;
+        }else{
+            if(!frameCtx?.layer||SomataGeometryPolicy.isStrict(frameCtx))return false;
+            if(!frameCtx.morphFrameActive||frameCtx.greenMorphEnabled||frameCtx.minimalFadeEnabled)return false;
+            if(frameCtx.blueMorphProvider?.mode==='fade')return false;
+            if(!['topology','calm'].includes(state?.morph?.mode))return false;
+        }
+        // v505 invariant: when lamps are configured to stick to the contour, their
+        // topology identity is evaluated first and then projected onto the CURRENT
+        // rendered rail of this frame.  Later topology GPU shortcuts froze endpoint
+        // segment refs and skipped that final projection, so lamps visibly detached.
+        return lampContourAttachmentEnabledForFrame(frameCtx)===true;
+    }catch(_){return false;}
+}
 function gpuMorphArbitraryLampIneligibleReason(frameCtx,requireReady=true){
     if(!frameCtx?.layer)return'no-frame';
     if(!frameCtx.morphFrameActive||frameCtx.greenMorphEnabled||frameCtx.minimalFadeEnabled)return'not-blue-topology-morph';
@@ -129,11 +154,15 @@ function gpuMorphSpecialSpiralLampFrame(frameCtx,maxPoints=600){
 }
 function prepareGpuMorphLampFrame(frameCtx){
     try{
-        const strictSpiral=typeof isStrictSpiralWebGPUFrame==='function'&&isStrictSpiralWebGPUFrame(frameCtx),authoritative=strictSpiral?(typeof currentGpuBezierResourceForFrame==='function'?currentGpuBezierResourceForFrame(frameCtx):(typeof currentGpuBezierMorphResource==='function'?currentGpuBezierMorphResource(frameCtx?.layerIndex):null)):null;
+        const strictSpiral=SomataGeometryPolicy.isStrict(frameCtx),authoritative=strictSpiral?(typeof currentGpuBezierResourceForFrame==='function'?currentGpuBezierResourceForFrame(frameCtx):(typeof currentGpuBezierMorphResource==='function'?currentGpuBezierMorphResource(frameCtx?.layerIndex):null)):null;
 
         if(strictSpiral&&(!authoritative?.ready||authoritative?.specialSpiralBezierRail!==true)){gpuMorphLampBridgeStats.fallbacks++;gpuMorphLampBridgeStats.lastReason='strict-spiral-retained-rail-wait';try{requestMainCanvasRender?.();}catch(_){}return null;}
         const special=gpuMorphSpecialSpiralLampFrame(frameCtx,600);if(special){gpuLampFeatureReady(frameCtx);gpuMorphLampBridgeStats.hits++;gpuMorphLampBridgeStats.lastReason='spiral-exact-gpu-arc';return special;}
         if(strictSpiral){gpuMorphLampBridgeStats.fallbacks++;gpuMorphLampBridgeStats.lastReason='strict-spiral-arc-wait';return null;}
+        if(useCanonicalV505TopologyLampAttachment(frameCtx)){
+            gpuMorphLampBridgeStats.fallbacks++;gpuMorphLampBridgeStats.lastReason='v505-canonical-contour-attachment';
+            return null;
+        }
         const mode=gpuMorphLampPositionMode(frameCtx);
         if(mode==='key'){
             const cfg=frameCtx?.layerLampConfig||ensureLayerLampState?.(frameCtx?.layer)||state?.lamps||{},motion=cfg?.morphMotionMode||'linear';
@@ -158,9 +187,10 @@ function prepareGpuMorphLampFrame(frameCtx){
 }
 function canUseGpuMorphLampFrame(frameCtx,requireReady=true){
     try{
-        const strictSpiral=typeof isStrictSpiralWebGPUFrame==='function'&&isStrictSpiralWebGPUFrame(frameCtx),specialRec=typeof currentGpuBezierResourceForFrame==='function'?currentGpuBezierResourceForFrame(frameCtx):(typeof currentGpuBezierMorphResource==='function'?currentGpuBezierMorphResource(frameCtx?.layerIndex):null);
+        const strictSpiral=SomataGeometryPolicy.isStrict(frameCtx),specialRec=typeof currentGpuBezierResourceForFrame==='function'?currentGpuBezierResourceForFrame(frameCtx):(typeof currentGpuBezierMorphResource==='function'?currentGpuBezierMorphResource(frameCtx?.layerIndex):null);
         if(strictSpiral&&specialRec?.specialSpiralBezierRail!==true)return false;
         if(specialRec?.specialSpiralBezierRail===true){if(typeof warmupGpuMorphArcResource==='function')warmupGpuMorphArcResource();return Boolean(specialRec?.ready&&typeof LampGPURenderer!=='undefined'&&LampGPURenderer.isWebGPUReady?.());}
+        if(useCanonicalV505TopologyLampAttachment(frameCtx))return false;
         const mode=gpuMorphLampPositionMode(frameCtx);
         if(mode==='key'){
             const cfg=frameCtx?.layerLampConfig||ensureLayerLampState?.(frameCtx?.layer)||state?.lamps||{},motion=cfg?.morphMotionMode||'linear';
@@ -172,5 +202,5 @@ function canUseGpuMorphLampFrame(frameCtx,requireReady=true){
         return false;
     }catch(err){try{spiroPassIsolationNoteFailure?.('lamps',err,frameCtx);}catch(_){}return false;}
 }
-window.__spiroGpuMorphLampBridgeStatus=()=>({...gpuMorphLampBridgeStats,topology:typeof __spiroGpuLampTopologyStatus==='function'?__spiroGpuLampTopologyStatus():null,ghost:typeof __spiroGpuLampGhostStatus==='function'?__spiroGpuLampGhostStatus():null,corners:typeof __spiroGpuLampCornerStatus==='function'?__spiroGpuLampCornerStatus():null,contract:'topology Morph Lamps are capability-routed before CPU geometry: Arbitrary uses stable contour fractions + shared Exact Arc; Key uses phase-resident topology identity; Cartesian Ghost uses exact phase nearest-key envelopes with bounded <=260 display evaluation; Corners consume packed MorphFrame endpoints and preserve the historical nearest-fraction identity/inertia state without CPU Morph path objects.'});
+window.__spiroGpuMorphLampBridgeStatus=()=>({...gpuMorphLampBridgeStats,topology:typeof __spiroGpuLampTopologyStatus==='function'?__spiroGpuLampTopologyStatus():null,ghost:typeof __spiroGpuLampGhostStatus==='function'?__spiroGpuLampGhostStatus():null,corners:typeof __spiroGpuLampCornerStatus==='function'?__spiroGpuLampCornerStatus():null,contract:'topology Morph Lamps are capability-routed before CPU geometry except when contour sticking is enabled: Topology/Calm then deliberately use the canonical v505 current-rail projection path. Strict Spiral retains its exact Arc carrier. Arbitrary uses stable contour fractions + shared Exact Arc where eligible; Key/Corners may use resident topology identity only when that does not bypass contour attachment.'});
 

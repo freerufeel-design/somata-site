@@ -1,0 +1,10 @@
+const {read,assert}=require('./lib/test-utils');
+const ui=read('js/app/ui-project-runtime.js');
+const motion=read('js/effects/motion.js');
+assert(!/\bfunction\s+applyMasterLayerSnapshotNow\s*\(/.test(ui),'legacy applyMasterLayerSnapshotNow() returned');
+assert(/\bfunction\s+mirrorMasterLayerDiff\s*\(/.test(ui),'active Master changed-path mirror missing');
+assert(/collectMasterChangedPaths/.test(ui)&&/for\s*\(const path of paths\)\s*\{/.test(ui)&&/applyMasterPath\(layer,path/.test(ui),'Master replacement path no longer broadcasts changed paths');
+assert(!/\bfunction\s+isAnyMorphLikeAnimationActive\s*\(/.test(motion),'legacy isAnyMorphLikeAnimationActive() returned');
+assert(/\bfunction\s+getMorphActivityState\s*\(/.test(motion),'active morph activity API missing');
+assert(/window\.__spiroMorphActivity\s*=\s*\(\)\s*=>\s*getMorphActivityState\(\)/.test(motion),'morph activity diagnostics no longer use active replacement');
+console.log('LEGACY DEAD-CODE REGRESSION: PASS — obsolete Master snapshot + morph-like wrapper remain removed');

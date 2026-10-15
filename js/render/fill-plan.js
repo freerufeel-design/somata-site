@@ -4,6 +4,7 @@ window.__spiroRegisterModule?.('js/render/fill-plan');
 var FillMeshPreparer = (() => {
     let cache = new WeakMap();
     let dynamicCache = new WeakMap();
+    let frameContourCache = new WeakMap();
     let spiralMorphCache = new WeakMap();
     let spiralInterwindingCache = new WeakMap();
     let evictedMeshes = [];
@@ -301,76 +302,158 @@ var FillMeshPreparer = (() => {
         frameCtx._fillMeshShadow=mesh;return mesh;
     }
 
-    function prepareDynamicCommands(frameCtx, commands) {
-        const layer = frameCtx?.layer;
-        if (!layer || frameCtx?.geometryPlan?.dynamic !== true || !Array.isArray(commands) || !commands.length) return null;
-        let entry = dynamicCache.get(layer);
-        if (!entry) {
-            entry = { frameId:-1, commands:null, capacityFloats:0, storage:null, mesh:{
-                dynamic:true, dynamicScreenSpace:true, revision:0, frameId:-1, fanData:null, fanFloatCount:0,
-                fanTriangleCount:0, complete:false, nativeComplete:false, records:[], preparationComplexity:'O(N)',
-                semantic:'dynamic Corridor Fill: frame-resident stroke commands -> one GPU stencil fan; no Canvas mask'
-            }};
-            dynamicCache.set(layer, entry);
-        } else if (entry.frameId === Number(frameCtx.frameId) && entry.commands === commands && entry.mesh.nativeComplete) {
-            dynamicReuses++;
-            frameCtx._fillMeshShadow = entry.mesh;
-            return entry.mesh;
+    // Convert the actual Line stroke commands into closed Fill contours.
+    // A sharp profile can be emitted as several open Bezier subpaths inside ONE stroke command.
+    // Visually those subpaths are one polygonal contour because every segment ends exactly where
+    // the next one starts. Fill must therefore stitch that command back into the same boundary
+    // instead of requiring every individual segment to carry `closed:true`.
+    //
+    // Important: stitching never crosses stroke-command boundaries. Separate commands can be
+    // different orbits / alpha carriers and must not be invented into one contour.
+    const LINE_JOIN_EPS = 1e-3; // screen-space px; only endpoint continuity, not proximity filling.
+    function lineJoinSamePoint(a,b){
+        const ax=Number(a?.x),ay=Number(a?.y),bx=Number(b?.x),by=Number(b?.y);
+        return Number.isFinite(ax)&&Number.isFinite(ay)&&Number.isFinite(bx)&&Number.isFinite(by)&&Math.abs(ax-bx)<=LINE_JOIN_EPS&&Math.abs(ay-by)<=LINE_JOIN_EPS;
+    }
+    function normalizedLinePoints(points){
+        if(!Array.isArray(points)||points.length<2)return null;
+        const out=[];
+        for(const p of points){
+            const x=Number(p?.x),y=Number(p?.y);if(!Number.isFinite(x)||!Number.isFinite(y))return null;
+            const q={x,y};if(!out.length||!lineJoinSamePoint(out[out.length-1],q))out.push(q);
         }
-
-        let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,totalEdges=0,totalPoints=0;
-        for (const cmd of commands) {
-            for (const sp of cmd?.subpaths || []) {
-                const pts=sp?.points||[];
-                if (sp?.closed !== true || pts.length < 3) continue;
-                totalPoints += pts.length;
-                for (let i=0;i<pts.length;i++) {
-                    const a=pts[i],b=pts[(i+1)%pts.length];
-                    const ax=Number(a?.x),ay=Number(a?.y),bx=Number(b?.x),by=Number(b?.y);
-                    if(!Number.isFinite(ax)||!Number.isFinite(ay)||!Number.isFinite(bx)||!Number.isFinite(by))continue;
-                    if(ax<minX)minX=ax;if(ax>maxX)maxX=ax;if(ay<minY)minY=ay;if(ay>maxY)maxY=ay;
-                    if(Math.abs(ax-bx)>EPS||Math.abs(ay-by)>EPS)totalEdges++;
+        return out.length>=2?out:null;
+    }
+    function collectLineCarrierContours(commands){
+        const contours=[];
+        if(!Array.isArray(commands))return contours;
+        const commitOpen=(chain)=>{
+            if(!chain||chain.length<3||!lineJoinSamePoint(chain[0],chain[chain.length-1]))return;
+            const pts=chain.slice();if(lineJoinSamePoint(pts[0],pts[pts.length-1]))pts.pop();
+            const clean=cleanContourPoints(pts);if(clean?.length>=3)contours.push(clean.map(p=>({x:Number(p.x),y:Number(p.y)})));
+        };
+        for(const cmd of commands){
+            let chain=null;
+            const flush=()=>{commitOpen(chain);chain=null;};
+            for(const sp of cmd?.subpaths||[]){
+                const pts=normalizedLinePoints(sp?.points);if(!pts)continue;
+                if(sp?.closed===true){
+                    flush();const clean=cleanContourPoints(pts);if(clean?.length>=3)contours.push(clean.map(p=>({x:Number(p.x),y:Number(p.y)})));continue;
+                }
+                if(!chain){chain=pts.slice();continue;}
+                const tail=chain[chain.length-1],first=pts[0],last=pts[pts.length-1];
+                if(lineJoinSamePoint(tail,first)){
+                    for(let i=1;i<pts.length;i++)chain.push(pts[i]);
+                }else if(lineJoinSamePoint(tail,last)){
+                    for(let i=pts.length-2;i>=0;i--)chain.push(pts[i]);
+                }else{
+                    flush();chain=pts.slice();
                 }
             }
+            flush();
         }
-        const mesh=entry.mesh;
+        return contours;
+    }
+
+
+    // Somata 7.8: ordinary Fill consumes the already-connected FrameContour.
+    // No second topology reconstruction is allowed here.  screenPaths are the exact
+    // screen-space points owned by the same Line carrier that the visible Line uses.
+    function prepareFrameContour(frameCtx, record) {
+        const layer=frameCtx?.layer,paths=record?.screenPaths;
+        if(!layer||!Array.isArray(paths)||!paths.length)return null;
+        const isDynamic=frameCtx?.geometryPlan?.dynamic===true,fid=Number(frameCtx?.frameId)||0;
+        let entry=frameContourCache.get(layer);
+        if(!entry){
+            entry={record:null,frameId:-1,capacityFloats:0,storage:null,mesh:{
+                dynamic:isDynamic,dynamicScreenSpace:true,frameContourFill:true,lineCarrierFill:true,revision:0,frameId:-1,fanData:null,fanFloatCount:0,
+                fanTriangleCount:0,complete:false,nativeComplete:false,records:[],preparationComplexity:'O(N)',
+                semantic:'Fill boundary = shared FrameContour screenPaths; no independent geometry reconstruction'
+            }};frameContourCache.set(layer,entry);
+        }else if(entry.record===record&&entry.frameId===fid&&entry.mesh.nativeComplete){
+            dynamicReuses++;frameCtx._fillMeshShadow=entry.mesh;return entry.mesh;
+        }
+        const contours=[];let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,totalEdges=0,totalPoints=0;
+        for(const path of paths){
+            if(path?.closed!==true)continue;const pts=cleanContourPoints(path.points);if(!pts?.length)continue;contours.push(pts);totalPoints+=pts.length;
+            for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length],ax=Number(a.x),ay=Number(a.y),bx=Number(b.x),by=Number(b.y);
+                if(ax<minX)minX=ax;if(ax>maxX)maxX=ax;if(ay<minY)minY=ay;if(ay>maxY)maxY=ay;if(!samePoint(a,b))totalEdges++;}
+        }
+        const mesh=entry.mesh;mesh.dynamic=isDynamic;mesh.frameId=fid;mesh.contourCount=contours.length;mesh.totalVertices=totalPoints;
         if(!totalEdges||!Number.isFinite(minX)||!Number.isFinite(minY)||!Number.isFinite(maxX)||!Number.isFinite(maxY)){
-            mesh.fanFloatCount=0;mesh.fanTriangleCount=0;mesh.complete=false;mesh.nativeComplete=false;
+            mesh.fanFloatCount=0;mesh.fanTriangleCount=0;mesh.complete=false;mesh.nativeComplete=false;mesh.totalTriangles=0;mesh.revision=(mesh.revision+1)>>>0||1;entry.record=record;entry.frameId=fid;frameCtx._fillMeshShadow=mesh;return mesh;
+        }
+        const need=totalEdges*6;if(!entry.storage||entry.capacityFloats<need){let cap=Math.max(96,entry.capacityFloats||0);while(cap<need)cap=Math.ceil(cap*1.6);entry.capacityFloats=cap;entry.storage=new Float32Array(cap);}
+        const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1,out=entry.storage;let o=0;
+        for(const pts of contours)for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];if(samePoint(a,b))continue;out[o++]=anchorX;out[o++]=anchorY;out[o++]=Number(a.x);out[o++]=Number(a.y);out[o++]=Number(b.x);out[o++]=Number(b.y);}
+        mesh.fanData=entry.storage;mesh.fanFloatCount=o;mesh.fanTriangleCount=Math.floor(o/6);mesh.complete=mesh.fanTriangleCount>0;mesh.nativeComplete=mesh.complete;mesh.revision=(mesh.revision+1)>>>0||1;mesh.anchor={x:anchorX,y:anchorY};mesh.totalTriangles=mesh.fanTriangleCount;
+        entry.record=record;entry.frameId=fid;frameCtx._fillMeshShadow=mesh;dynamicBuilds++;dynamicSourcePoints+=totalPoints;dynamicEdges+=mesh.fanTriangleCount;dynamicFanBytes+=o*4;return mesh;
+    }
+
+    function prepareLineCarrierCommands(frameCtx, commands) {
+        const layer = frameCtx?.layer;
+        if (!layer || !Array.isArray(commands) || !commands.length) return null;
+        const isDynamic=frameCtx?.geometryPlan?.dynamic===true;
+        let entry = dynamicCache.get(layer);
+        if (!entry) {
+            entry = { frameId:-1, commands:null, dynamic:null, capacityFloats:0, storage:null, mesh:{
+                dynamic:isDynamic, dynamicScreenSpace:true, lineCarrierFill:true, revision:0, frameId:-1, fanData:null, fanFloatCount:0,
+                fanTriangleCount:0, complete:false, nativeComplete:false, records:[], preparationComplexity:'O(N)',
+                semantic:'Fill boundary = exact frame-resident Line command contour; open Bezier segments are stitched only by shared endpoints'
+            }};
+            dynamicCache.set(layer, entry);
+        } else if (entry.commands === commands && entry.dynamic === isDynamic && entry.mesh.nativeComplete && (!isDynamic || entry.frameId === Number(frameCtx.frameId))) {
+            dynamicReuses++;entry.mesh.frameId=Number(frameCtx.frameId)||0;frameCtx._fillMeshShadow = entry.mesh;return entry.mesh;
+        }
+
+        const contours=collectLineCarrierContours(commands);
+        let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,totalEdges=0,totalPoints=0;
+        for(const pts of contours){
+            totalPoints+=pts.length;
+            for(let i=0;i<pts.length;i++){
+                const a=pts[i],b=pts[(i+1)%pts.length],ax=Number(a.x),ay=Number(a.y),bx=Number(b.x),by=Number(b.y);
+                if(ax<minX)minX=ax;if(ax>maxX)maxX=ax;if(ay<minY)minY=ay;if(ay>maxY)maxY=ay;
+                if(Math.abs(ax-bx)>EPS||Math.abs(ay-by)>EPS)totalEdges++;
+            }
+        }
+        const mesh=entry.mesh;mesh.dynamic=isDynamic;mesh.dynamicScreenSpace=true;mesh.lineCarrierFill=true;
+        if(!totalEdges||!Number.isFinite(minX)||!Number.isFinite(minY)||!Number.isFinite(maxX)||!Number.isFinite(maxY)){
+            mesh.fanFloatCount=0;mesh.fanTriangleCount=0;mesh.complete=false;mesh.nativeComplete=false;mesh.totalVertices=0;mesh.totalTriangles=0;mesh.contourCount=0;
             mesh.frameId=Number(frameCtx.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;
-            entry.frameId=mesh.frameId;entry.commands=commands;frameCtx._fillMeshShadow=mesh;return mesh;
+            entry.frameId=mesh.frameId;entry.commands=commands;entry.dynamic=isDynamic;frameCtx._fillMeshShadow=mesh;return mesh;
         }
         const need=totalEdges*6;
         if(!entry.storage||entry.capacityFloats<need){
-            let cap=Math.max(96,entry.capacityFloats||0);
-            while(cap<need)cap=Math.ceil(cap*1.6);
+            let cap=Math.max(96,entry.capacityFloats||0);while(cap<need)cap=Math.ceil(cap*1.6);
             entry.capacityFloats=cap;entry.storage=new Float32Array(cap);
         }
         const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1;
         const out=entry.storage;let o=0;
-        for (const cmd of commands) {
-            for (const sp of cmd?.subpaths || []) {
-                const pts=sp?.points||[];
-                if (sp?.closed !== true || pts.length < 3) continue;
-                for (let i=0;i<pts.length;i++) {
-                    const a=pts[i],b=pts[(i+1)%pts.length];
-                    const ax=Number(a?.x),ay=Number(a?.y),bx=Number(b?.x),by=Number(b?.y);
-                    if(!Number.isFinite(ax)||!Number.isFinite(ay)||!Number.isFinite(bx)||!Number.isFinite(by))continue;
-                    if(Math.abs(ax-bx)<=EPS&&Math.abs(ay-by)<=EPS)continue;
-                    out[o++]=anchorX;out[o++]=anchorY;out[o++]=ax;out[o++]=ay;out[o++]=bx;out[o++]=by;
-                }
+        for(const pts of contours){
+            for(let i=0;i<pts.length;i++){
+                const a=pts[i],b=pts[(i+1)%pts.length],ax=Number(a.x),ay=Number(a.y),bx=Number(b.x),by=Number(b.y);
+                if(Math.abs(ax-bx)<=EPS&&Math.abs(ay-by)<=EPS)continue;
+                out[o++]=anchorX;out[o++]=anchorY;out[o++]=ax;out[o++]=ay;out[o++]=bx;out[o++]=by;
             }
         }
         mesh.fanData=entry.storage;mesh.fanFloatCount=o;mesh.fanTriangleCount=Math.floor(o/6);
         mesh.complete=mesh.fanTriangleCount>0;mesh.nativeComplete=mesh.complete;
         mesh.frameId=Number(frameCtx.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;
-        mesh.anchor={x:anchorX,y:anchorY};mesh.totalVertices=totalPoints;mesh.totalTriangles=mesh.fanTriangleCount;
-        entry.frameId=mesh.frameId;entry.commands=commands;frameCtx._fillMeshShadow=mesh;
+        mesh.anchor={x:anchorX,y:anchorY};mesh.totalVertices=totalPoints;mesh.totalTriangles=mesh.fanTriangleCount;mesh.contourCount=contours.length;
+        entry.frameId=mesh.frameId;entry.commands=commands;entry.dynamic=isDynamic;frameCtx._fillMeshShadow=mesh;
         dynamicBuilds++;dynamicSourcePoints+=totalPoints;dynamicEdges+=mesh.fanTriangleCount;dynamicFanBytes+=o*4;
         return mesh;
     }
 
+    // Compatibility name for Corridor and older tests/call-sites. Dynamic callers now use the
+    // same implementation as Static; only the supplied frame geometry decides what the mesh is.
+    function prepareDynamicCommands(frameCtx,commands){
+        if(frameCtx?.geometryPlan?.dynamic!==true)return null;
+        return prepareLineCarrierCommands(frameCtx,commands);
+    }
+
     function takeEvicted() { const out = evictedMeshes; evictedMeshes = []; return out; }
-    function reset() { cache = new WeakMap(); dynamicCache = new WeakMap(); spiralMorphCache = new WeakMap(); spiralInterwindingCache = new WeakMap(); evictedMeshes = []; }
+    function reset() { cache = new WeakMap(); dynamicCache = new WeakMap(); frameContourCache = new WeakMap(); spiralMorphCache = new WeakMap(); spiralInterwindingCache = new WeakMap(); evictedMeshes = []; }
     function status() {
         return {
             builds, hits, contoursSeen, degenerateContours, variantEvictions,
@@ -379,10 +462,10 @@ var FillMeshPreparer = (() => {
             dynamicBuilds,dynamicReuses,dynamicSourcePoints,dynamicEdges,dynamicFanBytes,
             classificationPasses: 0, earClippingPasses: 0,
             mode: 'linear-stencil-all', complexity: 'O(N)',
-            semantic: 'all static closed contours -> one GPU stencil field -> one layer color composite'
+            semantic: 'ordinary Static + Dynamic + Corridor Fill use the exact shared Line/master FrameContour; strict Spiral retains its native adapter'
         };
     }
-    return { prepareStatic, prepareFrame, prepareDynamicCommands, prepareSpiralMorphBands, prepareInterwindingCorridor, canUseNative, hasSpiralBandTopology, buildSpiralBandContours, takeEvicted, status, reset };
+    return { prepareStatic, prepareFrame, prepareFrameContour, prepareLineCarrierCommands, prepareDynamicCommands, collectLineCarrierContours, prepareSpiralMorphBands, prepareInterwindingCorridor, canUseNative, hasSpiralBandTopology, buildSpiralBandContours, takeEvicted, status, reset };
 })();
 
 window.__spiroFillMeshPreparationStatus = () => FillMeshPreparer.status();
@@ -395,7 +478,7 @@ window.__spiroNativeFillPolicy = () => ({
     defaultFillRule: 'evenodd',
     requiresNativeComplete: true,
     preparationComplexity: 'O(N)',
-    excludes: ['dynamic-morph', 'open/odd-branch spiral', 'fourier', 'rounding-guides'],
+    excludes: ['fade/lightning geometry', 'open/odd-branch spiral', 'fourier', 'rounding-guides'],
     fallbackOrder: ['native-webgpu-stencil', 'exact-rule-mask->webgpu', 'exact-rule-mask->webgl2', 'exact-canvas-fill'],
     layerSceneResident: true,
     visibleSemantics: 'source-over, premultiplied, 4x MSAA; one composite per layer'

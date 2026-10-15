@@ -1,0 +1,10 @@
+const fs=require('fs');const path=require('path');const assert=(c,m)=>{if(!c)throw new Error(m)};
+const fill=fs.readFileSync(path.join(__dirname,'../js/render/fill-pass.js'),'utf8');
+const web=fs.readFileSync(path.join(__dirname,'../js/render/web-pass.js'),'utf8');
+const batch=fs.readFileSync(path.join(__dirname,'../js/render/stroke-batch-service.js'),'utf8');
+assert(fill.includes('_fillBelowWebResolved=true')&&fill.includes('_suppressLateFillForWeb=true'),'Fill ordering miss is not resolved/deferred explicitly');
+assert(web.includes("frameCtx._fillBelowWebResolved!==true"),'Web still waits for successful Fill instead of resolved ordering pass');
+assert(!web.includes("fillRequested===true&&frameCtx._fillRenderedBelowWeb!==true"),'old Web-vs-Fill deadlock gate still present');
+assert(batch.includes("_fillRenderedBelowWeb===true||frameCtx._suppressLateFillForWeb===true"),'late batch Fill can still be inserted above Web after ordered Fill miss');
+assert(fill.includes("stage:'ordered-fill-retry'")&&fill.includes('late Fill suppressed to preserve the configured effect stack'),'Base Fill fallback can still cover Web on retry frame');
+console.log('PASS 7.8.2 Fill/Web ordering retry cannot deadlock or invert composition');

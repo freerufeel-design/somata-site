@@ -118,7 +118,7 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{
         if(frameCtx.geometryProvider!==frameCtx.blueMorphProvider)return'another-geometry-provider';
         if(frameCtx.geometryPlan?.kind!=='blue-prepared')return'geometry-kind-'+String(frameCtx.geometryPlan?.kind||'unknown');
         if(frameCtx.geometryPlan?.kind==='lightning')return'lightning';
-        if((state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild())))return'circle-slide';
+        if(state?.morph?.mode==='circleSlide')return'circle-slide';
         if(state?.showRoundingGuides)return'rounding-guides';
         if(frameCtx.lineProfileStrokeOnly)return'profile-replaces-base';
         if(mode==='base'&&!frameCtx.lineDisplayEnabled)return'line-hidden';

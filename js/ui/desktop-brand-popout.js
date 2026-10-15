@@ -17,7 +17,8 @@ const brandRuntime={
 };
 
 function isDesktopBrandMode(){
-    return typeof matchMedia==='function'?matchMedia('(min-width: 761px)').matches:(innerWidth>760);
+    if(typeof matchMedia!=='function')return innerWidth>760;
+    return !matchMedia('(max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse)').matches;
 }
 function getStage(){return document.getElementById('desktopBrandStage');}
 function getButton(){return document.getElementById('desktopBrandLogoButton');}

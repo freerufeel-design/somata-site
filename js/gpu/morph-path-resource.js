@@ -282,7 +282,7 @@ async function buildSharedGpuMorphResource(layerIndex,plan,phaseSerial){
     let allClosed=true;const topologySignatureParts=[];
     for(let pi=0;pi<flat.pathCount;pi++){const o=pi*4,n=flat.pathRanges[o+1]>>>0,closed=(flat.pathRanges[o+2]>>>0)!==0;allClosed=allClosed&&closed;topologySignatureParts.push(`${n}:${closed?1:0}`);}
     const rec={
-        layerIndex,phaseSerial,sourceBuffer,targetBuffer,topologyMetadataBuffer,pathRangeBuffer,segmentMetaBuffer,pathSegmentRangeBuffer,pathIndexBuffer,outputBuffer,uniformBuffer,bindGroup,cubicBuffer,cubicUniformBuffer,cubicBindGroup,
+        layerIndex,phaseSerial,generation:sharedGpuMorphPathRuntime.generation,sourceBuffer,targetBuffer,topologyMetadataBuffer,pathRangeBuffer,segmentMetaBuffer,pathSegmentRangeBuffer,pathIndexBuffer,outputBuffer,uniformBuffer,bindGroup,cubicBuffer,cubicUniformBuffer,cubicBindGroup,
         pointCount:flat.pointCount,pathCount:flat.pathCount,segmentCount:flat.segmentCount,topologyMode:plan.radialEnabled?'mixed/radial':'cartesian',
         allClosed,topologySignature:topologySignatureParts.join('|'),cpuPathRanges:flat.pathRanges,cpuPathSegmentRanges:flat.pathSegmentRanges,cpuSegmentMeta:flat.segmentMeta,cpuPathIndexData:flat.pathIndexData,cpuEndpointPathLengths:flat.endpointPathLengths,
         sourceVersion:Number(runtimeState.morph?.lampCycleSerial)||0,targetVersion:Number(runtimeState.morph?.lampCycleSerial)||0,
@@ -304,7 +304,7 @@ async function buildSharedGpuMorphResource(layerIndex,plan,phaseSerial){
 async function prepareSharedGpuMorphPathResources(){
     const phaseSerial=sharedGpuMorphPathRuntime.phaseSerial;
     sharedGpuMorphPathRuntime.stats.phaseBuilds++;
-    if((state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()))){
+    if(state?.morph?.mode==='circleSlide'){
         sharedGpuMorphPathRuntime.whyUnavailable='circle-slide uses angular phase plan; CPU compatibility path remains lazy';
         return [];
     }
@@ -331,7 +331,7 @@ async function prepareSharedGpuMorphPathResources(){
 
 function getSharedGpuMorphPathResource(layerIndex){
     const rec=sharedGpuMorphPathRuntime.resources?.[layerIndex]||null;
-    if(rec?.ready&&rec.phaseSerial===sharedGpuMorphPathRuntime.phaseSerial){sharedGpuMorphPathRuntime.stats.resourceHits++;return rec;}
+    if(rec?.ready&&rec.phaseSerial===sharedGpuMorphPathRuntime.phaseSerial&&rec.generation===sharedGpuMorphPathRuntime.generation&&sharedGpuMorphPathRuntime.generation===WebGPUDeviceHub.getGeneration()){sharedGpuMorphPathRuntime.stats.resourceHits++;return rec;}
     sharedGpuMorphPathRuntime.stats.resourceMisses++;return null;
 }
 

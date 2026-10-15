@@ -1496,6 +1496,39 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             return out;
         }
 
+        // 7.6.4: a large authored fillet can consume the next short span and leave a
+        // secondary C0/C1 kink at the boundary of the generated round.  Morph already
+        // repairs every smooth/non-authored join on GPU; static geometry must obey the
+        // same rule, not a weaker angle threshold.  The near-1 tolerance avoids only
+        // meaningless floating-point churn.  Authored hard corners remain untouched.
+        function repairRoundedSpiralBezierJoins(segments, maxTurnCos = 0.999999) {
+            const out=Array.isArray(segments)?segments:[];
+            if(out.length<2)return out;
+            let repaired=0;
+            const unit=(x,y,fx=1,fy=0)=>{const l=Math.hypot(x,y);return l>1e-9?{x:x/l,y:y/l}:{x:fx,y:fy};};
+            for(let i=1;i<out.length;i++){
+                const prev=out[i-1],next=out[i];
+                if(!prev?.p3||!prev?.c2||!next?.p0||!next?.c1)continue;
+                if(prev.__profileCorner1===true||next.__profileCorner0===true)continue;
+                const knot={x:((Number(prev.p3.x)||0)+(Number(next.p0.x)||0))*.5,y:((Number(prev.p3.y)||0)+(Number(next.p0.y)||0))*.5};
+                const vin={x:knot.x-(Number(prev.c2.x)||0),y:knot.y-(Number(prev.c2.y)||0)};
+                const vout={x:(Number(next.c1.x)||0)-knot.x,y:(Number(next.c1.y)||0)-knot.y};
+                const lin=Math.hypot(vin.x,vin.y),lout=Math.hypot(vout.x,vout.y);
+                if(lin<=1e-8||lout<=1e-8)continue;
+                const di=unit(vin.x,vin.y),dout=unit(vout.x,vout.y,di.x,di.y),dot=di.x*dout.x+di.y*dout.y;
+                if(dot>=maxTurnCos)continue;
+                let sx=di.x+dout.x,sy=di.y+dout.y,sl=Math.hypot(sx,sy);
+                let dir;if(sl<=1e-8||dot<-.95)dir=lin>=lout?di:dout;else dir={x:sx/sl,y:sy/sl};
+                prev.c2={x:knot.x-dir.x*lin,y:knot.y-dir.y*lin};
+                prev.p3={x:knot.x,y:knot.y};
+                next.p0={x:knot.x,y:knot.y};
+                next.c1={x:knot.x+dir.x*lout,y:knot.y+dir.y*lout};
+                prev.__spiroSecondaryRound=true;next.__spiroSecondaryRound=true;repaired++;
+            }
+            out._spiroSecondaryRoundRepairs=(Number(out._spiroSecondaryRoundRepairs)||0)+repaired;
+            return out;
+        }
+
         function buildSpiralBezierSegments(points, roundingFrac = 0, cornerFlags = null, smoothSpline = false) {
 
             if(state.fourierMode!==true&&Array.isArray(points?._spiroRetainedCubics)&&points._spiroRetainedCubics.length){
@@ -1556,6 +1589,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             return finalizePeriodicSpiralBezierCarrier(segments,src);
         }
         window.__spiroBuildSpiralBezierSegments=buildSpiralBezierSegments;
+        window.__spiroFinalizePeriodicSpiralBezierCarrier=finalizePeriodicSpiralBezierCarrier;
+        window.__spiroRepairRoundedSpiralBezierJoins=repairRoundedSpiralBezierJoins;
 
         function spiralProfileGeometrySignature(layer){
             if(!layer)return 'none';
@@ -2674,6 +2709,154 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             return points;
         }
 
+        // 7.6.4: one carrier/profile constructor for both static and Morph Spiral; static and Morph also share closure and post-fillet tangent cleanup.
+        // Static Spiral still calls mapProfileOntoSpiralEdge(); Morph supplies the
+        // interpolated key anchor and the interpolated carrier (delta + radial scale)
+        // explicitly.  The authored line profile is therefore never morphed in
+        // already-mapped screen space.
+        function getSpiralCarrierSpec(layer, branchIndex = 0) {
+            const N=Math.max(2,Math.round(Number(layer?.N)||4));
+            const R=getEffectiveLayerRadius(layer,220);
+            const rotation=((Number(layer?.rotation)||0)*Math.PI)/180;
+            const bi=Number.isFinite(Number(branchIndex))?Number(branchIndex):0;
+            const angle=(bi/N)*Math.PI*2+rotation-Math.PI/2;
+            const order=getEffectiveSpiralOrder(layer);
+            const direction=spiralDirection(order)||1;
+            const step=getEffectiveSpiralStep(layer);
+            const delta=((Math.PI*2*step)/N)*direction;
+            const targetScale=Math.pow(Math.max(1.0000001,getSpiralClosureRatio()),spiralRadialExponent(order));
+            return {
+                anchor:{x:R*Math.cos(angle),y:R*Math.sin(angle)},
+                radius:R,N,step,order,direction,delta,targetScale,
+                logScale:Math.log(Math.max(1e-9,targetScale)),
+                tangential:layer?.spiralTangential===true,
+                closed:layer?.spiralClosed!==false,
+                roundSeams:layer?.spiralRoundSeams!==false
+            };
+        }
+
+        function mapProfileOntoSpiralCarrier(profilePts, anchor, R, carrierSpec = {}, out = null) {
+            const a={x:Number(anchor?.x)||0,y:Number(anchor?.y)||0};
+            const delta=Number(carrierSpec?.delta)||0;
+            const targetScale=Math.max(1e-9,Number(carrierSpec?.targetScale)||1);
+            const direction=delta<0?-1:1;
+            const pseudoN=2;
+            const pseudoStep=Math.abs(delta)*pseudoN/(Math.PI*2);
+            const ratio=Math.max(1.0000001,getSpiralClosureRatio());
+            const exponent=Math.max(0,Math.log(targetScale)/Math.log(ratio));
+            // P[1] is intentionally unused by evalSpiralBaseline; keeping a second
+            // finite point satisfies the legacy edge API while both code paths share
+            // exactly the same mapping/Bezier-control implementation.
+            const P=[a,{x:a.x,y:a.y}];
+            return mapProfileOntoSpiralEdge(
+                profilePts,P,0,R,1,carrierSpec?.tangential===true,out,pseudoStep,pseudoN,
+                carrierSpec?.closed!==false,Math.max(0,Number(carrierSpec?.roundingFrac)||0),
+                direction,exponent
+            );
+        }
+
+        // 7.7 performance: profile preparation is branch-invariant.  A Spiral frame may
+        // contain many branches/corridor rails, but the authored profile, spline sampling and
+        // compact segment layout are identical for every branch.  Preparing them once per
+        // layer/frame avoids repeating the expensive profile sampler N times.
+        const spiralCarrierProfilePrepStats={prepares:0,reuses:0,lastTargetCount:0,lastPointCount:0};
+        function prepareSpiralCarrierProfile(layer, carrierSpec = {}) {
+            if(!layer)return null;
+            const smoothSplineMode=layer.profileMode==='spline';
+            const splineSnapshotAlreadySampled=smoothSplineMode&&isPreSampledSplineLayer(layer);
+            const profileSpaceSplineAlreadySampled=smoothSplineMode&&splineSnapshotAlreadySampled;
+            const baseProfilePts=(Array.isArray(carrierSpec?.profileNodes)&&carrierSpec.profileNodes.length>=2)
+                ? carrierSpec.profileNodes.map(p=>({x:Number(p?.x)||0,y:Number(p?.y)||0}))
+                : ((smoothSplineMode&&Array.isArray(layer.profileNodes)&&layer.profileNodes.length>=2)
+                    ? layer.profileNodes.map(p=>({x:Number(p?.x)||0,y:Number(p?.y)||0}))
+                    : getInterpolatedProfilePoints(layer));
+            const spiralRounding=Math.max(0,Number.isFinite(Number(carrierSpec?.roundingFrac))
+                ? Number(carrierSpec.roundingFrac):getRoundingStrength(layer.rounding));
+            const targetCount=Math.max(
+                baseProfilePts.length,
+                Math.round(Number(carrierSpec?.profileTargetCount)||getSpiralRenderSampleCount(layer,Math.max(baseProfilePts.length,getConfiguredSplinePointCount())))
+            );
+            const profileData=buildSpiralProfileForDraw(
+                layer,baseProfilePts,targetCount,spiralRounding,
+                carrierSpec?.profileSpaceSplineAlreadySampled===true||profileSpaceSplineAlreadySampled
+            );
+            spiralCarrierProfilePrepStats.prepares++;
+            spiralCarrierProfilePrepStats.lastTargetCount=targetCount;
+            spiralCarrierProfilePrepStats.lastPointCount=profileData?.points?.length||0;
+            return{baseProfilePts,spiralRounding,targetCount,profileData,profilePts:profileData?.points||[],profileSpaceSplineAlreadySampled};
+        }
+        window.__spiroPrepareSpiralCarrierProfile=prepareSpiralCarrierProfile;
+        window.__spiroSpiralCarrierProfilePrepStatus=()=>({...spiralCarrierProfilePrepStats});
+
+        function buildSpiralCarrierPath(layer, anchor, carrierSpec = {}) {
+            if(!layer||!anchor)return null;
+            const R=Math.max(1,Number(carrierSpec?.radius)||getEffectiveLayerRadius(layer,220));
+            const prepared=(carrierSpec?.preparedProfile&&Array.isArray(carrierSpec.preparedProfile.profilePts))
+                ? carrierSpec.preparedProfile:prepareSpiralCarrierProfile(layer,carrierSpec);
+            if(!prepared)return null;
+            if(carrierSpec?.preparedProfile===prepared)spiralCarrierProfilePrepStats.reuses++;
+            const baseProfilePts=prepared.baseProfilePts,spiralRounding=prepared.spiralRounding,profileData=prepared.profileData,profilePts=prepared.profilePts;
+            if(!Array.isArray(profilePts)||profilePts.length<2)return null;
+            const tangential=carrierSpec?.tangential===true;
+            const spiralClosed=carrierSpec?.closed!==false;
+            const roundSeams=carrierSpec?.roundSeams!==false;
+            const delta=Number(carrierSpec?.delta)||0;
+            const targetScale=Math.max(1e-9,Number(carrierSpec?.targetScale)||1);
+            let mapped=mapProfileOntoSpiralCarrier(profilePts,anchor,R,{delta,targetScale,tangential,closed:spiralClosed,roundingFrac:0});
+            const rawMapped=mapped;
+            if(layer.profileMode==='segments'&&spiralRounding>0.001)
+                mapped=applySpiralFinalSpaceProfileRounding(mapped,spiralRounding);
+            let rawVisible=mapped,visible=mapped;
+            if(spiralClosed){
+                rawVisible=buildClosedSpiralAutoCloseGeometry(mapped,0,false);
+                visible=(roundSeams&&spiralRounding>0.001)
+                    ? buildClosedSpiralAutoCloseGeometry(mapped,spiralRounding,true)
+                    : rawVisible;
+            }
+            let validity=validateSpiralEdgePoints(visible);
+            if(!validity.ok){
+                validity=validateSpiralEdgePoints(rawVisible);
+                if(validity.ok)visible=rawVisible;
+                else {
+                    const fallback=mapProfileOntoSpiralCarrier([{x:0,y:0},{x:1,y:0}],anchor,R,{delta,targetScale,tangential,closed:spiralClosed,roundingFrac:0});
+                    visible=spiralClosed?buildClosedSpiralAutoCloseGeometry(fallback,0,false):fallback;
+                }
+            }
+            const retainedPoints=visible.map((srcPoint)=>({
+                ...srcPoint,
+                x:Number(srcPoint?.x)||0,y:Number(srcPoint?.y)||0,
+                widthScale:Math.max(.02,Number(srcPoint?.widthScale)||1),
+                ptIdx:Number.isFinite(Number(srcPoint?.ptIdx))?Number(srcPoint.ptIdx):undefined,
+                __spiralDelta:delta,__spiralTargetScale:targetScale,
+                __spiralClosed:spiralClosed,__spiralTangential:tangential,
+                __spiralRoundSeams:roundSeams
+            }));
+            const bakedProfileRound=layer.profileMode==='segments'&&spiralRounding>0.001;
+            const profileCornerFlags=layer.profileMode==='segments'?segmentProfileCornerFlags(profilePts):profilePts.map(()=>false);
+            const cornerFlags=retainedPoints.map((p,idx)=>bakedProfileRound?false:(Boolean(p.__profileCorner)||Boolean(profileCornerFlags[Number.isFinite(Number(p?.ptIdx))?Number(p.ptIdx):idx])));
+            const lampFlags=profileData?.keyFlags||profilePts.map(()=>false);
+            const lampCornerFlags=retainedPoints.map((p,idx)=>Boolean(lampFlags[Number.isFinite(Number(p?.ptIdx))?Number(p.ptIdx):idx]));
+            let retainedCubics=state.fourierMode===true?[]:buildSpiralBezierSegments(retainedPoints,0,cornerFlags,false);
+            if(bakedProfileRound&&retainedCubics?.length)retainedCubics=repairRoundedSpiralBezierJoins(retainedCubics);
+            if(retainedCubics?.length){retainedPoints._spiroRetainedCubics=retainedCubics;retainedPoints._spiroRetainedProfileCarrier=true;}
+            return {
+                points:retainedPoints,_bezierSegments:retainedCubics?.length?retainedCubics:null,
+                spiralRetainedProfileCarrier:Boolean(retainedCubics?.length),closed:false,cornerFlags,lampCornerFlags,
+                spiralProfileRoundingBaked:true,spiralProfileSplineBaked:true,
+                spiralProfileSpaceSplineBaked:profileData?.profileSpaceSplineBaked===true,
+                spiralPolygonProfileSplineCarrier:profileData?.polygonProfileSplineCarrier===true,
+                spiralProfileSourceCubicCount:Number(profileData?.profileSourceCubicCount)||0,
+                spiralContinuityProtected:spiralClosed===true,
+                spiralBranchIndex:Number.isFinite(Number(carrierSpec?.branchIndex))?Number(carrierSpec.branchIndex):0,
+                orbitIndex:Number(carrierSpec?.orbitIndex)||0,
+                __carrierMapped:true,__carrierAnchor:{x:Number(anchor.x)||0,y:Number(anchor.y)||0},
+                __carrierDelta:delta,__carrierTargetScale:targetScale,__rawMapped:rawMapped
+            };
+        }
+        window.__spiroGetSpiralCarrierSpec=getSpiralCarrierSpec;
+        window.__spiroMapProfileOntoSpiralCarrier=mapProfileOntoSpiralCarrier;
+        window.__spiroBuildSpiralCarrierPath=buildSpiralCarrierPath;
+
         function makeChaosStarPrng(seed) {
             let x=(Number(seed)>>>0)||0x9e3779b9;
             return () => {
@@ -2893,7 +3076,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                             __spiralRoundSeams:spiralRoundSeams===true
                         }));
 
-                        const retainedCubics=state.fourierMode===true?[]:buildSpiralBezierSegments(retainedPoints,0,cornerFlags,false);
+                        let retainedCubics=state.fourierMode===true?[]:buildSpiralBezierSegments(retainedPoints,0,cornerFlags,false);
+                        if(bakedProfileRound&&retainedCubics?.length)retainedCubics=repairRoundedSpiralBezierJoins(retainedCubics);
                         if(retainedCubics?.length){
                             retainedPoints._spiroRetainedCubics=retainedCubics;
                             retainedPoints._spiroRetainedProfileCarrier=true;
@@ -3211,7 +3395,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                         try{requestMainCanvasRender();}catch(_){}
                         const ownGeneration=generation;
                         const onUncaptured=(ev)=>{if(generation!==ownGeneration)return;uncapturedErrorCount++;lastUncapturedError=String(ev?.error?.message||ev?.message||ev?.error||'WebGPU uncaptured error');lastError=lastUncapturedError;try{ev?.preventDefault?.();}catch(_){}try{console.error('[Somata WebGPU uncaptured]',lastUncapturedError,ev?.error||'');}catch(_){}
-                            if(/used in submit while destroyed/i.test(lastUncapturedError)){
+                            if(/used in submit while destroyed|associated with \[Device\].*cannot be used with \[Device\]/i.test(lastUncapturedError)){
                                 resourceLifetimeFaults++;const now=performance.now();if(!faultBurstStartedAt||now-faultBurstStartedAt>1000){faultBurstStartedAt=now;faultBurstCount=0;}faultBurstCount++;
 
                                 if(faultBurstCount>=3&&forcedRecoveryGeneration!==ownGeneration){forcedRecoveryGeneration=ownGeneration;forcedRecoveries++;const badDevice=device;setTimeout(()=>{if(generation!==ownGeneration||device!==badDevice)return;try{badDevice?.destroy?.();}catch(_){}},0);}
@@ -3222,6 +3406,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                             if(generation!==ownGeneration)return;
                             ready=false;lost=true;attempted=false;pending=null;generation++;lostCount++;
                             lastError=`device lost${info?.message?`: ${info.message}`:''}`;
+                            try{console.error('[Somata WebGPU device lost]',{reason:info?.reason||'unknown',message:info?.message||'',generation:ownGeneration});}catch(_){}
                             requestMainCanvasRender();
                         });
                         return{adapter,device,generation};
@@ -3354,12 +3539,13 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
 
         const WebGPUFillMeshRenderer = (() => {
             const canvas=document.createElement('canvas');
-            let device=null,context=null,format=null,pipeline=null,windingStencilPipeline=null,windingCoverPipeline=null,parityStencilPipeline=null,parityCoverPipeline=null,bindGroupLayout=null,pipelineLayout=null,msaaTexture=null,stencilTexture=null;
+            let device=null,context=null,format=null,pipeline=null,windingStencilPipeline=null,windingCoverPipeline=null,parityStencilPipeline=null,parityCoverPipeline=null,bindGroupLayout=null,pipelineLayout=null,msaaTexture=null,stencilTexture=null,isolatedFillTexture=null,isolatedFillView=null,isolatedCompositePipeline=null,isolatedCompositeSampler=null,isolatedCompositeBindGroup=null,fadeCompositePipeline=null,fadeSmoothSampler=null,fadeCompositeError='';
             let ready=false,attempted=false,initializing=false,lost=false,lastError='',hubGeneration=0,width=0,height=0;
             let submissions=0,draws=0,bufferBuilds=0,bufferHits=0,fallbacks=0,renderedTriangles=0,gpuEvictions=0;
-            let directEncodes=0,directTriangles=0,uniformSlotGrows=0,windingDraws=0,windingCovers=0,windingTriangles=0,parityDraws=0,parityCovers=0,dynamicMeshUploads=0,dynamicMeshUploadBytes=0,dynamicMeshGrows=0,dynamicMeshReuses=0;
+            let directEncodes=0,directTriangles=0,isolatedEncodes=0,uniformSlotGrows=0,windingDraws=0,windingCovers=0,windingTriangles=0,parityDraws=0,parityCovers=0,dynamicMeshUploads=0,dynamicMeshUploadBytes=0,dynamicMeshGrows=0,dynamicMeshReuses=0;
             let gpuMeshCache=new WeakMap(),gpuMeshRecords=new Set(),uniformSlots=[],uniformCursor=0;
-            const fullUniform=new Float32Array(20),UNIFORM_RING=16;
+            const fillHistoryRecords=new Map(),fadeStyleRecords=new Map();
+            const fullUniform=new Float32Array(20),UNIFORM_RING=16,fadeUniformScratch=new Float32Array(8);
             const WGSL=`
 struct U {
     viewport: vec2<f32>,
@@ -3392,6 +3578,88 @@ struct VOut { @builtin(position) p: vec4<f32> };
     if(a<0.00001){discard;}
     return vec4<f32>(u.color.rgb*a,a);
 }`;
+            const ISOLATED_COMPOSITE_WGSL=`
+@group(0) @binding(0) var srcTex:texture_2d<f32>;
+@group(0) @binding(1) var srcSampler:sampler;
+struct V{@builtin(position) p:vec4<f32>,@location(0) uv:vec2<f32>};
+@vertex fn vs(@builtin(vertex_index) i:u32)->V{
+    let p=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0));
+    let q=p[i];var o:V;o.p=vec4<f32>(q,0.0,1.0);o.uv=vec2<f32>((q.x+1.0)*0.5,(1.0-q.y)*0.5);return o;
+}
+@fragment fn fs(v:V)->@location(0) vec4<f32>{return textureSample(srcTex,srcSampler,v.uv);}
+`;
+            const FADE_COMPOSITE_WGSL=`
+@group(0) @binding(0) var srcTex:texture_2d<f32>;
+@group(0) @binding(1) var srcSampler:sampler;
+struct FadeU { viewportRadiusHardness:vec4<f32>, directionPad:vec4<f32> };
+@group(0) @binding(2) var<uniform> u:FadeU;
+struct V{@builtin(position) p:vec4<f32>,@location(0) uv:vec2<f32>};
+@vertex fn vs(@builtin(vertex_index) i:u32)->V{
+    let p=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0));
+    let q=p[i];var o:V;o.p=vec4<f32>(q,0.0,1.0);o.uv=vec2<f32>((q.x+1.0)*0.5,(1.0-q.y)*0.5);return o;
+}
+fn insideAt(uv:vec2<f32>)->f32{return select(0.0,1.0,textureSampleLevel(srcTex,srcSampler,clamp(uv,vec2<f32>(0.0),vec2<f32>(1.0)),0.0).a>0.00001);}
+fn alphaAt(uv:vec2<f32>,baseA:f32)->f32{return clamp(textureSampleLevel(srcTex,srcSampler,clamp(uv,vec2<f32>(0.0),vec2<f32>(1.0)),0.0).a/max(baseA,0.00001),0.0,1.0);}
+fn ringAlpha8(uv:vec2<f32>,d:vec2<f32>,baseA:f32)->f32{
+    var a=0.0;
+    a+=alphaAt(uv+vec2<f32>( d.x,0.0),baseA);a+=alphaAt(uv+vec2<f32>(-d.x,0.0),baseA);
+    a+=alphaAt(uv+vec2<f32>(0.0, d.y),baseA);a+=alphaAt(uv+vec2<f32>(0.0,-d.y),baseA);
+    a+=alphaAt(uv+vec2<f32>( d.x*0.7071, d.y*0.7071),baseA);a+=alphaAt(uv+vec2<f32>(-d.x*0.7071, d.y*0.7071),baseA);
+    a+=alphaAt(uv+vec2<f32>( d.x*0.7071,-d.y*0.7071),baseA);a+=alphaAt(uv+vec2<f32>(-d.x*0.7071,-d.y*0.7071),baseA);
+    return a/8.0;
+}
+@fragment fn fs(v:V)->@location(0) vec4<f32>{
+    let c=textureSampleLevel(srcTex,srcSampler,v.uv,0.0);
+    if(c.a<=0.00001){return vec4<f32>(0.0);}
+    let h=clamp(u.viewportRadiusHardness.w,0.0,1.0);
+    if(h<=0.0001){return vec4<f32>(0.0);}
+    if(h>=0.9999){return c;}
+    let vp=max(u.viewportRadiusHardness.xy,vec2<f32>(1.0));
+    // The contour-depth field must not move when Hardness changes.  Earlier
+    // versions scaled the sampling radius by (1-h); after direction inversion
+    // that made the intermediate range run backwards near 0/100.
+    // Hardness now only moves a monotonic threshold through one fixed field.
+    let radius=max(1.0,u.viewportRadiusHardness.z);
+    let d=vec2<f32>(radius/vp.x,radius/vp.y);
+    var core=0.0;
+    if(u.directionPad.y<0.5){
+        // Sharp mode is intentionally the original layered algorithm.
+        let h2=d*0.5;
+        var cov=0.0;
+        cov+=insideAt(v.uv+vec2<f32>( d.x,0.0));cov+=insideAt(v.uv+vec2<f32>(-d.x,0.0));
+        cov+=insideAt(v.uv+vec2<f32>(0.0, d.y));cov+=insideAt(v.uv+vec2<f32>(0.0,-d.y));
+        cov+=insideAt(v.uv+vec2<f32>( d.x*0.7071, d.y*0.7071));cov+=insideAt(v.uv+vec2<f32>(-d.x*0.7071, d.y*0.7071));
+        cov+=insideAt(v.uv+vec2<f32>( d.x*0.7071,-d.y*0.7071));cov+=insideAt(v.uv+vec2<f32>(-d.x*0.7071,-d.y*0.7071));
+        var cov2=0.0;
+        cov2+=insideAt(v.uv+vec2<f32>( h2.x,0.0));cov2+=insideAt(v.uv+vec2<f32>(-h2.x,0.0));
+        cov2+=insideAt(v.uv+vec2<f32>(0.0, h2.y));cov2+=insideAt(v.uv+vec2<f32>(0.0,-h2.y));
+        cov2+=insideAt(v.uv+vec2<f32>( h2.x*0.7071, h2.y*0.7071));cov2+=insideAt(v.uv+vec2<f32>(-h2.x*0.7071, h2.y*0.7071));
+        cov2+=insideAt(v.uv+vec2<f32>( h2.x*0.7071,-h2.y*0.7071));cov2+=insideAt(v.uv+vec2<f32>(-h2.x*0.7071,-h2.y*0.7071));
+        let depth=clamp((cov/8.0)*0.68+(cov2/8.0)*0.32,0.0,1.0);
+        core=smoothstep(0.08,0.92,depth);
+    }else{
+        // Smooth mode approximates a contour-distance field from three continuous
+        // concentric mask samples.  Unlike the sharp binary rings, bilinear alpha
+        // and multiscale blending remove visible layer boundaries while keeping
+        // the inner plateau similar to the actual contour.
+        let baseA=max(c.a,0.00001);
+        let near=ringAlpha8(v.uv,d*0.24,baseA);
+        let mid=ringAlpha8(v.uv,d*0.52,baseA);
+        let far=ringAlpha8(v.uv,d*0.84,baseA);
+        let depth=clamp(near*0.50+mid*0.32+far*0.18,0.0,1.0);
+        core=smoothstep(0.03,0.97,depth);
+    }
+    let directedDepth=select(core,1.0-core,u.directionPad.x>0.5);
+    // 0% -> empty, 100% -> ordinary Fill.  Between them the filled region may
+    // only grow: progress lowers a threshold through a fixed depth field.
+    // Sharp keeps a narrow transition so its contour layers remain visible;
+    // Smooth uses a wider transition over the continuous depth field.
+    let progress=smoothstep(0.0,1.0,h);
+    let threshold=1.0-progress;
+    let band=select(0.025,0.12,u.directionPad.y>0.5);
+    let weight=clamp(smoothstep(threshold-band,threshold+band,directedDepth),0.0,1.0);
+    return c*weight;
+}`;
             function destroyMeshRecord(rec){
                 if(!rec)return;
                 for(const part of rec.parts||[]){try{part.vertexBuffer?.destroy?.();}catch(_){}try{part.indexBuffer?.destroy?.();}catch(_){}}
@@ -3399,9 +3667,14 @@ struct VOut { @builtin(position) p: vec4<f32> };
             function resetGpuObjects(){
                 try{msaaTexture?.destroy?.();}catch(_){}msaaTexture=null;
                 try{stencilTexture?.destroy?.();}catch(_){}stencilTexture=null;
+                try{isolatedFillTexture?.destroy?.();}catch(_){}isolatedFillTexture=null;isolatedFillView=null;isolatedCompositeBindGroup=null;
+                for(const rec of fillHistoryRecords.values()){try{clearTimeout(rec?.timerHandle);}catch(_){}try{rec?.texture?.destroy?.();}catch(_){}}
+                fillHistoryRecords.clear();
+                for(const rec of fadeStyleRecords.values()){try{rec?.buffer?.destroy?.();}catch(_){}}
+                fadeStyleRecords.clear();
                 for(const rec of gpuMeshRecords)destroyMeshRecord(rec);gpuMeshRecords.clear();gpuMeshCache=new WeakMap();
                 for(const slot of uniformSlots)try{slot?.buffer?.destroy?.();}catch(_){}uniformSlots=[];uniformCursor=0;
-                pipeline=null;windingStencilPipeline=null;windingCoverPipeline=null;parityStencilPipeline=null;parityCoverPipeline=null;bindGroupLayout=null;pipelineLayout=null;
+                pipeline=null;windingStencilPipeline=null;windingCoverPipeline=null;parityStencilPipeline=null;parityCoverPipeline=null;bindGroupLayout=null;pipelineLayout=null;fadeCompositePipeline=null;fadeSmoothSampler=null;fadeCompositeError='';
             }
             function drainMeshEvictions(){
                 for(const mesh of FillMeshPreparer.takeEvicted?.()||[]){
@@ -3471,6 +3744,33 @@ struct VOut { @builtin(position) p: vec4<f32> };
                             stencilReadMask:0x01,stencilWriteMask:0},
                         multisample:{count:4}
                     });
+                    const isolatedCompositeModule=device.createShaderModule({label:'Somata isolated Fill composite WGSL',code:ISOLATED_COMPOSITE_WGSL});await assertWebGPUShaderModule(isolatedCompositeModule,'Somata isolated Fill composite WGSL');
+                    isolatedCompositeSampler=device.createSampler({magFilter:'nearest',minFilter:'nearest'});
+                    fadeSmoothSampler=device.createSampler({magFilter:'linear',minFilter:'linear',addressModeU:'clamp-to-edge',addressModeV:'clamp-to-edge'});
+                    isolatedCompositePipeline=device.createRenderPipeline({
+                        label:'Somata isolated Fill source-over composite',layout:'auto',
+                        vertex:{module:isolatedCompositeModule,entryPoint:'vs'},
+                        fragment:{module:isolatedCompositeModule,entryPoint:'fs',targets:[{format,blend}]},
+                        primitive:{topology:'triangle-list'}
+                    });
+                    // Special Fill shaders are optional capabilities.  They must never poison
+                    // the base Fill renderer: Dense/Mathematical/Accumulation all depend on the
+                    // native + isolated pipelines above and must stay usable even when a future
+                    // Fade shader is rejected by a real GPU/driver.
+                    fadeCompositePipeline=null;fadeCompositeError='';
+                    try{
+                        const fadeCompositeModule=device.createShaderModule({label:'Somata fading Fill composite WGSL',code:FADE_COMPOSITE_WGSL});
+                        await assertWebGPUShaderModule(fadeCompositeModule,'Somata fading Fill composite WGSL');
+                        fadeCompositePipeline=device.createRenderPipeline({
+                            label:'Somata fading Fill contour-distance composite',layout:'auto',
+                            vertex:{module:fadeCompositeModule,entryPoint:'vs'},
+                            fragment:{module:fadeCompositeModule,entryPoint:'fs',targets:[{format,blend}]},
+                            primitive:{topology:'triangle-list'}
+                        });
+                    }catch(fadeErr){
+                        fadeCompositePipeline=null;fadeCompositeError=String(fadeErr?.message||fadeErr);
+                        try{console.error('[Somata Fill] Fading Fill shader unavailable; base Fill remains active',fadeCompositeError);}catch(_){}
+                    }
                     ready=true;lost=false;lastError='';try{requestMainCanvasRender();}catch(_){}return true;
                 }catch(err){ready=false;lastError=String(err?.message||err);return false;}
                 finally{initializing=false;}
@@ -3482,11 +3782,13 @@ struct VOut { @builtin(position) p: vec4<f32> };
             }
             function ensureSize(w,h){
                 if(!warmup())return false;w=Math.max(1,w|0);h=Math.max(1,h|0);
-                if(width===w&&height===h&&msaaTexture&&stencilTexture&&canvas.width===w&&canvas.height===h)return true;
+                if(width===w&&height===h&&msaaTexture&&stencilTexture&&isolatedFillTexture&&canvas.width===w&&canvas.height===h)return true;
                 width=w;height=h;canvas.width=w;canvas.height=h;context.configure({device,format,alphaMode:'premultiplied'});
-                try{msaaTexture?.destroy?.();}catch(_){}try{stencilTexture?.destroy?.();}catch(_){}
+                try{msaaTexture?.destroy?.();}catch(_){}try{stencilTexture?.destroy?.();}catch(_){}try{isolatedFillTexture?.destroy?.();}catch(_){}
                 msaaTexture=device.createTexture({label:'SpiroStar native Fill Mesh MSAA',size:[w,h,1],sampleCount:4,format,usage:GPUTextureUsage.RENDER_ATTACHMENT});
                 stencilTexture=device.createTexture({label:'SpiroStar native Fill winding stencil',size:[w,h,1],sampleCount:4,format:'depth24plus-stencil8',usage:GPUTextureUsage.RENDER_ATTACHMENT});
+                isolatedFillTexture=device.createTexture({label:'Somata isolated ordered Fill current-frame texture',size:[w,h,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});isolatedFillView=isolatedFillTexture.createView();
+                isolatedCompositeBindGroup=null;
                 return true;
             }
             function ensureUniformSlot(index){
@@ -3587,14 +3889,10 @@ struct VOut { @builtin(position) p: vec4<f32> };
                 return{a:a*cc+c*ss,b:b*cc+d*ss,c:a*(-ss)+c*cc,d:b*(-ss)+d*cc,e,f};
             }
             function fillSpiralCenterShade(frameCtx,targetCtx){
-                if(state?.tunnel?.active!==true||!isSpiralLayer(frameCtx?.layer)||Math.max(0,Math.round(Number(state?.tunnel?.centerHiddenCopies)||0))<=0)return null;
-                let range=null;try{range=typeof getTunnelCenterRevealRange==='function'?getTunnelCenterRevealRange(state.tunnel,frameCtx?.visibleInstances?.copies?.[0]?.stepRatio):null;}catch(_){range=null;}
-                if(!range)return null;
-                const lightScale=Math.max(.001,Math.abs(Number(frameCtx?.lightMorphScale)||1));
-                const localExtent=Math.max(1,(Number(frameCtx?.layerExtent)||Number(frameCtx?.layer?.radius)||220)/lightScale);
-                const m=affineForFrame(frameCtx,targetCtx,null,null),matrixScale=Math.sqrt(Math.max(1e-12,Math.abs(m.a*m.d-m.b*m.c)));
-                const inner=Math.max(0,localExtent*Math.max(0,Number(range.startScale)||0)*matrixScale),outer=Math.max(inner+.001,localExtent*Math.max(0,Number(range.endScale)||0)*matrixScale);
-                return{cx:Number(m.e)||0,cy:Number(m.f)||0,inner,outer};
+                // 7.6.4: center emergence belongs to the Corridor copy alpha.  A
+                // screen/local-radius mask cuts every line that happens to cross the
+                // center and makes an inward Spiral pop when the mask boundary moves.
+                return null;
             }
             function prepareUniformSlot(frameCtx,targetCtx,copyIndex=null,mesh=null){
                 const rgba=GPUColorCache.rgba(frameCtx.layer?.fillColor||frameCtx.layer?.strokeColor||'#ffffff'),copies=frameCtx.visibleInstances?.copies||[],copy=copyIndex==null?null:copies[copyIndex];
@@ -3612,7 +3910,7 @@ struct VOut { @builtin(position) p: vec4<f32> };
                 device.queue.writeBuffer(slot.buffer,0,fullUniform);slot.lastFrameId=frameId;
                 return{empty:false,slot};
             }
-            function encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,corridor=false){
+            function encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,corridor=false,preserveTarget=false){
                 if(!encoder||!targetTexture||!frameCtx||!mesh?.nativeComplete||!targetCtx||!ensureSize(mainCanvas.width,mainCanvas.height))return{handled:false,triangles:0,windingTriangles:0};
                 const gpu=getGpuMesh(mesh);if(!gpu)return{handled:false,triangles:0,windingTriangles:0};
                 const copyCount=corridor?Math.max(0,frameCtx.visibleInstances?.copies?.length||0):1;
@@ -3623,10 +3921,10 @@ struct VOut { @builtin(position) p: vec4<f32> };
                         const prepared=prepareUniformSlot(frameCtx,targetCtx,corridor?ci:null,mesh);if(prepared.empty)continue;visibleCopies++;
                         for(const part of gpu.records){
                             if(part.type==='mesh'){
-                                const pass=encoder.beginRenderPass({colorAttachments:[{view:msaaTexture.createView(),resolveTarget:targetTexture.createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:first?'clear':'load',storeOp:'store'}]});
+                                const pass=encoder.beginRenderPass({colorAttachments:[{view:msaaTexture.createView(),resolveTarget:targetTexture.createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:(first&&!preserveTarget)?'clear':'load',storeOp:'store'}]});
                                 pass.setPipeline(pipeline);pass.setBindGroup(0,prepared.slot.bindGroup);pass.setVertexBuffer(0,part.vertexBuffer);pass.setIndexBuffer(part.indexBuffer,part.indexFormat);pass.drawIndexed(part.indexCount);pass.end();draws++;first=false;totalTriangles+=part.triangleCount;
                             }else if(part.type==='winding'){
-                                const pass=encoder.beginRenderPass({colorAttachments:[{view:msaaTexture.createView(),resolveTarget:targetTexture.createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:first?'clear':'load',storeOp:'store'}],depthStencilAttachment:{view:stencilTexture.createView(),depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'discard',stencilClearValue:0,stencilLoadOp:'clear',stencilStoreOp:'discard'}});
+                                const pass=encoder.beginRenderPass({colorAttachments:[{view:msaaTexture.createView(),resolveTarget:targetTexture.createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:(first&&!preserveTarget)?'clear':'load',storeOp:'store'}],depthStencilAttachment:{view:stencilTexture.createView(),depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'discard',stencilClearValue:0,stencilLoadOp:'clear',stencilStoreOp:'discard'}});
                                 const mathematical=getLayerFillRule(frameCtx.layer)==='evenodd';
                                 pass.setStencilReference(0);pass.setPipeline(mathematical?parityStencilPipeline:windingStencilPipeline);pass.setBindGroup(0,prepared.slot.bindGroup);pass.setVertexBuffer(0,part.vertexBuffer);pass.draw(part.vertexCount);
                                 if(mathematical)parityDraws++;else windingDraws++;totalWinding+=part.triangleCount;
@@ -3639,6 +3937,116 @@ struct VOut { @builtin(position) p: vec4<f32> };
                     return{handled:true,triangles:totalTriangles,windingTriangles:totalWinding,visibleCopies,empty:visibleCopies===0};
                 }catch(err){lastError=String(err?.message||err);fallbacks++;return{handled:false,triangles:0,windingTriangles:0};}
             }
+            function appendIsolatedFillComposite(encoder,targetTexture,clearTarget=false){
+                if(!encoder||!targetTexture||!isolatedFillTexture||!isolatedFillView||!isolatedCompositePipeline||!isolatedCompositeSampler)return false;
+                try{
+                    if(!isolatedCompositeBindGroup)isolatedCompositeBindGroup=device.createBindGroup({layout:isolatedCompositePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:isolatedFillView},{binding:1,resource:isolatedCompositeSampler}]});
+                    const pass=encoder.beginRenderPass({colorAttachments:[{view:targetTexture.createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:clearTarget?'clear':'load',storeOp:'store'}]});
+                    pass.setPipeline(isolatedCompositePipeline);pass.setBindGroup(0,isolatedCompositeBindGroup);pass.draw(3);pass.end();return true;
+                }catch(err){lastError=String(err?.message||err);return false;}
+            }
+            function fillBoundaryRadiusPx(frameCtx,mesh,targetCtx){
+                const data=mesh?.fanData,limit=Math.max(0,Math.min(Number(mesh?.fanFloatCount)||data?.length||0,data?.length||0));
+                if(!data||limit<6)return Math.max(8,Math.min(width,height)*.18);
+                const m=affineForFrame(frameCtx,targetCtx,null,mesh);let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+                // fanData = [anchor,a,b] per edge. Ignore the synthetic far-away anchor:
+                // only a/b describe the visible contour.
+                for(let i=0;i+5<limit;i+=6){
+                    for(const j of [i+2,i+4]){
+                        const x=Number(data[j]),y=Number(data[j+1]);if(!Number.isFinite(x)||!Number.isFinite(y))continue;
+                        const sx=m.a*x+m.c*y+m.e,sy=m.b*x+m.d*y+m.f;
+                        if(sx<minX)minX=sx;if(sx>maxX)maxX=sx;if(sy<minY)minY=sy;if(sy>maxY)maxY=sy;
+                    }
+                }
+                if(!Number.isFinite(minX)||!Number.isFinite(maxX)||!Number.isFinite(minY)||!Number.isFinite(maxY))return Math.max(8,Math.min(width,height)*.18);
+                const w=Math.max(1,maxX-minX),h=Math.max(1,maxY-minY);
+                return Math.max(4,Math.min(Math.min(w,h)*.5,Math.min(width,height)*.45));
+            }
+            function fadeStyleRecord(frameCtx){
+                const key=String(frameCtx?.layer?.id||`layer-${Number(frameCtx?.layerIndex)||0}`);
+                let rec=fadeStyleRecords.get(key);
+                if(!rec||rec.generation!==hubGeneration){
+                    try{rec?.buffer?.destroy?.();}catch(_){}
+                    rec={generation:hubGeneration,buffer:device.createBuffer({label:`Somata fading Fill uniform ${key}`,size:32,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST})};
+                    fadeStyleRecords.set(key,rec);
+                }
+                return rec;
+            }
+            function appendFadingFillComposite(encoder,targetTexture,frameCtx,mesh,targetCtx,clearTarget=false){
+                if(!encoder||!targetTexture||!fadeCompositePipeline||!isolatedCompositeSampler||!isolatedFillView){if(!fadeCompositePipeline&&fadeCompositeError)lastError=fadeCompositeError;return false;}
+                try{
+                    const rec=fadeStyleRecord(frameCtx),hardness=(typeof getLayerFillFadeHardness==='function'?getLayerFillFadeHardness(frameCtx?.effectLayer||frameCtx?.layer):50)/100;
+                    const layer=frameCtx?.effectLayer||frameCtx?.layer;
+                    const direction=typeof getLayerFillFadeDirection==='function'&&getLayerFillFadeDirection(layer)==='toCenter'?1:0;
+                    const fillType=typeof getLayerFillType==='function'?getLayerFillType(layer):'fade';
+                    const smoothMode=fillType==='fadeSmooth'?1:0;
+                    const fadeSampler=smoothMode&&fadeSmoothSampler?fadeSmoothSampler:isolatedCompositeSampler;
+                    const radius=fillBoundaryRadiusPx(frameCtx,mesh,targetCtx);
+                    fadeUniformScratch[0]=width;fadeUniformScratch[1]=height;fadeUniformScratch[2]=radius;fadeUniformScratch[3]=hardness;
+                    fadeUniformScratch[4]=direction;fadeUniformScratch[5]=smoothMode;fadeUniformScratch[6]=0;fadeUniformScratch[7]=0;
+                    device.queue.writeBuffer(rec.buffer,0,fadeUniformScratch);
+                    const bindGroup=device.createBindGroup({layout:fadeCompositePipeline.getBindGroupLayout(0),entries:[
+                        {binding:0,resource:isolatedFillView},{binding:1,resource:fadeSampler},{binding:2,resource:{buffer:rec.buffer}}
+                    ]});
+                    const pass=encoder.beginRenderPass({colorAttachments:[{view:targetTexture.createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:clearTarget?'clear':'load',storeOp:'store'}]});
+                    pass.setPipeline(fadeCompositePipeline);pass.setBindGroup(0,bindGroup);pass.draw(3);pass.end();return true;
+                }catch(err){lastError=String(err?.message||err);return false;}
+            }
+            function accumulationHistoryRecord(frameCtx){
+                const key=String(frameCtx?.layer?.id||`layer-${Number(frameCtx?.layerIndex)||0}`);
+                let rec=fillHistoryRecords.get(key);
+                if(!rec||rec.generation!==hubGeneration||rec.width!==width||rec.height!==height){
+                    try{rec?.texture?.destroy?.();}catch(_){}
+                    const texture=device.createTexture({label:`Somata accumulating Fill history ${key}`,size:[width,height,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
+                    rec={generation:hubGeneration,width,height,texture,view:texture.createView(),bindGroup:null,cycleStartMs:0,lastFrameId:-1,timerSec:0,timerHandle:null,forceReset:false};
+                    fillHistoryRecords.set(key,rec);
+                }
+                if(!rec.bindGroup)rec.bindGroup=device.createBindGroup({layout:isolatedCompositePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:rec.view},{binding:1,resource:isolatedCompositeSampler}]});
+                return rec;
+            }
+            function appendAccumulatingFillComposite(encoder,targetTexture,frameCtx,clearTarget=false){
+                if(!encoder||!targetTexture||!isolatedCompositePipeline||!isolatedCompositeSampler||!isolatedFillView)return false;
+                try{
+                    if(!isolatedCompositeBindGroup)isolatedCompositeBindGroup=device.createBindGroup({layout:isolatedCompositePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:isolatedFillView},{binding:1,resource:isolatedCompositeSampler}]});
+                    const rec=accumulationHistoryRecord(frameCtx),frameId=Number(frameCtx?.frameId)||0,now=Number(frameCtx?.frame?.now??frameCtx?.now)||performance.now();
+                    const timerSec=typeof getLayerFillAccumulationSeconds==='function'?getLayerFillAccumulationSeconds(frameCtx?.effectLayer||frameCtx?.layer):5;
+                    const timerChanged=Math.abs(Number(rec.timerSec||0)-timerSec)>.0001;
+                    const discontinuity=rec.lastFrameId>=0&&frameId>rec.lastFrameId+1;
+                    const expired=rec.cycleStartMs>0&&(now-rec.cycleStartMs)>=timerSec*1000;
+                    const reset=rec.forceReset===true||rec.cycleStartMs<=0||timerChanged||discontinuity||expired||frameId<=rec.lastFrameId;
+                    if(reset){
+                        rec.forceReset=false;rec.cycleStartMs=now;
+                        try{clearTimeout(rec.timerHandle);}catch(_){}
+                        rec.timerHandle=setTimeout(()=>{rec.forceReset=true;try{requestMainCanvasRender?.();}catch(_){}},Math.max(100,timerSec*1000));
+                    }
+                    rec.timerSec=timerSec;rec.lastFrameId=frameId;
+                    const accumulatePass=encoder.beginRenderPass({colorAttachments:[{view:rec.view,clearValue:{r:0,g:0,b:0,a:0},loadOp:reset?'clear':'load',storeOp:'store'}]});
+                    accumulatePass.setPipeline(isolatedCompositePipeline);accumulatePass.setBindGroup(0,isolatedCompositeBindGroup);accumulatePass.draw(3);accumulatePass.end();
+                    const compositePass=encoder.beginRenderPass({colorAttachments:[{view:targetTexture.createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:clearTarget?'clear':'load',storeOp:'store'}]});
+                    compositePass.setPipeline(isolatedCompositePipeline);compositePass.setBindGroup(0,rec.bindGroup);compositePass.draw(3);compositePass.end();
+                    return true;
+                }catch(err){lastError=String(err?.message||err);return false;}
+            }
+            function appendStyledFillComposite(encoder,targetTexture,frameCtx,mesh,targetCtx,clearTarget=false){
+                const type=typeof getLayerFillType==='function'?getLayerFillType(frameCtx?.effectLayer||frameCtx?.layer):'normal';
+                if(type==='accumulation')return appendAccumulatingFillComposite(encoder,targetTexture,frameCtx,clearTarget);
+                if(type==='fade'||type==='fadeSmooth')return appendFadingFillComposite(encoder,targetTexture,frameCtx,mesh,targetCtx,clearTarget);
+                return appendIsolatedFillComposite(encoder,targetTexture,clearTarget);
+            }
+            function encodeIsolatedMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx,corridor=false,clearTarget=false){
+                if(!targetTexture||!canEncodeToTexture(frameCtx,mesh)||!isolatedFillTexture)return{handled:false,commandBuffer:null,reason:lastError||'isolated Fill renderer not ready'};
+                try{
+                    const encoder=device.createCommandEncoder({label:corridor?'Somata isolated Corridor Fill encoder':'Somata isolated ordered Fill encoder'});
+                    // Critical invariant: the MSAA attachment always starts from transparent for
+                    // an isolated Fill.  Loading it would retain the previous frame and make a
+                    // normal translucent Fill accumulate whenever Web forces a separate pass.
+                    const rec=encodeMeshPass(encoder,isolatedFillTexture,frameCtx,mesh,targetCtx,corridor,false);
+                    if(!rec.handled)return{...rec,commandBuffer:null,reason:lastError||'isolated Fill encode failed'};
+                    if(rec.empty)return{...rec,commandBuffer:null,isolated:true};
+                    if(!appendStyledFillComposite(encoder,targetTexture,frameCtx,mesh,targetCtx,clearTarget))return{handled:false,commandBuffer:null,reason:lastError||'styled Fill composite failed'};
+                    const commandBuffer=encoder.finish();isolatedEncodes++;directEncodes++;directTriangles+=rec.triangles+rec.windingTriangles;return{...rec,commandBuffer,isolated:true};
+                }catch(err){lastError=String(err?.message||err);fallbacks++;return{handled:false,commandBuffer:null,reason:lastError};}
+            }
             function canEncodeToTexture(frameCtx,mesh){
                 warmup();return Boolean(ready&&!lost&&WebGPUDeviceHub.isReady()&&frameCtx&&mesh?.nativeComplete);
             }
@@ -3646,14 +4054,20 @@ struct VOut { @builtin(position) p: vec4<f32> };
                 const rec=encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,false);
                 if(rec.handled){directEncodes++;directTriangles+=rec.triangles+rec.windingTriangles;}return rec;
             }
-            function encodeMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx){
+            function encodeMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx,preserveTarget=false){
                 if(!targetTexture||!canEncodeToTexture(frameCtx,mesh))return{handled:false,commandBuffer:null,reason:lastError||'native Fill renderer not ready'};
-                try{const encoder=device.createCommandEncoder({label:'Somata interwinding Spiral Fill Layer Scene encoder'}),rec=encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,false);if(!rec.handled)return{...rec,commandBuffer:null,reason:lastError||'Fill encode failed'};if(rec.empty)return{...rec,commandBuffer:null};const commandBuffer=encoder.finish();directEncodes++;directTriangles+=rec.triangles+rec.windingTriangles;return{...rec,commandBuffer};}catch(err){lastError=String(err?.message||err);fallbacks++;return{handled:false,commandBuffer:null,reason:lastError};}
+                const special=typeof getLayerFillType==='function'&&getLayerFillType(frameCtx?.effectLayer||frameCtx?.layer)!=='normal';
+                if(special)return encodeIsolatedMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx,!preserveTarget);
+                try{const encoder=device.createCommandEncoder({label:'Somata interwinding Spiral Fill Layer Scene encoder'}),rec=encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,false,preserveTarget);if(!rec.handled)return{...rec,commandBuffer:null,reason:lastError||'Fill encode failed'};if(rec.empty)return{...rec,commandBuffer:null};const commandBuffer=encoder.finish();directEncodes++;directTriangles+=rec.triangles+rec.windingTriangles;return{...rec,commandBuffer};}catch(err){lastError=String(err?.message||err);fallbacks++;return{handled:false,commandBuffer:null,reason:lastError};}
             }
-            function encodeCorridorCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx){
+            function encodeCorridorCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx,preserveTarget=false){
                 if(!targetTexture||!canEncodeToTexture(frameCtx,mesh))return{handled:false,commandBuffer:null,reason:lastError||'native Fill renderer not ready'};
-                try{const encoder=device.createCommandEncoder({label:'SpiroStar native Corridor Fill Layer Scene encoder'}),rec=encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,true);if(!rec.handled)return{...rec,commandBuffer:null,reason:lastError||'Corridor Fill encode failed'};if(rec.empty)return{...rec,commandBuffer:null};const commandBuffer=encoder.finish();directEncodes++;directTriangles+=rec.triangles+rec.windingTriangles;return{...rec,commandBuffer};}catch(err){lastError=String(err?.message||err);fallbacks++;return{handled:false,commandBuffer:null,reason:lastError};}
+                const special=typeof getLayerFillType==='function'&&getLayerFillType(frameCtx?.effectLayer||frameCtx?.layer)!=='normal';
+                if(special)return encodeCorridorIsolatedCommandToTexture(targetTexture,frameCtx,mesh,targetCtx,!preserveTarget);
+                try{const encoder=device.createCommandEncoder({label:'SpiroStar native Corridor Fill Layer Scene encoder'}),rec=encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,true,preserveTarget);if(!rec.handled)return{...rec,commandBuffer:null,reason:lastError||'Corridor Fill encode failed'};if(rec.empty)return{...rec,commandBuffer:null};const commandBuffer=encoder.finish();directEncodes++;directTriangles+=rec.triangles+rec.windingTriangles;return{...rec,commandBuffer};}catch(err){lastError=String(err?.message||err);fallbacks++;return{handled:false,commandBuffer:null,reason:lastError};}
             }
+            function encodeMeshIsolatedCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx,clearTarget=false){return encodeIsolatedMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx,false,clearTarget);}
+            function encodeCorridorIsolatedCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx,clearTarget=false){return encodeIsolatedMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx,true,clearTarget);}
             function render(frameCtx,mesh,targetCtx){
                 if(!frameCtx||!mesh?.nativeComplete||!targetCtx||!ensureSize(mainCanvas.width,mainCanvas.height))return false;
                 try{
@@ -3665,8 +4079,8 @@ struct VOut { @builtin(position) p: vec4<f32> };
                 }catch(err){lastError=String(err?.message||err);fallbacks++;return false;}
             }
             function clear(){/* render pass clears every presentation */}
-            function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost&&WebGPUDeviceHub.isReady(),attempted,initializing,lost,lastError,width,height,submissions,draws,bufferBuilds,bufferHits,gpuEvictions,residentMeshRecords:gpuMeshRecords.size,fallbacks,renderedTriangles,directEncodes,directTriangles,windingDraws,windingCovers,parityDraws,parityCovers,windingTriangles,uniformSlots:uniformSlots.length,uniformSlotGrows,dynamicMeshUploads,dynamicMeshUploadBytes,dynamicMeshGrows,dynamicMeshReuses,msaa:4,stencilFormat:'depth24plus-stencil8',hubGeneration};}
-            return{warmup,isReady:()=>warmup(),canEncodeToTexture,encodeToTexture,encodeMeshCommandToTexture,encodeCorridorCommandToTexture,render,clear,status};
+            function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost&&WebGPUDeviceHub.isReady(),attempted,initializing,lost,lastError,width,height,submissions,draws,bufferBuilds,bufferHits,gpuEvictions,residentMeshRecords:gpuMeshRecords.size,fallbacks,renderedTriangles,directEncodes,directTriangles,isolatedEncodes,windingDraws,windingCovers,parityDraws,parityCovers,windingTriangles,uniformSlots:uniformSlots.length,uniformSlotGrows,dynamicMeshUploads,dynamicMeshUploadBytes,dynamicMeshGrows,dynamicMeshReuses,fillHistoryLayers:fillHistoryRecords.size,fadeStyleLayers:fadeStyleRecords.size,fadeAvailable:!!fadeCompositePipeline,fadeError:fadeCompositeError,msaa:4,stencilFormat:'depth24plus-stencil8',hubGeneration};}
+            return{warmup,isReady:()=>warmup(),canEncodeToTexture,encodeToTexture,encodeMeshCommandToTexture,encodeCorridorCommandToTexture,encodeMeshIsolatedCommandToTexture,encodeCorridorIsolatedCommandToTexture,render,clear,status};
         })();
 
         const WebGPUFillRenderer = (() => {
@@ -3760,13 +4174,21 @@ struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
                 const rec=WebGPUFillMeshRenderer.encodeToTexture(encoder,targetTexture,frameCtx,mesh,targetCtx);
                 if(rec?.handled)active='webgpu-mesh-layer-scene';return rec;
             }
-            function encodeMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx){
-                const rec=WebGPUFillMeshRenderer.encodeMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx);
+            function encodeMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx,preserveTarget=false){
+                const rec=WebGPUFillMeshRenderer.encodeMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx,preserveTarget);
                 if(rec?.handled)active='webgpu-mesh-layer-scene-command';return rec;
             }
-            function encodeCorridorMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx){
-                const rec=WebGPUFillMeshRenderer.encodeCorridorCommandToTexture(targetTexture,frameCtx,mesh,targetCtx);
+            function encodeCorridorMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx,preserveTarget=false){
+                const rec=WebGPUFillMeshRenderer.encodeCorridorCommandToTexture(targetTexture,frameCtx,mesh,targetCtx,preserveTarget);
                 if(rec?.handled)active='webgpu-mesh-corridor-layer-scene';return rec;
+            }
+            function encodeMeshIsolatedCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx,clearTarget=false){
+                const rec=WebGPUFillMeshRenderer.encodeMeshIsolatedCommandToTexture(targetTexture,frameCtx,mesh,targetCtx,clearTarget);
+                if(rec?.handled)active='webgpu-mesh-isolated-layer-scene';return rec;
+            }
+            function encodeCorridorMeshIsolatedCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx,clearTarget=false){
+                const rec=WebGPUFillMeshRenderer.encodeCorridorIsolatedCommandToTexture(targetTexture,frameCtx,mesh,targetCtx,clearTarget);
+                if(rec?.handled)active='webgpu-mesh-corridor-isolated-layer-scene';return rec;
             }
             function render(mask,fillStyle,targetCtx){
                 WebGPUFillRenderer.warmup();
@@ -3775,7 +4197,7 @@ struct VSOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
             }
             function clear(){active='none';WebGPUFillMeshRenderer.clear();WebGPUFillRenderer.clear();FillWebGLRenderer.clear();}
             function status(){return{active,nativeMesh:WebGPUFillMeshRenderer.status(),webgpuMask:WebGPUFillRenderer.status(),webgl2:FillWebGLRenderer.status()};}
-            return{isAvailable,renderMesh,canEncodeMeshToTexture,encodeMeshToTexture,encodeMeshCommandToTexture,encodeCorridorMeshCommandToTexture,render,clear,status};
+            return{isAvailable,renderMesh,canEncodeMeshToTexture,encodeMeshToTexture,encodeMeshCommandToTexture,encodeCorridorMeshCommandToTexture,encodeMeshIsolatedCommandToTexture,encodeCorridorMeshIsolatedCommandToTexture,render,clear,status};
         })();
 
         const frameGraphPerformanceRuntime={penaltyUntilFrame:0,materializations:0,lastMaterializedFrame:0,lastRiskReason:'',preflightRejects:0};
@@ -4152,8 +4574,9 @@ fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
                     const underlaySource=deferredUnderlaySource(),utx=underlaySource?.texture||dummyLayerTexture;
                     const layerEffects=layerSource&&!layerSource?.globalFrameScene?peekLayerSceneEffectCommands(frame):[];
                     const rawLampSource=deferredLampSource(),rawLampCommand=rawLampSource?LampGPURenderer?.getDeferredCommandBuffer?.():null;
-                    const wantsLampInterleave=Boolean(rawLampSource?.texture&&layerSource?.texture&&!layerSource?.globalFrameScene&&layerEffects.some(item=>Number(item?.phase)>=50));
-                    const lampLayerSceneCommand=wantsLampInterleave?encodeLampBlendIntoTarget(rawLampSource.texture,layerSource.texture,rawLampSource?.blendMode,'Somata Lamps blend-aware → Layer Scene between Web and Sweep'):null;
+                    const lampPhase=typeof somataEffectPhase==='function'?somataEffectPhase('lamps'):450;
+                    const wantsLampInterleave=Boolean(rawLampSource?.texture&&layerSource?.texture&&!layerSource?.globalFrameScene&&layerEffects.some(item=>Number(item?.phase)>=lampPhase));
+                    const lampLayerSceneCommand=wantsLampInterleave?encodeLampBlendIntoTarget(rawLampSource.texture,layerSource.texture,rawLampSource?.blendMode,'Somata Lamps blend-aware → ordered Layer Scene'):null;
                     const lampsEmbedded=Boolean(wantsLampInterleave&&lampLayerSceneCommand),lampSource=lampsEmbedded?null:rawLampSource,lt=lampSource?.texture||dummyLampTexture;
 
                     const strictSpiral=frame?.strictSpiralGpuPresentRequired===true,lateCanvasOverlay=Boolean(strictSpiral&&frame?.strictSpiralLateCanvasOverlay===true&&frame?.gpuMainCanvasHasContent===true&&renderBackendTelemetry.hasMaterialization?.()!==true),mainSceneEmpty=Boolean(layerSource&&(lateCanvasOverlay?false:(strictSpiral?frame?.gpuMainCanvasHasContent!==true:frame?.gpuMainSceneEmpty)));const st=mainSceneEmpty?dummyLampTexture:sceneTexture;
@@ -4176,7 +4599,7 @@ fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
 
                     const frameCommands=frameCommandScratch;frameCommands.length=0;const gpuTimer=beginGpuTiming(frame?.id??renderRuntime.frameId);if(gpuTimer?.begin)frameCommands.push(gpuTimer.begin);
                     if(underlayCommands?.clearCommand)frameCommands.push(underlayCommands.clearCommand);for(const cmd of underlayCommands?.effectCommands||[])if(cmd)frameCommands.push(cmd);if(Array.isArray(frameSceneCommands))for(const cmd of frameSceneCommands)if(cmd)frameCommands.push(cmd);if(layerCommand)frameCommands.push(layerCommand);
-                    if(lampsEmbedded){for(const item of layerEffects)if(Number(item?.phase)<50&&item?.commandBuffer)frameCommands.push(item.commandBuffer);if(rawLampCommand)frameCommands.push(rawLampCommand);frameCommands.push(lampLayerSceneCommand);for(const item of layerEffects)if(Number(item?.phase)>=50&&item?.commandBuffer)frameCommands.push(item.commandBuffer);}else{for(const item of layerEffects)if(item?.commandBuffer)frameCommands.push(item.commandBuffer);if(rawLampCommand)frameCommands.push(rawLampCommand);}
+                    if(lampsEmbedded){for(const item of layerEffects)if(Number(item?.phase)<lampPhase&&item?.commandBuffer)frameCommands.push(item.commandBuffer);if(rawLampCommand)frameCommands.push(rawLampCommand);frameCommands.push(lampLayerSceneCommand);for(const item of layerEffects)if(Number(item?.phase)>=lampPhase&&item?.commandBuffer)frameCommands.push(item.commandBuffer);}else{for(const item of layerEffects)if(item?.commandBuffer)frameCommands.push(item.commandBuffer);if(rawLampCommand)frameCommands.push(rawLampCommand);}
                     frameCommands.push(finalCommand);const gpuTimerEnd=finishGpuTiming(gpuTimer);if(gpuTimerEnd)frameCommands.push(gpuTimerEnd);mergedFrameCommandBuffers+=frameCommands.length;device.queue.submit(frameCommands);try{notifyLayerSceneEffectCommandsSubmitted?.(frame);}catch(_){}try{notifyFrameSceneEffectCommandsSubmitted?.(frame);}catch(_){}if(gpuTimerEnd)readGpuTiming(gpuTimer);submissions++;if(rawLampCommand){LampGPURenderer.markDeferredSubmitted();mergedLampSubmissions++;}if(layerSource?.globalFrameScene){WebGPUStrokeRenderer.markFrameScenePresented?.(renderRuntime.frameId);clearLayerSceneEffectCommands(frame);}else if(layerSource){WebGPUStrokeRenderer.markDeferredLayerScenePresented?.(renderRuntime.frameId);clearLayerSceneEffectCommands(frame);}
                     if(underlaySource){WebGPUStrokeRenderer.markFrameUnderlayCommandsSubmitted?.(renderRuntime.frameId);WebGPUStrokeRenderer.markFrameUnderlayPresented?.(renderRuntime.frameId);}frames++;updatePresentationCss(true);return true;
                 }catch(err){lastError=String(err?.message||err);updatePresentationCss(false);return false;}
@@ -5449,7 +5872,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                         {binding:7,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:'float'}}
                     ]});
                     const layerSceneLayout=device.createPipelineLayout({bindGroupLayouts:[layerSceneBindGroupLayout]});
-                    layerScenePipeline=device.createRenderPipeline({label:'SpiroStar layer scene pipeline',layout:layerSceneLayout,vertex:{module:layerSceneModule,entryPoint:'vsScene'},fragment:{module:layerSceneModule,entryPoint:'fsScene',targets:[{format}]},primitive:{topology:'triangle-list'}});
+                    layerScenePipeline=device.createRenderPipeline({label:'SpiroStar layer scene pipeline',layout:layerSceneLayout,vertex:{module:layerSceneModule,entryPoint:'vsScene'},fragment:{module:layerSceneModule,entryPoint:'fsScene',targets:[{format,blend:blendState('over')}]},primitive:{topology:'triangle-list'}});
                     layerSceneSampler=device.createSampler({magFilter:'linear',minFilter:'linear',addressModeU:'clamp-to-edge',addressModeV:'clamp-to-edge'});
                     layerSceneUniformBuffer=device.createBuffer({size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST,label:'SpiroStar layer scene uniforms'});
                     const circleCompositeModule=device.createShaderModule({label:'SpiroStar Geometry Circles scratch composite WGSL',code:CIRCLE_COMPOSITE_WGSL});await assertWebGPUShaderModule(circleCompositeModule,'SpiroStar Geometry Circles scratch composite WGSL');
@@ -7012,10 +7435,11 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
             }
             entry.rec.__resetForBaseContext(mainCtx,true);entry.rec.__phaseEntry=entry;return entry.rec;
         }
-        function getDynamicTunnelMorphMasterStrokeCommands(frameCtx){
-            if(!frameCtx||state.tunnel?.active!==true||frameCtx.geometryPlan?.dynamic!==true||frameCtx.geometryPlan?.kind==='lightning'||frameCtx.lineProfileStrokeOnly||state.showRoundingGuides)return null;
-            if(frameCtx._dynamicTunnelMorphMasterFrameId===frameCtx.frameId)return frameCtx._dynamicTunnelMorphMasterCommands||null;
-            frameCtx._dynamicTunnelMorphMasterFrameId=frameCtx.frameId;frameCtx._dynamicTunnelMorphMasterCommands=null;dynamicTunnelMorphMasterStats.frames++;
+        function getDynamicTunnelMorphMasterStrokeCommands(frameCtx,allowHiddenGraffitiCarrier=false){
+            const hiddenGraffitiCarrier=allowHiddenGraffitiCarrier===true&&frameCtx?.lineProfileStrokeOnly===true&&frameCtx?.lineProfileApplication==='graffiti';
+            if(!frameCtx||state.tunnel?.active!==true||frameCtx.geometryPlan?.dynamic!==true||frameCtx.geometryPlan?.kind==='lightning'||(frameCtx.lineProfileStrokeOnly&&!hiddenGraffitiCarrier)||state.showRoundingGuides)return null;
+            if(frameCtx._dynamicTunnelMorphMasterFrameId===frameCtx.frameId&&frameCtx._dynamicTunnelMorphMasterHiddenGraffiti===hiddenGraffitiCarrier)return frameCtx._dynamicTunnelMorphMasterCommands||null;
+            frameCtx._dynamicTunnelMorphMasterFrameId=frameCtx.frameId;frameCtx._dynamicTunnelMorphMasterHiddenGraffiti=hiddenGraffitiCarrier;frameCtx._dynamicTunnelMorphMasterCommands=null;dynamicTunnelMorphMasterStats.frames++;
             const rec=getDynamicTunnelMorphMasterRecorder(frameCtx);if(!rec)return null;
             rec.__suppressFill=true;rec.__disableAdaptiveSpiral=isSpiralLayer(frameCtx.layer)&&frameCtx.layer?.spiralClosed!==false;rec.strokeStyle=frameCtx.tunnelBaseStrokeColor||frameCtx.layer?.strokeColor||'#ffffff';
             const oldBase=frameCtx.baseAlpha;
@@ -7075,7 +7499,19 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
             }
             const usePhaseResident=frameCtx.geometryPlan?.dynamic===true&&frameCtx.geometryPlan?.kind!=='lightning';
             const useStaticTunnelPool=state.tunnel?.active===true&&!usePhaseResident;
-            const rec=usePhaseResident?getPhaseResidentMorphGLRecorder(frameCtx):(useStaticTunnelPool?acquireReusableTunnelStrokeRecorder(frameCtx.layer,false):createGeometryGLRecordingContext(mainCtx));rec.__suppressFill=true;
+            const rec=usePhaseResident?getPhaseResidentMorphGLRecorder(frameCtx):(useStaticTunnelPool?acquireReusableTunnelStrokeRecorder(frameCtx.layer,false):createGeometryGLRecordingContext(mainCtx));
+            // FrameContour/Line recording must be self-contained.  Do not inherit the
+            // ambient mainCtx style: effect preparation can run before the visible
+            // Base pass has configured mainCtx for this layer.
+            rec.globalAlpha=1;
+            rec.strokeStyle=String(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#ffffff');
+            rec.fillStyle=String(frameCtx.layer?.fillColor||'transparent');
+            rec.lineWidth=Math.max(.001,Number(frameCtx.strokeWidth)||Number(frameCtx.layer?.strokeWidth)||1.5);
+            rec.lineCap=String(frameCtx.lineCap||'round');
+            rec.lineJoin=String(frameCtx.lineJoin||'round');
+            rec.miterLimit=Math.max(1,Number(frameCtx.miterLimit)||6);
+            rec.globalCompositeOperation='source-over';
+            rec.__suppressFill=true;
             try{frameCtx.drawLayerInstances(rec,true,null,hiddenGraffitiCarrier);}catch(_){return null;}
             if(usePhaseResident)finishPhaseResidentMorphGLRecorder(rec);else rec.__finishFrame?.();
             if(rec.unsupported||!rec.commands?.length)return null;
@@ -7797,12 +8233,19 @@ fn markerSd(p:vec2<f32>)->f32{
         window.__spiroMorphRecorderPoolStatus=()=>({...phaseResidentMorphRecorderStats});
 
         let corridorGpuFrameColorCacheBuilds=0,corridorGpuFrameColorCacheHits=0;
+        const SOMATA_CORRIDOR_INTERPOLATE_COPY_ALPHA_ALONG_SPIRAL=false;
         function buildCorridorGPUOptions(frameCtx,extra={}){
             const tr=mainCtx.getTransform(),copies=frameCtx.visibleInstances?.copies||[],alphas=frameCtx.visibleInstances?.alphas||[],baseColor=frameCtx.tunnelBaseStrokeColor||frameCtx.layer?.strokeColor||'#ffffff',profile=frameCtx.tunnelPaletteProfile||null;
             let cc=frameCtx._corridorGpuColorCache;if(!cc||cc.frameId!==frameCtx.frameId||cc.copies!==copies||cc.baseColor!==baseColor||cc.profile!==profile){cc={frameId:frameCtx.frameId,copies,baseColor,profile,values:new Array(copies.length)};frameCtx._corridorGpuColorCache=cc;corridorGpuFrameColorCacheBuilds++;}
             const colorForCopy=(copy,i)=>{const idx=Number.isInteger(i)?i:copies.indexOf(copy);if(idx>=0&&cc.values[idx]!==undefined){corridorGpuFrameColorCacheHits++;return cc.values[idx];}const color=getTunnelCopyColor(baseColor,copy,profile);if(idx>=0)cc.values[idx]=color;return color;};
-            return{originX:tr.e,originY:tr.f,baseAlpha:frameCtx.baseAlpha,alphas,spiralSeamAlpha:isSpiralLayer(frameCtx.layer)&&frameCtx.layer?.spiralClosed!==false,copyCacheKey:frameCtx,copyCacheFrameId:frameCtx.frameId,copyCacheVariant:'effect',copyResidencyKey:frameCtx.layer,residentCopyPayload:true,sharedCorridorTransformBasis:true,rotationForCopy:(copy)=>getMotionTunnelLagRadians(copy,frameCtx.layer),colorForCopy,...extra};
+            // 7.6.5: copy reveal/fade is an instance property. Never interpolate
+            // the alpha of one Corridor copy into the next along the Spiral rail:
+            // that creates a radial-looking dark patch on every older copy that
+            // crosses the center. Static/general GPU Corridor now matches retained
+            // Spiral Morph: each copy keeps one alpha for its whole geometry.
+            return{originX:tr.e,originY:tr.f,baseAlpha:frameCtx.baseAlpha,alphas,spiralSeamAlpha:SOMATA_CORRIDOR_INTERPOLATE_COPY_ALPHA_ALONG_SPIRAL,copyCacheKey:frameCtx,copyCacheFrameId:frameCtx.frameId,copyCacheVariant:'effect',copyResidencyKey:frameCtx.layer,residentCopyPayload:true,sharedCorridorTransformBasis:true,rotationForCopy:(copy)=>getMotionTunnelLagRadians(copy,frameCtx.layer),colorForCopy,...extra};
         }
+        window.__spiroCorridorRevealPolicy=()=>({version:'7.6.5',owner:'copy-alpha',alphaScope:'whole-copy',interpolateAlongSpiral:SOMATA_CORRIDOR_INTERPOLATE_COPY_ALPHA_ALONG_SPIRAL,radialMask:false});
         window.__spiroCorridorGpuCpuCacheStatus=()=>({colorCacheBuilds:corridorGpuFrameColorCacheBuilds,colorCacheHits:corridorGpuFrameColorCacheHits,transformBasis:WebGPUCorridorCopyStore.status().transformCpu});
 
         function tryRenderCorridorLineEffectGPU(frameCtx,opt={}){

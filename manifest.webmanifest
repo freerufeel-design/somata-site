@@ -1,10 +1,14 @@
 {
-  "name": "Somata 7.5",
+  "name": "Somata 7.8.3",
   "short_name": "Somata",
   "start_url": "./",
   "scope": "./",
-  "display": "standalone",
+  "display": "fullscreen",
   "background_color": "#090d16",
   "theme_color": "#090d16",
-  "orientation": "any"
+  "orientation": "any",
+  "display_override": [
+    "fullscreen",
+    "standalone"
+  ]
 }

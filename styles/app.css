@@ -1500,7 +1500,8 @@
         }
         .fill-opacity-control.hidden,
         .fill-match-stroke-control.hidden,
-        .fill-mode-control.hidden { display:none !important; }
+        .fill-mode-control.hidden,
+        .fill-special-control.hidden { display:none !important; }
         .fill-match-stroke-control {
             padding-top:2px;
             padding-bottom:2px;
@@ -1515,6 +1516,28 @@
         }
         .fill-mode-control .row-label {
             margin-bottom:4px;
+        }
+        .fill-mode-select,
+        #paramFillFadeDirection {
+            width:100%;
+            min-width:0;
+            height:28px;
+            border-radius:6px;
+            border:1px solid #334155;
+            background:#172033;
+            color:#e2e8f0;
+            font-size:10px;
+            padding:0 8px;
+        }
+        .fill-timer-inputs {
+            justify-content:flex-start;
+            gap:6px;
+        }
+        #paramFillAccumulationSeconds {
+            width:78px;
+        }
+        .fill-special-control {
+            padding-top:2px;
         }
         .fill-mode-buttons {
             display:grid;
@@ -2193,7 +2216,7 @@
             display: none;
         }
 
-        @media (max-width: 760px) {
+        @media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
             html, body {
                 width: 100%;
                 height: 100%;
@@ -2406,9 +2429,9 @@
                 right: 8px;
                 z-index: 5;
                 display: inline-flex;
-                width: 38px;
-                height: 38px;
-                min-height: 38px;
+                width: 44px;
+                height: 44px;
+                min-width: 44px;
                 padding: 0;
                 align-items: center;
                 justify-content: center;
@@ -3906,7 +3929,7 @@
 
 
         /* v140 — fixed mobile tool launcher + compact rail + bottom FPS */
-        @media (max-width: 760px) {
+        @media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
             header { position:relative; }
             .header-actions {
                 padding-left: 44px !important;
@@ -3917,10 +3940,10 @@
                 top: max(7px, env(safe-area-inset-top)) !important;
                 left: max(7px, env(safe-area-inset-left)) !important;
                 bottom: auto !important;
-                width: 36px !important;
-                height: 36px !important;
-                min-width: 36px !important;
-                min-height: 36px !important;
+                width: 44px !important;
+                height: 44px !important;
+                min-width: 44px !important;
+                min-height: 44px !important;
                 padding: 0 !important;
                 z-index: 245 !important;
                 display: inline-flex !important;
@@ -4242,6 +4265,12 @@
                 font-size: 18px !important;
             }
             #settingsSidebar .mobile-sidebar-close {
+                flex: 0 0 44px !important;
+                width: 44px !important;
+                min-width: 44px !important;
+                max-width: 44px !important;
+                height: 44px !important;
+                min-height: 44px !important;
                 font-size: 20px !important;
             }
 
@@ -4366,7 +4395,7 @@
 
         /* v177 — Mobile long-press parameter focus mode */
         #mobileParameterFocusOverlay { display:none; }
-        @media (max-width:760px) {
+        @media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
             body.mobile-parameter-focus {
                 background: var(--bg-dark) !important;
                 overflow: hidden !important;
@@ -5174,7 +5203,6 @@
     transition:opacity .14s ease,transform .14s ease;
 }
 #somataErrorCopyToast.is-visible{opacity:1;transform:translate(-50%,0);}
-@media(min-width:761px){#somataErrorCopyToast{display:none!important;}}
 
 /* Somata 7.3.16 — in-client release certification controls. */
 .file-self-test{display:grid;gap:6px;padding:8px 9px;border:1px solid rgba(148,163,184,.22);border-radius:7px;background:rgba(15,23,42,.42)}
@@ -5269,10 +5297,10 @@ html.app-pseudo-fullscreen #btnPseudoFullscreenExit {
     top: max(8px, env(safe-area-inset-top));
     right: max(8px, env(safe-area-inset-right));
     display: inline-flex !important;
-    width: 42px;
-    height: 42px;
-    min-width: 42px;
-    min-height: 42px;
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
     padding: 0;
     align-items: center;
     justify-content: center;
@@ -5370,7 +5398,7 @@ html.app-pseudo-fullscreen #btnPseudoFullscreenExit {
         flex: 1 1 auto;
     }
 }
-@media (max-width: 760px) {
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
     .desktop-brand-logo-button,
     .desktop-brand-logo { display: none !important; }
 }
@@ -5417,7 +5445,7 @@ html.app-pseudo-fullscreen #btnPseudoFullscreenExit {
     opacity: 0 !important;
     pointer-events: none !important;
 }
-@media (max-width: 760px) {
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
     .desktop-brand-stage { display: none !important; }
 }
 
@@ -5550,3 +5578,233 @@ html.app-pseudo-fullscreen #btnPseudoFullscreenExit {
   .morph-profile-group-dropdown{max-width:none;width:100%;}
   .morph-profile-group-menu{position:static;box-shadow:none;margin-top:4px;min-width:0;}
 }
+
+
+/* 7.5 mobile interaction regression: reachable touch targets + scrollable bottom dock. */
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  #floatingViewportControls.floating-controls {
+    position: fixed !important;
+    left: auto !important;
+    right: max(8px, env(safe-area-inset-right)) !important;
+    bottom: max(8px, env(safe-area-inset-bottom)) !important;
+    width: auto !important;
+    max-width: calc(100vw - max(72px, env(safe-area-inset-left) + 64px) - max(8px, env(safe-area-inset-right))) !important;
+    min-height: 44px !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    touch-action: pan-x;
+    z-index: 90 !important;
+  }
+  #floatingViewportControls.floating-controls::-webkit-scrollbar { display: none; }
+  #floatingViewportControls .btn-icon,
+  #floatingViewportControls button,
+  #floatingViewportControls label {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
+    flex: 0 0 44px !important;
+    touch-action: manipulation;
+  }
+  #fpsCounter.fps-counter {
+    min-width: 52px !important;
+    min-height: 44px !important;
+    height: 44px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    touch-action: manipulation;
+    cursor: pointer;
+    z-index: 91 !important;
+  }
+}
+
+/* 7.5.4 narrow-phone dock: flex-end overflow escapes left and cannot be scrolled back. */
+@media (max-width: 360px) and (hover: none) and (pointer: coarse) {
+  #floatingViewportControls.floating-controls { justify-content: flex-start !important; }
+}
+
+/* 7.5.2 mobile transition safety: closed drawers must never intercept the dock while sliding out. */
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  aside#settingsSidebar:not(.mobile-open),
+  aside#settingsSidebar:not(.mobile-open) * { pointer-events: none !important; }
+  .sidebar-tool-rail:not(.mobile-open):not(.mobile-rail-open),
+  .sidebar-tool-rail:not(.mobile-open):not(.mobile-rail-open) * { pointer-events: none !important; }
+}
+
+/* 7.5.7 — mobile header controls must remain finger-reachable in portrait and
+   short coarse-touch landscape. Keep one scrollable row instead of wrapping
+   desktop-sized controls into two rows. */
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  header {
+    display: block !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-height: 56px !important;
+    padding: 6px 8px !important;
+    overflow: hidden !important;
+  }
+  .header-actions {
+    display: flex !important;
+    flex-flow: row nowrap !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    gap: 5px !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding: 0 0 3px !important;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+  }
+  .header-actions::-webkit-scrollbar { display: none; }
+  .header-actions > * { flex: 0 0 auto !important; }
+  .header-actions button,
+  .header-actions select {
+    min-width: 44px !important;
+    min-height: 44px !important;
+    height: 44px !important;
+    touch-action: manipulation;
+  }
+  .header-actions button.btn-icon,
+  .header-actions .random-preset-btn,
+  .header-actions .minimal-morph-btn,
+  .header-actions .morph-settings-btn,
+  .header-actions .morph-btn,
+  .header-actions .project-morph-btn,
+  .header-actions .project-morph-settings-btn,
+  .header-actions .random-settings-btn {
+    width: 44px !important;
+    min-width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+  }
+}
+
+/* 7.5.9 — mobile audio panels follow the same portrait/short-landscape touch contract. */
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  #audioReactivePanel,
+  #audioRoutingPanel {
+    top: calc(60px + env(safe-area-inset-top)) !important;
+    box-sizing: border-box !important;
+  }
+  #audioReactivePanel {
+    left: max(6px, env(safe-area-inset-left)) !important;
+    right: max(6px, env(safe-area-inset-right)) !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: calc(100dvh - 66px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  #audioRoutingPanel {
+    left: max(6px, env(safe-area-inset-left)) !important;
+    right: max(6px, env(safe-area-inset-right)) !important;
+    bottom: max(6px, env(safe-area-inset-bottom)) !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+  }
+  #btnCloseAudioPanel,
+  #btnCloseAudioRouting {
+    width: 44px !important;
+    min-width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+    touch-action: manipulation;
+  }
+  .audio-routing-head { min-height: 44px !important; height: auto !important; }
+}
+
+/* 7.5.10 — Spiral controls use the same finger-reachable contract as the rest
+   of the mobile UI in portrait and short coarse-touch landscape. */
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  .contour-mode-toggle button {
+    min-height: 44px !important;
+    height: 44px !important;
+    touch-action: manipulation;
+  }
+  .spiral-settings-row input[type="number"],
+  .spiral-settings-row select {
+    min-height: 44px !important;
+    height: 44px !important;
+    touch-action: manipulation;
+  }
+  #spiralSettingsBlock .spiral-step-link,
+  #spiralSettingsBlock .spiral-tangent-toggle,
+  #spiralSettingsBlock .spiral-seam-round-toggle,
+  #spiralSettingsBlock .spiral-fill-toggle {
+    min-height: 44px !important;
+    touch-action: manipulation;
+  }
+}
+
+/* 7.5.11 — Project Morph settings follow the same finger-reachable mobile
+   contract as Spiral controls in portrait and short coarse-touch landscape. */
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  #projectMorphSettingsPanel {
+    top: calc(60px + env(safe-area-inset-top)) !important;
+    left: max(6px, env(safe-area-inset-left)) !important;
+    right: max(6px, env(safe-area-inset-right)) !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: calc(100dvh - 66px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
+    box-sizing: border-box !important;
+    transform: none !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  #projectMorphSettingsPanel .project-morph-setting {
+    min-height: 44px !important;
+  }
+  #projectMorphSettingsPanel .project-morph-setting > label {
+    min-height: 44px !important;
+    align-items: center !important;
+  }
+  #projectMorphSettingsPanel .project-morph-setting input[type="number"],
+  #projectMorphSettingsPanel .project-morph-setting select {
+    min-height: 44px !important;
+    height: 44px !important;
+    touch-action: manipulation;
+  }
+}
+
+
+/* Somata 7.8.1 — FPS console load analyzer. */
+#screenErrorOverlayTabs{display:flex;align-items:center;gap:6px;position:sticky;top:0;z-index:2;margin:-9px -12px 10px;padding:7px 10px;border-bottom:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.96);user-select:none;-webkit-user-select:none;}
+#screenErrorOverlayTabs button{height:26px;min-width:78px;padding:0 9px;border:1px solid rgba(148,163,184,.3);border-radius:5px;background:rgba(15,23,42,.8);color:#cbd5e1;font:700 11px/1 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;cursor:pointer;}
+#screenErrorOverlayTabs button:hover{background:rgba(30,41,59,.95);color:#fff;}
+#screenErrorOverlayTabs button.is-active{border-color:rgba(56,189,248,.72);background:rgba(8,47,73,.78);color:#bae6fd;}
+#screenErrorOverlayAnalyze{margin-left:auto;min-width:112px!important;}
+#screenErrorOverlayAnalyze.is-enabled{border-color:rgba(74,222,128,.72)!important;background:rgba(20,83,45,.72)!important;color:#bbf7d0!important;}
+#screenErrorOverlayErrorsPanel[hidden],#screenErrorOverlayLoadPanel[hidden]{display:none!important;}
+#screenErrorOverlayLoadText{margin:0;min-width:0;white-space:pre;overflow-wrap:normal;color:#cbd5e1;font:600 11px/1.48 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;user-select:text;-webkit-user-select:text;}
+#screenErrorOverlayLoadPanel{min-width:max-content;}
+@media(max-width:620px){#screenErrorOverlayTabs{margin:-8px -9px 8px;padding:6px 7px;gap:4px;overflow-x:auto;}#screenErrorOverlayTabs button{min-width:70px;padding:0 6px;font-size:10px;}#screenErrorOverlayAnalyze{min-width:100px!important;margin-left:0;}#screenErrorOverlayLoadText{font-size:9.5px;line-height:1.38;}}
+
+#screenErrorOverlay.is-load-tab{border-color:rgba(56,189,248,.72);background:rgba(3,12,24,.94);box-shadow:0 10px 34px rgba(0,0,0,.55),inset 0 0 0 1px rgba(14,116,144,.24);}
+#screenErrorOverlay.is-load-tab #screenErrorOverlayHeader{border-bottom-color:rgba(56,189,248,.25);background:rgba(8,47,73,.72);}
+#screenErrorOverlay.is-load-tab #screenErrorOverlayTitle{color:#7dd3fc;}
+
+
+/* File → Settings → artistic effect stack (bottom → top). */
+.effect-order-setting{margin-top:10px;padding-top:10px;border-top:1px solid rgba(148,163,184,.22);min-width:260px}
+.effect-order-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:3px}
+.effect-order-heading button{font-size:11px;padding:3px 7px;white-space:nowrap}
+.effect-order-hint{font-size:10px;opacity:.68;margin-bottom:6px}
+.effect-order-list{display:flex;flex-direction:column;gap:4px}
+.effect-order-row{display:grid;grid-template-columns:20px 24px minmax(0,1fr);align-items:center;gap:5px;padding:5px 7px;border:1px solid rgba(148,163,184,.25);border-radius:5px;background:rgba(15,23,42,.46);cursor:grab;user-select:none}
+.effect-order-row:active{cursor:grabbing}
+.effect-order-row.dragging{opacity:.42}
+.effect-order-row.drag-over{outline:1px solid currentColor;outline-offset:1px}
+.effect-order-handle{font-size:14px;opacity:.72;text-align:center}
+.effect-order-index{font:10px/1 ui-monospace,SFMono-Regular,Menlo,monospace;opacity:.62;text-align:right}
+.effect-order-label{min-width:0;font-size:11px;line-height:1.2}

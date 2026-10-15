@@ -146,7 +146,13 @@ async function ensureGpuMorphArcPipelines(){
     }catch(err){gpuMorphArcRuntime.ready=false;gpuMorphArcRuntime.lastError=String(err?.message||err);return false;}})();
     gpuMorphArcRuntime.initializing=task;try{return await task;}finally{if(gpuMorphArcRuntime.initializing===task)gpuMorphArcRuntime.initializing=null;}
 }
-function warmupGpuMorphArcResource(){if(gpuMorphArcRuntime.ready)return true;if(!gpuMorphArcRuntime.initializing)void ensureGpuMorphArcPipelines();return false;}
+function warmupGpuMorphArcResource(){
+    const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;
+    if(gpuMorphArcRuntime.ready&&gpuMorphArcRuntime.generation!==gen){
+        invalidateGpuMorphArcResources('device-generation-changed');invalidateStaticSpiralBezierResources();gpuMorphArcRuntime.ready=false;gpuMorphArcRuntime.device=null;gpuMorphArcRuntime.pipelines=null;
+    }
+    if(gpuMorphArcRuntime.ready)return true;if(!gpuMorphArcRuntime.initializing)void ensureGpuMorphArcPipelines();return false;
+}
 
 function buildGpuMorphArcResource(morphRec){
     if(!morphRec?.ready||!morphRec.segmentCount||!morphRec.cubicBuffer||!gpuMorphArcRuntime.ready)return null;
@@ -223,9 +229,12 @@ function getStaticSpiralBezierResource(layerIndex,sharedDevice=null,sharedGenera
         const round=path?.spiralProfileRoundingBaked===true?0:roundBase;
         const smooth=layer?.profileMode==='spline'&&path?.spiralProfileSplineBaked!==true;
         let cubics=[];try{
-            if(Array.isArray(path?._bezierSegments)&&path._bezierSegments.length)cubics=path._bezierSegments;
-            else if(Array.isArray(pts?._spiroRetainedCubics)&&pts._spiroRetainedCubics.length)cubics=pts._spiroRetainedCubics;
+            const cloneCubics=(src)=>(src||[]).map(q=>({...q,p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}}));
+            if(Array.isArray(path?._bezierSegments)&&path._bezierSegments.length)cubics=cloneCubics(path._bezierSegments);
+            else if(Array.isArray(pts?._spiroRetainedCubics)&&pts._spiroRetainedCubics.length)cubics=cloneCubics(pts._spiroRetainedCubics);
             else if(typeof __spiroBuildSpiralBezierSegments==='function')cubics=__spiroBuildSpiralBezierSegments(pts,round,path?.cornerFlags||[],smooth)||[];
+            if(cubics.length&&typeof __spiroFinalizePeriodicSpiralBezierCarrier==='function')cubics=__spiroFinalizePeriodicSpiralBezierCarrier(cubics,pts);
+            if(cubics.length&&roundBase>.001&&typeof __spiroRepairRoundedSpiralBezierJoins==='function')cubics=__spiroRepairRoundedSpiralBezierJoins(cubics);
         }catch(_){cubics=[];}
         if(!cubics.length)continue;paths.push({path,cubics,closed:path?.closed===true,periodic:Boolean(layer?.spiralClosed!==false&&path?.spiralContinuityProtected===true)});cubicCount+=cubics.length;
     }
@@ -253,6 +262,9 @@ function currentGpuBezierMorphResource(layerIndex){
     if(morphActive){
         const src=runtimeState?.morph?.renderSourceLayers?.[li]||null,dst=runtimeState?.morph?.renderTargetLayers?.[li]||null,base=state?.layers?.[li]||null;
         const hasSpiralEndpoint=Boolean(src?.spiralEnabled===true||dst?.spiralEnabled===true||base?.spiralEnabled===true);
+        // 7.7: keep the 7.5 effect-authority rule. Any strict Spiral morph effect must
+        // consume the specialized visible Spiral rail, never the generic shared morph rail.
+        // circle-rebuild modes count as specialized as well, exactly as in 7.5.
         const specialMode=Boolean(state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild())||(hasSpiralEndpoint&&typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()));
         const o=state?.morph?.options||{},spiralGeometryRequested=Boolean(o.byVertices||o.bySteps||o.byShape||state?.morph?.monoOrbitTransforms||o.byRounding||o.bySize||o.byRotation||o.bySpiralOrder||o.bySpiralLayers);
 
@@ -261,6 +273,9 @@ function currentGpuBezierMorphResource(layerIndex){
             const special=typeof WebGPUSpiralBezierMorphRenderer!=='undefined'?WebGPUSpiralBezierMorphRenderer.getResource?.(li):null;
             if(special?.ready&&special?.bezierVisualRail&&special?.specialSpiralBezierRail)return special;
             try{WebGPUSpiralBezierMorphRenderer?.warmup?.();}catch(_){ }
+            // Do NOT fall back to getSharedGpuMorphPathResource here. That resource can be
+            // topologically valid while describing a different visible rail; Web and Lightning
+            // then appear detached from the Spiral. 7.5 was fail-closed here and 7.7 restores it.
             return null;
         }
 
@@ -274,11 +289,13 @@ function currentGpuBezierMorphResource(layerIndex){
 function currentGpuBezierResourceForFrame(frameCtx){
     if(!frameCtx)return null;
     const li=Number(frameCtx.layerIndex)||0;
-    const blueOwnsFrame=Boolean(frameCtx.morphFrameActive===true&&frameCtx.greenMorphEnabled!==true&&frameCtx.minimalFadeEnabled!==true&&frameCtx.blueMorphProvider?.mode!=='fade'&&frameCtx.geometryProvider===frameCtx.blueMorphProvider&&frameCtx.geometryPlan?.kind==='blue-circle-slide');
+    const blueOwnsFrame=Boolean(frameCtx.morphFrameActive===true&&frameCtx.greenMorphEnabled!==true&&frameCtx.minimalFadeEnabled!==true&&frameCtx.blueMorphProvider?.mode!=='fade'&&frameCtx.geometryProvider===frameCtx.blueMorphProvider&&(frameCtx.geometryPlan?.kind==='blue-circle-slide'||frameCtx.geometryPlan?.kind==='blue-prepared'));
     if(blueOwnsFrame){
         const special=typeof WebGPUSpiralBezierMorphRenderer!=='undefined'?WebGPUSpiralBezierMorphRenderer.getResource?.(li):null;
         if(special?.ready&&special?.bezierVisualRail&&special?.specialSpiralBezierRail)return special;
         try{WebGPUSpiralBezierMorphRenderer?.warmup?.();}catch(_){}
+        // Blue owns the visible frame. If its exact Spiral rail is not ready yet, effects wait.
+        // Rendering on the generic shared rail is visually incorrect and was the 7.6.x regression.
         return null;
     }
     const layer=frameCtx.layer||state?.layers?.[li]||null;
@@ -301,7 +318,7 @@ function gpuMorphArcIneligibleReason(frameCtx){
     if(state?.fourierMode===true)return'fourier';
 
     const spiral=l=>Boolean(l&&typeof isSpiralLayer==='function'&&isSpiralLayer(l));
-    const strictSpiral=typeof isStrictSpiralWebGPUFrame==='function'?isStrictSpiralWebGPUFrame(frameCtx):Boolean(spiral(frameCtx.layer)||spiral(frameCtx.sourceLayer)||spiral(frameCtx.geometryPlan?.sourceLayer)||spiral(frameCtx.geometryPlan?.targetLayer));
+    const strictSpiral=globalThis.SomataGeometryPolicy?.isStrict?.(frameCtx)===true;
     const shared=currentGpuBezierResourceForFrame(frameCtx);
     if(strictSpiral)return shared?.bezierVisualRail?'':'bezier-rail-unavailable';
     const spiralLayer=spiral(frameCtx.layer),staticSpiral=spiralLayer&&!frameCtx.morphFrameActive;
@@ -323,7 +340,7 @@ function getGpuMorphArcTableForFrame(frameCtx){
 
     if(frameCtx._gpuMorphArcDecisionFrameId===fid){
         const cached=frameCtx._gpuMorphArcTable||null,cachedAuthority=cached?._gpuMorphArcResource?.morphRec||null;
-        if(cached&&cachedAuthority===currentAuthority&&cached?._gpuMorphArcResource?.ready){gpuMorphArcRuntime.stats.frameCacheHits++;return cached;}
+        if(cached&&cachedAuthority===currentAuthority&&cached?._gpuMorphArcResource?.ready&&cached._gpuMorphArcResource.generation===gpuMorphArcRuntime.generation&&gpuMorphArcRuntime.generation===WebGPUDeviceHub.getGeneration()){gpuMorphArcRuntime.stats.frameCacheHits++;return cached;}
     }
     frameCtx._gpuMorphArcDecisionFrameId=fid;frameCtx._gpuMorphArcTable=null;
     const reason=gpuMorphArcIneligibleReason(frameCtx);noteGpuMorphArcDecision(frameCtx,!reason,reason||'gpu-morph-arc');
@@ -335,7 +352,7 @@ function getGpuMorphArcTableForFrame(frameCtx){
     frameCtx._gpuMorphArcTable=table;noteGpuMorphArcDecision(frameCtx,true,'gpu-morph-arc',rec.segmentCount);return table;
 }
 function encodeGpuMorphArcTable(table,encoder,options=null){
-    const rec=table?._gpuMorphArcResource;if(!rec?.ready||!encoder)return false;const frameId=Math.max(0,Number(table.frameId)||0),t=typeof rec.morphRec?.resolveMorphT==='function'?rec.morphRec.resolveMorphT(table.gpuMorphT):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));
+    const rec=table?._gpuMorphArcResource,currentGen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(!rec?.ready||!encoder||rec.generation!==gpuMorphArcRuntime.generation||gpuMorphArcRuntime.generation!==currentGen)return false;const frameId=Math.max(0,Number(table.frameId)||0),t=typeof rec.morphRec?.resolveMorphT==='function'?rec.morphRec.resolveMorphT(table.gpuMorphT):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));
 
     if(rec.hasCommittedData&&rec.lastCommittedT===t){rec.lastEncodedFrame=frameId;rec.lastEncodedT=t;gpuMorphArcRuntime.stats.frameDataReuses++;gpuMorphArcRuntime.stats.committedReuseHits++;return true;}
 
@@ -352,20 +369,20 @@ function encodeGpuMorphArcTable(table,encoder,options=null){
 }
 
 function isGpuMorphArcTableCommitted(table){
-    const rec=table?._gpuMorphArcResource;if(!rec?.ready)return false;
+    const rec=table?._gpuMorphArcResource,currentGen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(!rec?.ready||rec.generation!==gpuMorphArcRuntime.generation||gpuMorphArcRuntime.generation!==currentGen)return false;
     const t=typeof rec.morphRec?.resolveMorphT==='function'?rec.morphRec.resolveMorphT(table.gpuMorphT):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));
     return rec.hasCommittedData===true&&rec.lastCommittedT===t;
 }
 window.isGpuMorphArcTableCommitted=isGpuMorphArcTableCommitted;
 function noteGpuMorphArcTableSubmitted(table){
-    const rec=table?._gpuMorphArcResource;if(!rec?.ready)return false;
+    const rec=table?._gpuMorphArcResource,currentGen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(!rec?.ready||rec.generation!==gpuMorphArcRuntime.generation||gpuMorphArcRuntime.generation!==currentGen)return false;
     const frameId=Math.max(0,Number(table.frameId)||0),t=typeof rec.morphRec?.resolveMorphT==='function'?rec.morphRec.resolveMorphT(table.gpuMorphT):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));
     rec.hasCommittedData=true;rec.lastCommittedFrame=frameId;rec.lastCommittedT=t;
     if(typeof rec.morphRec?.encodeCurrentCubics!=='function'){try{noteSharedGpuMorphPathSubmitted?.(rec.morphRec,t,frameId);}catch(_){}}
     gpuMorphArcRuntime.stats.committedSubmissions++;return true;
 }
 function buildGpuMorphArcPrerequisiteCommand(table,options=null){
-    const rec=table?._gpuMorphArcResource;if(!rec?.ready||!gpuMorphArcRuntime.device)return null;
+    const rec=table?._gpuMorphArcResource,currentGen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(!rec?.ready||!gpuMorphArcRuntime.device||rec.generation!==gpuMorphArcRuntime.generation||gpuMorphArcRuntime.generation!==currentGen)return null;
     const frameId=Math.max(0,Number(table.frameId)||0),t=typeof rec.morphRec?.resolveMorphT==='function'?rec.morphRec.resolveMorphT(table.gpuMorphT):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));
     if(rec.hasCommittedData&&rec.lastCommittedT===t)return{ready:true,committed:true,table,commandBuffer:null,onSubmitted:null};
     try{
@@ -376,7 +393,7 @@ function buildGpuMorphArcPrerequisiteCommand(table,options=null){
 }
 
 function ensureGpuMorphArcTableSubmitted(table){
-    const rec=table?._gpuMorphArcResource;if(!rec?.ready||!gpuMorphArcRuntime.device)return false;
+    const rec=table?._gpuMorphArcResource,currentGen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(!rec?.ready||!gpuMorphArcRuntime.device||rec.generation!==gpuMorphArcRuntime.generation||gpuMorphArcRuntime.generation!==currentGen)return false;
     const t=typeof rec.morphRec?.resolveMorphT==='function'?rec.morphRec.resolveMorphT(table.gpuMorphT):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));
     if(rec.hasCommittedData&&rec.lastCommittedT===t){gpuMorphArcRuntime.stats.committedReuseHits++;return true;}
     try{

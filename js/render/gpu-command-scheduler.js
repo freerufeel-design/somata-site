@@ -22,11 +22,18 @@ function spiroGpuSchedulerFrame(frameCtxOrFrame){
 function spiroGpuSchedulerQueue(frameCtxOrFrame){
     const frame=frameCtxOrFrame?.frame||frameCtxOrFrame;if(!frame)return null;
     if(!Array.isArray(frame.gpuLayerSceneEffectCommands))frame.gpuLayerSceneEffectCommands=[];
+    const fid=Number(frame.id)||Number(frame.frameId)||Number(frameGeometryRuntime?.frameId)||0;
+    if(Number(frame._gpuLayerSceneEffectQueueFrameId)!==fid){
+        frame.gpuLayerSceneEffectCommands.length=0;
+        if(Array.isArray(frame.gpuLayerSceneCommandBuffers))frame.gpuLayerSceneCommandBuffers.length=0;
+        frame._gpuLayerSceneEffectQueueFrameId=fid;
+    }
     return frame.gpuLayerSceneEffectCommands;
 }
 function spiroGpuScheduleLayerSceneCommand(frameCtx,phase,commandBuffer,label='effect',onSubmitted=null,meta=null){
     if(!commandBuffer)return true;const frame=frameCtx?.frame||frameCtx,q=spiroGpuSchedulerQueue(frame);if(!q)return false;
-    const item={phase:Number(phase)||0,commandBuffer,label:String(label||'effect'),onSubmitted:typeof onSubmitted==='function'?onSubmitted:null,meta:meta||null};
+    const fid=Number(frame?.id)||Number(frameCtx?.frameId)||0;
+    const item={frameId:fid,phase:Number(phase)||0,commandBuffer,label:String(label||'effect'),onSubmitted:typeof onSubmitted==='function'?onSubmitted:null,meta:meta||null};
     let i=q.length;while(i>0&&Number(q[i-1]?.phase)>item.phase)i--;q.splice(i,0,item);
     const s=spiroGpuSchedulerFrame(frame);if(s){s.commandCount++;s.labels.push(item.label);if(meta?.prerequisite){s.prerequisiteCount++;spiroGpuCommandSchedulerRuntime.prerequisiteCommands++;}}
     spiroGpuCommandSchedulerRuntime.commands++;return true;

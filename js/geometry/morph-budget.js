@@ -80,7 +80,7 @@ function chooseMorphLayerSampleBudget(layer,sourceVisual,targetVisual,sourceProf
 
     const constrained=spiral&&(a.constrained===true||b.constrained===true);
     const min=spiral?(smooth?144:72):(smooth?96:48);
-    const max=spiral?(constrained?(smooth?480:240):(smooth?960:480)):720;
+    const max=spiral?(constrained?192:360):720; // 7.6 shared Spiral profile fallback: specialized retained carrier remains the quality path; cap generic warmup geometry.
     const safety=spiral?(smooth?1.12:1.08):(smooth?1.18:1.08);
     const budget=quantizeMorphSampleBudget(raw*safety,min,max);
     const rec={layerIndex,budget,rawEstimate:raw,spiral,smooth,constrained,source:a,target:b};

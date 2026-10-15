@@ -34,6 +34,7 @@ const SpiroMorphController = (() => {
     function clearBlueResolvedFrame() {
         const rt = blueRuntime();
         rt.frameLayers = [];
+        rt.profileCarrierPlans = [];
         return rt.frameLayers;
     }
 
@@ -49,6 +50,7 @@ const SpiroMorphController = (() => {
         rt.exactStartPending = false;
         rt.gpuPhasePrepareSerial = ((Math.max(0, Number(rt.gpuPhasePrepareSerial) || 0) + 1) >>> 0);
         rt.gpuPhasePreparing = false;
+        rt.gpuPhaseWarming = false;
         rt.gpuPhasePreparePromise = null;
         if (clearFrame) clearBlueResolvedFrame();
         return bumpBluePhase(reason);
@@ -211,12 +213,14 @@ const SpiroMorphController = (() => {
                 phaseSerial: currentBluePhaseSerial(),
                 phaseReason: blue.phaseReason || '',
                 frameLayers: blue.frameLayers?.length || 0,
+                profileCarrierPlans: blue.profileCarrierPlans?.length || 0,
+                gpuWarming: blue.gpuPhaseWarming === true,
                 linearProgress: Number(blue.progress) || 0,
                 geometryProgress: Number(blue.geometryT) || 0
             },
             orange: { active: orange.active === true, transitioning: orange.transitioning === true },
             green: { active: green.active === true, transitionActive: green.transitionActive === true, ownsFrame: greenOwnsFrame() },
-            contract: 'state.layers is canonical; Blue and Green render from runtime frame layers; Orange owns an explicit commit/priority window.'
+            contract: '7.6: one shared profile Morph clock; polygon/spiral are carrier mappings; GPU resources may warm asynchronously without redefining Morph mode.'
         };
     }
 

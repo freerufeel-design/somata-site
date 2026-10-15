@@ -1,7 +1,7 @@
 (function(){
     'use strict';
 
-    const BUILD='20261012-error-console-v738';
+    const BUILD='20261015-v78101';
     const MAX_ENTRIES=160;
     const MAX_TEXT_CHARS=140000;
     const MAX_ENTRY_CHARS=18000;
@@ -15,6 +15,19 @@
     let output=null;
     let countNode=null;
     let collapseButton=null;
+    let errorsPanel=null;
+    let loadPanel=null;
+    let loadOutput=null;
+    let errorTabButton=null;
+    let loadTabButton=null;
+    let analysisToggleButton=null;
+    let activeTab='errors';
+    let analysisEnabled=false;
+    let analysisTimer=0;
+    let profilerSampleEveryBeforeAnalysis=null;
+    let lastLoadCounters=null;
+    let lastLoadCounterAt=0;
+    let lastLoadSnapshot=null;
     let totalChars=0;
     let sequence=0;
     let visible=false;
@@ -36,7 +49,7 @@
     function fpsCounter(){return document.getElementById('fpsCounter');}
     function autoShowSetting(){return document.getElementById('autoShowErrorConsoleSetting');}
     function isMobileFpsMode(){
-        try{return globalThis.matchMedia?.('(max-width: 760px)')?.matches===true;}catch(_){return false;}
+        try{return globalThis.matchMedia?.('(max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse)')?.matches===true;}catch(_){return false;}
     }
 
     let copyToastTimer=0;
@@ -113,6 +126,108 @@
         }catch(_){return false;}
     }
 
+    function safeCall(name){
+        try{const fn=globalThis?.[name];return typeof fn==='function'?fn():null;}catch(_){return null;}
+    }
+
+    function fmtMs(v){v=Number(v);return Number.isFinite(v)?`${v.toFixed(v>=100?0:(v>=10?1:2))} ms`:'—';}
+    function fmtRate(v){v=Number(v);if(!Number.isFinite(v))return '—';const a=Math.abs(v);return a>=1000000?`${(v/1000000).toFixed(1)}M/s`:a>=1000?`${(v/1000).toFixed(1)}k/s`:`${v.toFixed(a>=100?0:(a>=10?1:2))}/s`;}
+    function fmtPct(v){v=Number(v);return Number.isFinite(v)?`${Math.max(0,v).toFixed(v>=10?0:1)}%`:'—';}
+    function flattenNumbers(value,prefix='',out={}){
+        if(value==null)return out;
+        if(typeof value==='number'&&Number.isFinite(value)){out[prefix]=value;return out;}
+        if(typeof value!=='object'||Array.isArray(value))return out;
+        for(const [k,v] of Object.entries(value)){const key=prefix?`${prefix}.${k}`:k;if(typeof v==='number'&&Number.isFinite(v))out[key]=v;else if(v&&typeof v==='object'&&!Array.isArray(v))flattenNumbers(v,key,out);}
+        return out;
+    }
+    function counterRates(current,now){
+        const flat=flattenNumbers(current||{}),rates={};
+        if(lastLoadCounters&&lastLoadCounterAt>0){const dt=Math.max(.001,(now-lastLoadCounterAt)/1000);for(const [k,v] of Object.entries(flat)){const prev=lastLoadCounters[k];if(Number.isFinite(prev)&&v>=prev)rates[k]=(v-prev)/dt;}}
+        lastLoadCounters=flat;lastLoadCounterAt=now;return rates;
+    }
+    function passLabel(name){
+        const map={sweep:'Sweep / Lightning',layerPrepare:'Подготовка слоя / геометрии',base:'Base / контур',fill:'Fill',web:'Паутина',graffiti:'Graffiti',lamps:'Lamps',particles:'Particles',glow:'Glow',outline:'Outline',profile:'Profile',pathFx:'Path FX',framePrepare:'Подготовка кадра',lampGPU:'Lamp GPU',viewport:'Viewport'};
+        return map[name]||name;
+    }
+    function collectLoadSnapshot(){
+        const now=performance.now(),perf=safeCall('__spiroPerfSnapshot')||{},governor=perf.performanceGovernor||safeCall('__spiroPerformanceGovernorStatus')||{},scheduler=perf.animation||safeCall('__spiroAnimationStats')||{},finalGpu=safeCall('__spiroFinalGPUStatus')||{},lightning=(safeCall('__spiroGpuLightningArcPeekStatus')||{}),lightningBridge=safeCall('__spiroLightningGpuArcBridgeStatus')||{},gpuRuntime=safeCall('__somataGpuRuntimeDiagnostics')||{},hub=safeCall('__spiroWebGPUHubStatus')||{},mode=safeCall('__somataMorphFreezeContext')||{};
+        const passEma=perf.passes?.ema||{},passLast=perf.passes?.last||{},profileTotal=Math.max(0,Number(passEma.total)||Number(passLast.total)||Number(perf.renderMs)||0);
+        const aggregate=new Set(['total','layersTotal']);
+        const cpuRows=Object.entries(passEma).filter(([name,v])=>!aggregate.has(name)&&Number.isFinite(Number(v))&&Number(v)>=.01).sort((a,b)=>Number(b[1])-Number(a[1])).slice(0,10).map(([name,ms])=>({name,label:passLabel(name),ms:Number(ms),pct:profileTotal>0?Number(ms)*100/profileTotal:0}));
+        const paintMs=Math.max(0,Number(scheduler?.lastPaintMs)||Number(perf.renderMs)||0),tickMs=Math.max(0,Number(scheduler?.lastTickDurationMs)||0),unprofiled=Math.max(0,paintMs-profileTotal);
+        const gpuTiming=finalGpu?.frameGraph?.gpuTiming||{},gpuEma=Math.max(0,Number(gpuTiming.emaMs)||Number(governor.emaGpuMs)||0),gpuLast=Math.max(0,Number(gpuTiming.lastMs)||0),fps=Math.max(0,Number(governor.emaFps)||0),budget=1000/Math.max(1,Number(governor.targetFps)||60);
+        const counters={lightning:{frames:Number(lightning.frames)||0,draws:Number(lightning.draws)||0,strokeDraws:Number(lightning.strokeDraws)||0,logicalSegments:Number(lightning.logicalSegments)||0,exactRasterSubsegments:Number(lightning.exactRasterSubsegments)||0,arcEncodes:Number(lightning.arcEncodes)||0,arcReuses:Number(lightning.arcReuses)||0,bundleBuilds:Number(lightning.bundleBuilds)||0,bundleHits:Number(lightning.bundleHits)||0,bundleExecutes:Number(lightning.bundleExecutes)||0,failures:Number(lightning.failures)||0},bridge:{requests:Number(lightningBridge.requests)||0,hits:Number(lightningBridge.hits)||0,fallbacks:Number(lightningBridge.fallbacks)||0},hub:{uncapturedErrorCount:Number(hub.uncapturedErrorCount)||0,lostCount:Number(hub.lostCount)||0}};
+        const rates=counterRates(counters,now);
+        const candidates=[];
+        if(cpuRows[0])candidates.push({label:cpuRows[0].label,ms:cpuRows[0].ms,kind:'CPU pass'});
+        if(unprofiled>.5)candidates.push({label:'Driver / submit / present / непрофилированная часть renderMainCanvas',ms:unprofiled,kind:'main thread / driver'});
+        if(gpuEma>.5)candidates.push({label:'GPU',ms:gpuEma,kind:'GPU timing'});
+        if(Number(lightning.lastEncodeCpuMs)>.5)candidates.push({label:'Lightning encode (CPU)',ms:Number(lightning.lastEncodeCpuMs),kind:'Lightning'});
+        candidates.sort((a,b)=>b.ms-a.ms);const hottest=candidates[0]||{label:'нет измеримого потребителя',ms:0,kind:'idle'};
+        let bottleneck=String(governor.bottleneck||'unknown');
+        if(bottleneck==='unknown'){
+            if(gpuEma>=budget*.9)bottleneck='gpu';
+            else if(unprofiled>=Math.max(8,profileTotal*.5))bottleneck='driver/present-or-unprofiled';
+            else if(cpuRows[0]?.ms>=budget*.35)bottleneck='cpu-pass';
+        }
+        const latestError=entries.length?entries[entries.length-1].split('\n').slice(0,2).join(' — '):'';
+        return{now,fps,budget,paintMs,tickMs,profileTotal,unprofiled,gpuEma,gpuLast,gpuSamples:Number(gpuTiming.samples)||0,gpuSupported:gpuTiming.supported===true,bottleneck,hottest,cpuRows,lightning,lightningBridge,rates,errorCount:entries.length,latestError,gpuRuntime,hub,mode};
+    }
+    function renderLoadText(){
+        if(!loadOutput)return;
+        if(!analysisEnabled){loadOutput.textContent='Анализ выключен. Нажмите «Анализ: ВКЛ», затем воспроизведите лаг — таблица будет обновляться в реальном времени.';return;}
+        const s=collectLoadSnapshot();lastLoadSnapshot=s;
+        const lines=[];const overload=s.budget>0?s.paintMs/s.budget:0;
+        lines.push(`LIVE ${new Date().toLocaleTimeString([], {hour12:false})}   FPS ${s.fps?s.fps.toFixed(1):'—'}   budget ${fmtMs(s.budget)}`);
+        const m=s.mode||{},activeMode=m.blue?.active?`Blue/${m.blue?.mode||'morph'}`:(m.minimal?.active?`Orange/${m.minimal?.mode||'minimal'}`:(m.project?.active?'Green/project':'Static'));
+        lines.push(`Режим: ${activeMode}   layers=${Number(m.layers)||0}   spiral=${m.spiral?.type||'—'}${m.spiral?.corridorPhase?' + corridor-phase':''}`);
+        lines.push(`Главный потребитель: ${s.hottest.label} — ${fmtMs(s.hottest.ms)}   [${s.hottest.kind}]`);
+        lines.push(`Bottleneck: ${s.bottleneck}   render/paint ${fmtMs(s.paintMs)} (${overload.toFixed(1)}× budget)   tick ${fmtMs(s.tickMs)}`);
+        lines.push(`Профилированный render: ${fmtMs(s.profileTotal)}   вне pass-профайлера: ${fmtMs(s.unprofiled)}   GPU EMA: ${s.gpuEma?fmtMs(s.gpuEma):'нет данных'} (${s.gpuSamples} samples)`);
+        lines.push('');lines.push('CPU / render passes (EMA):');
+        if(!s.cpuRows.length)lines.push('  — нет выборки; подождите несколько кадров');
+        else s.cpuRows.forEach((r,i)=>lines.push(`  ${String(i+1).padStart(2,' ')}. ${r.label.padEnd(34,' ')} ${fmtMs(r.ms).padStart(9,' ')}   ${fmtPct(r.pct).padStart(6,' ')}`));
+        lines.push('');lines.push('Lightning:');
+        const l=s.lightning||{},r=s.rates||{};
+        lines.push(`  encode CPU last/EMA/max: ${fmtMs(l.lastEncodeCpuMs)} / ${fmtMs(l.emaEncodeCpuMs)} / ${fmtMs(l.maxEncodeCpuMs)}   arc prepare ${fmtMs(l.lastArcPrepareCpuMs)}`);
+        lines.push(`  stage=${l.lastStage||'—'} behavior=${l.lastBehavior||'—'} precision=${l.lastPrecision||'—'} raster×${Number(l.lastRasterSubdiv)||0} instances=${Number(l.lastInstances)||0} styles=${Number(l.lastStyleCount)||0}`);
+        lines.push(`  exact raster: ${fmtRate(r['lightning.exactRasterSubsegments'])}   logical segments: ${fmtRate(r['lightning.logicalSegments'])}   stroke draws: ${fmtRate(r['lightning.strokeDraws'])}`);
+        lines.push(`  arc encode/reuse: ${fmtRate(r['lightning.arcEncodes'])} / ${fmtRate(r['lightning.arcReuses'])}   failures: ${Number(l.failures)||0} (${fmtRate(r['lightning.failures'])})`);
+        lines.push(`  bridge: requests=${Number(s.lightningBridge?.requests)||0} hits=${Number(s.lightningBridge?.hits)||0} fallbacks=${Number(s.lightningBridge?.fallbacks)||0} reason=${s.lightningBridge?.lastReason||'—'}`);
+        if(l.lastError)lines.push(`  renderer error: ${String(l.lastError)}`);
+        lines.push('');lines.push(`Ошибки FPS-консоли: ${s.errorCount}   WebGPU uncaptured: ${Number(s.hub?.uncapturedErrorCount)||0}   device lost: ${Number(s.hub?.lostCount)||0}`);
+        if(s.latestError)lines.push(`Последняя: ${s.latestError}`);
+        if(s.gpuRuntime?.last?.reason)lines.push(`Последняя GPU-диагностика: ${s.gpuRuntime.last.feature}/${s.gpuRuntime.last.stage} — ${s.gpuRuntime.last.reason}`);
+        if(s.unprofiled>=Math.max(8,s.profileTotal*.5)&&!s.gpuEma)lines.push('\nПодсказка: большая непрофилированная часть при отсутствии GPU timestamps обычно означает driver submit/present, sync/validation или другой браузерный paint вне отдельных JS-pass’ов.');
+        loadOutput.textContent=lines.join('\n');
+    }
+    function stopAnalysisSampling(){
+        if(analysisTimer){clearInterval(analysisTimer);analysisTimer=0;}
+        const profiler=globalThis.__spiroPassProfiler;
+        if(profiler&&profilerSampleEveryBeforeAnalysis!==null){profiler.sampleEvery=profilerSampleEveryBeforeAnalysis;profilerSampleEveryBeforeAnalysis=null;}
+    }
+    function updateAnalysisSampling(){
+        const shouldRun=analysisEnabled&&visible&&!collapsed&&activeTab==='load';
+        if(!shouldRun){stopAnalysisSampling();return;}
+        const profiler=globalThis.__spiroPassProfiler;
+        if(profiler&&profilerSampleEveryBeforeAnalysis===null){profilerSampleEveryBeforeAnalysis=Math.max(1,Number(profiler.sampleEvery)||10);profiler.sampleEvery=1;}
+        if(!analysisTimer){lastLoadCounters=null;lastLoadCounterAt=0;renderLoadText();analysisTimer=setInterval(()=>{if(analysisEnabled&&visible&&!collapsed&&activeTab==='load')renderLoadText();},350);}
+    }
+    function setAnalysisEnabled(next){
+        analysisEnabled=next===true;
+        if(analysisToggleButton){analysisToggleButton.textContent=analysisEnabled?'Анализ: ВКЛ':'Анализ: ВЫКЛ';analysisToggleButton.classList.toggle('is-enabled',analysisEnabled);analysisToggleButton.setAttribute('aria-pressed',String(analysisEnabled));}
+        if(!analysisEnabled){lastLoadCounters=null;lastLoadCounterAt=0;}
+        updateAnalysisSampling();if(activeTab==='load')renderLoadText();return analysisEnabled;
+    }
+    function setTab(tab){
+        activeTab=tab==='load'?'load':'errors';
+        errorTabButton?.classList.toggle('is-active',activeTab==='errors');loadTabButton?.classList.toggle('is-active',activeTab==='load');
+        errorTabButton?.setAttribute('aria-selected',String(activeTab==='errors'));loadTabButton?.setAttribute('aria-selected',String(activeTab==='load'));dock?.classList.toggle('is-load-tab',activeTab==='load');
+        if(errorsPanel)errorsPanel.hidden=activeTab!=='errors';if(loadPanel)loadPanel.hidden=activeTab!=='load';
+        if(activeTab==='load')renderLoadText();else if(dock?.isConnected&&output){output.textContent=entries.length?entries.join('\n\n'):'Ошибок нет.';if(countNode)countNode.textContent=String(entries.length);}
+        updateAnalysisSampling();return activeTab;
+    }
+
     function makeButton(id,text,title){
         const button=document.createElement('button');
         button.id=id;
@@ -155,6 +270,7 @@
             collapseButton.setAttribute('aria-label',collapseButton.title);
             collapseButton.setAttribute('aria-expanded',String(!collapsed));
         }
+        updateAnalysisSampling();
     }
 
     function setVisible(next,{expand=false}={}){
@@ -166,6 +282,7 @@
             setCollapsed(collapsed);
         }
         updateFpsErrorState();
+        updateAnalysisSampling();
     }
 
     function render(){
@@ -173,6 +290,7 @@
         const wasNearBottom=!body||body.scrollHeight-body.scrollTop-body.clientHeight<32;
         output.textContent=entries.length?entries.join('\n\n'):'Ошибок нет.';
         countNode.textContent=String(entries.length);
+        if(activeTab==='load')renderLoadText();
         dock.hidden=!visible;
         setCollapsed(collapsed);
         updateFpsErrorState();
@@ -217,7 +335,7 @@
         if(output)output.textContent='Ошибок нет.';
         if(countNode)countNode.textContent='0';
 
-        setVisible(false);
+        if(activeTab==='errors'&&visible)render();
         if(clearDevtools){try{nativeConsoleClear?.();}catch(_){}}
         updateFpsErrorState();
         return true;
@@ -242,7 +360,7 @@
         dock.hidden=!visible;
         dock.setAttribute('role','region');
         dock.setAttribute('aria-live','polite');
-        dock.setAttribute('aria-label','Консоль ошибок приложения');
+        dock.setAttribute('aria-label','FPS консоль: ошибки и анализ нагрузки');
         dock.setAttribute('aria-hidden',String(!visible));
         dock.dataset.build=BUILD;
 
@@ -251,7 +369,7 @@
 
         const title=document.createElement('div');
         title.id='screenErrorOverlayTitle';
-        title.textContent='Консоль ошибок';
+        title.textContent='FPS консоль';
         countNode=document.createElement('span');
         countNode.id='screenErrorOverlayCount';
         countNode.textContent=String(entries.length);
@@ -273,12 +391,22 @@
 
         body=document.createElement('div');
         body.id='screenErrorOverlayBody';
+        const tabs=document.createElement('div');
+        tabs.id='screenErrorOverlayTabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Разделы FPS консоли');
+        errorTabButton=makeButton('screenErrorOverlayTabErrors','Ошибки','Показать ошибки и GPU-диагностику');errorTabButton.setAttribute('role','tab');
+        loadTabButton=makeButton('screenErrorOverlayTabLoad','Нагрузка','Показать анализ нагрузки в реальном времени');loadTabButton.setAttribute('role','tab');
+        analysisToggleButton=makeButton('screenErrorOverlayAnalyze','Анализ: ВЫКЛ','Включить непрерывный анализ нагрузки');analysisToggleButton.setAttribute('aria-pressed','false');
+        errorTabButton.addEventListener('click',()=>setTab('errors'));loadTabButton.addEventListener('click',()=>setTab('load'));analysisToggleButton.addEventListener('click',()=>setAnalysisEnabled(!analysisEnabled));
+        tabs.append(errorTabButton,loadTabButton,analysisToggleButton);
+        errorsPanel=document.createElement('div');errorsPanel.id='screenErrorOverlayErrorsPanel';errorsPanel.setAttribute('role','tabpanel');
         output=document.createElement('pre');
         output.id='screenErrorOverlayText';
         output.setAttribute('aria-label','Текст ошибок');
-        output.tabIndex=0;
-        body.appendChild(output);
-        dock.append(header,body);
+        output.tabIndex=0;errorsPanel.appendChild(output);
+        loadPanel=document.createElement('div');loadPanel.id='screenErrorOverlayLoadPanel';loadPanel.setAttribute('role','tabpanel');
+        loadOutput=document.createElement('pre');loadOutput.id='screenErrorOverlayLoadText';loadOutput.setAttribute('aria-label','Анализ нагрузки');loadOutput.tabIndex=0;loadPanel.appendChild(loadOutput);
+        body.append(tabs,errorsPanel,loadPanel);
+        dock.append(header,body);setTab(activeTab);
         shieldViewportGestures(dock);
         document.body.appendChild(dock);
         setCollapsed(collapsed);
@@ -297,8 +425,8 @@
         }
         sequence++;
 
-        if(autoShow)setVisible(true);
-        if(visible&&!collapsed)render();
+        if(autoShow){setTab('errors');setVisible(true);}
+        if(visible&&!collapsed){if(activeTab==='errors')render();else{if(countNode)countNode.textContent=String(entries.length);updateFpsErrorState();renderLoadText();}}
         else{if(countNode)countNode.textContent=String(entries.length);updateFpsErrorState();}
     }
 
@@ -391,6 +519,11 @@
         collapse:()=>{ensureDock();setCollapsed(true);return true;},
         expand:()=>{ensureDock();setVisible(true,{expand:true});render();return true;},
         push:(kind,message)=>push(kind,message),
-        setAutoShow:value=>setAutoShow(value)
+        setAutoShow:value=>setAutoShow(value),
+        setTab:value=>{ensureDock();return setTab(value);},
+        setAnalysis:value=>{ensureDock();return setAnalysisEnabled(value);},
+        get activeTab(){return activeTab;},
+        get analysisEnabled(){return analysisEnabled;},
+        get loadSnapshot(){return lastLoadSnapshot;}
     };
 })();
