@@ -12,7 +12,7 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Somata 7.8.3</title>
+    <title>Somata 7.9</title>
     <link rel="stylesheet" href="styles/app.css?v=20261016-v78307">
     <script defer src="js/bootstrap/boot-guard.js?v=20261015-v78302"></script>
     <script defer src="js/bootstrap/error-overlay.js?v=20261015-v78302"></script>
@@ -30,10 +30,10 @@
     <script defer src="js/core/scheduler.js?v=20261015-v78302"></script>
     <script defer src="js/core/morph-controller.js?v=20261015-v78302"></script>
     <script defer src="js/effects/motion.js?v=20261015-v78302"></script>
-    <script defer src="js/core/defaults-layers.js?v=20261016-v78309"></script>
+    <script defer src="js/core/defaults-layers.js?v=20261016-v79001"></script>
     <script defer src="js/geometry/spline.js?v=20261015-v78302"></script>
-    <script defer src="js/app/geometry-gpu-core.js?v=20261016-v78310"></script>
-    <script defer src="js/geometry/frame-contour.js?v=20261016-v78309"></script>
+    <script defer src="js/app/geometry-gpu-core.js?v=20261016-v79001"></script>
+    <script defer src="js/geometry/frame-contour.js?v=20261016-v79001"></script>
     <script defer src="js/gpu/lamp-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/web-thread-scene-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/graffiti-ribbon-renderer.js?v=20261015-v78302"></script>
@@ -64,7 +64,7 @@
     <script defer src="js/render/web-morph-bridge.js?v=20261015-v78302"></script>
     <script defer src="js/render/feature-host.js?v=20261015-v78302"></script>
     <script defer src="js/render/pass-registry.js?v=20261016-v78307"></script>
-    <script defer src="js/render/render-diagnostics.js?v=20261015-v78302"></script>
+    <script defer src="js/render/render-diagnostics.js?v=20261016-v79001"></script>
     <script defer src="js/render/render-layer-snapshot.js?v=20261015-v78302"></script>
     <script defer src="js/render/morph-provider-service.js?v=20261015-v78302"></script>
     <script defer src="js/render/geometry-circles-pass.js?v=20261015-v78302"></script>
@@ -111,7 +111,7 @@
     <script defer src="js/render/geometry-executor.js?v=20261015-v78302"></script>
     <script defer src="js/render/main-pipeline.js?v=20261016-v78305"></script>
     <script defer src="js/ui/master-broadcast-core.js?v=20261015-v78302"></script>
-    <script defer src="js/app/ui-project-runtime.js?v=20261016-v78310"></script>
+    <script defer src="js/app/ui-project-runtime.js?v=20261016-v79001"></script>
     <script defer src="js/ui/desktop-brand-popout.js?v=20261015-v78302"></script>
 </head>
 <body>
@@ -1766,6 +1766,14 @@
                                     <span id="valFillFadeHardness" class="text-mono editable-number-value">50%</span>
                                 </div>
                                 <input id="paramFillFadeHardness" type="range" min="0" max="100" step="1" value="50">
+                            </div>
+                            <div id="fillFadePixelizationControl" class="control-row fill-special-control hidden">
+                                <div class="row-label">
+                                    <span>Пикселизация:</span>
+                                    <span id="valFillFadePixelization" class="text-mono editable-number-value">25%</span>
+                                </div>
+                                <input id="paramFillFadePixelization" type="range" min="0" max="100" step="1" value="25" aria-label="Пикселизация резкой затухающей заливки">
+                                <div class="fill-mode-hint">0% — крупные ступени · 25% — текущий вид · 100% — плавный градиент</div>
                             </div>
                         </div>
                     </div>

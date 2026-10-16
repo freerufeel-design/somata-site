@@ -3539,7 +3539,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
 
         const WebGPUFillMeshRenderer = (() => {
             const canvas=document.createElement('canvas');
-            let device=null,context=null,format=null,pipeline=null,windingStencilPipeline=null,windingCoverPipeline=null,parityStencilPipeline=null,parityCoverPipeline=null,bindGroupLayout=null,pipelineLayout=null,msaaTexture=null,stencilTexture=null,isolatedFillTexture=null,isolatedFillView=null,isolatedCompositePipeline=null,isolatedCompositeSampler=null,isolatedCompositeBindGroup=null,fadeCompositePipeline=null,fadeSmoothSampler=null,fadeCompositeError='';
+            let device=null,context=null,format=null,pipeline=null,windingStencilPipeline=null,windingCoverPipeline=null,parityStencilPipeline=null,parityCoverPipeline=null,bindGroupLayout=null,pipelineLayout=null,msaaTexture=null,stencilTexture=null,isolatedFillTexture=null,isolatedFillView=null,isolatedCompositePipeline=null,isolatedCompositeSampler=null,isolatedCompositeBindGroup=null,fadeCompositePipeline=null,fadeSmoothSampler=null,fadeCompositeError='',fadeBlurPipelineH=null,fadeBlurPipelineV=null,fadeSmoothCompositePipeline=null,fadeBlurTextureA=null,fadeBlurTextureB=null,fadeBlurViewA=null,fadeBlurViewB=null,fadeBlurUniformBuffer=null,fadeBlurBindGroupH=null,fadeBlurBindGroupV=null,fadeBlurWidth=0,fadeBlurHeight=0,fadeAdvancedError='';
             let ready=false,attempted=false,initializing=false,lost=false,lastError='',hubGeneration=0,width=0,height=0;
             let submissions=0,draws=0,bufferBuilds=0,bufferHits=0,fallbacks=0,renderedTriangles=0,gpuEvictions=0;
             let directEncodes=0,directTriangles=0,isolatedEncodes=0,uniformSlotGrows=0,windingDraws=0,windingCovers=0,windingTriangles=0,parityDraws=0,parityCovers=0,dynamicMeshUploads=0,dynamicMeshUploadBytes=0,dynamicMeshGrows=0,dynamicMeshReuses=0;
@@ -3620,7 +3620,12 @@ fn ringAlpha8(uv:vec2<f32>,d:vec2<f32>,baseA:f32)->f32{
     // that made the intermediate range run backwards near 0/100.
     // Hardness now only moves a monotonic threshold through one fixed field.
     let radius=max(1.0,u.viewportRadiusHardness.z);
-    let d=vec2<f32>(radius/vp.x,radius/vp.y);
+    let pix=clamp(u.directionPad.z,0.0,1.0);
+    // Sharp 25% is the 7.9 baseline. Below it we deliberately enlarge the
+    // sampling cells; above it the advanced smooth field takes over when available.
+    let sharpScale=mix(2.25,1.0,min(1.0,pix/0.25));
+    let baseD=vec2<f32>(radius/vp.x,radius/vp.y);
+    let d=select(baseD*sharpScale,baseD,u.directionPad.y>0.5);
     var core=0.0;
     if(u.directionPad.y<0.5){
         // Sharp mode is intentionally the original layered algorithm.
@@ -3660,6 +3665,74 @@ fn ringAlpha8(uv:vec2<f32>,d:vec2<f32>,baseA:f32)->f32{
     let weight=clamp(smoothstep(threshold-band,threshold+band,directedDepth),0.0,1.0);
     return c*weight;
 }`;
+            const FADE_BLUR_WGSL=`
+@group(0) @binding(0) var srcTex:texture_2d<f32>;
+@group(0) @binding(1) var srcSampler:sampler;
+struct BlurU { uvStep:vec4<f32> };
+@group(0) @binding(2) var<uniform> u:BlurU;
+struct V{@builtin(position) p:vec4<f32>,@location(0) uv:vec2<f32>};
+@vertex fn vs(@builtin(vertex_index) i:u32)->V{
+    let p=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0));
+    let q=p[i];var o:V;o.p=vec4<f32>(q,0.0,1.0);o.uv=vec2<f32>((q.x+1.0)*0.5,(1.0-q.y)*0.5);return o;
+}
+fn aAt(uv:vec2<f32>)->f32{return textureSampleLevel(srcTex,srcSampler,clamp(uv,vec2<f32>(0.0),vec2<f32>(1.0)),0.0).a;}
+fn gaussian9(uv:vec2<f32>,step:vec2<f32>)->f32{
+    var a=aAt(uv)*0.204164;
+    a+=(aAt(uv+step)+aAt(uv-step))*0.180174;
+    a+=(aAt(uv+step*2.0)+aAt(uv-step*2.0))*0.123832;
+    a+=(aAt(uv+step*3.0)+aAt(uv-step*3.0))*0.066282;
+    a+=(aAt(uv+step*4.0)+aAt(uv-step*4.0))*0.027631;
+    return a;
+}
+@fragment fn fsH(v:V)->@location(0) vec4<f32>{let a=gaussian9(v.uv,vec2<f32>(u.uvStep.x,0.0));return vec4<f32>(a,a,a,a);}
+@fragment fn fsV(v:V)->@location(0) vec4<f32>{let a=gaussian9(v.uv,vec2<f32>(0.0,u.uvStep.y));return vec4<f32>(a,a,a,a);}
+`;
+            const FADE_SMOOTH_COMPOSITE_WGSL=`
+@group(0) @binding(0) var srcTex:texture_2d<f32>;
+@group(0) @binding(1) var srcSampler:sampler;
+@group(0) @binding(2) var blurTex:texture_2d<f32>;
+@group(0) @binding(3) var blurSampler:sampler;
+struct FadeU { viewportRadiusHardness:vec4<f32>, directionPad:vec4<f32> };
+@group(0) @binding(4) var<uniform> u:FadeU;
+struct V{@builtin(position) p:vec4<f32>,@location(0) uv:vec2<f32>};
+@vertex fn vs(@builtin(vertex_index) i:u32)->V{
+    let p=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0));
+    let q=p[i];var o:V;o.p=vec4<f32>(q,0.0,1.0);o.uv=vec2<f32>((q.x+1.0)*0.5,(1.0-q.y)*0.5);return o;
+}
+fn insideAt(uv:vec2<f32>)->f32{return select(0.0,1.0,textureSampleLevel(srcTex,srcSampler,clamp(uv,vec2<f32>(0.0),vec2<f32>(1.0)),0.0).a>0.00001);}
+fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
+    let h2=d*0.5;var cov=0.0;var cov2=0.0;
+    cov+=insideAt(uv+vec2<f32>( d.x,0.0));cov+=insideAt(uv+vec2<f32>(-d.x,0.0));
+    cov+=insideAt(uv+vec2<f32>(0.0, d.y));cov+=insideAt(uv+vec2<f32>(0.0,-d.y));
+    cov+=insideAt(uv+vec2<f32>( d.x*0.7071, d.y*0.7071));cov+=insideAt(uv+vec2<f32>(-d.x*0.7071, d.y*0.7071));
+    cov+=insideAt(uv+vec2<f32>( d.x*0.7071,-d.y*0.7071));cov+=insideAt(uv+vec2<f32>(-d.x*0.7071,-d.y*0.7071));
+    cov2+=insideAt(uv+vec2<f32>( h2.x,0.0));cov2+=insideAt(uv+vec2<f32>(-h2.x,0.0));
+    cov2+=insideAt(uv+vec2<f32>(0.0, h2.y));cov2+=insideAt(uv+vec2<f32>(0.0,-h2.y));
+    cov2+=insideAt(uv+vec2<f32>( h2.x*0.7071, h2.y*0.7071));cov2+=insideAt(uv+vec2<f32>(-h2.x*0.7071, h2.y*0.7071));
+    cov2+=insideAt(uv+vec2<f32>( h2.x*0.7071,-h2.y*0.7071));cov2+=insideAt(uv+vec2<f32>(-h2.x*0.7071,-h2.y*0.7071));
+    return smoothstep(0.08,0.92,clamp((cov/8.0)*0.68+(cov2/8.0)*0.32,0.0,1.0));
+}
+@fragment fn fs(v:V)->@location(0) vec4<f32>{
+    let c=textureSampleLevel(srcTex,srcSampler,v.uv,0.0);if(c.a<=0.00001){return vec4<f32>(0.0);}
+    let h=clamp(u.viewportRadiusHardness.w,0.0,1.0);if(h<=0.0001){return vec4<f32>(0.0);}if(h>=0.9999){return c;}
+    let baseA=max(c.a,0.00001);
+    let blurA=textureSampleLevel(blurTex,blurSampler,v.uv,0.0).a;
+    let smoothCore=smoothstep(0.01,0.99,clamp(blurA/baseA,0.0,1.0));
+    let smoothMode=u.directionPad.y>0.5;
+    let pix=clamp(u.directionPad.z,0.0,1.0);
+    var core=smoothCore;var band=0.12;
+    if(!smoothMode){
+        let vp=max(u.viewportRadiusHardness.xy,vec2<f32>(1.0));
+        let d=vec2<f32>(max(1.0,u.viewportRadiusHardness.z)/vp.x,max(1.0,u.viewportRadiusHardness.z)/vp.y);
+        let sharp=sharpCore(v.uv,d);
+        let t=smoothstep(0.25,1.0,pix);
+        core=mix(sharp,smoothCore,t);band=mix(0.025,0.12,t);
+    }
+    let directed=select(core,1.0-core,u.directionPad.x>0.5);
+    let progress=smoothstep(0.0,1.0,h);let threshold=1.0-progress;
+    let weight=clamp(smoothstep(threshold-band,threshold+band,directed),0.0,1.0);
+    return c*weight;
+}`;
             function destroyMeshRecord(rec){
                 if(!rec)return;
                 for(const part of rec.parts||[]){try{part.vertexBuffer?.destroy?.();}catch(_){}try{part.indexBuffer?.destroy?.();}catch(_){}}
@@ -3668,13 +3741,15 @@ fn ringAlpha8(uv:vec2<f32>,d:vec2<f32>,baseA:f32)->f32{
                 try{msaaTexture?.destroy?.();}catch(_){}msaaTexture=null;
                 try{stencilTexture?.destroy?.();}catch(_){}stencilTexture=null;
                 try{isolatedFillTexture?.destroy?.();}catch(_){}isolatedFillTexture=null;isolatedFillView=null;isolatedCompositeBindGroup=null;
+                try{fadeBlurTextureA?.destroy?.();}catch(_){}try{fadeBlurTextureB?.destroy?.();}catch(_){}fadeBlurTextureA=null;fadeBlurTextureB=null;fadeBlurViewA=null;fadeBlurViewB=null;fadeBlurBindGroupH=null;fadeBlurBindGroupV=null;fadeBlurWidth=0;fadeBlurHeight=0;
+                try{fadeBlurUniformBuffer?.destroy?.();}catch(_){}fadeBlurUniformBuffer=null;
                 for(const rec of fillHistoryRecords.values()){try{clearTimeout(rec?.timerHandle);}catch(_){}try{rec?.texture?.destroy?.();}catch(_){}}
                 fillHistoryRecords.clear();
                 for(const rec of fadeStyleRecords.values()){try{rec?.buffer?.destroy?.();}catch(_){}}
                 fadeStyleRecords.clear();
                 for(const rec of gpuMeshRecords)destroyMeshRecord(rec);gpuMeshRecords.clear();gpuMeshCache=new WeakMap();
                 for(const slot of uniformSlots)try{slot?.buffer?.destroy?.();}catch(_){}uniformSlots=[];uniformCursor=0;
-                pipeline=null;windingStencilPipeline=null;windingCoverPipeline=null;parityStencilPipeline=null;parityCoverPipeline=null;bindGroupLayout=null;pipelineLayout=null;fadeCompositePipeline=null;fadeSmoothSampler=null;fadeCompositeError='';
+                pipeline=null;windingStencilPipeline=null;windingCoverPipeline=null;parityStencilPipeline=null;parityCoverPipeline=null;bindGroupLayout=null;pipelineLayout=null;fadeCompositePipeline=null;fadeSmoothSampler=null;fadeCompositeError='';fadeBlurPipelineH=null;fadeBlurPipelineV=null;fadeSmoothCompositePipeline=null;fadeAdvancedError='';
             }
             function drainMeshEvictions(){
                 for(const mesh of FillMeshPreparer.takeEvicted?.()||[]){
@@ -3771,6 +3846,23 @@ fn ringAlpha8(uv:vec2<f32>,d:vec2<f32>,baseA:f32)->f32{
                         fadeCompositePipeline=null;fadeCompositeError=String(fadeErr?.message||fadeErr);
                         try{console.error('[Somata Fill] Fading Fill shader unavailable; base Fill remains active',fadeCompositeError);}catch(_){}
                     }
+                    // 7.9 smooth-field capability: optional and lazy.  Failure falls back to
+                    // the established sharp/multisample Fade shader and never disables Fill.
+                    fadeBlurPipelineH=null;fadeBlurPipelineV=null;fadeSmoothCompositePipeline=null;fadeAdvancedError='';
+                    try{
+                        const blurModule=device.createShaderModule({label:'Somata 7.9 smooth Fill separable blur WGSL',code:FADE_BLUR_WGSL});
+                        const smoothModule=device.createShaderModule({label:'Somata 7.9 smooth Fill composite WGSL',code:FADE_SMOOTH_COMPOSITE_WGSL});
+                        await assertWebGPUShaderModule(blurModule,'Somata 7.9 smooth Fill separable blur WGSL');
+                        await assertWebGPUShaderModule(smoothModule,'Somata 7.9 smooth Fill composite WGSL');
+                        fadeBlurPipelineH=device.createRenderPipeline({label:'Somata 7.9 Fade field horizontal',layout:'auto',vertex:{module:blurModule,entryPoint:'vs'},fragment:{module:blurModule,entryPoint:'fsH',targets:[{format}]},primitive:{topology:'triangle-list'}});
+                        fadeBlurPipelineV=device.createRenderPipeline({label:'Somata 7.9 Fade field vertical',layout:'auto',vertex:{module:blurModule,entryPoint:'vs'},fragment:{module:blurModule,entryPoint:'fsV',targets:[{format}]},primitive:{topology:'triangle-list'}});
+                        fadeSmoothCompositePipeline=device.createRenderPipeline({label:'Somata 7.9 continuous Fade composite',layout:'auto',vertex:{module:smoothModule,entryPoint:'vs'},fragment:{module:smoothModule,entryPoint:'fs',targets:[{format,blend}]},primitive:{topology:'triangle-list'}});
+                        fadeBlurUniformBuffer=device.createBuffer({label:'Somata 7.9 Fade blur uniform',size:16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+                    }catch(advancedErr){
+                        fadeBlurPipelineH=null;fadeBlurPipelineV=null;fadeSmoothCompositePipeline=null;fadeAdvancedError=String(advancedErr?.message||advancedErr);
+                        try{fadeBlurUniformBuffer?.destroy?.();}catch(_){}fadeBlurUniformBuffer=null;
+                        try{console.warn('[Somata Fill] Continuous Fade field unavailable; using legacy fade field',fadeAdvancedError);}catch(_){}
+                    }
                     ready=true;lost=false;lastError='';try{requestMainCanvasRender();}catch(_){}return true;
                 }catch(err){ready=false;lastError=String(err?.message||err);return false;}
                 finally{initializing=false;}
@@ -3785,6 +3877,10 @@ fn ringAlpha8(uv:vec2<f32>,d:vec2<f32>,baseA:f32)->f32{
                 if(width===w&&height===h&&msaaTexture&&stencilTexture&&isolatedFillTexture&&canvas.width===w&&canvas.height===h)return true;
                 width=w;height=h;canvas.width=w;canvas.height=h;context.configure({device,format,alphaMode:'premultiplied'});
                 try{msaaTexture?.destroy?.();}catch(_){}try{stencilTexture?.destroy?.();}catch(_){}try{isolatedFillTexture?.destroy?.();}catch(_){}
+                // The continuous Fade field samples isolatedFillView, so any resize/source
+                // replacement invalidates its cached bind groups even when half-res dimensions
+                // happen to round to the same values.
+                try{fadeBlurTextureA?.destroy?.();}catch(_){}try{fadeBlurTextureB?.destroy?.();}catch(_){}fadeBlurTextureA=null;fadeBlurTextureB=null;fadeBlurViewA=null;fadeBlurViewB=null;fadeBlurBindGroupH=null;fadeBlurBindGroupV=null;fadeBlurWidth=0;fadeBlurHeight=0;
                 msaaTexture=device.createTexture({label:'SpiroStar native Fill Mesh MSAA',size:[w,h,1],sampleCount:4,format,usage:GPUTextureUsage.RENDER_ATTACHMENT});
                 stencilTexture=device.createTexture({label:'SpiroStar native Fill winding stencil',size:[w,h,1],sampleCount:4,format:'depth24plus-stencil8',usage:GPUTextureUsage.RENDER_ATTACHMENT});
                 isolatedFillTexture=device.createTexture({label:'Somata isolated ordered Fill current-frame texture',size:[w,h,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});isolatedFillView=isolatedFillTexture.createView();
@@ -3962,6 +4058,35 @@ fn ringAlpha8(uv:vec2<f32>,d:vec2<f32>,baseA:f32)->f32{
                 const w=Math.max(1,maxX-minX),h=Math.max(1,maxY-minY);
                 return Math.max(4,Math.min(Math.min(w,h)*.5,Math.min(width,height)*.45));
             }
+            function ensureFadeBlurResources(){
+                if(!fadeBlurPipelineH||!fadeBlurPipelineV||!fadeSmoothCompositePipeline||!fadeBlurUniformBuffer||!isolatedFillView||!fadeSmoothSampler)return false;
+                const bw=Math.max(1,Math.ceil(width*.5)),bh=Math.max(1,Math.ceil(height*.5));
+                if(fadeBlurTextureA&&fadeBlurTextureB&&fadeBlurWidth===bw&&fadeBlurHeight===bh&&fadeBlurBindGroupH&&fadeBlurBindGroupV)return true;
+                try{fadeBlurTextureA?.destroy?.();}catch(_){}try{fadeBlurTextureB?.destroy?.();}catch(_){}
+                fadeBlurTextureA=device.createTexture({label:'Somata 7.9 Fade field H 1/2-res',size:[bw,bh,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
+                fadeBlurTextureB=device.createTexture({label:'Somata 7.9 Fade field V 1/2-res',size:[bw,bh,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
+                fadeBlurViewA=fadeBlurTextureA.createView();fadeBlurViewB=fadeBlurTextureB.createView();fadeBlurWidth=bw;fadeBlurHeight=bh;
+                fadeBlurBindGroupH=device.createBindGroup({layout:fadeBlurPipelineH.getBindGroupLayout(0),entries:[{binding:0,resource:isolatedFillView},{binding:1,resource:fadeSmoothSampler},{binding:2,resource:{buffer:fadeBlurUniformBuffer}}]});
+                fadeBlurBindGroupV=device.createBindGroup({layout:fadeBlurPipelineV.getBindGroupLayout(0),entries:[{binding:0,resource:fadeBlurViewA},{binding:1,resource:fadeSmoothSampler},{binding:2,resource:{buffer:fadeBlurUniformBuffer}}]});
+                return true;
+            }
+            const fadeBlurUniformScratch=new Float32Array(4);
+            function appendContinuousFadeField(encoder,radius){
+                if(!encoder||!ensureFadeBlurResources())return false;
+                // Nine taps per axis on a half-resolution target.  The farthest tap is
+                // exactly the requested contour radius; this replaces 24 full-resolution
+                // directional samples with a much smoother and cheaper separable field.
+                fadeBlurUniformScratch[0]=Math.max(1,radius)/(4*Math.max(1,width));
+                fadeBlurUniformScratch[1]=Math.max(1,radius)/(4*Math.max(1,height));
+                fadeBlurUniformScratch[2]=0;fadeBlurUniformScratch[3]=0;
+                device.queue.writeBuffer(fadeBlurUniformBuffer,0,fadeBlurUniformScratch);
+                const clear={r:0,g:0,b:0,a:0};
+                const ph=encoder.beginRenderPass({colorAttachments:[{view:fadeBlurViewA,clearValue:clear,loadOp:'clear',storeOp:'store'}]});
+                ph.setPipeline(fadeBlurPipelineH);ph.setBindGroup(0,fadeBlurBindGroupH);ph.draw(3);ph.end();
+                const pv=encoder.beginRenderPass({colorAttachments:[{view:fadeBlurViewB,clearValue:clear,loadOp:'clear',storeOp:'store'}]});
+                pv.setPipeline(fadeBlurPipelineV);pv.setBindGroup(0,fadeBlurBindGroupV);pv.draw(3);pv.end();
+                return true;
+            }
             function fadeStyleRecord(frameCtx){
                 const key=String(frameCtx?.layer?.id||`layer-${Number(frameCtx?.layerIndex)||0}`);
                 let rec=fadeStyleRecords.get(key);
@@ -3980,11 +4105,28 @@ fn ringAlpha8(uv:vec2<f32>,d:vec2<f32>,baseA:f32)->f32{
                     const direction=typeof getLayerFillFadeDirection==='function'&&getLayerFillFadeDirection(layer)==='toCenter'?1:0;
                     const fillType=typeof getLayerFillType==='function'?getLayerFillType(layer):'fade';
                     const smoothMode=fillType==='fadeSmooth'?1:0;
-                    const fadeSampler=smoothMode&&fadeSmoothSampler?fadeSmoothSampler:isolatedCompositeSampler;
+                    const pixelization=(typeof getLayerFillFadePixelization==='function'?getLayerFillFadePixelization(layer):25)/100;
                     const radius=fillBoundaryRadiusPx(frameCtx,mesh,targetCtx);
                     fadeUniformScratch[0]=width;fadeUniformScratch[1]=height;fadeUniformScratch[2]=radius;fadeUniformScratch[3]=hardness;
-                    fadeUniformScratch[4]=direction;fadeUniformScratch[5]=smoothMode;fadeUniformScratch[6]=0;fadeUniformScratch[7]=0;
+                    fadeUniformScratch[4]=direction;fadeUniformScratch[5]=smoothMode;fadeUniformScratch[6]=pixelization;fadeUniformScratch[7]=0;
                     device.queue.writeBuffer(rec.buffer,0,fadeUniformScratch);
+
+                    // Smooth Fade, and Sharp Fade above its 25% legacy baseline, use the
+                    // new continuous field.  At <=25% Sharp stays on the established cheap
+                    // binary-ring path; this preserves the stable 7.9 look and avoids extra
+                    // offscreen passes unless the user actually asks for finer gradation.
+                    const wantsContinuous=(smoothMode===1||pixelization>0.2501)&&hardness>0.0001&&hardness<0.9999;
+                    const continuousReady=wantsContinuous&&fadeSmoothCompositePipeline&&fadeSmoothSampler&&appendContinuousFadeField(encoder,radius);
+                    if(continuousReady){
+                        const bindGroup=device.createBindGroup({layout:fadeSmoothCompositePipeline.getBindGroupLayout(0),entries:[
+                            {binding:0,resource:isolatedFillView},{binding:1,resource:isolatedCompositeSampler},
+                            {binding:2,resource:fadeBlurViewB},{binding:3,resource:fadeSmoothSampler},{binding:4,resource:{buffer:rec.buffer}}
+                        ]});
+                        const pass=encoder.beginRenderPass({colorAttachments:[{view:targetTexture.createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:clearTarget?'clear':'load',storeOp:'store'}]});
+                        pass.setPipeline(fadeSmoothCompositePipeline);pass.setBindGroup(0,bindGroup);pass.draw(3);pass.end();return true;
+                    }
+
+                    const fadeSampler=smoothMode&&fadeSmoothSampler?fadeSmoothSampler:isolatedCompositeSampler;
                     const bindGroup=device.createBindGroup({layout:fadeCompositePipeline.getBindGroupLayout(0),entries:[
                         {binding:0,resource:isolatedFillView},{binding:1,resource:fadeSampler},{binding:2,resource:{buffer:rec.buffer}}
                     ]});
@@ -4079,7 +4221,7 @@ fn ringAlpha8(uv:vec2<f32>,d:vec2<f32>,baseA:f32)->f32{
                 }catch(err){lastError=String(err?.message||err);fallbacks++;return false;}
             }
             function clear(){/* render pass clears every presentation */}
-            function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost&&WebGPUDeviceHub.isReady(),attempted,initializing,lost,lastError,width,height,submissions,draws,bufferBuilds,bufferHits,gpuEvictions,residentMeshRecords:gpuMeshRecords.size,fallbacks,renderedTriangles,directEncodes,directTriangles,isolatedEncodes,windingDraws,windingCovers,parityDraws,parityCovers,windingTriangles,uniformSlots:uniformSlots.length,uniformSlotGrows,dynamicMeshUploads,dynamicMeshUploadBytes,dynamicMeshGrows,dynamicMeshReuses,fillHistoryLayers:fillHistoryRecords.size,fadeStyleLayers:fadeStyleRecords.size,fadeAvailable:!!fadeCompositePipeline,fadeError:fadeCompositeError,msaa:4,stencilFormat:'depth24plus-stencil8',hubGeneration};}
+            function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost&&WebGPUDeviceHub.isReady(),attempted,initializing,lost,lastError,width,height,submissions,draws,bufferBuilds,bufferHits,gpuEvictions,residentMeshRecords:gpuMeshRecords.size,fallbacks,renderedTriangles,directEncodes,directTriangles,isolatedEncodes,windingDraws,windingCovers,parityDraws,parityCovers,windingTriangles,uniformSlots:uniformSlots.length,uniformSlotGrows,dynamicMeshUploads,dynamicMeshUploadBytes,dynamicMeshGrows,dynamicMeshReuses,fillHistoryLayers:fillHistoryRecords.size,fadeStyleLayers:fadeStyleRecords.size,fadeAvailable:!!fadeCompositePipeline,fadeError:fadeCompositeError,fadeContinuousAvailable:!!(fadeBlurPipelineH&&fadeBlurPipelineV&&fadeSmoothCompositePipeline),fadeContinuousError:fadeAdvancedError,fadeFieldResolution:fadeBlurWidth&&fadeBlurHeight?[fadeBlurWidth,fadeBlurHeight]:null,msaa:4,stencilFormat:'depth24plus-stencil8',hubGeneration};}
             return{warmup,isReady:()=>warmup(),canEncodeToTexture,encodeToTexture,encodeMeshCommandToTexture,encodeCorridorCommandToTexture,encodeMeshIsolatedCommandToTexture,encodeCorridorIsolatedCommandToTexture,render,clear,status};
         })();
 

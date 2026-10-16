@@ -1327,3 +1327,62 @@ Topology / Calm identity / transport
 Particles в Topology/Calm также не должны брать generic GPU Morph Arc как визуальный rail. Для них строится typed path table непосредственно из текущего `FrameContour.paths`. Благодаря этому Lamps и Particles следуют тому же пользовательскому Shape Profile, включая spline/rounding текущего кадра.
 
 Это правило относится именно к ordinary Topology/Calm. **Strict Spiral не переводится на FrameContour**: её authoritative carrier остаётся retained exact Bézier/GPU Arc.
+
+
+---
+
+## 7.9 — стабильный baseline и первая performance-итерация Fade
+
+Версия **7.9** считается новым стабильным baseline после исправлений Fill/Web, MSAA accumulation, configurable effect order, topology attachment Lamps/Particles, lamp spline motion/corner inertia и Fade Hardness.
+
+### Continuous Fade field
+
+`Затухающая — плавная` больше не строит глубину из 8 направлений × 3 дискретных радиуса. В 7.9 это отдельная optional GPU materialization:
+
+```text
+current-frame isolated Fill texture
+        ↓
+1/2-resolution horizontal Gaussian field
+        ↓
+1/2-resolution vertical Gaussian field
+        ↓
+continuous contour-depth texture
+        ↓
+Fade composite
+```
+
+Это техническая materialization Fill, а не новая геометрия. `FrameContour`, Fill topology, Web и остальные эффекты не знают о blur field.
+
+Контракты:
+
+- базовые `Плотный`, `Математический`, `С накоплением` не зависят от continuous Fade pipeline;
+- отказ advanced Fade shader/pipeline не имеет права переводить базовый Fill renderer в failed;
+- continuous resources создаются **лениво**, только когда активен `fadeSmooth` или пользователь повышает детализацию sharp Fade выше baseline;
+- field строится в **1/2 разрешения** и линейно семплируется при composite; это уменьшает texture-sample нагрузку относительно прежних 24 full-resolution directional samples;
+- `Жёсткость` по-прежнему только монотонно двигает порог: `0% = пусто`, `100% = полная Fill`.
+
+### Пикселизация sharp Fade
+
+У `Затухающая — резкая` есть `fillFadePixelization`:
+
+```text
+0%   → более крупные ступени
+25%  → сохранённый визуальный baseline 7.9
+100% → continuous field / плавный градиент
+```
+
+При `<=25%` sharp Fade остаётся на дешёвом legacy binary-ring path. Continuous field не материализуется. При `>25%` sharp-field постепенно смешивается с continuous field. Поэтому обычный baseline не платит за качество, которое пользователь не запросил.
+
+### Performance-правило следующих итераций
+
+7.9 закрепляет общий принцип дальнейшей оптимизации:
+
+> **Оптимизировать не эффект целиком, а materialization/demand. Дорогой representation создаётся только когда активный consumer действительно его запросил. Базовые carriers и эффекты не должны переходить на универсальный дорогой путь “на всякий случай”.**
+
+Следующие безопасные итерации после визуальной проверки 7.9:
+
+1. отделить логическую identity кадра от переиспользуемого `frameCtx` и вынести transient outputs в frame-owned generation;
+2. формализовать общий `GeometryCarrier` capability contract перед будущими Dreamcatcher/Tesseract;
+3. добавить frame trace DAG для prepare/encode/submit/present и использовать его для точечного удаления redundant materializations;
+4. объединять только совместимые GPU sections внутри одного encoder, сохраняя независимый художественный порядок Fill/Web/Geometry;
+5. перейти к единому `FrameClock/VisualClock` без локальных time sources.

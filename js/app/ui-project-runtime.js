@@ -1075,7 +1075,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             });
             return rt.profileCarrierPlans;
         }
-        window.__somata76MorphArchitectureStatus=()=>({version:'7.8.3',mode:String(state.morph?.mode||'circleSlide'),
+        window.__somata76MorphArchitectureStatus=()=>({version:'7.9',mode:String(state.morph?.mode||'circleSlide'),
             gpuWarming:runtimeState.morph?.gpuPhaseWarming===true,gpuPreparing:runtimeState.morph?.gpuPhasePreparing===true,
             layers:(runtimeState.morph?.profileCarrierPlans||[]).map(p=>({...p})),
             contract:'shared profile -> carrier mapping; Spiral modes morph key carrier points first. Phase is fixed-N/variable-K, phase-circle adds branch clone/merge, minimal-turn keeps step constant while N branches clone/merge with Corridor phase locked to the same continuous-N carrier delta; Space pause snaps to the stable phase source; topology moves key endpoints Cartesian; torn uses exact Bezier subdivision without arc resampling.'});
@@ -1453,6 +1453,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             layer.fillAccumulationSeconds = getLayerFillAccumulationSeconds(layer);
             layer.fillFadeDirection = getLayerFillFadeDirection(layer);
             layer.fillFadeHardness = getLayerFillFadeHardness(layer);
+            layer.fillFadePixelization = getLayerFillFadePixelization(layer);
             if(getLayerFillMatchStroke(layer))syncLayerFillColorToStroke(layer);
             if (layer.fillColor && layer.fillColor.length >= 7) {
                 document.getElementById('paramFillColor').value = colorBaseHex6(layer.fillColor, layer.strokeColor || '#4f46e5');
@@ -1468,13 +1469,17 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const fillAccumulationControl=document.getElementById('fillAccumulationControl');
             const fillFadeDirectionControl=document.getElementById('fillFadeDirectionControl');
             const fillFadeHardnessControl=document.getElementById('fillFadeHardnessControl');
+            const fillFadePixelizationControl=document.getElementById('fillFadePixelizationControl');
             fillAccumulationControl?.classList.toggle('hidden',!layer.fill||fillModeChoice!=='accumulation');
             fillFadeDirectionControl?.classList.toggle('hidden',!layer.fill||!(fillModeChoice==='fade'||fillModeChoice==='fadeSmooth'));
             fillFadeHardnessControl?.classList.toggle('hidden',!layer.fill||!(fillModeChoice==='fade'||fillModeChoice==='fadeSmooth'));
+            fillFadePixelizationControl?.classList.toggle('hidden',!layer.fill||fillModeChoice!=='fade');
             const fillAccumulationInput=document.getElementById('paramFillAccumulationSeconds');if(fillAccumulationInput)fillAccumulationInput.value=String(layer.fillAccumulationSeconds);
             const fillFadeDirectionInput=document.getElementById('paramFillFadeDirection');if(fillFadeDirectionInput)fillFadeDirectionInput.value=layer.fillFadeDirection;
             const fillFadeHardnessInput=document.getElementById('paramFillFadeHardness');if(fillFadeHardnessInput)fillFadeHardnessInput.value=String(layer.fillFadeHardness);
             const fillFadeHardnessValue=document.getElementById('valFillFadeHardness');if(fillFadeHardnessValue)fillFadeHardnessValue.textContent=`${Math.round(layer.fillFadeHardness)}%`;
+            const fillFadePixelizationInput=document.getElementById('paramFillFadePixelization');if(fillFadePixelizationInput)fillFadePixelizationInput.value=String(layer.fillFadePixelization);
+            const fillFadePixelizationValue=document.getElementById('valFillFadePixelization');if(fillFadePixelizationValue)fillFadePixelizationValue.textContent=`${Math.round(layer.fillFadePixelization)}%`;
             const fillModeHint=document.getElementById('fillModeHint');
             if(fillModeHint){
                 if(fillModeChoice==='accumulation')fillModeHint.textContent='Накапливает состояния заливки и очищает историю по таймеру.';
@@ -4325,6 +4330,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     document.getElementById('fillAccumulationControl')?.classList.toggle('hidden', !layer.fill||fillChoice!=='accumulation');
                     document.getElementById('fillFadeDirectionControl')?.classList.toggle('hidden', !layer.fill||!(fillChoice==='fade'||fillChoice==='fadeSmooth'));
                     document.getElementById('fillFadeHardnessControl')?.classList.toggle('hidden', !layer.fill||!(fillChoice==='fade'||fillChoice==='fadeSmooth'));
+                    document.getElementById('fillFadePixelizationControl')?.classList.toggle('hidden', !layer.fill||fillChoice!=='fade');
                     document.getElementById('fillSettingsBody')?.classList.toggle('fill-disabled', !layer.fill);
                     const fillColorInput=document.getElementById('paramFillColor');
                     if(fillColorInput){fillColorInput.disabled=getLayerFillMatchStroke(layer);fillColorInput.value=colorBaseHex6(layer.fillColor,layer.strokeColor||'#4f46e5');}
@@ -4352,9 +4358,11 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 const accumulation=document.getElementById('fillAccumulationControl');
                 const fadeDir=document.getElementById('fillFadeDirectionControl');
                 const fadeHard=document.getElementById('fillFadeHardnessControl');
+                const fadePix=document.getElementById('fillFadePixelizationControl');
                 accumulation?.classList.toggle('hidden',choice!=='accumulation');
                 fadeDir?.classList.toggle('hidden',!(choice==='fade'||choice==='fadeSmooth'));
                 fadeHard?.classList.toggle('hidden',!(choice==='fade'||choice==='fadeSmooth'));
+                fadePix?.classList.toggle('hidden',choice!=='fade');
                 const hint=document.getElementById('fillModeHint');
                 if(hint){
                     if(choice==='accumulation')hint.textContent='Накапливает состояния заливки и очищает историю по таймеру.';
@@ -4385,6 +4393,14 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 layer.fillFadeHardness=v;
                 const text=document.getElementById('valFillFadeHardness');if(text)text.textContent=`${Math.round(v)}%`;
                 if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,['fillFadeHardness'],'ui-fill-fade-hardness');
+                requestMainCanvasRender();
+            });
+            document.getElementById('paramFillFadePixelization')?.addEventListener('input',(e)=>{
+                const layer=getActiveLayer();if(!layer)return;
+                const v=Math.max(0,Math.min(100,Number(e.target.value)||0));
+                layer.fillFadePixelization=v;
+                const text=document.getElementById('valFillFadePixelization');if(text)text.textContent=`${Math.round(v)}%`;
+                if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,['fillFadePixelization'],'ui-fill-fade-pixelization');
                 requestMainCanvasRender();
             });
 
@@ -12013,6 +12029,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 layer.fillAccumulationSeconds=getLayerFillAccumulationSeconds(layer);
                 layer.fillFadeDirection=getLayerFillFadeDirection(layer);
                 layer.fillFadeHardness=getLayerFillFadeHardness(layer);
+                layer.fillFadePixelization=getLayerFillFadePixelization(layer);
                 if(layer.fillMatchStroke!==false)syncLayerFillColorToStroke(layer,true);
                 if(raw.lamps && typeof raw.lamps==='object' && !Number.isFinite(Number(raw.lamps.softnessMultiplier))) layer.lamps.softnessMultiplier=1;
                 ensureLayerEffectState(layer);

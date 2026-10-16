@@ -480,6 +480,12 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             const v=Number(layer?.fillFadeHardness);
             return Number.isFinite(v)?Math.max(0,Math.min(100,v)):50;
         }
+        function getLayerFillFadePixelization(layer) {
+            const v=Number(layer?.fillFadePixelization);
+            // 7.9 baseline: 25% reproduces the established layered/sharp look.
+            // 0% makes the layers coarser; 100% converges to the continuous smooth field.
+            return Number.isFinite(v)?Math.max(0,Math.min(100,v)):25;
+        }
         function getLayerFillAccumulationSeconds(layer) {
             const v=Number(layer?.fillAccumulationSeconds);
             return Number.isFinite(v)?Math.max(.1,Math.min(120,v)):5;
@@ -611,6 +617,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 fillAccumulationSeconds: 5,
                 fillFadeDirection: 'fromCenter',
                 fillFadeHardness: 50,
+                fillFadePixelization: 25,
                 fillColor: '#00ffcc08',
                 graffitiPaletteKey: 'standard',
                 profileMode: 'segments',
