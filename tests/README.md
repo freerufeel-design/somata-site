@@ -162,3 +162,6 @@ node tests/v819-palette-lookup-benchmark.js
 ## Somata 8.19.1 — Corridor → Blue startup warmup
 
 `node tests/v8191-startup-mode-warmup-regression.js` verifies that GPU copy-ring reservation never runs before the renderer becomes ready, is limited to 256 copies, and does not allocate after GPU device loss. In Chromium without hardware GPU, it also verifies Corridor → Blue Morph → Stop actions, no uncaught errors, and startup diagnostic availability. `RELEASE_8.19.1.md` documents GPU-specific verification limitations.
+
+- V8.19.3: `node tests/v8193-orange-explicit-routes-regression.js` — Orange changes only explicitly routed layer parameters and persists an empty binding list.
+- V8.19.3: `node tests/v8193-orange-special-row-style-regression.js` — real CSS parity for Forma/Orbits in Blue and Orange.

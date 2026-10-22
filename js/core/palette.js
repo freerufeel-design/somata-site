@@ -178,21 +178,59 @@ window.__spiroRegisterModule?.('js/core/palette');
         function getAllPlaylistPaletteColors(){return getActivePlaylistPaletteKeys().flatMap(key=>getPlaylistPaletteColors(key));}
         function getPlaylistPaletteDisplayName(key){return getPlaylistPaletteRecord(key)?.name||PLAYLIST_PALETTE_NAMES[key]||key;}
         function markPlaylistPaletteEdited(record){if(record)record.exactColors=null;}
+        // Morph-only palette allocation. Static rendering deliberately retains palette[i % n].
+        // Each pass consumes all distinct authored colours exactly once. Once exhausted,
+        // begin a fresh independently shuffled pass; never synthesize new colours.
+        function selectMorphLayerPaletteColors(key,count,{fixed=false,hueOffset=null}={}){
+            const raw=hueOffset==null?getPlaylistPaletteColors(key):getPlaylistPaletteColorsAtHueOffset(key,hueOffset);
+            const seen=new Set(),unique=[];
+            for(const value of raw||[]){const color=String(value||'').toLowerCase();if(!color||seen.has(color))continue;seen.add(color);unique.push(value);}
+            const pool=unique.length?unique:['#ffffff'];
+            const total=Math.max(0,Math.floor(Number(count)||0));
+            if(fixed)return Array.from({length:total},(_,i)=>pool[i%pool.length]);
+            const result=[];let last='';
+            while(result.length<total){
+                const pass=pool.slice();
+                for(let i=pass.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[pass[i],pass[j]]=[pass[j],pass[i]];}
+                // Avoid identical colours across a cycle boundary when possible.
+                if(pass.length>1&&pass[0]===last){const swap=1+Math.floor(Math.random()*(pass.length-1));[pass[0],pass[swap]]=[pass[swap],pass[0]];}
+                for(const color of pass){if(result.length>=total)break;result.push(color);}
+                last=result[result.length-1];
+            }
+            return result;
+        }
+        function morphPaletteSyncEnabled(){return state.morph?.syncPalettesBetweenMorphs!==false;}
+        function setMorphPaletteForContext(context,key){
+            const chosen=normalizePlaylistPaletteKey(key,'standard');
+            if(context==='blue'){
+                state.morph.lineColorPalette=chosen;
+                if(morphPaletteSyncEnabled())state.randomOptions.lineColorPalette=chosen;
+            }else{
+                state.randomOptions.lineColorPalette=chosen;
+                if(morphPaletteSyncEnabled())state.morph.lineColorPalette=chosen;
+            }
+            return chosen;
+        }
         function chooseRandomActivePlaylistPalette(current=''){
             const keys=getActivePlaylistPaletteKeys();
             if(keys.length<=1)return keys[0]||'standard';
             const pool=keys.filter(k=>k!==current);return pool[Math.floor(Math.random()*pool.length)]||keys[0];
         }
         function cyclePlaylistPaletteForContext(context){
-            if(context==='blue'){
-                if(state.morph?.cyclePalettes!==true)return state.morph?.lineColorPalette;
-                state.morph.lineColorPalette=chooseRandomActivePlaylistPalette(state.morph.lineColorPalette);
-            }else{
-                if(state.randomOptions?.cyclePalettes!==true)return state.randomOptions?.lineColorPalette;
-                state.randomOptions.lineColorPalette=chooseRandomActivePlaylistPalette(state.randomOptions.lineColorPalette);
+            const blue=context==='blue';
+            // When both engines run, Orange is the automatic palette authority.
+            // A manual Blue selection still explicitly updates Orange via setMorphPaletteForContext.
+            if(blue && morphPaletteSyncEnabled() && runtimeState?.minimalMorph?.active===true){
+                return setMorphPaletteForContext('yellow',state.randomOptions.lineColorPalette);
             }
-            if(typeof renderPlaylistPaletteButtons==='function')renderPlaylistPaletteButtons();
-            return context==='blue'?state.morph.lineColorPalette:state.randomOptions.lineColorPalette;
+            const owner=blue?state.morph:state.randomOptions;
+            if(owner?.cyclePalettes===true){
+                setMorphPaletteForContext(context,chooseRandomActivePlaylistPalette(owner.lineColorPalette));
+                if(typeof renderPlaylistPaletteButtons==='function')renderPlaylistPaletteButtons();
+            }else if(!blue&&morphPaletteSyncEnabled()){
+                setMorphPaletteForContext('yellow',state.randomOptions.lineColorPalette);
+            }
+            return owner?.lineColorPalette;
         }
 
         const MAX_ROUNDING_PERCENT = 200;

@@ -1924,8 +1924,38 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const makeInput=(source,id)=>{const input=document.createElement('input');input.type='number';input.className='morph-route-inline-number';for(const a of ['min','max','step'])if(source.getAttribute(a)!=null)input.setAttribute(a,source.getAttribute(a));input.value=source.value;input.title=source.title||source.getAttribute('aria-label')||label;input.addEventListener('change',()=>setMorphProxyControl(id,input.value));return input;};
             const lo=makeInput(minSource,minId),sep=document.createElement('span'),hi=makeInput(maxSource,maxId);sep.className='morph-route-inline-range-sep';sep.textContent='—';wrap.append(lo,sep,hi);parent.appendChild(wrap);return wrap;
         }
+        function chooseMorphPaletteInUI(context,key){
+            const blue=context==='blue',previousBlue=state.morph.lineColorPalette,previousOrange=state.randomOptions.lineColorPalette;
+            setMorphPaletteForContext(context,key);
+            if(blue){
+                state.morph.options.byColor=true;
+                window.SomataMorphParameterRouting?.captureActiveDraft?.(state.morph,state.minimalMorph);
+                syncMorphProfileDirtyUI?.();
+            }else{
+                state.randomOptions.byColor=true;
+                window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);
+                syncOrangeMorphProfileDirtyUI?.();
+            }
+            // Explicit selections also update the other editor's unsaved profile draft,
+            // so saving either profile cannot silently restore an outdated palette.
+            if(morphPaletteSyncEnabled()){
+                if(blue&&previousOrange!==state.randomOptions.lineColorPalette){
+                    window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);
+                    syncOrangeMorphProfileDirtyUI?.();
+                }else if(!blue&&previousBlue!==state.morph.lineColorPalette){
+                    window.SomataMorphParameterRouting?.captureActiveDraft?.(state.morph,state.minimalMorph);
+                    syncMorphProfileDirtyUI?.();
+                }
+            }
+            if(runtimeState.morph?.active && (blue||previousBlue!==state.morph.lineColorPalette) && runtimeState.minimalMorph?.active!==true){
+                runtimeState.morph.suppressPaletteCycleOnce=true;
+                activeRebaseMorphing?.();
+            }
+            if(runtimeState.minimalMorph?.active && (!blue||previousOrange!==state.randomOptions.lineColorPalette))activeRebaseMinimalMorphing?.();
+            syncMorphSettingsUI();syncRandomSettingsUI();requestMainCanvasRender();
+        }
         function appendMorphPaletteSelector(parent,extraClass=''){
-            const wrap=document.createElement('label');wrap.className=`morph-route-inline-control morph-route-palette-select ${extraClass}`.trim();const t=document.createElement('span');t.textContent='Палитра';const select=document.createElement('select');for(const key of getActivePlaylistPaletteKeys()){const o=document.createElement('option');o.value=key;o.textContent=getPlaylistPaletteDisplayName(key);select.appendChild(o);}select.value=normalizePlaylistPaletteKey(state.morph.lineColorPalette,'standard');select.addEventListener('change',()=>{state.morph.lineColorPalette=select.value;state.morph.options.byColor=true;window.SomataMorphParameterRouting?.captureActiveDraft?.(state.morph,state.minimalMorph);syncMorphSettingsUI();syncMorphProfileDirtyUI?.();if(runtimeState.morph?.active){runtimeState.morph.suppressPaletteCycleOnce=true;activeRebaseMorphing?.();}requestMainCanvasRender();});wrap.append(t,select);parent.appendChild(wrap);return select;
+            const wrap=document.createElement('label');wrap.className=`morph-route-inline-control morph-route-palette-select ${extraClass}`.trim();const t=document.createElement('span');t.textContent='Палитра';const select=document.createElement('select');for(const key of getActivePlaylistPaletteKeys()){const o=document.createElement('option');o.value=key;o.textContent=getPlaylistPaletteDisplayName(key);select.appendChild(o);}select.value=normalizePlaylistPaletteKey(state.morph.lineColorPalette,'standard');select.addEventListener('change',()=>chooseMorphPaletteInUI('blue',select.value));wrap.append(t,select);parent.appendChild(wrap);return select;
         }
         function appendMorphFillHarmonySelector(parent){
             const source=document.getElementById('morphFillHarmonySelect');if(!source)return null;const wrap=document.createElement('label');wrap.className='morph-route-inline-control morph-route-harmony-select';const t=document.createElement('span');t.textContent='Гармония цвета заливки';const select=document.createElement('select');for(const option of source.options||[]){const o=document.createElement('option');o.value=option.value;o.textContent=option.textContent;select.appendChild(o);}select.value=source.value;select.addEventListener('change',()=>setMorphProxyControl('morphFillHarmonySelect',select.value));wrap.append(t,select);parent.appendChild(wrap);return select;
@@ -1964,7 +1994,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         function appendMorphCompoundChildren(row,def){for(const childId of morphCompoundChildren(def?.id)){if(childId==='layer.radiusMultiplier')continue;if(morphAlwaysOnMultiplier(childId))appendMorphAlwaysOnMultiplierControl(row,childId,MORPH_COMPOUND_CHILD_LABELS[childId]||'');else appendMorphCompoundBindingControl(row,childId,MORPH_COMPOUND_CHILD_LABELS[childId]||'');}}
 
         function appendMorphBindingSpecificControls(row,def,binding){
-            if(def.id==='layer.strokeColor'){appendMorphPaletteSelector(row);appendMorphInlineCheck(row,'morphCyclePalettes','Менять палитру каждый цикл','morph-route-compact-check');}
+            if(def.id==='layer.strokeColor'){appendMorphPaletteSelector(row);appendMorphInlineCheck(row,'morphCyclePalettes','Менять палитру каждый цикл','morph-route-compact-check');appendMorphInlineCheck(row,'morphFixedColors','Фиксированные цвета','morph-route-compact-check');appendMorphInlineCheck(row,'morphSyncPalettes','Синхронизировать между морфингами','morph-route-compact-check');}
             if(def.id==='layer.fillColor'){
                 appendMorphPaletteSelector(row);
                 appendMorphInlineRange(row,'morphFillLayersMin','morphFillLayersMax','Число залитых слоёв','morph-route-dependent-range');
@@ -3592,10 +3622,9 @@ syncMorphProfileUI();
                 select.value=context==='morph'?normalizePlaylistPaletteKey(state.morph.lineColorPalette):normalizePlaylistPaletteKey(state.randomOptions.lineColorPalette);
                 select.addEventListener('change',()=>{
                     if(context==='morph'){
-                        state.morph.lineColorPalette=select.value;state.morph.options.byColor=true;const t=document.getElementById('morphByColor');if(t)t.checked=true;syncMorphSettingsUI();
-                        if(runtimeState.morph.active){runtimeState.morph.suppressPaletteCycleOnce=true;activeRebaseMorphing();}
+                        chooseMorphPaletteInUI('blue',select.value);
                     }else{
-                        state.randomOptions.lineColorPalette=select.value;state.randomOptions.byColor=true;const t=document.getElementById('randomByColor');if(t)t.checked=true;syncRandomSettingsUI();if(runtimeState.minimalMorph.active)activeRebaseMinimalMorphing();
+                        chooseMorphPaletteInUI('yellow',select.value);
                     }
                 });
                 host.appendChild(select);
@@ -3604,7 +3633,10 @@ syncMorphProfileUI();
             const motionHost=document.getElementById('motionPaletteHost');
             if(motionHost){motionHost.innerHTML='';const select=document.createElement('select');select.className='playlist-palette-select';select.setAttribute('aria-label','Палитра изменения цвета');for(const key of getActivePlaylistPaletteKeys()){const o=document.createElement('option');o.value=key;o.textContent=getPlaylistPaletteDisplayName(key);select.appendChild(o);}const mm=normalizeMotionState();select.value=mm.paletteKey;select.addEventListener('change',()=>{mm.paletteKey=select.value;motionRuntime.colorPhase=0;if(mm.colorEnabled)applyMotionColorCycle();syncMotionUI();requestMainCanvasRender();});motionHost.appendChild(select);}
             const mc=document.getElementById('morphCyclePalettes');if(mc)mc.checked=state.morph?.cyclePalettes===true;
+            for(const id of ['morphFixedColors','randomFixedColors','morphSyncPalettes','randomSyncPalettes']){const e=document.getElementById(id);if(e)e.checked=id==='morphFixedColors'?state.morph.fixedColors===true:id==='randomFixedColors'?state.randomOptions.fixedColors===true:morphPaletteSyncEnabled();}
             const rc=document.getElementById('randomCyclePalettes');if(rc)rc.checked=state.randomOptions?.cyclePalettes===true;
+            const fixed=document.getElementById('randomFixedColors');if(fixed)fixed.checked=state.randomOptions?.fixedColors===true;
+            const sync=document.getElementById('randomSyncPalettes');if(sync)sync.checked=morphPaletteSyncEnabled();
             renderGraffitiPaletteChooser();
         }
         function syncPlaylistPaletteSelectionUI(){renderPlaylistPaletteButtons();}
@@ -3841,6 +3873,29 @@ syncMorphProfileUI();
         });
         document.getElementById('morphCyclePalettes')?.addEventListener('change',e=>{state.morph.cyclePalettes=e.target.checked===true;});
         document.getElementById('randomCyclePalettes')?.addEventListener('change',e=>{state.randomOptions.cyclePalettes=e.target.checked===true;});
+        document.getElementById('morphFixedColors')?.addEventListener('change',e=>{
+            state.morph.fixedColors=e.target.checked===true;
+            window.SomataMorphParameterRouting?.captureActiveDraft?.(state.morph,state.minimalMorph);
+            syncMorphProfileDirtyUI?.();
+            if(runtimeState.morph?.active&&runtimeState.minimalMorph?.active!==true){runtimeState.morph.suppressPaletteCycleOnce=true;activeRebaseMorphing?.();}
+            syncMorphSettingsUI();requestMainCanvasRender();
+        });
+        document.getElementById('randomFixedColors')?.addEventListener('change',e=>{
+            state.randomOptions.fixedColors=e.target.checked===true;
+            window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);
+            syncOrangeMorphProfileDirtyUI?.();
+            if(runtimeState.minimalMorph?.active)activeRebaseMinimalMorphing?.();
+            syncRandomSettingsUI();requestMainCanvasRender();
+        });
+        for(const id of ['morphSyncPalettes','randomSyncPalettes'])document.getElementById(id)?.addEventListener('change',e=>{
+            const enabled=e.target.checked===true;
+            state.morph.syncPalettesBetweenMorphs=enabled;
+            if(enabled){
+                const authority=runtimeState.minimalMorph?.active===true?'yellow':id==='randomSyncPalettes'?'yellow':'blue';
+                chooseMorphPaletteInUI(authority,authority==='yellow'?state.randomOptions.lineColorPalette:state.morph.lineColorPalette);
+            }
+            syncMorphSettingsUI();syncRandomSettingsUI();requestMainCanvasRender();
+        });
 
         const APP_STANDARD_COLORS = Object.freeze([
             '#ffffff','#e2e8f0','#94a3b8','#475569','#111827','#000000',
@@ -4082,6 +4137,8 @@ syncMorphProfileUI();
             if (randomSpiralMin) randomSpiralMin.value = Math.max(0, Math.round(Number(state.randomOptions.spiralLayersMin) || 0));
             if (randomSpiralMax) randomSpiralMax.value = Math.max(0, Math.round(Number(state.randomOptions.spiralLayersMax ?? 1) || 0));
             const rc=document.getElementById('randomCyclePalettes');if(rc)rc.checked=state.randomOptions?.cyclePalettes===true;
+            const fixed=document.getElementById('randomFixedColors');if(fixed)fixed.checked=state.randomOptions?.fixedColors===true;
+            const sync=document.getElementById('randomSyncPalettes');if(sync)sync.checked=morphPaletteSyncEnabled();
             const minimalInterval = document.getElementById('minimalMorphInterval');
             const minimalFade = document.getElementById('minimalMorphFade');
             const minimalInstant = document.getElementById('minimalMorphInstant');
@@ -4126,6 +4183,9 @@ syncMorphProfileUI();
         function getOrangeMorphBindings(){
             return window.SomataOrangeMorphProfiles?.workingBindings?.(state.minimalMorph,state.randomOptions,state.randomLayerCount)||[];
         }
+        // A palette is an authored Orange target only while its route is active.
+        const hasOrangeColorRoute=()=>getOrangeMorphBindings().some(b=>b?.enabled!==false&&
+            (b.parameter==='layer.strokeColor'||b.parameter==='layer.fillColor'));
         function orangeParameterRoutingState(paramId){
             const def=window.SomataParameterRegistry?.get?.(paramId);
             if(!def||def.morph?.supported!==true||def.type==='boolean'||morphAlwaysOnMultiplier(paramId))return{supported:false,added:false,active:false,reason:def?.type==='boolean'?'Параметры только ВКЛ/ВЫКЛ не используются в Orange':'Недоступно'};
@@ -4163,7 +4223,7 @@ syncMorphProfileUI();
             syncOrangeGeneratorFlagsFromBindings();syncRandomSettingsUI();renderOrangeMorphBindings();renderOrangeMorphRoutingGroups();syncMorphRouteDecorations();syncOrangeMorphProfileDirtyUI();if(runtimeState.minimalMorph?.active===true)activeRebaseMinimalMorphing?.();requestMainCanvasRender();return true;
         }
         function appendOrangePaletteSelector(parent){
-            const wrap=document.createElement('label');wrap.className='morph-route-inline-control morph-route-palette-select orange-route-palette-select';const t=document.createElement('span');t.textContent='Палитра';const select=document.createElement('select');for(const key of getActivePlaylistPaletteKeys()){const o=document.createElement('option');o.value=key;o.textContent=getPlaylistPaletteDisplayName(key);select.appendChild(o);}select.value=normalizePlaylistPaletteKey(state.randomOptions?.lineColorPalette,'standard');select.addEventListener('change',()=>{state.randomOptions.lineColorPalette=select.value;state.randomOptions.byColor=true;window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);syncRandomSettingsUI();syncOrangeMorphProfileDirtyUI();if(runtimeState.minimalMorph?.active===true)activeRebaseMinimalMorphing?.();requestMainCanvasRender();});wrap.append(t,select);parent.appendChild(wrap);return select;
+            const wrap=document.createElement('label');wrap.className='morph-route-inline-control morph-route-palette-select orange-route-palette-select';const t=document.createElement('span');t.textContent='Палитра';const select=document.createElement('select');for(const key of getActivePlaylistPaletteKeys()){const o=document.createElement('option');o.value=key;o.textContent=getPlaylistPaletteDisplayName(key);select.appendChild(o);}select.value=normalizePlaylistPaletteKey(state.randomOptions?.lineColorPalette,'standard');select.addEventListener('change',()=>chooseMorphPaletteInUI('yellow',select.value));wrap.append(t,select);parent.appendChild(wrap);return select;
         }
         // Orange has the same three Fill-colour widgets as Blue, with independent
         // persisted Orange profile data (never changes state.morph.*).
@@ -4273,6 +4333,8 @@ syncMorphProfileUI();
             if(def.id==='layer.strokeColor'){
                 appendOrangePaletteSelector(row);
                 appendMorphInlineCheck(row,'randomCyclePalettes','Менять палитру каждый цикл','morph-route-compact-check');
+                appendMorphInlineCheck(row,'randomFixedColors','Фиксированные цвета','morph-route-compact-check');
+                appendMorphInlineCheck(row,'randomSyncPalettes','Синхронизировать между морфингами','morph-route-compact-check');
             }else if(def.id==='layer.fillColor'){
                 appendOrangePaletteSelector(row);
                 appendOrangeFillLayersRange(row);
@@ -4632,6 +4694,8 @@ syncMorphProfileUI();
                 morphRotationMultiplier: state.morph.rotationMultiplier,
                 morphRotationRandomDirection: state.morph.rotationRandomDirection,
                 morphByColor: state.morph.options.byColor,
+                morphFixedColors: state.morph.fixedColors===true,
+                morphSyncPalettes: morphPaletteSyncEnabled(),
                 morphGlobalHueEnabled: state.morph.morphGlobalHueOffset === true,
                 morphGlobalHueRange: Math.max(0,Math.min(360,Number.isFinite(Number(state.morph.globalHueOffsetRange))?Number(state.morph.globalHueOffsetRange):180)),
                 morphSpiralOrderMin: state.morph.spiralOrderMin ?? -1,
@@ -6731,7 +6795,7 @@ syncMorphProfileUI();
                 const hueOffset=state.morph.morphGlobalHueOffset===true
                     ? ((Number(runtimeState.morph.sourceGlobalHueOffset)%360)+360)%360
                     : normalizePlaylistHueOffset(state.playlistPaletteHueOffset);
-                return shuffle(getPlaylistPaletteColorsAtHueOffset(key,hueOffset));
+                return selectMorphLayerPaletteColors(key,state.layers.length,{fixed:state.morph.fixedColors===true,hueOffset});
             };
 
             const randomIntExcept = (min, max, current) => {
@@ -8833,6 +8897,10 @@ syncMorphProfileUI();
             }
             const preserveMinimalMorphEffects = (targetLayers, sourceLayers = state.layers) => {
                 if(!Array.isArray(targetLayers)||!targetLayers.length)return targetLayers;
+                // Already projected from authored layers. Legacy effect inheritance
+                // and curated static enforcement would silently overwrite settings
+                // which are not present in the Orange parameter matrix.
+                if(targetLayers.__somataOrangeExplicitRoutes===true)return targetLayers;
                 const curatedStatic=String(state.minimalMorph?.generatorStyle||'standard')!=='standard';
                 // Preserve the user's per-slot choice of Line/Graffiti across new Orange IDs.
                 // The Orange generator changes geometry, not the authored appearance mode.
@@ -8894,7 +8962,10 @@ syncMorphProfileUI();
             const beginMinimalMorphTransition = (now = performance.now(), force = false) => {
                 const mm = state.minimalMorph, mmRt = runtimeState.minimalMorph;
                 if (!mmRt.active) return;
-                if(!force)cyclePlaylistPaletteForContext('yellow');
+                if(hasOrangeColorRoute()){
+                    if(!force)cyclePlaylistPaletteForContext('yellow');
+                    else if(morphPaletteSyncEnabled())setMorphPaletteForContext('yellow',state.randomOptions.lineColorPalette);
+                }
                 syncMinimalMorphTimingFromUI();
                 if (mmRt.transitioning) {
                     if (!force) return;
@@ -10089,15 +10160,8 @@ syncMorphProfileUI();
                 return result;
             };
 
-            const randomDistinctPaletteColors = (paletteKey, count = 3) => {
-                const raw=(getPlaylistPaletteColors(paletteKey)||[]).filter(Boolean);
-                const unique=[];const seen=new Set();
-                for(const c of raw){const key=String(c).toLowerCase();if(seen.has(key))continue;seen.add(key);unique.push(c);}
-                // Fixed palette semantics: never fabricate hues when a composition
-                // has more layers than colours. Reuse palette entries in original order.
-                const palette=unique.length?unique:['#ffffff'];
-                return Array.from({length:Math.max(0,count)},(_,i)=>palette[i%palette.length]);
-            };
+            const randomDistinctPaletteColors = (paletteKey, count = 3) =>
+                selectMorphLayerPaletteColors(paletteKey,count,{fixed:state.randomOptions?.fixedColors===true});
 
             const makeRandomCandidate = (requestedCount = state.randomLayerCount || 3, profileGroups = normalizedOrangeMorphProfileGroups(), family = normalizeOrangeMorphFamily()) => {
                 const count = Math.max(1, Math.min(8, Number(requestedCount) || 3));
@@ -10245,7 +10309,7 @@ syncMorphProfileUI();
             const applyOrangeRandomPaletteColors = (layers) => {
                 if(!Array.isArray(layers)||!layers.length)return layers||[];
                 const options=state.randomOptions||{};
-                if(options.byColor===false)return layers;
+                if(!hasOrangeColorRoute())return layers;
                 const paletteKey=normalizePlaylistPaletteKey(options.lineColorPalette,'standard');
                 const colors=randomDistinctPaletteColors(paletteKey,Math.max(3,layers.length));
                 for(let i=0;i<layers.length;i++){
@@ -10473,6 +10537,78 @@ syncMorphProfileUI();
                 }
                 return layers;
             };
+            // V8.19.3: Orange is a parameter editor, not a scene reset.
+            // Generation recipes are candidate values only. Commit ONLY parameters
+            // explicitly enabled in the Orange matrix; everything else is cloned
+            // from the currently authored slot, including effect trees and motion.
+            const projectOrangeExplicitRoutes = (generated, sourceLayers) => {
+                if(!Array.isArray(generated)||!generated.length||!Array.isArray(sourceLayers)||!sourceLayers.length)return generated;
+                const routes=getOrangeMorphBindings().filter(b=>b?.enabled!==false);
+                const coverage=generated.__somataCoverage;
+                const specialKeys={
+                    'geometry.shape':['profileMode','profileNodes','profileKey','closedLoop'],
+                    'geometry.orbits':['customSuborbits'],
+                    'geometry.chaos':['chaosStar','chaosStepMinus','chaosStepPlus','chaosClosures','chaosSeed'],
+                    'spiral.layers':['spiralEnabled','spiralOrder','spiralStep','spiralStepLinked','spiralClosed','spiralTangential','spiralRoundSeams']
+                };
+                const specialEnabled=id=>id==='geometry.shape'?state.randomOptions?.byShape===true:
+                    id==='geometry.orbits'?state.randomOptions?.orbitBindingEnabled===true:
+                    id==='geometry.chaos'?state.randomOptions?.chaosStar===true:
+                    state.randomOptions?.bySpiralLayers===true;
+                for(let i=0;i<generated.length;i++){
+                    const candidate=generated[i],src=sourceLayers[i]||sourceLayers[i%sourceLayers.length];
+                    if(!candidate||!src)continue;
+                    const target=cloneEffectConfig(src);
+                    // Keep a unique ID for each newly generated authored target; do not
+                    // generate a new name or replace unrelated properties.
+                    target.id=candidate.id;
+                    for(const b of routes){
+                        if(coverage?.coverage?.get(b.parameter)?.has(i)===false)continue;
+                        const def=window.SomataParameterRegistry?.get?.(b.parameter);
+                        if(!def||def.morph?.frameTarget==='global')continue;
+                        if(def.id==='layer.strokeColor'){
+                            target.strokeColor=candidate.strokeColor;
+                            target.paletteKey=candidate.paletteKey;
+                        }else if(def.id==='layer.fillColor'){
+                            // A colour route may set Fill on/off, but opacity is
+                            // controlled ONLY by its own independent route.
+                            const oldAlpha=getFillOpacityPercent(src.fillColor);
+                            target.fill=candidate.fill===true;
+                            target.fillMatchStroke=candidate.fillMatchStroke===true;
+                            target.fillColor=colorWithPercentAlpha(candidate.fillColor||candidate.strokeColor||src.fillColor,oldAlpha);
+                        }else if(def.id==='layer.fillOpacity'){
+                            // Applied after all colour routes, independently of row order.
+                            continue;
+                        }else{
+                            const path=def.morph?.framePath;
+                            if(!path)continue;
+                            const value=window.SomataParameterRegistry?.valueAt?.(candidate,path);
+                            if(value!==undefined)window.SomataParameterRegistry?.applyPath?.(target,path,cloneEffectConfig(value));
+                        }
+                    }
+                    const fillOpacityBinding=routes.find(b=>b.parameter==='layer.fillOpacity');
+                    if(fillOpacityBinding && coverage?.coverage?.get('layer.fillOpacity')?.has(i)!==false){
+                        const alpha=Number.isFinite(Number(candidate.fillOpacity))?Number(candidate.fillOpacity):getFillOpacityPercent(candidate.fillColor);
+                        target.fillOpacity=alpha;
+                        target.fillColor=colorWithPercentAlpha(target.fillColor||src.fillColor||target.strokeColor,alpha);
+                    }
+                    for(const [id,keys] of Object.entries(specialKeys)){
+                        if(!specialEnabled(id)||coverage?.specialCoverage?.get(id)?.has(i)===false)continue;
+                        for(const key of keys){
+                            if(Object.prototype.hasOwnProperty.call(candidate,key))target[key]=cloneEffectConfig(candidate[key]);
+                        }
+                        if(id==='spiral.layers' && (candidate.spiralEnabled===true||Number(candidate.spiralOrder)>0)){
+                            target.closedLoop=false;target.fill=false;
+                            target.fillColor=colorWithPercentAlpha(target.fillColor||target.strokeColor,0);
+                        }
+                    }
+                    // Do not normalize any unselected geometry settings here.
+                    generated[i]=target;
+                }
+                Object.defineProperty(generated,'__somataOrangeExplicitRoutes',{value:true,configurable:true});
+                return generated;
+            };
+
             const createOrangeComposition = (requestedCount = state.randomLayerCount || 3, _legacyMode = state.minimalMorph?.mode) => {
                 const style=String(state.minimalMorph?.generatorStyle||'standard');
                 const curated=createCuratedStaticOrangeComposition(style,requestedCount);
@@ -10533,8 +10669,9 @@ syncMorphProfileUI();
                   }
                 }
                 // Retain the non-enumerable global targets and avoid a throwaway array.
-                colored.forEach(forceStaticOrangeLayer);
-                return colored;
+                // Curated recipe effects and forced static defaults are not permissions.
+                // Apply the final explicit parameter mask AFTER every generator pass.
+                return projectOrangeExplicitRoutes(colored,sources);
             };
 
             const MorphInterpolation = createMorphInterpolationModule();
@@ -10566,11 +10703,12 @@ syncMorphProfileUI();
 
             const applyRandomComposition = () => {
                 if (runtimeState.minimalMorph.active) {
-                    if(state.randomOptions?.cyclePalettes===true)cyclePlaylistPaletteForContext('yellow');
+                    if(hasOrangeColorRoute()&&state.randomOptions?.cyclePalettes===true)cyclePlaylistPaletteForContext('yellow');
                     beginMinimalMorphTransition(performance.now(), true);
                     return;
                 }
-                if(state.randomOptions?.cyclePalettes===true)cyclePlaylistPaletteForContext('yellow');
+                if(hasOrangeColorRoute()&&state.randomOptions?.cyclePalettes===true)cyclePlaylistPaletteForContext('yellow');
+                if(hasOrangeColorRoute()&&morphPaletteSyncEnabled())setMorphPaletteForContext('yellow',state.randomOptions.lineColorPalette);
                 stopMorphing();
                 state.randomLayerCount = Math.max(1, Math.min(8, parseInt(document.getElementById('randomLayerCount')?.value, 10) || state.randomLayerCount || 3));
                 if (document.getElementById('randomLayerCount')) document.getElementById('randomLayerCount').value = state.randomLayerCount;
@@ -11465,7 +11603,7 @@ syncMorphProfileUI();
             runtimeState.morph.pausedByOrangeProject = false;
             runtimeState.morph.pauseStartedAt = 0;
             state.morphPlayback.lastType = null;
-            state.randomOptions = { byShape: true, onlyLine: false, byVertices: true, bySteps: true, byRounding: true, bySize: true, byColor: true, lineColorPalette: 'standard', cyclePalettes: false, bySpiralLayers: false, spiralLayersMin: 0, spiralLayersMax: 1 };
+            state.randomOptions = { byShape: true, onlyLine: false, byVertices: true, bySteps: true, byRounding: true, bySize: true, byColor: true, lineColorPalette: 'standard', cyclePalettes: false, fixedColors: false, bySpiralLayers: false, spiralLayersMin: 0, spiralLayersMax: 1 };
             state.morph.slideType = 'sector';
             state.morph.mode = 'circleSlide';
             state.morph.fadePercent = 0;
@@ -11505,6 +11643,8 @@ syncMorphProfileUI();
             state.morph.spiralOrderLinked = false;
             state.morph.lineColorPalette = 'standard';
             state.morph.cyclePalettes = false;
+            state.morph.fixedColors = false;
+            state.morph.syncPalettesBetweenMorphs = true;
             state.morph.morphGlobalHueOffset = false;
             state.morph.globalHueOffsetRange = 180;
             state.morph.spiralLayersMax = 1;
@@ -11714,6 +11854,8 @@ syncMorphProfileUI();
                         spiralOrderLinked: state.morph.spiralOrderLinked === true,
                         lineColorPalette: state.morph.lineColorPalette || 'standard',
                         cyclePalettes: state.morph.cyclePalettes === true,
+                        fixedColors: state.morph.fixedColors === true,
+                        syncPalettesBetweenMorphs: morphPaletteSyncEnabled(),
                         morphGlobalHueOffset: state.morph.morphGlobalHueOffset === true,
                         globalHueOffsetRange: Math.max(0,Math.min(360,Number.isFinite(Number(state.morph.globalHueOffsetRange))?Number(state.morph.globalHueOffsetRange):180)),
                         spiralLayersMin: Math.max(0, Math.min(64, Math.round(Number(state.morph.spiralLayersMin) || 0))),
@@ -13946,6 +14088,8 @@ syncMorphProfileUI();
             state.morph.spiralOrderLinked = m.spiralOrderLinked === true;
             state.morph.lineColorPalette = normalizePlaylistPaletteKey(m.lineColorPalette,state.morph.lineColorPalette||'standard');
             state.morph.cyclePalettes = m.cyclePalettes === true;
+            state.morph.fixedColors = m.fixedColors === true;
+            state.morph.syncPalettesBetweenMorphs = m.syncPalettesBetweenMorphs !== false;
             state.morph.morphGlobalHueOffset = m.morphGlobalHueOffset === true;
             state.morph.globalHueOffsetRange = Number.isFinite(Number(m.globalHueOffsetRange)) ? Math.max(0,Math.min(360,Math.round(Number(m.globalHueOffsetRange)))) : (state.morph.globalHueOffsetRange ?? 180);
             state.morph.spiralLayersMin = Number.isFinite(Number(m.spiralLayersMin)) ? Math.max(0, Math.min(64, Math.round(Number(m.spiralLayersMin)))) : (state.morph.spiralLayersMin ?? 0);
@@ -13987,6 +14131,7 @@ syncMorphProfileUI();
             if (Number.isFinite(Number(settings.randomLayerCount))) state.randomLayerCount = Math.max(1, Math.min(8, Number(settings.randomLayerCount)));
             if (settings.randomOptions && typeof settings.randomOptions === 'object') state.randomOptions = { ...state.randomOptions, ...settings.randomOptions };
             state.randomOptions.lineColorPalette = normalizePlaylistPaletteKey(state.randomOptions.lineColorPalette,'standard');
+            state.randomOptions.fixedColors = state.randomOptions.fixedColors === true;
             if(Number.isFinite(Number(settings.randomLayerCount)))state.randomLayerCount=Math.max(1,Math.min(8,Number(settings.randomLayerCount)));
             state.minimalMorph.defaultActive = settings.minimalMorph?.defaultActive === true;
             if (settings.minimalMorph && typeof settings.minimalMorph === 'object') {
@@ -14634,7 +14779,7 @@ syncMorphProfileUI();
         });
         document.getElementById('btnSaveShape').addEventListener('click', saveCurrentShape);
 
-        const FACTORY_MORPH_SETTINGS = {intervalSec:5,intervalMultiplier:1,splinePoints:12,profileModeTransition:'phase',profileModeTransitionPercent:20,defaultActive:false,spiralOrderMin:-1,spiralOrderMax:1,spiralOrderLinked:false,spiralLayersMin:0,spiralLayersMax:1,chaosMorphEnabled:false,chaosMorphStepSpread:1,chaosMorphClosuresMax:3,preserveSpiralContinuity:true,spiralMorphType:'phaseCircle',spiralRotationCompensation:false,pauseOnSpace:false,diversity:false,vertexMin:4,vertexMax:19,vertexMultiplier:1,roundingMin:0,roundingMax:30,stepMin:0,stepMax:100,monoOrbitTransforms:true,orbitPercentMin:0,orbitPercentMax:0,strokeWidthMin:.8,strokeWidthMax:3.2,opacityMin:70,opacityMax:100,fillLayersMin:0,fillLayersMax:1,fillHueMin:-15,fillHueMax:15,fillHueReset:true,fillHueHarmony:'native',lineColorPalette:'standard',cyclePalettes:false,morphGlobalHueOffset:false,globalHueOffsetRange:180,sizeVariation:100,sizeVariationMultiplier:1,radiusMin:20,radiusMax:500,normalizeSizes:true,rotationMinPercent:0,rotationMaxPercent:50,rotationMultiplier:1,rotationRandomDirection:true,fillOpacityMin:10,fillOpacityMax:10,mode:'circleSlide',fadePercent:0,circleProfileOverflow:true,slideType:'sector',speedType:'linear',lightningWhite:true,lightningRandom:false,lightningColor:'#ffffff',lightningSegmentPercent:30,lightningGlow:18,options:{byShape:true,byVertices:true,bySteps:true,byRounding:false,byStrokeWidth:true,bySize:true,byColor:true,byFillColor:true,byOpacity:false,byRotation:true,bySpiralOrder:false,bySpiralLayers:false},shapeOptions:{noLoops:true,loops:false,closed:false,open:false,family:'mix',profileGroups:['standard'],profileGroup:'standard',standardOnly:true}};
+        const FACTORY_MORPH_SETTINGS = {intervalSec:5,intervalMultiplier:1,splinePoints:12,profileModeTransition:'phase',profileModeTransitionPercent:20,defaultActive:false,spiralOrderMin:-1,spiralOrderMax:1,spiralOrderLinked:false,spiralLayersMin:0,spiralLayersMax:1,chaosMorphEnabled:false,chaosMorphStepSpread:1,chaosMorphClosuresMax:3,preserveSpiralContinuity:true,spiralMorphType:'phaseCircle',spiralRotationCompensation:false,pauseOnSpace:false,diversity:false,vertexMin:4,vertexMax:19,vertexMultiplier:1,roundingMin:0,roundingMax:30,stepMin:0,stepMax:100,monoOrbitTransforms:true,orbitPercentMin:0,orbitPercentMax:0,strokeWidthMin:.8,strokeWidthMax:3.2,opacityMin:70,opacityMax:100,fillLayersMin:0,fillLayersMax:1,fillHueMin:-15,fillHueMax:15,fillHueReset:true,fillHueHarmony:'native',lineColorPalette:'standard',cyclePalettes:false,fixedColors:false,syncPalettesBetweenMorphs:true,morphGlobalHueOffset:false,globalHueOffsetRange:180,sizeVariation:100,sizeVariationMultiplier:1,radiusMin:20,radiusMax:500,normalizeSizes:true,rotationMinPercent:0,rotationMaxPercent:50,rotationMultiplier:1,rotationRandomDirection:true,fillOpacityMin:10,fillOpacityMax:10,mode:'circleSlide',fadePercent:0,circleProfileOverflow:true,slideType:'sector',speedType:'linear',lightningWhite:true,lightningRandom:false,lightningColor:'#ffffff',lightningSegmentPercent:30,lightningGlow:18,options:{byShape:true,byVertices:true,bySteps:true,byRounding:false,byStrokeWidth:true,bySize:true,byColor:true,byFillColor:true,byOpacity:false,byRotation:true,bySpiralOrder:false,bySpiralLayers:false},shapeOptions:{noLoops:true,loops:false,closed:false,open:false,family:'mix',profileGroups:['standard'],profileGroup:'standard',standardOnly:true}};
 
         function resetMorphSettingsToFactory(){
             delete state.morph.orbitCountMin;
@@ -16473,6 +16618,7 @@ syncMorphProfileUI();
                 byColor: true,
                 lineColorPalette: 'standard',
                 cyclePalettes: false,
+                fixedColors: false,
                 bySpiralLayers: false,
                 spiralLayersMin: 0,
                 spiralLayersMax: 1

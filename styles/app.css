@@ -6980,3 +6980,24 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
 :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-layer-coverage>span{white-space:nowrap}
 :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-layer-percent{width:38px!important;min-width:38px!important;max-width:38px!important;height:21px!important;min-height:21px!important;padding:1px 2px!important;text-align:center;font-size:9px!important;font-variant-numeric:tabular-nums}
 @media(max-width:760px){:is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row{flex-wrap:wrap}}
+
+/* 8.19.3 — Forma / Orbits: same parameter chip and row rhythm as regular routes. */
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row[data-morph-special="shape"],
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row[data-orange-special="shape"],
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row[data-morph-special="orbits"],
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row[data-orange-special="orbits"] {
+  background:rgba(30,41,59,.34)!important;
+  border-color:rgba(71,85,105,.50)!important;
+}
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row:is([data-morph-special="shape"],[data-orange-special="shape"],[data-morph-special="orbits"],[data-orange-special="orbits"]) .morph-special-config-name{
+  display:flex;align-items:center;flex:0 1 220px!important;width:auto!important;
+  min-width:118px!important;max-width:220px!important;min-height:25px;height:25px;
+  padding:2px 6px!important;border:1px solid rgba(71,85,105,.58)!important;
+  border-radius:6px!important;background:#1e293b!important;
+  color:#e2e8f0!important;font-size:9px!important;font-weight:650!important;
+  line-height:19px;box-sizing:border-box;white-space:nowrap;
+}
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row:is([data-morph-special="shape"],[data-orange-special="shape"],[data-morph-special="orbits"],[data-orange-special="orbits"]) .morph-route-layer-coverage{
+  margin-left:0;
+}
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row:is([data-morph-special="shape"],[data-orange-special="shape"],[data-morph-special="orbits"],[data-orange-special="orbits"]) .morph-binding-remove{margin-left:auto!important}

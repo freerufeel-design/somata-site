@@ -609,7 +609,10 @@ window.SomataMorphParameterRouting=SomataMorphParameterRouting;
 const SomataOrangeMorphProfiles=(()=>{
     const clone=SomataParameterRegistry.clone, drafts=new WeakMap();
     const runtimeKeys=new Set(['active','autoStartedByProject','paused','pauseStartedAt','originLayers','originActiveLayerId','originPresetValue','transitioning','nextSwitchAt','fadeStart','progress','raf','sourceLayers','targetLayers','sourceDrawData','targetDrawData','sourceLampPoints','targetLampPoints','webUiHoldStart','featureOverrides']);
-    const minimalConfig=mm=>{const out={};for(const [k,v] of Object.entries(mm||{})){if(runtimeKeys.has(k)||k==='profiles'||k==='activeProfileId')continue;out[k]=clone(v);}return out;};
+    // Orange presets store only Orange editor controls. Unknown/legacy keys
+    // must never silently turn into new scene-wide assignments.
+    const editableMinimalKeys=new Set(['mode','family','profileGroups','generatorStyle','routingBindings','defaultActive','intervalSec','fadeSec','instantSwitch']);
+    const minimalConfig=mm=>{const out={};for(const [k,v] of Object.entries(mm||{})){if(!editableMinimalKeys.has(k))continue;out[k]=clone(v);}return out;};
     const snapshot=(mm,randomOptions,layerCount)=>({minimal:minimalConfig(mm),randomOptions:clone(randomOptions||{}),randomLayerCount:Math.max(1,Math.min(8,Number(layerCount)||3))});
     const finite=(v,fallback)=>Number.isFinite(Number(v))?Number(v):fallback;
     function binding(id,min=null,max=null,enabled=true){
@@ -670,8 +673,9 @@ const SomataOrangeMorphProfiles=(()=>{
         const oldPercent=v=>Number(v)>0?Math.max(1,Math.min(100,Math.ceil(Number(v)*100/19))):100;
         ro.orbitPercentMin=Math.max(1,Math.min(100,Math.round(Number(ro.orbitPercentMin ?? oldPercent(ro.orbitCountMin??ro.orbitCount))||100)));
         ro.orbitPercentMax=Math.max(ro.orbitPercentMin,Math.min(100,Math.round(Number(ro.orbitPercentMax ?? oldPercent(ro.orbitCountMax??ro.orbitCount))||100)));
+        const hasExplicitList=Array.isArray(cfg.minimal.routingBindings);
         const existing=compactBindings(cfg.minimal.routingBindings);
-        cfg.minimal.routingBindings=existing.length?existing:(spec?bindingsFromSpec(spec,cfg.randomOptions):defaultOrangeBindings(cfg.randomOptions||{}));
+        cfg.minimal.routingBindings=hasExplicitList?existing:(spec?bindingsFromSpec(spec,cfg.randomOptions):defaultOrangeBindings(cfg.randomOptions||{}));
         return cfg;
     }
     function ensureBuiltinOrangePresets(out,standard){
@@ -681,15 +685,22 @@ const SomataOrangeMorphProfiles=(()=>{
             if(!p.config.minimal||typeof p.config.minimal!=='object')p.config.minimal={};if(!p.config.minimal.generatorStyle)p.config.minimal.generatorStyle=spec.style;ensureConfigBindings(p.config,spec);
         }return out;
     }
-    const apply=(mm,randomOptions,holder,cfg)=>{if(!cfg)return;ensureConfigBindings(cfg);for(const [k,v] of Object.entries(cfg.minimal||{}))if(!runtimeKeys.has(k)&&k!=='profiles'&&k!=='activeProfileId')mm[k]=clone(v);mm.routingBindings=compactBindings(mm.routingBindings);if(randomOptions&&cfg.randomOptions&&typeof cfg.randomOptions==='object'){for(const k of Object.keys(randomOptions))delete randomOptions[k];Object.assign(randomOptions,clone(cfg.randomOptions));}if(holder&&Number.isFinite(Number(cfg.randomLayerCount)))holder.value=Math.max(1,Math.min(8,Number(cfg.randomLayerCount)));};
+    const apply=(mm,randomOptions,holder,cfg)=>{if(!cfg)return;ensureConfigBindings(cfg);for(const [k,v] of Object.entries(cfg.minimal||{}))if(editableMinimalKeys.has(k))mm[k]=clone(v);mm.routingBindings=compactBindings(mm.routingBindings);if(randomOptions&&cfg.randomOptions&&typeof cfg.randomOptions==='object'){for(const k of Object.keys(randomOptions))delete randomOptions[k];Object.assign(randomOptions,clone(cfg.randomOptions));}if(holder&&Number.isFinite(Number(cfg.randomLayerCount)))holder.value=Math.max(1,Math.min(8,Number(cfg.randomLayerCount)));};
     const comparable=v=>{try{return JSON.stringify(v??null)}catch(_){return String(v)}};
     function ensureProfiles(mm,randomOptions,layerCount){
-        if(!mm||typeof mm!=='object')return[];if(!Array.isArray(mm.routingBindings))mm.routingBindings=defaultOrangeBindings(randomOptions||{});
+        if(!mm||typeof mm!=='object')return[];
+        // A new-project state starts with [] before its Standard Orange profile
+        // has ever been created. Seed the initial editor ONCE. After profiles
+        // exist, [] means an intentional empty matrix and must stay empty.
+        const hasStoredProfiles=Array.isArray(mm.profiles)&&mm.profiles.length>0;
+        if(!Array.isArray(mm.routingBindings)||(!hasStoredProfiles&&mm.routingBindings.length===0))
+            mm.routingBindings=defaultOrangeBindings(randomOptions||{});
         let arr=Array.isArray(mm.profiles)?mm.profiles:[],out=[],seen=new Set();
         for(let i=0;i<arr.length;i++){const raw=arr[i];if(!raw||typeof raw!=='object')continue;const id=String(raw.id||`orange_${i+1}`);if(!id||seen.has(id))continue;seen.add(id);raw.id=id;raw.name=String(raw.name||`Orange ${i+1}`);raw.system=raw.system===true;raw.transient=raw.transient===true&&!raw.system;if(!raw.config||typeof raw.config!=='object')raw.config=snapshot(mm,randomOptions,layerCount);ensureConfigBindings(raw.config);out.push(raw);}
         let standard=out.find(p=>p.id==='orange-standard');if(!standard){standard={id:'orange-standard',name:'Standard Orange',system:true,config:snapshot(mm,randomOptions,layerCount)};out.unshift(standard);}standard.name='Standard Orange';standard.system=true;standard.transient=false;if(!standard.config||typeof standard.config!=='object')standard.config=snapshot(mm,randomOptions,layerCount);if(!standard.config.minimal||typeof standard.config.minimal!=='object')standard.config.minimal={};if(!standard.config.minimal.generatorStyle)standard.config.minimal.generatorStyle='standard';ensureConfigBindings(standard.config);
         ensureBuiltinOrangePresets(out,standard);mm.profiles=out;if(!out.some(p=>p.id===mm.activeProfileId))mm.activeProfileId='orange-standard';
-        const active=out.find(p=>p.id===mm.activeProfileId)||standard;if(active&&(!Array.isArray(mm.routingBindings)||!mm.routingBindings.length))mm.routingBindings=clone(active.config?.minimal?.routingBindings||[]);
+        const active=out.find(p=>p.id===mm.activeProfileId)||standard;
+        if(active&&!Array.isArray(mm.routingBindings))mm.routingBindings=clone(active.config?.minimal?.routingBindings||[]);
         return out;
     }
     function activeProfile(mm,randomOptions,layerCount){const arr=ensureProfiles(mm,randomOptions,layerCount);return arr.find(p=>p.id===mm.activeProfileId)||arr[0]||null;}
@@ -720,7 +731,7 @@ const SomataOrangeMorphProfiles=(()=>{
 }
 function setRange(mm,randomOptions,layerCount,paramId,min,max){const list=workingBindings(mm,randomOptions,layerCount),b=list.find(x=>x.parameter===paramId);if(!b)return false;let lo=finite(min,b.min),hi=finite(max,b.max);if(Number.isFinite(lo)&&Number.isFinite(hi)&&lo>hi)[lo,hi]=[hi,lo];if(Number.isFinite(lo))b.min=lo;if(Number.isFinite(hi))b.max=hi;captureDraft(mm,randomOptions,layerCount);return true;}
     function persistentOrangeProfile(mm,randomOptions,layerCount){const p=activeProfile(mm,randomOptions,layerCount);if(p?.transient===true)return (mm.profiles||[]).find(x=>x.id===p.originProfileId&&x.transient!==true)||(mm.profiles||[]).find(x=>x.id==='orange-standard')||null;return p;}
-    function persistentMinimalSnapshot(mm,randomOptions,layerCount){ensureProfiles(mm,randomOptions,layerCount);const out=clone(mm),p=persistentOrangeProfile(mm,randomOptions,layerCount);if(p?.config?.minimal)for(const [k,v] of Object.entries(p.config.minimal))if(!runtimeKeys.has(k))out[k]=clone(v);out.profiles=clone((mm.profiles||[]).filter(x=>x?.transient!==true));out.activeProfileId=out.profiles.some(x=>x.id===p?.id)?p.id:'orange-standard';return out;}
+    function persistentMinimalSnapshot(mm,randomOptions,layerCount){ensureProfiles(mm,randomOptions,layerCount);const out=clone(mm),p=persistentOrangeProfile(mm,randomOptions,layerCount);if(p?.config?.minimal)for(const [k,v] of Object.entries(p.config.minimal))if(editableMinimalKeys.has(k))out[k]=clone(v);out.profiles=clone((mm.profiles||[]).filter(x=>x?.transient!==true));out.activeProfileId=out.profiles.some(x=>x.id===p?.id)?p.id:'orange-standard';return out;}
     function persistentRandomOptions(mm,randomOptions,layerCount){const p=persistentOrangeProfile(mm,randomOptions,layerCount);return clone(p?.config?.randomOptions||randomOptions||{});}
     function persistentLayerCount(mm,randomOptions,layerCount){const p=persistentOrangeProfile(mm,randomOptions,layerCount);return Math.max(1,Math.min(8,Number(p?.config?.randomLayerCount??layerCount)||3));}
     return Object.freeze({ensureProfiles,activeProfile,ensureDraft,captureDraft,isDirty,save,reset,select,create,remove,rename,workingBindings,routeState,setBinding,removeBinding,setRange,setCoverage,persistentMinimalSnapshot,persistentRandomOptions,persistentLayerCount});

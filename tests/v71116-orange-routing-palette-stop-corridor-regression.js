@@ -31,9 +31,9 @@ const assert=(ok,msg)=>{if(!ok)throw Error(msg)};
    const lagActive=tunnelColorShiftIsActive(),palette={index:0,colors:['#ff0000','#00ff00','#0000ff']};
    const copies=[{copyId:0,colorIndex:0},{copyId:1,colorIndex:1},{copyId:2,colorIndex:2},{copyId:3,colorIndex:3}];
    const shifted=copies.map(c=>getTunnelCopyColor('#ff000080',c,palette));
-   // RGB palette has three colours. Eight Orange layers must loop 0,1,2,0,1,2,0,1.
+   // Explicit Fixed Colors restores the original static-like palette cycle 0,1,2,0,1,2,0,1.
    state.tunnel.active=false;
-   state.randomOptions.lineColorPalette='rgb';state.randomOptions.cyclePalettes=false;
+   state.randomOptions.lineColorPalette='rgb';state.randomOptions.cyclePalettes=false;state.randomOptions.fixedColors=true;
    window.SomataOrangeParameterRoutingUI.setActive('layer.strokeColor',true);
    state.randomLayerCount=8;document.getElementById('randomLayerCount').value='8';
    const rgb=getPlaylistPaletteColors('rgb').map(x=>String(x).toLowerCase());

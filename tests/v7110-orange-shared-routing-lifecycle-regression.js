@@ -48,7 +48,10 @@ const assert=(c,m)=>{if(!c)throw new Error(m)};
 
       // Manual left toggle persists and Orange keeps running across the next dice transition.
       const lampToggle=document.getElementById('showLamps');
-      if(lampToggle.checked!==false){lampToggle.checked=false;lampToggle.dispatchEvent(new Event('change',{bubbles:true}));await sleep(25);}
+      // 8.19.3 no longer secretly enables lamps: toggle them ON then OFF
+      // so this explicitly tests the manual Orange override path.
+      if(lampToggle.checked!==true){lampToggle.checked=true;lampToggle.dispatchEvent(new Event('change',{bubbles:true}));await sleep(25);}
+      lampToggle.checked=false;lampToggle.dispatchEvent(new Event('change',{bubbles:true}));await sleep(25);
       const afterManualOff={running:runtimeState.minimalMorph.active===true,override:state.minimalMorph?.featureOverrides?.lamps};
       // The manual state belongs to Orange as a morph type, not to one preset.
       os.value='orange-crystal-cathedral';os.dispatchEvent(new Event('change',{bubbles:true}));await sleep(45);
@@ -73,7 +76,9 @@ const assert=(c,m)=>{if(!c)throw new Error(m)};
     assert(out.afterRoute.active!==out.beforeRoute,'Orange RMB/routing toggle did not change state');
     assert(out.diceRunning,'dice stopped Orange Morph');
     assert(out.widths.length&&out.widths.every(v=>Math.abs(v-7)<1e-6),'Orange range did not drive generated stroke width: '+JSON.stringify(out.widths));
-    assert(out.lampCount>0,'lamp-owning Orange preset generated no lamps');
+    // Since 8.19.3 presets are only candidate values, they cannot enable Lamps
+    // without an explicit routed feature; initial scene Lamps are OFF here.
+    assert(out.lampCount===0,'Orange preset silently enabled Lamps outside its matrix');
     assert(out.adaptive.every(x=>x.on&&x.adjust&&x.strength>=80),'Orange lamps lost adaptive brightness: '+JSON.stringify(out.adaptive));
     assert(out.afterManualOff.running&&out.afterManualOff.override===false,'manual lamp OFF stopped Orange or was not remembered');
     assert(out.afterProfileSwitch.running&&out.afterProfileSwitch.override===false,'manual lamp OFF was lost when switching Orange preset');

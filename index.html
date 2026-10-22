@@ -8,22 +8,22 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Somata">
     <meta name="theme-color" content="#090d16">
-    <link rel="manifest" href="manifest.webmanifest?v=8.19.1">
+    <link rel="manifest" href="manifest.webmanifest?v=8.19.3">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Somata 8.19.1</title>
-    <link rel="stylesheet" href="styles/app.css?v=20261022-v800">
+    <title>Somata 8.19.3</title>
+    <link rel="stylesheet" href="styles/app.css?v=8.19.3">
     <script defer src="js/bootstrap/boot-guard.js?v=20261015-v78302"></script>
     <script defer src="js/bootstrap/error-overlay.js?v=20261015-v78302"></script>
     <script defer src="js/bootstrap/module-registry.js?v=20261015-v78302"></script>
     <script defer src="js/render/geometry-policy.js?v=20261015-v78302"></script>
     <script defer src="js/render/effect-owner-service.js?v=20261015-v78302"></script>
     <script defer src="js/render/compositor-contract.js?v=20261015-v78302"></script>
-    <script defer src="js/core/palette.js?v=20261015-v78302"></script>
-    <script defer src="js/core/state.js?v=8.19.0"></script>
-    <script defer src="js/core/parameter-routing.js?v=20261022-v800"></script>
-    <script defer src="js/core/parameter-matrix.js?v=20261021-v71116"></script>
+    <script defer src="js/core/palette.js?v=8.19.2"></script>
+    <script defer src="js/core/state.js?v=8.19.2"></script>
+    <script defer src="js/core/parameter-routing.js?v=8.19.3"></script>
+    <script defer src="js/core/parameter-matrix.js?v=8.19.2"></script>
     <script defer src="js/core/layer-versions.js?v=20261015-v78302"></script>
     <script defer src="js/ui/profile-presets.js?v=20261015-v78302"></script>
     <script defer src="js/geometry/kernel.js?v=20261015-v78302"></script>
@@ -114,7 +114,7 @@
     <script defer src="js/render/geometry-executor.js?v=20261015-v78302"></script>
     <script defer src="js/render/main-pipeline.js?v=8.19.0"></script>
     <script defer src="js/ui/master-broadcast-core.js?v=20261015-v78302"></script>
-    <script defer src="js/app/ui-project-runtime.js?v=8.19.0"></script>
+    <script defer src="js/app/ui-project-runtime.js?v=8.19.3"></script>
     <script defer src="js/ui/ui-mode.js?v=20261021-v71102"></script>
     <script defer src="js/ui/desktop-brand-popout.js?v=20261015-v78302"></script>
 </head>
@@ -440,6 +440,8 @@
                                 <label class="palette-morph-label" title="Активные палитры берутся из общего меню 🎨"><span>Палитра</span></label>
                                 <span id="minimalMorphLinePalette" class="morph-line-palette palette-dropdown-host" role="group" aria-label="Палитра жёлтого/оранжевого морфинга"></span>
                                 <label class="palette-cycle-check" title="На каждую новую фазу случайно выбирать другую активную палитру"><input id="randomCyclePalettes" type="checkbox"><span>Листать</span></label>
+                                <label class="palette-cycle-check" title="Последовательно назначать цвета палитры слоям вместо случайного выбора без повторений"><input id="randomFixedColors" type="checkbox"><span>Фиксированные цвета</span></label>
+                                <label class="palette-cycle-check" title="Общая настройка Blue/Orange: единая палитра при совместной работе"><input id="randomSyncPalettes" type="checkbox" checked><span>Синхронизировать между морфингами</span></label>
                             </div>
                             <div class="morph-setting-row interval-row compact-morph-row orange-legacy-generator-toggle hidden">
                                 <label title="Сколько слоёв случайной композиции будут преобразованы в спираль"><input id="randomBySpiralLayers" type="checkbox"><span>Слои со спиралями</span></label>
@@ -664,6 +666,8 @@
                                     <label class="palette-morph-label" title="Изменять цвет линии при каждом цикле"><input id="morphByColor" type="checkbox" checked><span>Цвет линии</span></label>
                                     <span id="morphLinePalette" class="morph-line-palette palette-dropdown-host" role="group" aria-label="Палитра синего морфинга"></span>
                                     <label class="palette-cycle-check" title="На каждую новую фазу случайно выбирать другую активную палитру"><input id="morphCyclePalettes" type="checkbox"><span>Листать</span></label>
+                                    <label class="palette-cycle-check" title="Последовательно назначать цвета палитры слоям вместо случайного выбора без повторений"><input id="morphFixedColors" type="checkbox"><span>Фиксированные цвета</span></label>
+                                    <label class="palette-cycle-check" title="Blue и Orange используют одну палитру: Orange задаёт её при одновременной работе; ручной выбор Blue передаётся Orange"><input id="morphSyncPalettes" type="checkbox" checked><span>Синхронизировать между морфингами</span></label>
                                 </div>
                                 <div id="morphGlobalHueRow" class="morph-setting-row compact-morph-row interval-row morph-global-hue-row">
                                     <label title="Плавно сдвигать общий Hue всей палитры на заданное число градусов за один морф"><input id="morphGlobalHueEnabled" type="checkbox"><span>Морфинг общего смещения цвета</span></label>

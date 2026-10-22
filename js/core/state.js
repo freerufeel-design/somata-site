@@ -312,6 +312,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 orbitPercentMin: 100,
                 orbitPercentMax: 100,
                 cyclePalettes: false,
+                fixedColors: false,
                 bySpiralLayers: false,
                 spiralLayersMin: 0,
                 spiralLayersMax: 1
@@ -382,6 +383,8 @@ window.__spiroRegisterModule?.('js/core/state');
                 fillHueHarmony: 'native',
                 lineColorPalette: 'standard',
                 cyclePalettes: false,
+                fixedColors: false,
+                syncPalettesBetweenMorphs: true,
                 morphGlobalHueOffset: false,
                 globalHueOffsetRange: 180,
                 sizeVariation: 100,

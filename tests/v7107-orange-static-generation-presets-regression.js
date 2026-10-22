@@ -38,12 +38,13 @@ async function main(){
   assert(r.uniqueIds===r.ids.length,'duplicate Orange profile IDs');assert(r.active==='orange-standard','Standard Orange was not restored');
   for(const [id,exp] of Object.entries(EXPECTED)){
     const p=r.profiles.find(x=>x.id===id);assert(p,'missing '+id);assert(p.name===exp.name&&p.system&&p.builtin,'wrong built-in profile metadata for '+id);assert(p.style===exp.style,'wrong generator style for '+id+': '+p.style);assert(r.selectIds.includes(id),'profile missing from selector: '+id);
-    const x=r.results[id];assert(x&&x.style===exp.style,'profile style did not apply for '+id);assert(x.count===exp.layers,'wrong generated layer count for '+id+': '+x.count);assert(x.allStatic&&x.stableAuthored,'authored Orange target changed while idle for '+id);assert(x.uniqueRadii>=Math.min(2,x.count),'preset lost layered size structure '+id);assert(x.live?.running&&x.live?.allStatic,'real Orange playback inherited an animated effect for '+id+': '+JSON.stringify(x.live));assert(x.live.count===exp.layers,'real Orange playback generated wrong layer count for '+id);
-    if(exp.signature==='lamps')assert(x.live.lamps>=1,'solar rosette has no static lamps in real Orange playback');
-    if(exp.signature==='fills')assert(x.live.fills>=2,'stained glass has insufficient fill layers in real Orange playback');
-    if(exp.signature==='web')assert(x.live.web>=1,'lace has no static web layer in real Orange playback');
-    if(exp.signature==='facets')assert(x.roundings.every(v=>v===0)&&x.live.lamps>=1,'crystal cathedral lost sharp facets/static lamps');
-    if(exp.signature==='spiral')assert(x.live.spiral>=1,'spiral herbarium has no static Spiral layer');
+    const x=r.results[id];assert(x&&x.style===exp.style,'profile style did not apply for '+id);assert(x.count===exp.layers,'wrong generated layer count for '+id+': '+x.count);assert(x.allStatic&&x.stableAuthored,'authored Orange target changed while idle for '+id);
+    assert(x.uniqueRadii>=Math.min(2,x.count),'explicit layer.radius route lost layered size structure '+id);
+    assert(x.live?.running,'Orange playback did not start for '+id+': '+JSON.stringify(x.live));
+    assert(x.live.count===exp.layers,'real Orange playback generated wrong layer count for '+id);
+    // 8.19.3 no longer silently turns on Lamps/Web/Fill/Spiral or disables
+    // previously authored motion through curated style templates.
+    // Strict per-route preservation is tested in v8193-orange-explicit-routes-regression.js.
   }
   const errs=uncaughtExceptions(h.events).slice(base);assert(!errs.length,'uncaught browser exceptions: '+errs.join(' | '));
   console.log('7.10.7 ORANGE STATIC GENERATION PRESETS REGRESSION: PASS',r);

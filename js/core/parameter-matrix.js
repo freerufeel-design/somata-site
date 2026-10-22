@@ -84,7 +84,7 @@ const SomataParameterMatrix=(()=>{
         Object.freeze({id:'spiral.layers',group:'Спирали',label:'Спиральные слои',type:'special',kind:'spiralLayers',min:0,max:8,step:1,subcontrols:Object.freeze(['Число спиральных слоёв']),audioSupported:false,reason:'Количество слоёв изменяет структуру сцены; непрерывная аудиомодуляция не поддерживается'})
     ]);
     const nestedExtras=Object.freeze({
-        'layer.strokeColor':Object.freeze(['Палитра','Менять палитру каждый цикл']),
+        'layer.strokeColor':Object.freeze(['Палитра','Менять палитру каждый цикл','Фиксированные цвета','Синхронизировать между морфингами']),
         'layer.fillColor':Object.freeze(['Палитра','Число залитых слоёв','Гармония цвета заливки']),
         'layer.radius':Object.freeze(['Сохранять пропорции размеров слоёв']),
         'layer.rotation':Object.freeze(['Случайно менять направление поворота']),
