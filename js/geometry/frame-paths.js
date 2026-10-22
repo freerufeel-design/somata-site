@@ -416,6 +416,8 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                 if(total-pathStart>1e-6)pathCount++;
             }
             segs.length=write;table.total=total;table.segmentCount=write;table.pathCount=pathCount;
+            // Invalidate derived Web block bounds even if the same pooled table is rebuilt twice in one frame.
+            table._webProjectionRevision=(Number(table._webProjectionRevision)||0)+1;
             table.dynamicFrame=dynamicFrame;table.frameId=dynamicFrame?frameGeometryRuntime.frameId:0;
 
             table._rangeReadyFrameId=-1;table._rangeReadySegmentCount=-1;table._rangeReadyTotal=-1;

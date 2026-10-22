@@ -118,8 +118,8 @@ function reportSweepGpuIssue(frameCtx,stage,reason,extra=null){
     else console.error('[Somata 7.5 GPU][sweep]',stage,reason,{frameId:frameCtx?.frameId,layerIndex:frameCtx?.layerIndex,...(extra||{})});
     try{requestMainCanvasRender?.();}catch(_){}
 }
-function renderLayerSweepPass(frameCtx){
-    const effect=frameCtx.effectsPlan?.sweep;
+function renderLayerSweepInstance(frameCtx,effectOverride=null){
+    const effect=effectOverride||frameCtx.effectsPlan?.sweep;
     if(!effect?.enabled)return;
     const {layer,baseAlpha,visibleInstances}=frameCtx,cfg=effect.frameData?.cfg;
     if(!cfg)return reportSweepGpuIssue(frameCtx,'missing-config','Sweep is enabled but its live configuration is unavailable');
@@ -218,14 +218,35 @@ function renderLayerSweepPass(frameCtx){
     return reportSweepGpuIssue(frameCtx,'unsupported-frame-data','Sweep has no GPU-resident frame representation',{effectType:cfg.effectType});
 }
 
-SomataFeatureHost.provide('sweep','sceneAdmission',(frameCtx)=>{
-    const effect=frameCtx?.effectsPlan?.sweep;if(!effect?.enabled)return true;const cfg=effect.frameData?.cfg;
+
+function renderLayerSweepPass(frameCtx){
+    const effect=frameCtx?.effectsPlan?.sweep;if(!effect?.enabled)return;
+    const list=Array.isArray(effect.instances)&&effect.instances.length?effect.instances:[effect];
+    let lastResult;
+    for(const item of list){
+        if(!item?.enabled)continue;
+        try{frameCtx._profileSweepAttempted=false;lastResult=renderLayerSweepInstance(frameCtx,item);}
+        catch(error){
+            try{somataGpuDiagnosticError(item?.cfg?.effectType==='lightning'?'lightning':'sweep','subeffect-render-failure',String(error?.message||error),frameCtx,{fallback:'skip-only-failed-subeffect',recovered:true,effectType:item?.cfg?.effectType||'sweep'});}catch(_){}
+            try{requestMainCanvasRender?.();}catch(_){}
+        }
+    }
+    return lastResult;
+}
+function sweepInstanceSceneAdmission(effect){
+    if(!effect?.enabled)return{admit:false,reason:'disabled'};const cfg=effect.frameData?.cfg;
     if(cfg?.effectType==='lightning'){
         if(effect.frameData?.lightningSpectralPrepared)return{admit:Boolean(typeof WebGPUBezierSweepRenderer!=='undefined'&&WebGPUBezierSweepRenderer.isReady?.()),reason:'spectral Lightning renderer unavailable'};
         return{admit:effect.frameData?.gpuMorphArcLightning===true?Boolean(typeof WebGPULightningArcRenderer!=='undefined'&&WebGPULightningArcRenderer.isReady?.()):SweepGPURenderer.canEncodeToLayerScene(),reason:'Lightning Layer Scene renderer unavailable'};
     }
     if(effect.frameData?.bezierGlintGPU===true)return{admit:Boolean(typeof WebGPUBezierSweepRenderer!=='undefined'&&WebGPUBezierSweepRenderer.isReady?.()),reason:'Bezier Glint renderer unavailable'};
     return{admit:effect.frameData?.canonicalGPU===true&&WebGPUCanonicalSweepRenderer.canUse(cfg,effect.tunnelActive===true),reason:'canonical Sweep renderer unavailable'};
+}
+
+SomataFeatureHost.provide('sweep','sceneAdmission',(frameCtx)=>{
+    const effect=frameCtx?.effectsPlan?.sweep;if(!effect?.enabled)return true;const list=Array.isArray(effect.instances)&&effect.instances.length?effect.instances:[effect],checks=list.map(sweepInstanceSceneAdmission);
+    if(checks.some(x=>x?.admit===true))return true;
+    return checks.find(x=>x&&x.admit===false)||{admit:false,reason:'Sweep/Lightning Layer Scene renderer unavailable'};
 });
 
 window.SomataRenderPassRegistry?.register?.('sweep',{stage:window.SomataRenderPassRegistry.STAGES.POST_BASE,order:50,run:renderLayerSweepPass});

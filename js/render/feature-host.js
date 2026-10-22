@@ -9,6 +9,22 @@ window.__spiroRegisterModule?.('js/render/feature-host');
 // If a pass throws, every write made by that pass is discarded.
 const SomataFeatureHost=(()=>{
     const specs=new Map();
+    // Capabilities are registered at module startup. Cache dispatch by capability
+    // and invalidate whenever modules register or replace a provider.
+    const providersByCapability=new Map();
+    let dispatchRebuilds=0,dispatchHits=0;
+    function providersFor(cap){
+        let rows=providersByCapability.get(cap);
+        if(rows){dispatchHits++;return rows;}
+        rows=[];for(const spec of specs.values()){
+            const provider=spec.capabilities?.get(cap);
+            if(typeof provider==='function')rows.push({name:spec.name,provider});
+        }
+        providersByCapability.set(cap,rows);dispatchRebuilds++;return rows;
+    }
+    // Output contracts change only at registration, not on every frame/pass.
+    // Keep the union ready for scoped passes instead of rebuilding it per run.
+    let globalOutputsCache=new Set();
     const stats={runs:0,isolatedRuns:0,committedWrites:0,discardedWrites:0,failedDiscards:0,failures:0,capabilityQueries:0,capabilityMisses:0,capabilityFailures:0,scratchMasked:0,lastFeature:'',lastDiscarded:[]};
     function toSet(v){return new Set(Array.isArray(v)?v.map(String):[]);}
     function register(name,spec={}){
@@ -18,12 +34,16 @@ const SomataFeatureHost=(()=>{
         const reads=spec.reads!==undefined?toSet(spec.reads):(prev?.reads||new Set());
         const plans=spec.plans!==undefined?toSet(spec.plans):(prev?.plans||new Set());
         specs.set(key,{name:key,domain:String(spec.domain||prev?.domain||'effect'),outputs,reads,plans,capabilities:prev?.capabilities||new Map()});
+        providersByCapability.clear();
+        globalOutputsCache=new Set();
+        for(const feature of specs.values())for(const prop of feature.outputs)globalOutputsCache.add(prop);
         return true;
     }
     function has(name){return specs.has(String(name||''));}
     function provide(name,capability,provider){
         const key=String(name||''),cap=String(capability||'');if(!key||!cap||typeof provider!=='function')throw new Error('Feature capability provider required');
-        if(!specs.has(key))register(key,{});specs.get(key).capabilities.set(cap,provider);return true;
+        if(!specs.has(key))register(key,{});specs.get(key).capabilities.set(cap,provider);
+        providersByCapability.delete(cap);return true;
     }
     function queryRecord(name,capability,...args){
         const key=String(name||''),cap=String(capability||''),spec=specs.get(key),provider=spec?.capabilities?.get(cap);stats.capabilityQueries++;
@@ -33,10 +53,11 @@ const SomataFeatureHost=(()=>{
     }
     function query(name,capability,...args){return queryRecord(name,capability,...args).value;}
     function queryAll(capability,...args){
-        const cap=String(capability||''),out=[];for(const spec of specs.values()){
-            const provider=spec.capabilities?.get(cap);if(typeof provider!=='function')continue;stats.capabilityQueries++;
-            try{out.push({name:spec.name,value:provider(...args),error:null});}
-            catch(err){stats.capabilityFailures++;out.push({name:spec.name,value:undefined,error:String(err?.message||err)});console.error?.(`[Somata feature capability ${spec.name}.${cap}]`,err);}
+        const cap=String(capability||''),out=[];
+        for(const {name,provider} of providersFor(cap)){
+            stats.capabilityQueries++;
+            try{out.push({name,value:provider(...args),error:null});}
+            catch(err){stats.capabilityFailures++;out.push({name,value:undefined,error:String(err?.message||err)});console.error?.(`[Somata feature capability ${name}.${cap}]`,err);}
         }return out;
     }
     function cloneOwnedOutput(value){
@@ -46,7 +67,7 @@ const SomataFeatureHost=(()=>{
         if(value&&typeof value==='object'&&Object.prototype.toString.call(value)==='[object Object]')return{...value};
         return value;
     }
-    function allOutputNames(){const set=new Set();for(const spec of specs.values())for(const p of spec.outputs)set.add(p);return set;}
+    function allOutputNames(){return globalOutputsCache;}
     function scopedPlans(parentPlans,spec){
         const out=Object.create(null);if(!parentPlans||typeof parentPlans!=='object')return Object.freeze(out);
         for(const key of spec.plans)if(Object.prototype.hasOwnProperty.call(parentPlans,key)){
@@ -110,7 +131,7 @@ const SomataFeatureHost=(()=>{
         if(thrown)throw thrown;
         return result;
     }
-    function status(){return{...stats,features:[...specs.values()].map(s=>({name:s.name,domain:s.domain,outputs:[...s.outputs],reads:[...s.reads],plans:[...s.plans],capabilities:[...(s.capabilities?.keys?.()||[])]})),contract:'Feature passes get scoped immutable plan views, explicit cross-feature outputs, and an underscore scratch firewall. Undeclared writes are discarded; failed passes commit nothing.'};}
+    function status(){return{...stats,dispatchRebuilds,dispatchHits,features:[...specs.values()].map(s=>({name:s.name,domain:s.domain,outputs:[...s.outputs],reads:[...s.reads],plans:[...s.plans],capabilities:[...(s.capabilities?.keys?.()||[])]})),contract:'Feature passes get scoped immutable plan views, explicit cross-feature outputs, and an underscore scratch firewall. Undeclared writes are discarded; failed passes commit nothing.'};}
     return{register,has,provide,queryRecord,query,queryAll,run,status};
 })();
 

@@ -53,9 +53,39 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             return tunnel;
         }
 
+        function routedGlobalMorphValue(parameterId, authored) {
+            const fn=window.SomataMorphParameterRouting?.resolveGlobalValue;
+            const value=typeof fn==='function'?fn(parameterId,authored):authored;
+            return Number.isFinite(Number(value))?Number(value):authored;
+        }
+        function getTunnelSpeedPercent() {
+            const authored=Math.max(-100,Math.min(100,(Number(state.tunnel?.speedStrength)||0)*100));
+            const morphed=routedGlobalMorphValue('tunnel.speed',authored);
+            const routed=audioApplyNumeric('tunnel.speed',morphed,-1);
+            return Math.max(-100,Math.min(100,Number.isFinite(Number(routed))?Number(routed):morphed));
+        }
+        function getTunnelSpacingPercent() {
+            const authored=Math.max(20,Math.min(2000,(Number(state.tunnel?.spacingStrength)||3)*100));
+            const morphed=routedGlobalMorphValue('tunnel.spacing',authored);
+            const routed=audioApplyNumeric('tunnel.spacing',morphed,-1);
+            return Math.max(20,Math.min(2000,Number.isFinite(Number(routed))?Number(routed):morphed));
+        }
+        function getTunnelColorShiftDegrees() {
+            const authored=Math.max(0,Math.min(360,Number(state.tunnel?.colorShiftDegrees)||0));
+            const morphed=routedGlobalMorphValue('tunnel.colorShift',authored);
+            const routed=audioApplyNumeric('tunnel.colorShift',morphed,-1);
+            return Math.max(0,Math.min(360,Number.isFinite(Number(routed))?Number(routed):morphed));
+        }
+        function getTunnelVignetteAmount() {
+            const authored=Math.max(0,Math.min(1200,Number(state.tunnel?.vignetteAmount)||0));
+            const morphed=routedGlobalMorphValue('tunnel.vignette',authored);
+            const routed=audioApplyNumeric('tunnel.vignette',morphed,-1);
+            return Math.max(0,Math.min(1200,Number.isFinite(Number(routed))?Number(routed):morphed));
+        }
+
         function tunnelColorShiftIsActive() {
             const t = normalizeTunnelColorShiftState();
-            return state.tunnel?.active === true && t.colorShiftEnabled === true && t.colorShiftDegrees > 0.0001;
+            return state.tunnel?.active === true && (t.paletteLagEnabled === true || (t.colorShiftEnabled === true && getTunnelColorShiftDegrees() > 0.0001));
         }
 
         function tunnelColorBaseHex(value, fallback = '#ffffff') {
@@ -89,47 +119,105 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             return `#${out}${tunnelColorAlphaSuffix(value)}`;
         }
 
-        function resolveTunnelPaletteProfile(baseColor, layer = null) {
+        function tunnelNearestPaletteStop(baseColor, colors) {
+            const base=tunnelColorBaseHex(baseColor),n=parseInt(base.slice(1),16);
+            const br=(n>>16)&255,bg=(n>>8)&255,bb=n&255;
+            let index=0,distance=Infinity;
+            for(let i=0;i<colors.length;i++){
+                const c=tunnelColorBaseHex(colors[i]),v=parseInt(c.slice(1),16);
+                const dr=((v>>16)&255)-br,dg=((v>>8)&255)-bg,db=(v&255)-bb;
+                const d=dr*dr+dg*dg+db*db;
+                if(d<distance){distance=d;index=i;}
+            }
+            return {index,distance};
+        }
+        function resolveTunnelPaletteProfile(baseColor, layer = null, layerIndex = -1, channel = 'stroke') {
             if (!normalizeTunnelColorShiftState().paletteLagEnabled) return null;
-            const base = tunnelColorBaseHex(baseColor);
-            const n = parseInt(base.slice(1),16), br=(n>>16)&255,bg=(n>>8)&255,bb=n&255;
+            const blue=runtimeState?.morph;
+            // The Morph palette is authored once per cycle. Looking up the nearest
+            // palette using the *intermediate* stroke colour made the entire
+            // Corridor jump between palettes every few seconds and scanned all
+            // active palettes on every frame (twice for Stroke/Fill).
+            if(blue?.active===true && state.morph?.options?.byColor===true){
+                const key=normalizePlaylistPaletteKey(state.morph.lineColorPalette,'standard');
+                const colors=getPlaylistPaletteColors(key);
+                if(!colors.length)return null;
+                const index=Number(layerIndex);
+                const source=Number.isInteger(index)&&index>=0?blue.sourceVisuals?.[index]:null;
+                const target=Number.isInteger(index)&&index>=0?blue.targetVisuals?.[index]:null;
+                const src=channel==='fill'?source?.fillColor:source?.strokeColor;
+                const dst=channel==='fill'?target?.fillColor:target?.strokeColor;
+                if(src&&dst){
+                    const first=tunnelNearestPaletteStop(src,colors).index;
+                    const last=tunnelNearestPaletteStop(dst,colors).index;
+                    const length=colors.length;
+                    // Follow the same Blue geometryT as Line. Fractional colour
+                    // stops blend instead of jumping at the nearest-colour boundary.
+                    let delta=last-first;
+                    if(delta>length/2)delta-=length;
+                    else if(delta< -length/2)delta+=length;
+                    const rawT=Number(blue.geometryT);
+                    const t=Number.isFinite(rawT)?Math.max(0,Math.min(1,rawT)):0;
+                    return {key,colors,index:first+delta*t};
+                }
+                return {key,colors,index:tunnelNearestPaletteStop(baseColor,colors).index};
+            }
+            // Preserve the original palette-selection rule for static / Orange
+            // scenes; only Blue's transient per-frame colour was unstable.
             const active=getActivePlaylistPaletteKeys();
             const preferred=active.includes(layer?.paletteKey)?layer.paletteKey:null;
-            let best=null,bestD=Infinity;
             const ordered=preferred?[preferred,...active.filter(k=>k!==preferred)]:active;
-            for (const key of ordered) {
-                const colors = getPlaylistPaletteColors(key);
-                if (!Array.isArray(colors) || !colors.length) continue;
-                let localIndex=0,localD=Infinity;
-                for (let i=0;i<colors.length;i++) {
-                    const c=tunnelColorBaseHex(colors[i]),v=parseInt(c.slice(1),16),dr=((v>>16)&255)-br,dg=((v>>8)&255)-bg,db=(v&255)-bb,d=dr*dr+dg*dg+db*db;
-                    if(d<localD){localD=d;localIndex=i;}
-                }
-
-                if(key===preferred && localD<=2500)return {key,colors,index:localIndex};
-                if(localD<bestD){bestD=localD;best={key,colors,index:localIndex};}
+            let best=null,bestD=Infinity;
+            for(const key of ordered){
+                const colors=getPlaylistPaletteColors(key);
+                if(!Array.isArray(colors)||!colors.length)continue;
+                const match=tunnelNearestPaletteStop(baseColor,colors);
+                if(key===preferred&&match.distance<=2500)return {key,colors,index:match.index};
+                if(match.distance<bestD){bestD=match.distance;best={key,colors,index:match.index};}
             }
             return best;
         }
 
+        // Corridor: physical copy position interpolates between neighbouring palette stops.
+        function tunnelBlendPaletteHex(a,b,t,alpha=''){
+          if(t<=0)return `${tunnelColorBaseHex(a)}${alpha}`;
+          const x=parseInt(tunnelColorBaseHex(a).slice(1),16),y=parseInt(tunnelColorBaseHex(b).slice(1),16);
+          const rgb=[16,8,0].map(sh=>Math.round(((x>>sh)&255)*(1-t)+((y>>sh)&255)*t).toString(16).padStart(2,'0')).join('');
+          return `#${rgb}${alpha}`;
+        }
         function getTunnelCopyColor(baseColor, copy, paletteProfile = null) {
-            if (!tunnelColorShiftIsActive()) return baseColor;
-            const t = normalizeTunnelColorShiftState();
+            const t=normalizeTunnelColorShiftState();
+            if(state.tunnel?.active!==true)return baseColor;
+            // Resolve the routed shift only once per colour lookup.
+            const degrees=t.colorShiftEnabled===true?getTunnelColorShiftDegrees():0;
+            if(t.paletteLagEnabled!==true&&degrees<=0.0001)return baseColor;
             const copyId = Number.isFinite(Number(copy?.copyId)) ? Number(copy.copyId) : Math.round(Number(copy?.position)||0);
             const localIndex = Number.isFinite(Number(copy?.colorIndex)) ? Number(copy.colorIndex) : Math.round(Number(copy?.position)||0);
 
-            const colorStep = t.colorShiftCumulative ? copyId : localIndex;
-            const lagDegrees = -colorStep * t.colorShiftDegrees;
+            const position=copy?.position;
+            const colorStep=t.colorShiftCumulative?copyId:(Number.isFinite(Number(position))?Number(position):localIndex);
+            // Palette lag is independent of cumulative hue rotation. It advances
+            // through real palette colours, including when accumulation is off.
+            if(t.paletteLagEnabled===true){
+                const palette=paletteProfile?.colors;
+                if(Array.isArray(palette)&&palette.length){
+                    const start=Number.isFinite(Number(paletteProfile.index))?Number(paletteProfile.index):0;
+                    const continuousStep=start+colorStep;
+                    const step=Math.floor(continuousStep),fraction=continuousStep-step;
+                    const idx=((step%palette.length)+palette.length)%palette.length;
+                    const alpha=tunnelColorAlphaSuffix(baseColor);
+                    return fraction<1e-6?`${tunnelColorBaseHex(palette[idx])}${alpha}`:
+                      tunnelBlendPaletteHex(palette[idx],palette[(idx+1)%palette.length],fraction,alpha);
+                }
+            }
+            if(t.colorShiftEnabled!==true)return baseColor;
+            const lagDegrees = -colorStep * degrees;
             return tunnelRotateHueHex(baseColor, lagDegrees);
         }
 
         function getTunnelDistanceFactor() {
-            const tunnel = state.tunnel;
-            const strength = Math.max(0, Number(tunnel?.spacingStrength) || 0);
-            const multiplier = Math.max(0.0001, Number(tunnel?.spacingMultiplier) || 0.0001);
-            const base = strength * multiplier;
-            const linked = audioApplyNumeric('tunnel.spacing', base, -1);
-            return Math.max(0.01, Number.isFinite(Number(linked)) ? Number(linked) : base);
+            const multiplier = Math.max(0.0001, Number(state.tunnel?.spacingMultiplier) || 0.0001);
+            return Math.max(0.01,(getTunnelSpacingPercent()/100)*multiplier);
         }
 
         function getTunnelCopies() {
@@ -145,7 +233,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 result._logStepRatio = 0;
                 result._fadeOffset = 0;
                 result._fadeDurationSec = 0;
-                result._direction = tunnel?.direction;
+                result._direction = getTunnelSpeedPercent()<0?'away':'toward';
                 result._centerHiddenCopies = 0;
                 result._centerRevealStartScale = 0;
                 result._centerRevealEndScale = 0;
@@ -176,10 +264,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 : 0;
             const outerExtra = Math.max(2, Math.min(68, fadeOffsetExtra + fadeTravelExtra + 4));
 
+            // This logarithmic basis is constant across all Corridor copies in the frame.
+            const logMinScale=Math.log(minScale),logRatio=Math.log(Math.max(1.000000001,ratio));
             let write = 0;
             for (let i = -2; i <= count - 1 + outerExtra; i++) {
                 const position = i + phase;
-                const logScale = Math.log(minScale) + Math.log(Math.max(1.000000001, ratio)) * position;
+                const logScale = logMinScale + logRatio * position;
                 const scale = Math.exp(Math.max(-30, Math.min(30, logScale)));
                 let item = result[write];
                 if (!item) item = result[write] = {};
@@ -200,7 +290,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             result._logStepRatio = Math.log(Math.max(1.000001, ratio));
             result._fadeOffset = Math.max(-50, Math.min(50, Math.round(Number(tunnel.fadeOffsetSteps) || 0)));
             result._fadeDurationSec = Math.max(0, Number(tunnel.fadeDurationSec) || 0);
-            result._direction = tunnel.direction;
+            result._direction = getTunnelSpeedPercent()<0?'away':'toward';
             result._centerHiddenCopies = centerHiddenCopies;
             result._centerRevealStartScale = centerRange.startScale;
             result._centerRevealEndScale = centerRange.endScale;
@@ -213,11 +303,9 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const musicLevel = state.audioReactive.active
                 ? Math.max(0, Math.min(1, (state.audioReactive.levels[0] + state.audioReactive.levels[1] + state.audioReactive.levels[2]) / 3))
                 : 0;
-            const speedStrength = Math.max(0, Number(tunnel.speedStrength) || 0);
             const speedMultiplier = Math.max(0, Number(tunnel.speedMultiplier) || 0);
-            const baseSpeed = Math.max(0, Number(tunnel.speed) || 0.42) * speedStrength * speedMultiplier;
-            const routedSpeed = audioApplyNumeric('tunnel.speed', baseSpeed, -1);
-            const visualSpeed = Math.max(0, routedSpeed) * (1 + musicLevel * 0.28);
+            const baseSpeed = Math.max(0, Number(tunnel.speed) || 0.42) * (Math.abs(getTunnelSpeedPercent())/100) * speedMultiplier;
+            const visualSpeed = baseSpeed * (1 + musicLevel * 0.28);
             return visualSpeed / getTunnelDistanceFactor(); // copy-steps per second
         }
 
@@ -230,7 +318,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const relativeFigureSteps = Math.log(Math.max(1e-9, Number(copy?.scale) || 1) / screenLimitScale) / logRatio;
             const offset = Number.isFinite(Number(tunnelFrame?._fadeOffset)) ? Number(tunnelFrame._fadeOffset) : Math.max(-50, Math.min(50, Math.round(Number(tunnel.fadeOffsetSteps) || 0)));
             const durationSec = Number.isFinite(Number(tunnelFrame?._fadeDurationSec)) ? Number(tunnelFrame._fadeDurationSec) : Math.max(0, Number(tunnel.fadeDurationSec) || 0);
-            const direction = tunnelFrame?._direction || tunnel.direction;
+            const direction = tunnelFrame?._direction || (getTunnelSpeedPercent()<0?'away':'toward');
             const cachedPhaseSpeed = Number(tunnelFrame?._phaseSpeedMagnitude);
             const phaseSpeedMagnitude = Math.max(0.0001, Number.isFinite(cachedPhaseSpeed) ? cachedPhaseSpeed : getTunnelPhaseSpeedMagnitude());
             const copyId = Number.isFinite(Number(copy?.copyId)) ? Number(copy.copyId) : Math.round(Number(copy?.position) || 0);
@@ -415,7 +503,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
 
         function applyTunnelScreenEdgeFeather(ctx, cssWidth, cssHeight, dpr) {
             if (!state.showVignette || !state.tunnel?.active || !state.tunnel.fadeOversize) return;
-            const amountPx = Math.max(0, Math.min(1200, audioApplyNumeric('tunnel.vignette', Number(state.tunnel.vignetteAmount) || 0, -1)));
+            const amountPx = getTunnelVignetteAmount();
             if (amountPx <= 0.0001) return;
             try{renderBackendTelemetry.mark('final','canvas','Canvas tunnel vignette',true);}catch(_){}
 
@@ -470,14 +558,13 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const musicLevel = state.audioReactive.active
                 ? Math.max(0, Math.min(1, (state.audioReactive.levels[0] + state.audioReactive.levels[1] + state.audioReactive.levels[2]) / 3))
                 : 0;
-            const speedStrength = Math.max(0, Number(tunnel.speedStrength) || 0);
+            const speedPercent=getTunnelSpeedPercent();
             const speedMultiplier = Math.max(0, Number(tunnel.speedMultiplier) || 0);
-            const baseSpeed = Math.max(0, Number(tunnel.speed) || 0.42) * speedStrength * speedMultiplier;
-            const routedSpeed = audioApplyNumeric('tunnel.speed', baseSpeed, -1);
-            const visualSpeed = Math.max(0, routedSpeed) * (1 + musicLevel * 0.28);
+            const baseSpeed = Math.max(0, Number(tunnel.speed) || 0.42) * (Math.abs(speedPercent)/100) * speedMultiplier;
+            const visualSpeed = baseSpeed * (1 + musicLevel * 0.28);
             const distanceFactor = getTunnelDistanceFactor();
             const phaseSpeed = visualSpeed / distanceFactor;
-            const directionSign = tunnel.direction === 'away' ? -1 : 1;
+            const directionSign = speedPercent < 0 ? -1 : 1;
             if (!Number.isFinite(Number(tunnel.travelPhase))) tunnel.travelPhase = Number(tunnel.phase) || 0;
             tunnel.travelPhase += dt * phaseSpeed * directionSign;
             tunnel.phase = ((tunnel.travelPhase % 1) + 1) % 1;
@@ -535,7 +622,6 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const spacingMultiplier = document.getElementById('tunnelSpacingMultiplier');
             const spacingText = document.getElementById('tunnelSpacingText');
             const centerHiddenCopies = document.getElementById('tunnelCenterHiddenCopies');
-            const directionText = document.getElementById('tunnelDirectionText');
             const defaultActive = document.getElementById('tunnelDefaultActive');
             const fadeEnabled = document.getElementById('tunnelFadeEnabled');
             const vignetteToggle = document.getElementById('showVignetteSetting');
@@ -551,7 +637,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const colorShiftCumulative = document.getElementById('tunnelColorShiftCumulative');
             const paletteLagEnabled = document.getElementById('tunnelPaletteLagEnabled');
 
-            const speedPct = Math.max(0, Math.min(300, (Number(tunnel.speedStrength) || 0) * 100));
+            const speedPct = Math.max(-100, Math.min(100, (Number(tunnel.speedStrength) || 0) * 100));
             const speedMult = Math.max(0, Math.min(20, Number(tunnel.speedMultiplier) || 0));
             const spacingPct = Math.max(20, Math.min(2000, (Number(tunnel.spacingStrength) || 3) * 100));
             const spacingMult = Math.max(0.0001, Number(tunnel.spacingMultiplier) || 1);
@@ -560,13 +646,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
 
             if (speedStrength) speedStrength.value = String(speedPct);
             if (speedMultiplier) speedMultiplier.value = String(speedMult);
-            if (speedText) speedText.textContent = `${Math.round(speedPct)}% × ${formatDisplayNumber(speedMult, 2)}`;
+            if (speedText) speedText.textContent = `${speedPct>0?'+':''}${Math.round(speedPct)}% × ${formatDisplayNumber(speedMult, 2)}`;
             if (spacingStrength) spacingStrength.value = String(spacingPct);
             if (spacingMultiplier) spacingMultiplier.value = String(spacingMult);
             if (spacingText) spacingText.textContent = `${Math.round(spacingPct)}% × ${formatDisplayNumber(spacingMult, 2)}`;
             if (centerHiddenCopies) centerHiddenCopies.value = String(centerHiddenCount);
             if (colorShiftEnabled) colorShiftEnabled.checked = tunnel.colorShiftEnabled;
-            if (colorShiftControls) colorShiftControls.classList.toggle('hidden', !tunnel.colorShiftEnabled);
             if (colorShiftDegrees) colorShiftDegrees.value = String(tunnel.colorShiftDegrees);
             if (colorShiftDegreesNumber) colorShiftDegreesNumber.value = String(tunnel.colorShiftDegrees);
             if (colorShiftText) colorShiftText.textContent = `${Math.round(tunnel.colorShiftDegrees)}°`;
@@ -592,14 +677,6 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
 
             tunnel.optimizedCalculation = true;
 
-            const direction = tunnel.direction === 'away' ? 'away' : 'toward';
-            tunnel.direction = direction;
-            if (directionText) directionText.textContent = direction === 'away' ? 'От нас' : 'На нас';
-            document.querySelectorAll('[data-tunnel-direction]').forEach((btn) => {
-                const active = btn.dataset.tunnelDirection === direction;
-                btn.classList.toggle('active', active);
-                btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-            });
         }
 
         function setupTunnelUI() {
@@ -646,13 +723,13 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             });
 
             const syncSpeed = () => {
-                const pct = Math.max(0, Math.min(300, Number(speedStrength?.value) || 0));
+                const pct = Math.max(-100, Math.min(100, Number(speedStrength?.value) || 0));
                 const mult = Math.max(0, Math.min(20, Number(speedMultiplier?.value) || 0));
                 state.tunnel.speedStrength = pct / 100;
                 state.tunnel.speedMultiplier = mult;
                 if (speedMultiplier) speedMultiplier.value = String(mult);
                 const text = document.getElementById('tunnelSpeedText');
-                if (text) text.textContent = `${Math.round(pct)}% × ${formatDisplayNumber(mult, 2)}`;
+                if (text) text.textContent = `${pct>0?'+':''}${Math.round(pct)}% × ${formatDisplayNumber(mult, 2)}`;
                 if (state.tunnel.active) requestMainCanvasRender();
             };
             speedStrength?.addEventListener('input', syncSpeed);
@@ -667,7 +744,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 state.tunnel.spacingMultiplier = mult;
                 if (spacingMultiplier) spacingMultiplier.value = String(mult);
                 const text = document.getElementById('tunnelSpacingText');
-                if (text) text.textContent = `${Math.round(pct)}% × ${formatDisplayNumber(mult, 2)}`;
+                if (text) text.textContent = `${pct>0?'+':''}${Math.round(pct)}% × ${formatDisplayNumber(mult, 2)}`;
                 if (state.tunnel.active) renderMainCanvas();
             };
             spacingStrength?.addEventListener('input', syncSpacing);
@@ -693,7 +770,6 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 t.colorShiftDegrees = deg;
                 t.colorShiftCumulative = colorShiftCumulative?.checked === true;
                 t.paletteLagEnabled = paletteLagEnabled?.checked === true;
-                if (colorShiftControls) colorShiftControls.classList.toggle('hidden', !t.colorShiftEnabled);
                 if (colorShiftDegrees && source !== colorShiftDegrees) colorShiftDegrees.value = String(deg);
                 if (colorShiftDegreesNumber && source !== colorShiftDegreesNumber) colorShiftDegreesNumber.value = String(deg);
                 const text=document.getElementById('tunnelColorShiftText');if(text)text.textContent=`${Math.round(deg)}°`;
@@ -735,13 +811,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             fadeDuration?.addEventListener('input', syncFade);
             fadeDuration?.addEventListener('change', syncFade);
 
-            document.querySelectorAll('[data-tunnel-direction]').forEach((btn) => {
-                btn.addEventListener('click', () => {
-                    state.tunnel.direction = btn.dataset.tunnelDirection === 'away' ? 'away' : 'toward';
-                    clearTunnelFadeRuntime();
-                    syncTunnelSettingsUI();
-                });
-            });
+
 
             syncTunnelSettingsUI();
         }
@@ -839,7 +909,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const idx=(state.layers||[]).indexOf(layer);
             if(idx>=0){
                 const rt=runtimeState?.morph;
-                for(const list of [rt?.frameLayers,rt?.lightLayers]){
+                for(const list of [rt?.frameLayers,rt?.lightLayers,runtimeState?.projectMorph?.frameRenderLayers,
+                    runtimeState?.minimalMorph?.sourceLayers,runtimeState?.minimalMorph?.targetLayers]){
                     const frame=Array.isArray(list)?list[idx]:null;
                     if(frame)frame.visible=next;
                 }
@@ -1075,7 +1146,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             });
             return rt.profileCarrierPlans;
         }
-        window.__somata76MorphArchitectureStatus=()=>({version:'7.9',mode:String(state.morph?.mode||'circleSlide'),
+        window.__somata76MorphArchitectureStatus=()=>({version:'7.11.3',mode:String(state.morph?.mode||'circleSlide'),
             gpuWarming:runtimeState.morph?.gpuPhaseWarming===true,gpuPreparing:runtimeState.morph?.gpuPhasePreparing===true,
             layers:(runtimeState.morph?.profileCarrierPlans||[]).map(p=>({...p})),
             contract:'shared profile -> carrier mapping; Spiral modes morph key carrier points first. Phase is fixed-N/variable-K, phase-circle adds branch clone/merge, minimal-turn keeps step constant while N branches clone/merge with Corridor phase locked to the same continuous-N carrier delta; Space pause snaps to the stable phase source; topology moves key endpoints Cartesian; torn uses exact Bezier subdivision without arc resampling.'});
@@ -1399,7 +1470,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             document.getElementById('lineMarkerTypeRow')?.classList.toggle('line-mode-hidden',mainLineMode!=='dash');
             document.getElementById('lineProfileSpriteLockHint')?.classList.toggle('hidden',mainLineMode!=='sprite');
             const graffitiOn=mainLineMode==='graffiti';
-            layer.lineProfileGraffiti='slash';
+            layer.lineProfileGraffiti=normalizeLineProfileValue(layer.lineProfileGraffiti,'slash');
             document.getElementById('graffitiProfileRow')?.classList.toggle('line-mode-hidden',!graffitiOn);
             document.getElementById('graffitiProfileRow')?.classList.toggle('hidden',!graffitiOn);
             const spriteBlock=document.getElementById('lineSpriteBlock');if(spriteBlock)spriteBlock.classList.toggle('line-mode-hidden',mainLineMode!=='sprite');
@@ -1415,7 +1486,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const graffitiNibRow=document.getElementById('graffitiNibRow');if(graffitiNibRow){graffitiNibRow.classList.toggle('hidden',!graffitiOn);graffitiNibRow.classList.toggle('line-mode-hidden',!graffitiOn);}
             const graffitiNibShape=['pointed','blunt','pinched','round'].includes(layer.graffitiNibShape)?layer.graffitiNibShape:'pointed';
             const graffitiNibShapeInput=document.getElementById('graffitiNibShape');if(graffitiNibShapeInput)graffitiNibShapeInput.value=graffitiNibShape;
-            const graffitiNibLength=Math.max(1,Math.min(20,Number(layer.graffitiNibLength)||10));
+            const graffitiNibLength=Math.max(1,Math.min(20,Number(layer.graffitiNibLength)||3));
             const graffitiNibLengthMultiplier=Math.max(.01,Number.isFinite(Number(layer.graffitiNibLengthMultiplier))?Number(layer.graffitiNibLengthMultiplier):1);
             const graffitiNibLengthRange=document.getElementById('graffitiNibLength');if(graffitiNibLengthRange)graffitiNibLengthRange.value=graffitiNibLength;
             const graffitiNibLengthText=document.getElementById('graffitiNibLengthText');if(graffitiNibLengthText)graffitiNibLengthText.textContent=graffitiNibLength.toFixed(graffitiNibLength%1?2:0);
@@ -1547,10 +1618,110 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             {mainId:'paramStrokeColor',option:'byColor',checkboxId:'morphByColor',label:'Цвет линии'},
             {mainId:'paramFillColor',option:'byFillColor',checkboxId:'morphByFillColor',label:'Цвет заливки'}
         ]);
+        // 7.10 — one artistic concept occupies one Morph row. Parameters that were
+        // side-by-side in the pre-routing UI (base value + multiplier/focus/etc.) stay
+        // independent bindings internally, but are edited together in a compound row.
+        // Nested children are shared by Blue, Orange and Audio in parameter-matrix.js.
+        const MORPH_COMPOUND_CHILDREN=window.SomataParameterMatrix.children;
+        const MORPH_COMPOUND_CHILD_LABELS=window.SomataParameterMatrix.childLabels;
+        const MORPH_COMPOUND_PARENT=Object.freeze(Object.fromEntries(Object.entries(MORPH_COMPOUND_CHILDREN).flatMap(([parent,children])=>children.map(child=>[child,parent]))));
+        const MORPH_ALWAYS_ON_MULTIPLIERS=new Set(Object.values(MORPH_COMPOUND_CHILDREN).flat().filter(id=>/Multiplier$/.test(id)));
+        function morphCompoundParentId(paramId){return MORPH_COMPOUND_PARENT[paramId]||'';}
+        function morphCompoundChildren(paramId){return MORPH_COMPOUND_CHILDREN[paramId]||[];}
+        function morphAlwaysOnMultiplier(paramId){return MORPH_ALWAYS_ON_MULTIPLIERS.has(String(paramId||''));}
+        function morphCompoundVisibleDefinition(def){return !!def&&def.type!=='boolean'&&!morphCompoundParentId(def.id);}
+        function morphUiGroup(def){return String(def?.morph?.group||def?.group||'');}
+        function pruneLegacyMorphMultiplierBindings(){
+            const routing=window.SomataMorphParameterRouting,profile=getActiveMorphProfile();if(!routing||!profile||profile.type!=='standard')return false;
+            const list=routing.workingBindings?.(state.morph,state.minimalMorph,profile);if(!Array.isArray(list))return false;let changed=false;
+            for(let i=list.length-1;i>=0;i--){if(morphAlwaysOnMultiplier(list[i]?.parameter)){list.splice(i,1);changed=true;}}
+            if(changed)routing.resetRuntime?.(runtimeState.morph);return changed;
+        }
+
         let blueMorphParameterBindingsReady=false;
         function blueMorphParameterRowFor(el){return el?.closest?.('.control-row')||el?.closest?.('.fill-settings-block')||null;}
         function setBlueMorphRangeCss(host,lo,hi,min,max){
             if(!host)return;const span=Math.max(1e-9,max-min),a=Math.max(0,Math.min(100,((lo-min)/span)*100)),b=Math.max(a,Math.min(100,((hi-min)/span)*100));host.style.setProperty('--morph-low',`${a}%`);host.style.setProperty('--morph-high',`${b}%`);
+        }
+        function morphSliderDisplayValue(input){
+            const n=Number(input?.value);if(!Number.isFinite(n))return String(input?.value??'');
+            const step=String(input?.step||'');let digits=0;if(step.includes('.'))digits=Math.min(4,step.split('.')[1].length);
+            if(Math.abs(n)>=1000)return String(Math.round(n));if(digits)return n.toFixed(digits).replace(/\.?0+$/,'');return String(Math.round(n*1000)/1000);
+        }
+        function ensureMorphSliderBubble(host){
+            if(!host)return null;let bubble=host.querySelector(':scope > .morph-slider-value-bubble');if(bubble)return bubble;
+            bubble=document.createElement('span');bubble.className='morph-slider-value-bubble';bubble.setAttribute('aria-hidden','true');host.appendChild(bubble);return bubble;
+        }
+        function showMorphSliderBubble(host,input,force=false){
+            if(!host||!input||(!force&&!host.classList.contains('morph-live')))return;const bubble=ensureMorphSliderBubble(host),min=Number(input.min),max=Number(input.max),v=Number(input.value);if(!Number.isFinite(v)||!Number.isFinite(min)||!Number.isFinite(max)||max<=min)return;
+            const pct=Math.max(0,Math.min(100,((v-min)/(max-min))*100));bubble.textContent=morphSliderDisplayValue(input);bubble.style.left=`${pct}%`;bubble.classList.add('visible');bubble.dataset.owner=input.classList.contains('blue-morph-dual-min')?'min':'max';host._morphBubbleOwner=input;
+        }
+        function hideMorphSliderBubble(host,delay=0){
+            if(!host)return;clearTimeout(host._morphBubbleTimer);host._morphBubbleTimer=setTimeout(()=>{if(host._morphBubbleDragging)return;host.querySelector(':scope > .morph-slider-value-bubble')?.classList.remove('visible');host._morphBubbleOwner=null;},delay);
+        }
+        function attachMorphSliderBubble(host,input){
+            if(!host||!input||input.dataset.morphBubbleBound==='1')return;input.dataset.morphBubbleBound='1';
+            input.addEventListener('input',()=>showMorphSliderBubble(host,input,true));input.addEventListener('focus',()=>showMorphSliderBubble(host,input,true));input.addEventListener('blur',()=>hideMorphSliderBubble(host,140));
+            input.addEventListener('pointerdown',()=>{host._morphBubbleDragging=true;showMorphSliderBubble(host,input,true);});input.addEventListener('pointerup',()=>{host._morphBubbleDragging=false;showMorphSliderBubble(host,input,true);hideMorphSliderBubble(host,520);});
+            if(host.dataset.morphBubbleHostBound!=='1'){
+                host.dataset.morphBubbleHostBound='1';host.addEventListener('pointermove',ev=>{if(!host.classList.contains('morph-live'))return;const rect=host.getBoundingClientRect();if(!(rect.width>0))return;const candidates=[...host.querySelectorAll('.blue-morph-dual:not(:disabled)')];if(!candidates.length)return;let best=null,bestDist=Infinity;for(const candidate of candidates){const min=Number(candidate.min),max=Number(candidate.max),v=Number(candidate.value);if(!Number.isFinite(min)||!Number.isFinite(max)||!Number.isFinite(v)||max<=min)continue;const px=rect.left+((v-min)/(max-min))*rect.width,dist=Math.abs(ev.clientX-px);if(dist<bestDist){bestDist=dist;best=candidate;}}if(best&&(bestDist<=22||host._morphBubbleDragging))showMorphSliderBubble(host,best,true);else if(!host._morphBubbleDragging)hideMorphSliderBubble(host,80);});host.addEventListener('pointerleave',()=>hideMorphSliderBubble(host,100));
+            }
+        }
+        // The same iPhone-like value bubble for authored sliders outside live Blue Morph.
+        // This is delegated, so every visible range in current/future UI gets it without DOM wrappers.
+        let standardSliderBubble=null,standardSliderBubbleTarget=null,standardSliderBubbleDragging=false,standardSliderBubbleHideTimer=0;
+        function isStandardSliderBubbleTarget(el){
+            if(!(el instanceof HTMLInputElement)||el.type!=='range'||el.classList.contains('blue-morph-dual'))return false;
+            if(el.disabled||el.getAttribute('aria-hidden')==='true')return false;
+            const morphHost=el.closest('.blue-morph-range-host');if(morphHost?.classList.contains('morph-live')&&el.classList.contains('blue-morph-current-slider'))return false;
+            const rect=el.getBoundingClientRect();return rect.width>0&&rect.height>0;
+        }
+        function ensureStandardSliderBubble(){
+            if(standardSliderBubble?.isConnected)return standardSliderBubble;
+            standardSliderBubble=document.createElement('span');standardSliderBubble.className='morph-slider-value-bubble standard-slider-value-bubble';standardSliderBubble.setAttribute('aria-hidden','true');document.body.appendChild(standardSliderBubble);return standardSliderBubble;
+        }
+        function positionStandardSliderBubble(input){
+            if(!isStandardSliderBubbleTarget(input))return false;const bubble=ensureStandardSliderBubble(),rect=input.getBoundingClientRect(),min=Number(input.min),max=Number(input.max),v=Number(input.value);if(!Number.isFinite(v)||!Number.isFinite(min)||!Number.isFinite(max)||max<=min)return false;
+            const pct=Math.max(0,Math.min(1,(v-min)/(max-min))),thumbInset=Math.min(9,rect.width*.08),x=rect.left+thumbInset+pct*Math.max(0,rect.width-thumbInset*2),safeX=Math.max(22,Math.min(window.innerWidth-22,x));
+            bubble.textContent=morphSliderDisplayValue(input);bubble.style.left=`${safeX}px`;bubble.style.top=`${Math.max(8,rect.top-8)}px`;bubble.classList.add('visible');standardSliderBubbleTarget=input;return true;
+        }
+        function hideStandardSliderBubble(delay=0){
+            clearTimeout(standardSliderBubbleHideTimer);standardSliderBubbleHideTimer=setTimeout(()=>{if(standardSliderBubbleDragging)return;standardSliderBubble?.classList.remove('visible');standardSliderBubbleTarget=null;},delay);
+        }
+        function bindStandardSliderBubbleDelegation(){
+            if(document.documentElement.dataset.standardSliderBubbleBound==='1')return;document.documentElement.dataset.standardSliderBubbleBound='1';
+            document.addEventListener('pointerover',ev=>{const input=ev.target?.closest?.('input[type="range"]');if(input&&isStandardSliderBubbleTarget(input)){clearTimeout(standardSliderBubbleHideTimer);positionStandardSliderBubble(input);}});
+            document.addEventListener('pointermove',ev=>{const input=ev.target?.closest?.('input[type="range"]');if(input&&isStandardSliderBubbleTarget(input))positionStandardSliderBubble(input);});
+            document.addEventListener('pointerout',ev=>{const input=ev.target?.closest?.('input[type="range"]');if(input&&input===standardSliderBubbleTarget&&!input.contains(ev.relatedTarget))hideStandardSliderBubble(90);});
+            document.addEventListener('pointerdown',ev=>{const input=ev.target?.closest?.('input[type="range"]');if(!input||!isStandardSliderBubbleTarget(input))return;standardSliderBubbleDragging=true;positionStandardSliderBubble(input);});
+            const release=()=>{if(!standardSliderBubbleDragging)return;standardSliderBubbleDragging=false;if(standardSliderBubbleTarget)positionStandardSliderBubble(standardSliderBubbleTarget);hideStandardSliderBubble(520);};
+            document.addEventListener('pointerup',release);document.addEventListener('pointercancel',release);
+            document.addEventListener('focusin',ev=>{const input=ev.target;if(isStandardSliderBubbleTarget(input)){clearTimeout(standardSliderBubbleHideTimer);positionStandardSliderBubble(input);}});
+            document.addEventListener('focusout',ev=>{if(ev.target===standardSliderBubbleTarget)hideStandardSliderBubble(140);});
+            document.addEventListener('input',ev=>{const input=ev.target;if(input===standardSliderBubbleTarget&&isStandardSliderBubbleTarget(input))positionStandardSliderBubble(input);});
+            window.addEventListener('scroll',()=>{if(standardSliderBubbleTarget&&standardSliderBubble?.classList.contains('visible'))positionStandardSliderBubble(standardSliderBubbleTarget);},{capture:true,passive:true});
+            window.addEventListener('resize',()=>{if(standardSliderBubbleTarget&&standardSliderBubble?.classList.contains('visible'))positionStandardSliderBubble(standardSliderBubbleTarget);});
+        }
+        bindStandardSliderBubbleDelegation();
+        let genericMorphRangeBindingsReady=false;
+        function ensureGenericMorphRangeBindings(){
+            if(genericMorphRangeBindingsReady)return;genericMorphRangeBindingsReady=true;
+            for(const def of (window.SomataParameterRegistry?.morphable?.()||[])){
+                if(def.morph?.legacy===true)continue;const el=document.getElementById(def.ui?.mainId);if(!el||el.type!=='range'||el.closest('.blue-morph-range-host'))continue;
+                const rawMin=Number(el.min),rawMax=Number(el.max),defMin=Number(def.min),defMax=Number(def.max);const min=Number.isFinite(rawMin)?rawMin:(Number.isFinite(defMin)?defMin:0),max=Number.isFinite(rawMax)?rawMax:(Number.isFinite(defMax)?defMax:min+1);if(!(max>min))continue;
+                const host=document.createElement('span');host.className='blue-morph-range-host generic-morph-range-host parameter-routing-control';host.dataset.morphMainId=def.ui.mainId;host.dataset.routingParamId=def.id;host.dataset.sliderMode='value';el.parentNode.insertBefore(host,el);host.appendChild(el);el.classList.add('blue-morph-current-slider');if(!el.dataset.blueMorphOriginalTabIndex)el.dataset.blueMorphOriginalTabIndex=String(el.tabIndex);
+                const step=(String(el.step||'')&&el.step!=='any')?el.step:String(def.step||1),low=document.createElement('input'),high=document.createElement('input');
+                for(const [node,which] of [[low,'min'],[high,'max']]){node.type='range';node.className=`blue-morph-dual blue-morph-dual-${which}`;node.min=String(min);node.max=String(max);node.step=step;node.disabled=true;node.tabIndex=-1;node.setAttribute('aria-hidden','true');node.setAttribute('aria-label',`${def.label}: ${which==='min'?'минимум':'максимум'} морфинга`);host.appendChild(node);attachMorphSliderBubble(host,node);}
+                const commit=(which,final=false)=>{const profile=getActiveMorphProfile();let binding=profile?.type==='standard'?getActiveMorphBindings(profile).find(b=>b.parameter===def.id):null;if(!binding||binding.enabled===false)return;let lo=Number(low.value),hi=Number(high.value);if(which==='min'&&lo>hi){hi=lo;high.value=String(hi);}if(which==='max'&&hi<lo){lo=hi;low.value=String(lo);}binding.min=lo;binding.max=hi;setBlueMorphRangeCss(host,lo,hi,min,max);window.SomataMorphParameterRouting?.resetRuntime?.(runtimeState.morph);if(runtimeState.morph?.active)activeRebaseMorphing?.();requestMainCanvasRender();syncMorphProfileDirtyUI?.();if(final){renderMorphProfileBindings();syncMorphRouteDecorations();}};
+                low.addEventListener('input',()=>commit('min',false));high.addEventListener('input',()=>commit('max',false));low.addEventListener('change',()=>commit('min',true));high.addEventListener('change',()=>commit('max',true));
+            }
+        }
+        function syncGenericMorphRangeBindings(){
+            ensureGenericMorphRangeBindings();const live=runtimeState?.morph?.active===true,profile=getActiveMorphProfile();
+            for(const def of (window.SomataParameterRegistry?.morphable?.()||[])){
+                if(def.morph?.legacy===true)continue;const el=document.getElementById(def.ui?.mainId),host=el?.closest?.('.generic-morph-range-host');if(!host)continue;const binding=profile?.type==='standard'?getActiveMorphBindings(profile).find(b=>b.parameter===def.id):null,on=binding?.enabled!==false&&!!binding,rangeMode=on&&live;host.classList.toggle('morph-live',rangeMode);host.dataset.sliderMode=rangeMode?'morph-range':'value';const dual=[...host.querySelectorAll('.blue-morph-dual')],originalTab=Number(el.dataset.blueMorphOriginalTabIndex);if(rangeMode){el.tabIndex=-1;el.setAttribute('aria-hidden','true');}else{el.tabIndex=Number.isFinite(originalTab)?originalTab:0;el.removeAttribute('aria-hidden');hideMorphSliderBubble(host,0);}for(const input of dual){input.disabled=!rangeMode;input.tabIndex=rangeMode?0:-1;input.setAttribute('aria-hidden',rangeMode?'false':'true');}
+                const min=Number(dual[0]?.min),max=Number(dual[0]?.max);let lo=Number(binding?.min),hi=Number(binding?.max);if(!Number.isFinite(lo)||!Number.isFinite(hi)){const range=defaultMorphBindingRange(def);lo=Number(range.min);hi=Number(range.max);}if(Number.isFinite(min))lo=Math.max(min,lo);if(Number.isFinite(max))hi=Math.min(max,hi);if(lo>hi)[lo,hi]=[hi,lo];if(dual[0]&&document.activeElement!==dual[0])dual[0].value=String(lo);if(dual[1]&&document.activeElement!==dual[1])dual[1].value=String(hi);if(Number.isFinite(min)&&Number.isFinite(max))setBlueMorphRangeCss(host,lo,hi,min,max);
+            }
         }
         function ensureBlueMorphParameterBindings(){
             if(blueMorphParameterBindingsReady)return;blueMorphParameterBindingsReady=true;
@@ -1559,25 +1730,648 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 const row=blueMorphParameterRowFor(el);if(!row)continue;row.dataset.blueMorphOption=spec.option;
                 let name=row.querySelector('.row-label > span:first-child')||row.querySelector('.hint-text')||row.querySelector('.fill-settings-title span');
                 if(name&&!name.dataset.blueMorphContextBound){
-                    name.dataset.blueMorphContextBound='1';name.classList.add('blue-morph-parameter-name');name.title=`ПКМ: включить/выключить «${spec.label}» в синем морфинге`;
-                    name.addEventListener('contextmenu',ev=>{ev.preventDefault();ev.stopPropagation();const cb=document.getElementById(spec.checkboxId);if(!cb)return;cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));syncBlueMorphParameterDecorations();});
+                    name.dataset.blueMorphContextBound='1';name.classList.add('blue-morph-parameter-name');name.title=`ПКМ: включить/выключить «${spec.label}» в выбранном Morph Profile`;
+                    name.addEventListener('contextmenu',ev=>{ev.preventDefault();ev.stopPropagation();const id=blueSpecParameterId(spec);if(id)openUnifiedParameterRoutingMenuForId(id,ev.clientX,ev.clientY);});
                 }
                 if(el.type!=='range'||!spec.minKey)continue;
                 const host=document.createElement('span');host.className='blue-morph-range-host';host.dataset.morphMainId=spec.mainId;host.dataset.sliderMode='value';
                 el.parentNode.insertBefore(host,el);host.appendChild(el);el.classList.add('blue-morph-current-slider');
                 if(!el.dataset.blueMorphOriginalTabIndex)el.dataset.blueMorphOriginalTabIndex=String(el.tabIndex);
                 const low=document.createElement('input'),high=document.createElement('input');
-                for(const [node,which] of [[low,'min'],[high,'max']]){node.type='range';node.className=`blue-morph-dual blue-morph-dual-${which}`;node.min=String(spec.min);node.max=String(spec.max);node.step=String(spec.step);node.disabled=true;node.tabIndex=-1;node.setAttribute('aria-hidden','true');node.setAttribute('aria-label',`${spec.label}: ${which==='min'?'минимум':'максимум'} морфинга`);host.appendChild(node);}
-                const commit=(which)=>{let lo=Number(low.value),hi=Number(high.value);if(which==='min'&&lo>hi){hi=lo;high.value=String(hi);}if(which==='max'&&hi<lo){lo=hi;low.value=String(lo);}state.morph[spec.minKey]=lo;state.morph[spec.maxKey]=hi;setBlueMorphRangeCss(host,lo,hi,spec.min,spec.max);const a=document.getElementById(spec.checkboxId);if(a&&!a.checked){a.checked=true;a.dispatchEvent(new Event('change',{bubbles:true}));}const mirrorIds={vertexMin:'morphVertexMin',vertexMax:'morphVertexMax',stepMin:'morphStepMin',stepMax:'morphStepMax',roundingMin:'morphRoundingMin',roundingMax:'morphRoundingMax',rotationMinPercent:'morphRotationMin',rotationMaxPercent:'morphRotationMax',opacityMin:'morphOpacityMin',opacityMax:'morphOpacityMax',strokeWidthMin:'morphStrokeWidthMin',strokeWidthMax:'morphStrokeWidthMax',fillOpacityMin:'morphFillOpacityMin',fillOpacityMax:'morphFillOpacityMax'};for(const key of [spec.minKey,spec.maxKey]){const id=mirrorIds[key],m=document.getElementById(id);if(m&&document.activeElement!==m)m.value=String(state.morph[key]);}if(runtimeState.morph.active)activeRebaseMorphing();requestMainCanvasRender();};
+                for(const [node,which] of [[low,'min'],[high,'max']]){node.type='range';node.className=`blue-morph-dual blue-morph-dual-${which}`;node.min=String(spec.min);node.max=String(spec.max);node.step=String(spec.step);node.disabled=true;node.tabIndex=-1;node.setAttribute('aria-hidden','true');node.setAttribute('aria-label',`${spec.label}: ${which==='min'?'минимум':'максимум'} морфинга`);host.appendChild(node);attachMorphSliderBubble(host,node);}
+                const commit=(which)=>{let lo=Number(low.value),hi=Number(high.value);if(which==='min'&&lo>hi){hi=lo;high.value=String(hi);}if(which==='max'&&hi<lo){lo=hi;low.value=String(lo);}state.morph[spec.minKey]=lo;state.morph[spec.maxKey]=hi;setBlueMorphRangeCss(host,lo,hi,spec.min,spec.max);const a=document.getElementById(spec.checkboxId);if(a&&!a.checked){a.checked=true;a.dispatchEvent(new Event('change',{bubbles:true}));}const mirrorIds={vertexMin:'morphVertexMin',vertexMax:'morphVertexMax',stepMin:'morphStepMin',stepMax:'morphStepMax',roundingMin:'morphRoundingMin',roundingMax:'morphRoundingMax',rotationMinPercent:'morphRotationMin',rotationMaxPercent:'morphRotationMax',opacityMin:'morphOpacityMin',opacityMax:'morphOpacityMax',strokeWidthMin:'morphStrokeWidthMin',strokeWidthMax:'morphStrokeWidthMax',fillOpacityMin:'morphFillOpacityMin',fillOpacityMax:'morphFillOpacityMax'};for(const key of [spec.minKey,spec.maxKey]){const id=mirrorIds[key],m=document.getElementById(id);if(m&&document.activeElement!==m)m.value=String(state.morph[key]);}if(runtimeState.morph.active)activeRebaseMorphing();requestMainCanvasRender();syncMorphProfileDirtyUI?.();};
                 low.addEventListener('input',()=>commit('min'));high.addEventListener('input',()=>commit('max'));low.addEventListener('change',()=>commit('min'));high.addEventListener('change',()=>commit('max'));
             }
             const profileGroup=document.getElementById('profileSettingsGroup');const profileTitle=profileGroup?.querySelector('.control-group-title > span');
-            if(profileGroup&&profileTitle&&!profileTitle.dataset.blueMorphContextBound){profileGroup.dataset.blueMorphOption='byShape';profileTitle.dataset.blueMorphContextBound='1';profileTitle.classList.add('blue-morph-parameter-name');profileTitle.title='ПКМ: включить/выключить профиль формы в синем морфинге';profileTitle.addEventListener('contextmenu',ev=>{ev.preventDefault();const cb=document.getElementById('morphByShape');if(cb){cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));syncBlueMorphParameterDecorations();}});}
+            if(profileGroup&&profileTitle&&!profileTitle.dataset.blueMorphContextBound){profileGroup.dataset.blueMorphOption='byShape';profileTitle.dataset.blueMorphContextBound='1';profileTitle.classList.add('blue-morph-parameter-name');profileTitle.title='ПКМ: включить/выключить профиль формы в выбранном Morph Profile';profileTitle.addEventListener('contextmenu',ev=>{ev.preventDefault();const cb=document.getElementById('morphByShape');if(cb){cb.checked=!cb.checked;cb.dispatchEvent(new Event('change',{bubbles:true}));syncBlueMorphParameterDecorations();}});}
         }
         function syncBlueMorphParameterDecorations(){
             ensureBlueMorphParameterBindings();const live=runtimeState?.morph?.active===true;
             for(const spec of BLUE_MORPH_PARAMETER_BINDINGS){const el=document.getElementById(spec.mainId),row=blueMorphParameterRowFor(el);if(!row)continue;const on=state.morph.options?.[spec.option]===true,rangeMode=on&&live;row.classList.toggle('blue-morph-enabled',on);row.classList.toggle('blue-morph-live',rangeMode);const host=el?.closest?.('.blue-morph-range-host');if(host&&spec.minKey){host.classList.toggle('morph-live',rangeMode);host.dataset.sliderMode=rangeMode?'morph-range':'value';const inputs=host.querySelectorAll('.blue-morph-dual');const originalTab=Number(el.dataset.blueMorphOriginalTabIndex);if(rangeMode){el.tabIndex=-1;el.setAttribute('aria-hidden','true');}else{el.tabIndex=Number.isFinite(originalTab)?originalTab:0;el.removeAttribute('aria-hidden');}for(const input of inputs){input.disabled=!rangeMode;input.tabIndex=rangeMode?0:-1;input.setAttribute('aria-hidden',rangeMode?'false':'true');}let lo=Number(state.morph[spec.minKey]),hi=Number(state.morph[spec.maxKey]);if(!Number.isFinite(lo))lo=spec.min;if(!Number.isFinite(hi))hi=spec.max;lo=Math.max(spec.min,Math.min(spec.max,lo));hi=Math.max(lo,Math.min(spec.max,hi));if(inputs[0]&&document.activeElement!==inputs[0])inputs[0].value=String(lo);if(inputs[1]&&document.activeElement!==inputs[1])inputs[1].value=String(hi);setBlueMorphRangeCss(host,lo,hi,spec.min,spec.max);}}
             const pg=document.getElementById('profileSettingsGroup');if(pg){const on=state.morph.options?.byShape===true;pg.classList.toggle('blue-morph-enabled',on);pg.classList.toggle('blue-morph-live',on&&live);}
+            syncGenericMorphRangeBindings();
+        }
+
+        let morphProfileUiReady=false;
+        function ensureMorphProfileState(){return window.SomataMorphParameterRouting?.ensureProfiles?.(state.morph,state.minimalMorph)||[];}
+        function getActiveMorphProfile(){return window.SomataMorphParameterRouting?.activeProfile?.(state.morph,state.minimalMorph)||null;}
+        function getActiveMorphBindings(profile=getActiveMorphProfile()){return window.SomataMorphParameterRouting?.workingBindings?.(state.morph,state.minimalMorph,profile)||(profile?.bindings||[]);}
+        function getMorphOrderMode(profile=getActiveMorphProfile()){return window.SomataMorphParameterRouting?.workingOrderMode?.(state.morph,state.minimalMorph,profile)||(profile?.orderMode==='type'?'type':'free');}
+        function getMorphDisplayBindings(profile=getActiveMorphProfile()){
+            const list=getActiveMorphBindings(profile);if(getMorphOrderMode(profile)!=='type')return list;
+            return window.SomataMorphParameterRouting?.typeSortedBindings?.(list)||list;
+        }
+        function setMorphOrderMode(mode){
+            const routing=window.SomataMorphParameterRouting,profile=getActiveMorphProfile();if(!routing||!profile||profile.type!=='standard')return false;
+            if(!routing.setWorkingOrderMode?.(state.morph,state.minimalMorph,mode))return false;
+            renderMorphProfileBindings();syncMorphOrderModeUI();syncMorphProfileDirtyUI?.();return true;
+        }
+        function syncMorphOrderModeUI(){
+            const profile=getActiveMorphProfile(),mode=profile?.type==='standard'?getMorphOrderMode(profile):'free',host=document.getElementById('morphOrderMode');
+            if(host)host.classList.toggle('hidden',profile?.type!=='standard');
+            document.querySelectorAll('[data-morph-order]').forEach(btn=>{const active=profile?.type==='standard'&&btn.dataset.morphOrder===mode;btn.classList.toggle('active',active);btn.setAttribute('aria-pressed',active?'true':'false');});
+            const toggle=document.getElementById('btnMorphOrderToggle');if(toggle){toggle.textContent=mode==='type'?'⇅ По типу':'↕ Свободно';toggle.dataset.mode=mode;toggle.classList.toggle('free',mode==='free');toggle.title=mode==='type'?'Сейчас строки сортируются по типу эффекта · нажмите для свободного порядка':'Сейчас свободный порядок · нажмите для сортировки по типу';}
+            const rows=document.getElementById('morphProfileBindings');if(rows){rows.dataset.orderMode=mode;rows.classList.toggle('morph-order-type',mode==='type');rows.classList.toggle('morph-order-free',mode==='free');}
+        }
+        function blueSpecParameterId(spec){return window.SomataParameterRegistry?.all?.().find(def=>def?.ui?.mainId===spec?.mainId&&def?.morph?.legacy===true)?.id||null;}
+        function morphBindingCurrentValue(def){
+            if(!def)return NaN;
+            if(def.morph?.frameTarget==='global'){
+                if(def.id==='tunnel.speed')return (Number(state.tunnel?.speedStrength)||0)*100;
+                if(def.id==='tunnel.spacing')return (Number(state.tunnel?.spacingStrength)||3)*100;
+                if(def.id==='tunnel.colorShift')return Number(state.tunnel?.colorShiftDegrees)||0;
+                if(def.id==='tunnel.vignette')return Number(state.tunnel?.vignetteAmount)||0;
+                if(def.id==='palette.hueOffset')return Number(state.playlistPaletteHueOffset)||0;
+                return NaN;
+            }
+            const layer=state.layers.find(l=>l.id===state.activeLayerId)||state.layers[0];if(!layer)return NaN;
+            const root=def.morph?.frameTarget==='layer'?layer:(typeof ensureLayerEffectState==='function'?ensureLayerEffectState(layer):layer);
+            const v=window.SomataParameterRegistry?.valueAt?.(root,def.morph?.framePath);return Number(v);
+        }
+        function defaultMorphBindingRange(def){
+            const currentRaw=morphBindingCurrentValue(def),ui=document.getElementById(def?.ui?.mainId),uiMin=Number(ui?.min),uiMax=Number(ui?.max),defMin=Number(def?.min),defMax=Number(def?.max),min=Number.isFinite(uiMin)?uiMin:defMin,max=Number.isFinite(uiMax)?uiMax:defMax,span=Number(def?.audio?.span),step=Math.max(1e-9,Number(ui?.step)||Number(def?.step)||1);
+            if(Number.isFinite(currentRaw)){
+                const current=Math.max(Number.isFinite(min)?min:-Infinity,Math.min(Number.isFinite(max)?max:Infinity,currentRaw));let delta=Number.isFinite(span)&&span>0?span:Math.max(Math.abs(current)*.35,step*4);
+                if(def?.audio?.mode==='positiveFactor'||def?.audio?.mode==='centerFactor'||def?.audio?.mode==='fadeFactor')delta=Math.max(Math.abs(current)*.45,delta*.25);
+                let lo=current-delta,hi=current+delta;if(Number.isFinite(min))lo=Math.max(min,lo);if(Number.isFinite(max))hi=Math.min(max,hi);if(Math.abs(lo-hi)<1e-12){if(!Number.isFinite(max)||hi+step<=max)hi+=step;else lo=Math.max(Number.isFinite(min)?min:-Infinity,lo-step);}return{min:lo,max:hi};
+            }
+            const lo=Number.isFinite(min)?min:0,hi=Number.isFinite(max)?max:lo+step;return{min:lo,max:hi>lo?hi:lo+step};
+        }
+        function setLegacyMorphBindingEnabled(def,enabled){
+            const cb=document.getElementById(def?.morph?.checkboxId);if(!cb)return false;if(cb.checked!==enabled){cb.checked=enabled;cb.dispatchEvent(new Event('change',{bubbles:true}));}return true;
+        }
+        function setMorphParameterBinding(paramId,enabled){
+            const routing=window.SomataMorphParameterRouting,def=window.SomataParameterRegistry?.get?.(paramId),profile=getActiveMorphProfile();if(!routing||!def||def.morph?.supported!==true||def.type==='boolean'||!profile||profile.type!=='standard'||morphAlwaysOnMultiplier(paramId))return false;
+            if(enabled){
+                if(def.morph?.legacy===true)setLegacyMorphBindingEnabled(def,true);
+                else{const b=routing.addBinding(state.morph,state.minimalMorph,paramId,defaultMorphBindingRange(def));if(b)b.enabled=true;}
+            }else{
+                if(def.morph?.legacy===true)setLegacyMorphBindingEnabled(def,false);
+                routing.removeBinding(state.morph,state.minimalMorph,paramId);
+            }
+            routing.syncActiveLegacyBindings(state.morph,state.minimalMorph);routing.resetRuntime(runtimeState.morph);syncMorphProfileUI();syncBlueMorphParameterDecorations();if(runtimeState.morph?.active)activeRebaseMorphing?.();requestMainCanvasRender();return true;
+        }
+        function removeMorphParameterBinding(paramId){return setMorphParameterBinding(paramId,false);}
+        function setMorphRouteBindingActive(def,binding,enabled){
+            if(!def||!binding)return false;const on=enabled===true;
+            if(def.morph?.legacy===true){
+                const option=def.morph?.option;if(option){state.morph.options=state.morph.options||{};state.morph.options[option]=on;}
+                const cb=document.getElementById(def.morph?.checkboxId);if(cb)cb.checked=on;
+                binding.enabled=on;
+            }else binding.enabled=on;
+            return true;
+        }
+        function commitMorphRouteActivationChange(){
+            const routing=window.SomataMorphParameterRouting;routing?.syncActiveLegacyBindings?.(state.morph,state.minimalMorph);routing?.resetRuntime?.(runtimeState.morph);
+            syncMorphSettingsUI();syncBlueMorphParameterDecorations();renderMorphProfileBindings();renderMorphRoutingTargets();renderMorphRoutingGroups();syncMorphRouteDecorations();
+            if(runtimeState.morph?.active)activeRebaseMorphing?.();requestMainCanvasRender();syncMorphProfileDirtyUI?.();
+        }
+        function renderMorphParameterPicker(){
+            const host=document.getElementById('morphParameterOptions'),input=document.getElementById('morphParameterSearch');if(!host)return;const profile=getActiveMorphProfile(),q=String(input?.value||'').trim().toLowerCase();host.innerHTML='';if(!profile||profile.type!=='standard')return;
+            const active=new Set(getActiveMorphBindings(profile).filter(b=>b.enabled!==false).map(b=>b.parameter));let last='';
+            for(const def of window.SomataParameterMatrix.all()){
+                const group=morphUiGroup(def),hay=`${group} ${def.label} ${def.id}`.toLowerCase();if(q&&!hay.includes(q))continue;
+                if(group!==last){const title=document.createElement('div');title.className='morph-param-group-title audio-param-group-title';title.textContent=group;host.appendChild(title);last=group;}
+                const specialOn=def.kind==='shape'?state.morph.options.byShape===true:def.kind==='orbits'?state.morph.monoOrbitTransforms===true:def.kind==='chaos'?state.morph.chaosMorphEnabled===true:def.kind==='spiralLayers'?state.morph.options.bySpiralLayers===true:active.has(def.id);const b=document.createElement('button');b.type='button';b.className='morph-param-option audio-param-option'+(specialOn?' active':'');b.innerHTML=`<span>${def.label}</span><small>${specialOn?'✓':''}</small>`;b.addEventListener('click',()=>{if(def.kind==='shape')setMorphProxyControl('morphByShape',state.morph.options.byShape!==true,'checked');else if(def.kind==='orbits')setMorphProxyControl('morphMonoOrbitTransforms',state.morph.monoOrbitTransforms!==true,'checked');else if(def.kind==='chaos')setMorphProxyControl('chaosMorphEnabled',state.morph.chaosMorphEnabled!==true,'checked');else if(def.kind==='spiralLayers')setMorphProxyControl('morphBySpiralLayers',state.morph.options.bySpiralLayers!==true,'checked');else setMorphParameterBinding(def.id,!active.has(def.id));});host.appendChild(b);
+            }
+        }
+        function morphLegacyRangeValue(def,key){
+            const stateKey=key==='min'?def?.morph?.minKey:def?.morph?.maxKey;const v=Number(state.morph?.[stateKey]);
+            if(Number.isFinite(v))return v;const fallback=Number(key==='min'?def?.min:def?.max);return Number.isFinite(fallback)?fallback:0;
+        }
+        function commitMorphBindingRange(def,binding,lo,hi){
+            let a=Number(lo.value),b=Number(hi.value);if(!Number.isFinite(a)||!Number.isFinite(b))return;if(a>b)[a,b]=[b,a];lo.value=String(a);hi.value=String(b);
+            if(def.morph?.legacy===true){const minKey=def.morph?.minKey,maxKey=def.morph?.maxKey;if(minKey)state.morph[minKey]=a;if(maxKey)state.morph[maxKey]=b;const spec=BLUE_MORPH_PARAMETER_BINDINGS.find(x=>x.mainId===def.ui?.mainId);if(spec){const main=document.getElementById(spec.mainId),host=main?.closest?.('.blue-morph-range-host');setBlueMorphRangeCss(host,a,b,spec.min,spec.max);}window.SomataMorphParameterRouting?.syncActiveLegacyBindings?.(state.morph,state.minimalMorph);
+            }else{binding.min=a;binding.max=b;}
+            window.SomataMorphParameterRouting?.resetRuntime?.(runtimeState.morph);syncMorphSidebarSettingsFromState();if(runtimeState.morph?.active)activeRebaseMorphing?.();requestMainCanvasRender();
+        }
+        // 7.11.9: a single range-control UI contract for Blue and Orange.
+        // The caller owns the Morph-specific value commit; layout, constraints and labels are shared.
+        function appendSharedMorphBindingRange(row,def,binding,commitRange,valueResolver=null){
+            const schema=window.SomataParameterMatrix.rowLayout(def.id);
+            const rangeSchema=schema?.controls?.find(c=>c.widget==='range')||def;
+            const lo=document.createElement('input'),hi=document.createElement('input');
+            for(const [el,key] of [[lo,'min'],[hi,'max']]){
+                el.type='number';el.className='morph-route-number';el.step=String(rangeSchema.step||'any');
+                if(Number.isFinite(Number(rangeSchema.min)))el.min=String(rangeSchema.min);
+                if(Number.isFinite(Number(rangeSchema.max)))el.max=String(rangeSchema.max);
+                const value=valueResolver?valueResolver(key):binding[key];
+                el.value=Number.isFinite(Number(value))?String(value):'';
+                el.setAttribute('aria-label',`${def.label}: ${key==='min'?'минимум':'максимум'}`);
+            }
+            const sep=document.createElement('span');sep.className='morph-route-range-sep';sep.textContent='—';
+            const commit=()=>commitRange(lo,hi);
+            lo.addEventListener('change',commit);hi.addEventListener('change',commit);
+            row.append(lo,sep,hi);return{lo,hi};
+        }
+        function morphSpecialLayerCoverage(owner,id){
+          return window.SomataParameterCoverage.percent({layerPercent:owner?.specialLayerCoverage?.[id]});
+        }
+        function appendMorphLayerCoverage(row,binding,commit){
+          const wrap=document.createElement('label');wrap.className='morph-route-layer-coverage morph-route-inline-control';
+          wrap.title='Случайная доля затронутых слоёв на цикл Morph / генерацию Orange';
+          const label=document.createElement('span');label.textContent='Слои';
+          const input=document.createElement('input');input.type='number';input.min='0';input.max='100';input.step='1';
+          input.className='morph-route-layer-percent';input.value=String(window.SomataParameterCoverage.percent(binding));
+          input.setAttribute('aria-label','Доля слоёв, %');
+          const unit=document.createElement('span');unit.textContent='%';wrap.append(label,input,unit);
+          input.addEventListener('change',()=>{
+            const pct=window.SomataParameterCoverage.percent({layerPercent:input.value});input.value=String(pct);commit(pct);
+          });row.appendChild(wrap);return input;
+        }
+        function appendSpecialLayerCoverage(row,engine,id){
+          const owner=engine==='orange'?state.randomOptions:state.morph;
+          appendMorphLayerCoverage(row,{layerPercent:morphSpecialLayerCoverage(owner,id)},percent=>{
+            owner.specialLayerCoverage=owner.specialLayerCoverage||{};owner.specialLayerCoverage[id]=percent;
+            if(engine==='orange'){
+              window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);
+              syncOrangeMorphProfileDirtyUI?.();if(runtimeState.minimalMorph?.active)activeRebaseMinimalMorphing?.();
+            }else{
+              window.SomataMorphParameterRouting?.captureActiveDraft?.(state.morph,state.minimalMorph);
+              syncMorphProfileDirtyUI?.();if(runtimeState.morph?.active)activeRebaseMorphing?.();
+            }
+            requestMainCanvasRender();
+          });
+        }
+        function createMorphRoutingGroupIcon(group,row=false){
+            return window.SomataParameterGroupIcons?.create?.(group,row?'morph-route-row-icon':'morph-routing-group-icon')||document.createElement('span');
+        }
+        function appendMorphGroupLabel(target,group,arrow=false){target.textContent='';const label=document.createElement('span');label.className='morph-routing-group-label';label.appendChild(createMorphRoutingGroupIcon(group));const name=document.createElement('span');name.className='morph-routing-group-name';name.textContent=group+(arrow?' ▾':'');label.appendChild(name);target.appendChild(label);}
+
+        function buildMorphParameterMenu(menu,currentId,onPick,groupFilter=''){
+            menu.innerHTML='';const input=document.createElement('input');input.type='search';input.className='audio-param-search';input.placeholder='Поиск параметра…';menu.appendChild(input);const body=document.createElement('div');menu.appendChild(body);
+            const render=()=>{const q=input.value.trim().toLowerCase();body.innerHTML='';let last='';for(const def of window.SomataParameterMatrix.all()){const group=morphUiGroup(def);if(groupFilter&&group!==groupFilter)continue;const hay=`${group} ${def.label} ${def.id}`.toLowerCase();if(q&&!hay.includes(q))continue;if(group!==last){const t=document.createElement('div');t.className='audio-param-group-title';appendMorphGroupLabel(t,group,false);body.appendChild(t);last=group;}const b=document.createElement('button');b.type='button';b.className='audio-param-option'+(currentId===def.id?' active':'');b.textContent=def.label;b.addEventListener('click',()=>onPick(def.id));body.appendChild(b);}};input.addEventListener('input',render);render();setTimeout(()=>input.focus(),0);
+        }
+        function setMorphProxyControl(id,value,kind='value'){
+            const el=document.getElementById(id);if(!el)return false;
+            if(kind==='checked')el.checked=!!value;else el.value=String(value);
+            if(kind==='checked')el.dispatchEvent(new Event('change',{bubbles:true}));
+            else{el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));}
+            queueMicrotask(()=>{syncMorphProfileDirtyUI?.();renderMorphProfileBindings();});return true;
+        }
+        function appendMorphInlineNumber(parent,id,label='',extraClass=''){
+            const source=document.getElementById(id);if(!source)return null;const wrap=document.createElement('label');wrap.className=`morph-route-inline-control ${extraClass}`.trim();if(label){const t=document.createElement('span');t.textContent=label;wrap.appendChild(t);}const input=document.createElement('input');input.type='number';input.className='morph-route-inline-number';for(const a of ['min','max','step','inputmode','data-log-multiplier','data-binary-multiplier','data-log-step'])if(source.getAttribute(a)!=null)input.setAttribute(a,source.getAttribute(a));input.value=source.value;input.title=source.title||source.getAttribute('aria-label')||label;input.addEventListener('change',()=>setMorphProxyControl(id,input.value));wrap.appendChild(input);parent.appendChild(wrap);return input;
+        }
+        function appendMorphInlineCheck(parent,id,label,extraClass=''){
+            const source=document.getElementById(id);if(!source)return null;const wrap=document.createElement('label');wrap.className=`morph-route-inline-check ${extraClass}`.trim();const input=document.createElement('input');input.type='checkbox';input.checked=source.checked;input.addEventListener('change',()=>setMorphProxyControl(id,input.checked,'checked'));const text=document.createElement('span');text.textContent=label;wrap.append(input,text);parent.appendChild(wrap);return input;
+        }
+        function appendMorphInlineSelect(parent,id,label='',extraClass=''){
+            const source=document.getElementById(id);if(!source)return null;const wrap=document.createElement('label');wrap.className=`morph-route-inline-control morph-route-inline-select ${extraClass}`.trim();if(label){const t=document.createElement('span');t.textContent=label;wrap.appendChild(t);}const select=document.createElement('select');select.title=source.title||source.getAttribute('aria-label')||label;for(const option of source.options||[]){const o=document.createElement('option');o.value=option.value;o.textContent=option.textContent;select.appendChild(o);}select.value=source.value;select.addEventListener('change',()=>setMorphProxyControl(id,select.value));wrap.appendChild(select);parent.appendChild(wrap);return select;
+        }
+        function appendMorphInlineRange(parent,minId,maxId,label='',extraClass=''){
+            const minSource=document.getElementById(minId),maxSource=document.getElementById(maxId);if(!minSource||!maxSource)return null;
+            const wrap=document.createElement('span');wrap.className=`morph-route-inline-control morph-route-inline-range ${extraClass}`.trim();if(label){const t=document.createElement('span');t.textContent=label;wrap.appendChild(t);}
+            const makeInput=(source,id)=>{const input=document.createElement('input');input.type='number';input.className='morph-route-inline-number';for(const a of ['min','max','step'])if(source.getAttribute(a)!=null)input.setAttribute(a,source.getAttribute(a));input.value=source.value;input.title=source.title||source.getAttribute('aria-label')||label;input.addEventListener('change',()=>setMorphProxyControl(id,input.value));return input;};
+            const lo=makeInput(minSource,minId),sep=document.createElement('span'),hi=makeInput(maxSource,maxId);sep.className='morph-route-inline-range-sep';sep.textContent='—';wrap.append(lo,sep,hi);parent.appendChild(wrap);return wrap;
+        }
+        function appendMorphPaletteSelector(parent,extraClass=''){
+            const wrap=document.createElement('label');wrap.className=`morph-route-inline-control morph-route-palette-select ${extraClass}`.trim();const t=document.createElement('span');t.textContent='Палитра';const select=document.createElement('select');for(const key of getActivePlaylistPaletteKeys()){const o=document.createElement('option');o.value=key;o.textContent=getPlaylistPaletteDisplayName(key);select.appendChild(o);}select.value=normalizePlaylistPaletteKey(state.morph.lineColorPalette,'standard');select.addEventListener('change',()=>{state.morph.lineColorPalette=select.value;state.morph.options.byColor=true;window.SomataMorphParameterRouting?.captureActiveDraft?.(state.morph,state.minimalMorph);syncMorphSettingsUI();syncMorphProfileDirtyUI?.();if(runtimeState.morph?.active){runtimeState.morph.suppressPaletteCycleOnce=true;activeRebaseMorphing?.();}requestMainCanvasRender();});wrap.append(t,select);parent.appendChild(wrap);return select;
+        }
+        function appendMorphFillHarmonySelector(parent){
+            const source=document.getElementById('morphFillHarmonySelect');if(!source)return null;const wrap=document.createElement('label');wrap.className='morph-route-inline-control morph-route-harmony-select';const t=document.createElement('span');t.textContent='Гармония цвета заливки';const select=document.createElement('select');for(const option of source.options||[]){const o=document.createElement('option');o.value=option.value;o.textContent=option.textContent;select.appendChild(o);}select.value=source.value;select.addEventListener('change',()=>setMorphProxyControl('morphFillHarmonySelect',select.value));wrap.append(t,select);parent.appendChild(wrap);return select;
+        }
+        // 7.10.5 — routed numeric bindings do not get invented multipliers; pure boolean routes are excluded from Blue Morph.
+        // Only real source-side multipliers and the legacy Blue multipliers that have their own semantics are shown.
+        function appendMorphChildBindingToggle(row,paramId,label,extraClass=''){
+            const def=window.SomataParameterRegistry?.get?.(paramId),profile=getActiveMorphProfile();if(!def||def.type==='boolean'||!profile||profile.type!=='standard')return null;
+            const binding=getActiveMorphBindings(profile).find(b=>b.parameter===paramId),wrap=document.createElement('label');wrap.className=`morph-route-inline-check morph-route-child-binding ${extraClass}`.trim();wrap.dataset.childParameter=paramId;
+            const input=document.createElement('input');input.type='checkbox';input.checked=!!binding&&binding.enabled!==false;input.title=`Включить / выключить «${def.label}» в этом профиле`;
+            input.addEventListener('change',()=>{setMorphParameterRouteActive(paramId,input.checked);renderMorphProfileBindings();renderMorphRoutingGroups();syncMorphRouteDecorations();});
+            const text=document.createElement('span');text.textContent=label;wrap.append(input,text);row.appendChild(wrap);return input;
+        }
+        function appendMorphCompoundBindingControl(row,paramId,label=''){
+            const def=window.SomataParameterRegistry?.get?.(paramId),profile=getActiveMorphProfile();if(!def||def.type==='boolean'||!profile||profile.type!=='standard')return null;
+            const binding=getActiveMorphBindings(profile).find(b=>b.parameter===paramId),enabled=!!binding&&binding.enabled!==false;
+            const wrap=document.createElement('div');wrap.className='morph-route-compound-binding';wrap.dataset.childParameter=paramId;
+            const toggle=document.createElement('label');toggle.className='morph-route-compound-toggle';const cb=document.createElement('input');cb.type='checkbox';cb.checked=enabled;cb.title=`Включить / выключить «${label||def.label}» в этом профиле`;const text=document.createElement('span');text.textContent=label||MORPH_COMPOUND_CHILD_LABELS[paramId]||def.label;toggle.append(cb,text);wrap.appendChild(toggle);
+            cb.addEventListener('change',()=>{setMorphParameterRouteActive(paramId,cb.checked);renderMorphProfileBindings();renderMorphRoutingGroups();syncMorphRouteDecorations();});
+            if(enabled&&binding){
+                const numeric=['number','integer','angle','multiplier'].includes(def.type);
+                if(numeric){
+                    const range=document.createElement('span');range.className='morph-route-compound-range';const rangeLabel=document.createElement('span');rangeLabel.className='morph-route-compound-caption';rangeLabel.textContent='Диапазон';range.appendChild(rangeLabel);
+                    const lo=document.createElement('input'),hi=document.createElement('input');for(const [el,key] of [[lo,'min'],[hi,'max']]){el.type='number';el.className='morph-route-inline-number morph-route-compound-number';el.step=String(window.SomataParameterMatrix?.stepFor?.(def)?.step||def.step||'any');if(Number.isFinite(Number(def.min)))el.min=String(def.min);if(Number.isFinite(Number(def.max)))el.max=String(def.max);el.value=String(Number(binding[key]));el.setAttribute('aria-label',`${label||def.label}: ${key==='min'?'минимум':'максимум'}`);}const sep=document.createElement('span');sep.className='morph-route-inline-range-sep';sep.textContent='—';const commit=()=>commitMorphBindingRange(def,binding,lo,hi);lo.addEventListener('change',commit);hi.addEventListener('change',commit);range.append(lo,sep,hi);wrap.appendChild(range);
+                }
+            }
+            row.appendChild(wrap);return wrap;
+        }
+        function appendMorphAlwaysOnMultiplierControl(row,paramId,label=''){
+            const def=window.SomataParameterRegistry?.get?.(paramId),source=document.getElementById(def?.ui?.mainId);if(!def||!source)return null;
+            const wrap=document.createElement('label');wrap.className='morph-route-compound-binding morph-route-always-on-multiplier';wrap.dataset.childParameter=paramId;
+            const semanticLabel=label||MORPH_COMPOUND_CHILD_LABELS[paramId]||def.label;const text=document.createElement('span');text.className='morph-route-compound-static-label';text.textContent='X';
+            const input=document.createElement('input');input.type='number';input.className='morph-route-inline-number morph-route-compound-static-multiplier';for(const a of ['min','max','step','inputmode','data-log-multiplier','data-binary-multiplier','data-log-step'])if(source.getAttribute(a)!=null)input.setAttribute(a,source.getAttribute(a));input.dataset.logMultiplier='1';input.value=source.value||'1';input.disabled=source.disabled;input.title=`${semanticLabel}: 1× — без изменения`;input.setAttribute('aria-label',semanticLabel);
+            const commit=()=>setMorphProxyControl(def.ui.mainId,input.value);input.addEventListener('input',commit);input.addEventListener('change',commit);wrap.append(text,input);row.appendChild(wrap);return input;
+        }
+        function appendMorphCompoundChildren(row,def){for(const childId of morphCompoundChildren(def?.id)){if(childId==='layer.radiusMultiplier')continue;if(morphAlwaysOnMultiplier(childId))appendMorphAlwaysOnMultiplierControl(row,childId,MORPH_COMPOUND_CHILD_LABELS[childId]||'');else appendMorphCompoundBindingControl(row,childId,MORPH_COMPOUND_CHILD_LABELS[childId]||'');}}
+
+        function appendMorphBindingSpecificControls(row,def,binding){
+            if(def.id==='layer.strokeColor'){appendMorphPaletteSelector(row);appendMorphInlineCheck(row,'morphCyclePalettes','Менять палитру каждый цикл','morph-route-compact-check');}
+            if(def.id==='layer.fillColor'){
+                appendMorphPaletteSelector(row);
+                appendMorphInlineRange(row,'morphFillLayersMin','morphFillLayersMax','Число залитых слоёв','morph-route-dependent-range');
+                appendMorphFillHarmonySelector(row);
+            }
+            if(def.id==='spiral.step')appendMorphChildBindingToggle(row,'spiral.stepLinked','Приравнять шаг спирали к K','morph-route-dependent-check');
+            if(def.id==='spiral.fillEnabled'){
+                appendMorphChildBindingToggle(row,'spiral.fillType','Настраивать тип заливки спирали','morph-route-dependent-check');
+                appendMorphInlineSelect(row,'paramSpiralFillType','Тип заливки спирали');
+            }else if(def.type==='enum'&&def.ui?.mainId)appendMorphInlineSelect(row,def.ui.mainId,'Значение');
+            if(def.id==='layer.radius'){
+                appendMorphInlineCheck(row,'morphNormalizeSizes','Сохранять пропорции размеров слоёв','morph-route-dependent-check');
+            }
+            if(def.id==='layer.rotation')appendMorphInlineCheck(row,'morphRotationRandomDirection','Случайно менять направление поворота','morph-route-compact-check');
+            if(def.id==='web.width')appendMorphInlineCheck(row,'webWidthRelative','Использовать толщину относительно линии','morph-route-dependent-check');
+            appendMorphCompoundChildren(row,def);
+            // Legacy Blue multipliers that still have their own Morph semantics stay compact and right-aligned.
+            if(def.id==='geometry.N')appendMorphInlineNumber(row,'morphVertexMultiplier','X','morph-route-multiplier');
+            else if(def.id==='layer.rotation')appendMorphInlineNumber(row,'morphRotationMultiplier','X','morph-route-multiplier');
+        }
+        function appendMorphShapeProfileGroups(parent){
+            const entries=[['morphProfileGroupStandard','Стандарт'],['morphProfileGroupClosed','Замкнутые'],['morphProfileGroupLoops','С петлями'],['morphProfileGroupOpen','Разомкнутые'],['morphProfileGroupMandala','Мандала']];
+            const details=document.createElement('details');details.className='morph-profile-group-dropdown morph-shape-route-profile-dropdown';details.title='Наборы профилей формы · как в стабильной Somata 7.9';
+            const summary=document.createElement('summary'),caption=document.createElement('span'),value=document.createElement('strong');caption.textContent='Наборы профилей';summary.append(caption,value);details.appendChild(summary);
+            const menu=document.createElement('div');menu.className='morph-profile-group-menu';menu.setAttribute('role','group');menu.setAttribute('aria-label','Группы профилей морфинга');details.appendChild(menu);
+            const proxies=[];
+            const updateSummary=()=>{const active=proxies.filter(x=>x.cb.checked).map(x=>x.label);value.textContent=active.length===entries.length?'Все':(active.join(', ')||'Нет');};
+            for(const [id,label] of entries){
+                const source=document.getElementById(id);if(!source)continue;const item=document.createElement('label');item.className='morph-profile-group-check';const cb=document.createElement('input');cb.type='checkbox';cb.checked=source.checked===true;cb.addEventListener('change',()=>{setMorphProxyControl(id,cb.checked,'checked');updateSummary();});const text=document.createElement('span');text.textContent=label;item.append(cb,text);menu.appendChild(item);proxies.push({cb,label});
+            }
+            updateSummary();parent.appendChild(details);return details;
+        }
+        function appendMorphShapeRow(host){
+            if(state.morph?.options?.byShape!==true)return;const row=document.createElement('div');row.className='audio-route-row morph-route-row morph-binding-row morph-special-config-row';row.dataset.morphSpecial='shape';
+            const spacer=document.createElement('span');spacer.className='morph-route-drag-handle morph-route-drag-placeholder';spacer.textContent='·';row.appendChild(spacer);const cb=document.createElement('input');cb.type='checkbox';cb.checked=true;cb.title='Морфить форму';cb.addEventListener('change',()=>setMorphProxyControl('morphByShape',cb.checked,'checked'));row.appendChild(cb);row.appendChild(createMorphRoutingGroupIcon('Геометрия',true));
+            const name=document.createElement('div');name.className='morph-special-config-name';name.textContent='Форма';row.appendChild(name);appendMorphInlineSelect(row,'morphShapeFamily','Семейство формы');appendMorphShapeProfileGroups(row);
+            appendSpecialLayerCoverage(row,'blue','geometry.shape');
+            const rm=document.createElement('button');rm.type='button';rm.className='audio-route-remove morph-binding-remove';rm.textContent='×';rm.title='Убрать строку «Форма»';rm.addEventListener('click',()=>setMorphProxyControl('morphByShape',false,'checked'));row.appendChild(rm);host.appendChild(row);
+        }
+        // Shared Blue/Orange special-row renderer: row anatomy comes from the
+        // parameter matrix; only ranges and their commit callbacks are mode-local.
+        function appendSharedMorphOrbitRow(host,engine,enabled,values,onRange,onToggle){
+            const spec=window.SomataParameterMatrix.rowLayout('geometry.orbits');
+            const row=document.createElement('div');row.className='audio-route-row morph-route-row morph-binding-row morph-special-config-row'+(engine==='orange'?' orange-route-row orange-orbit-count-row':'');
+            row.dataset.parameterId='geometry.orbits';row.dataset[engine==='orange'?'orangeSpecial':'morphSpecial']='orbits';
+            const spacer=document.createElement('span');spacer.className='morph-route-drag-handle morph-route-drag-placeholder';spacer.textContent='·';row.appendChild(spacer);
+            const cb=document.createElement('input');cb.type='checkbox';cb.checked=enabled;cb.title='Включить / выключить «Орбиты»';cb.setAttribute('aria-label','Орбиты');cb.addEventListener('change',()=>onToggle(cb.checked));row.appendChild(cb);
+            row.appendChild(createMorphRoutingGroupIcon('Геометрия',true));
+            // Non-interactive text, like an ordinary parameter label: no fake picker.
+            const label=document.createElement('span');label.className='morph-special-config-name morph-orbit-plain-label';label.textContent=spec.label;
+            row.appendChild(label);
+            const range=document.createElement('span');range.className='morph-special-config-range morph-route-inline-control morph-route-inline-range';range.dataset.orbitRange='1';if(engine==='orange')range.dataset.orangeSetting='orbitCount';
+            const caption=document.createElement('span');caption.textContent=spec.widgets[0];range.appendChild(caption);
+            const inputs=values.map((value,i)=>{
+                const input=document.createElement('input');input.type='number';input.className='morph-route-inline-number';input.min=String(spec.min);input.max=String(spec.max);input.step=String(spec.step);
+                input.value=String(value);input.title=i?'Максимальная доля орбит, %':'Минимальная доля орбит, %';input.setAttribute('aria-label',`Доля орбит (%): ${i?'максимум':'минимум'}`);return input;
+            });
+            const sep=document.createElement('span');sep.className='morph-route-inline-range-sep';sep.textContent='—';
+            const commit=()=>{
+                let a=Math.max(spec.min,Math.min(spec.max,Math.round(Number(inputs[0].value)||0))),b=Math.max(spec.min,Math.min(spec.max,Math.round(Number(inputs[1].value)||0)));
+                if(a>b)[a,b]=[b,a];inputs[0].value=String(a);inputs[1].value=String(b);onRange(a,b);
+            };
+            inputs.forEach(el=>el.addEventListener('change',commit));const unit=document.createElement('span');unit.className='morph-sec';unit.textContent='%';range.append(inputs[0],sep,inputs[1],unit);row.appendChild(range);
+            appendSpecialLayerCoverage(row,engine,'geometry.orbits');
+            const rm=document.createElement('button');rm.type='button';rm.className='audio-route-remove morph-binding-remove';rm.textContent='×';rm.title='Убрать строку «Орбиты»';rm.addEventListener('click',()=>onToggle(false));row.appendChild(rm);host.appendChild(row);return row;
+        }
+        function appendMorphOrbitRow(host){
+            if(state.morph?.monoOrbitTransforms!==true)return;
+            const read=key=>{
+                // Legacy absolute counts are displayed as an approximate percentage
+                // until the user edits the range; the actual old project is not mutated.
+                const legacy=state.morph?.[key.replace('Percent','Count')];
+                const value=Number.isFinite(Number(legacy))&&legacy!=null
+                    ? (Number(legacy)>0?Math.ceil(Number(legacy)*100/19):100)
+                    : (Number(state.morph?.[key])||100);
+                return Math.max(1,Math.min(100,Math.round(value)));
+            };
+            appendSharedMorphOrbitRow(host,'blue',true,[read('orbitPercentMin'),read('orbitPercentMax')],(a,b)=>{
+                state.morph.orbitPercentMin=a;state.morph.orbitPercentMax=b;
+                delete state.morph.orbitCountMin;delete state.morph.orbitCountMax;
+                window.SomataMorphParameterRouting?.captureActiveDraft?.(state.morph,state.minimalMorph);
+                syncMorphProfileDirtyUI?.();if(runtimeState.morph?.active)activeRebaseMorphing?.();requestMainCanvasRender();
+            },enabled=>setMorphProxyControl('morphMonoOrbitTransforms',enabled,'checked'));
+        }
+        function appendMorphChaosRow(host){
+            if(state.morph?.chaosMorphEnabled!==true)return;const row=document.createElement('div');row.className='audio-route-row morph-route-row morph-binding-row morph-special-config-row';row.dataset.morphSpecial='chaos';
+            const spacer=document.createElement('span');spacer.className='morph-route-drag-handle morph-route-drag-placeholder';spacer.textContent='·';row.appendChild(spacer);const cb=document.createElement('input');cb.type='checkbox';cb.checked=true;cb.title='Морфить звезду хаоса';cb.addEventListener('change',()=>setMorphProxyControl('chaosMorphEnabled',cb.checked,'checked'));row.appendChild(cb);row.appendChild(createMorphRoutingGroupIcon('Геометрия',true));
+            const name=document.createElement('div');name.className='morph-special-config-name';name.textContent='Морфинг хаоса';row.appendChild(name);appendMorphInlineNumber(row,'chaosMorphStepSpread','Разброс шага ±');appendMorphInlineNumber(row,'chaosMorphClosuresMax','Замыканий до');
+            appendSpecialLayerCoverage(row,'blue','geometry.chaos');
+            const rm=document.createElement('button');rm.type='button';rm.className='audio-route-remove morph-binding-remove';rm.textContent='×';rm.title='Убрать строку «Морфинг хаоса»';rm.addEventListener('click',()=>setMorphProxyControl('chaosMorphEnabled',false,'checked'));row.appendChild(rm);host.appendChild(row);
+        }
+        function appendMorphSpiralLayersRow(host){
+            if(state.morph?.options?.bySpiralLayers!==true)return;const row=document.createElement('div');row.className='audio-route-row morph-route-row morph-binding-row morph-special-config-row';row.dataset.morphSpecial='spiralLayers';
+            const spacer=document.createElement('span');spacer.className='morph-route-drag-handle morph-route-drag-placeholder';spacer.textContent='·';row.appendChild(spacer);
+            const cb=document.createElement('input');cb.type='checkbox';cb.checked=true;cb.title='Морфить число спиральных слоёв';cb.addEventListener('change',()=>setMorphProxyControl('morphBySpiralLayers',cb.checked,'checked'));row.appendChild(cb);row.appendChild(createMorphRoutingGroupIcon('Спирали',true));
+            const name=document.createElement('div');name.className='morph-special-config-name';name.textContent='Спиральные слои';row.appendChild(name);
+            const range=document.createElement('span');range.className='morph-special-config-range';appendMorphInlineNumber(range,'morphSpiralLayersMin','Минимум спиральных слоёв');appendMorphInlineNumber(range,'morphSpiralLayersMax','Максимум спиральных слоёв');row.appendChild(range);
+            const order=document.createElement('span');order.className='morph-special-config-range morph-special-order-range';appendMorphInlineNumber(order,'morphSpiralOrderMin','Минимальный порядок спирали');appendMorphInlineNumber(order,'morphSpiralOrderMax','Максимальный порядок спирали');row.appendChild(order);
+            appendMorphInlineCheck(row,'morphSpiralOrderLinked','Использовать случайно +K или −K','morph-route-compact-check');appendMorphInlineCheck(row,'morphSpiralRotationCompensation','Компенсация вращения','morph-route-compact-check');
+            appendSpecialLayerCoverage(row,'blue','spiral.layers');
+            const rm=document.createElement('button');rm.type='button';rm.className='audio-route-remove morph-binding-remove';rm.textContent='×';rm.title='Убрать строку «Спиральные слои»';rm.addEventListener('click',()=>setMorphProxyControl('morphBySpiralLayers',false,'checked'));row.appendChild(rm);host.appendChild(row);
+        }
+        let morphBindingDrag=null;
+        function clearMorphBindingDragUI(host=document.getElementById('morphProfileBindings')){
+            morphBindingDrag=null;if(!host)return;host.classList.remove('morph-binding-drag-active','morph-order-drag-locked');host.querySelectorAll('.morph-drag-before,.morph-drag-after,.morph-drag-forbidden,.dragging').forEach(el=>el.classList.remove('morph-drag-before','morph-drag-after','morph-drag-forbidden','dragging'));
+        }
+        function renderMorphProfileBindings(){
+            const host=document.getElementById('morphProfileBindings');if(!host)return;host.innerHTML='';const panel=document.getElementById('morphSettingsPanel');if(panel?.classList.contains('hidden'))return;const profile=getActiveMorphProfile();if(!profile||profile.type!=='standard')return;
+            window.SomataMorphParameterRouting?.syncActiveLegacyBindings?.(state.morph,state.minimalMorph);
+            const routing=window.SomataMorphParameterRouting,orderMode=getMorphOrderMode(profile),defs=new Map((window.SomataParameterRegistry?.all?.()||[]).map(d=>[d.id,d]));
+            host.dataset.orderMode=orderMode;host.classList.toggle('morph-order-type',orderMode==='type');host.classList.toggle('morph-order-free',orderMode==='free');
+            const displayBindings=getMorphDisplayBindings(profile),displayIds=new Set(displayBindings.map(b=>b.parameter));
+            appendMorphShapeRow(host);appendMorphOrbitRow(host);appendMorphChaosRow(host);
+            for(const binding of displayBindings){const def=defs.get(binding.parameter);if(!def||def.type==='boolean')continue;
+                const compoundParent=morphCompoundParentId(def.id);
+                if((compoundParent&&displayIds.has(compoundParent))||(def.id==='spiral.stepLinked'&&displayIds.has('spiral.step'))||(def.id==='spiral.fillType'&&displayIds.has('spiral.fillEnabled')))continue;
+                const row=document.createElement('div');row.className='audio-route-row morph-route-row morph-binding-row'+(binding.enabled===false?' disabled':'');row.dataset.morphParameter=def.id;row.draggable=false;
+                const handle=document.createElement('span');handle.className='morph-route-drag-handle';handle.setAttribute('aria-label','Перетащить строку');handle.setAttribute('role','button');handle.tabIndex=0;handle.draggable=true;handle.textContent='⠿';handle.title=orderMode==='free'?'Перетащить строку':'Сортировка по типу: перестановка запрещена; перенос между слоями будет доступен позже';row.appendChild(handle);
+                handle.addEventListener('dragstart',e=>{morphBindingDrag={parameter:def.id,profileId:profile.id,target:'master'};row.classList.add('dragging');host.classList.add('morph-binding-drag-active');if(orderMode==='type')host.classList.add('morph-order-drag-locked');if(e.dataTransfer){const payload=JSON.stringify(morphBindingDrag);e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('application/x-somata-morph-binding',payload);e.dataTransfer.setData('text/plain',def.id);}});
+                handle.addEventListener('dragend',()=>clearMorphBindingDragUI(host));
+                row.addEventListener('dragover',e=>{if(!morphBindingDrag||morphBindingDrag.parameter===def.id)return;row.classList.remove('morph-drag-before','morph-drag-after','morph-drag-forbidden');if(orderMode!=='free'){if(e.dataTransfer)e.dataTransfer.dropEffect='none';row.classList.add('morph-drag-forbidden');return;}e.preventDefault();if(e.dataTransfer)e.dataTransfer.dropEffect='move';const after=e.clientY>=row.getBoundingClientRect().top+row.getBoundingClientRect().height/2;row.classList.add(after?'morph-drag-after':'morph-drag-before');});
+                row.addEventListener('dragleave',()=>row.classList.remove('morph-drag-before','morph-drag-after','morph-drag-forbidden'));
+                row.addEventListener('drop',e=>{const drag=morphBindingDrag;if(!drag||drag.parameter===def.id)return;if(orderMode!=='free'){if(e.dataTransfer)e.dataTransfer.dropEffect='none';clearMorphBindingDragUI(host);return;}e.preventDefault();const after=e.clientY>=row.getBoundingClientRect().top+row.getBoundingClientRect().height/2;if(routing?.reorderBinding?.(state.morph,state.minimalMorph,drag.parameter,def.id,after?'after':'before')){clearMorphBindingDragUI(host);renderMorphProfileBindings();syncMorphProfileDirtyUI?.();}else clearMorphBindingDragUI(host);});
+                const cb=document.createElement('input');cb.type='checkbox';cb.id=`morphRouteEnabled_${def.id.replace(/[^a-zA-Z0-9_-]/g,'_')}`;cb.checked=binding.enabled!==false;cb.title='Включить / выключить параметр';cb.addEventListener('change',()=>{setMorphRouteBindingActive(def,binding,cb.checked);commitMorphRouteActivationChange();});row.appendChild(cb);
+                row.appendChild(createMorphRoutingGroupIcon(morphUiGroup(def),true));
+                const picker=document.createElement('div');picker.className='audio-param-picker morph-route-compact-picker';const pickBtn=document.createElement('button');pickBtn.type='button';pickBtn.className='audio-param-picker-button';pickBtn.textContent=def.label;pickBtn.title=`${morphUiGroup(def)} › ${def.label}`;const menu=document.createElement('div');menu.className='audio-param-menu hidden';pickBtn.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.audio-param-menu').forEach(m=>{if(m!==menu)m.classList.add('hidden')});menu.classList.toggle('hidden');if(!menu.classList.contains('hidden')){buildMorphParameterMenu(menu,def.id,nextId=>{if(nextId===def.id){menu.classList.add('hidden');return;}setMorphParameterBinding(def.id,false);if(window.SomataParameterMatrix.get(nextId)?.kind){const map={shape:'morphByShape',orbits:'morphMonoOrbitTransforms',chaos:'chaosMorphEnabled',spiralLayers:'morphBySpiralLayers'};setMorphProxyControl(map[window.SomataParameterMatrix.get(nextId).kind],true,'checked');}else setMorphParameterBinding(nextId,true);menu.classList.add('hidden');renderMorphProfileBindings();});positionViewportPopup(menu,pickBtn);}});picker.append(pickBtn,menu);row.appendChild(picker);
+                const numeric=['number','integer','angle','multiplier'].includes(def.type);
+                if((numeric&&def.morph?.minKey&&def.morph?.maxKey)||(numeric&&def.morph?.legacy!==true)){
+                    appendSharedMorphBindingRange(row,def,binding,(lo,hi)=>commitMorphBindingRange(def,binding,lo,hi),key=>def.morph?.legacy===true?morphLegacyRangeValue(def,key):binding[key]);
+                }
+                appendMorphLayerCoverage(row,binding,percent=>{
+                  binding.layerPercent=percent;
+                  window.SomataMorphParameterRouting?.resetRuntime?.(runtimeState.morph);
+                  if(runtimeState.morph?.active)activeRebaseMorphing?.();
+                  syncMorphProfileDirtyUI?.();requestMainCanvasRender();
+                });
+                appendMorphBindingSpecificControls(row,def,binding);
+                const rm=document.createElement('button');rm.type='button';rm.className='audio-route-remove morph-binding-remove';rm.textContent='×';rm.title='Удалить связь';rm.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();removeMorphParameterBinding(def.id);});row.appendChild(rm);host.appendChild(row);
+            }
+            appendMorphSpiralLayersRow(host);
+            if(!host.children.length){const empty=document.createElement('div');empty.className='hint-text';empty.textContent='Связей нет. Добавьте параметр через группы выше, кнопку «Добавить связь» или ПКМ по параметру слева.';host.appendChild(empty);}
+        }
+        function morphParameterRoutingState(paramId){
+            const def=window.SomataParameterRegistry?.get?.(paramId),profile=getActiveMorphProfile();if(!def||def.morph?.supported!==true)return{supported:false,added:false,active:false,reason:'Параметр не используется в синем Morph'};
+            if(def.type==='boolean')return{supported:false,added:false,active:false,reason:'Параметры только ВКЛ/ВЫКЛ не используются в синем Morph'};
+            if(morphAlwaysOnMultiplier(paramId))return{supported:false,added:false,active:false,reason:'Коэффициент управляется исходным контролом и не является отдельной Morph-связью'};
+            if(!profile||profile.type!=='standard')return{supported:false,added:false,active:false,reason:'Выберите профиль синего морфинга'};
+            let binding=getActiveMorphBindings(profile).find(b=>b.parameter===def.id),active=false;
+            if(def.morph?.legacy===true){active=state.morph?.options?.[def.morph.option]===true;if(binding)binding.enabled=active;}
+            else active=binding?.enabled!==false&&!!binding;
+            return{supported:true,added:!!binding,active,binding,profileId:profile.id};
+        }
+        function setMorphParameterRouteActive(paramId,enabled){
+            const routing=window.SomataMorphParameterRouting,def=window.SomataParameterRegistry?.get?.(paramId),profile=getActiveMorphProfile();if(!routing||!def||def.morph?.supported!==true||def.type==='boolean'||!profile||profile.type!=='standard'||morphAlwaysOnMultiplier(paramId))return false;
+            let binding=getActiveMorphBindings(profile).find(b=>b.parameter===def.id),on=enabled===true;
+            if(def.morph?.legacy===true){setLegacyMorphBindingEnabled(def,on);routing.syncActiveLegacyBindings(state.morph,state.minimalMorph);binding=getActiveMorphBindings(profile).find(b=>b.parameter===def.id);if(binding)binding.enabled=on;}
+            else if(on){if(!binding)binding=routing.addBinding(state.morph,state.minimalMorph,paramId,defaultMorphBindingRange(def));if(binding)binding.enabled=true;}
+            else if(binding)binding.enabled=false;
+            routing.syncActiveLegacyBindings(state.morph,state.minimalMorph);routing.resetRuntime(runtimeState.morph);syncMorphSettingsUI();syncBlueMorphParameterDecorations();renderMorphProfileBindings();renderMorphRoutingTargets();renderMorphRoutingGroups();syncMorphRouteDecorations();if(runtimeState.morph?.active)activeRebaseMorphing?.();requestMainCanvasRender();syncMorphProfileDirtyUI?.();return true;
+        }
+        window.SomataMorphParameterRoutingUI=Object.freeze({state:morphParameterRoutingState,setActive:setMorphParameterRouteActive});
+
+        const parameterRoutingRows=new WeakMap();
+        let parameterRoutingPopup=null,parameterRoutingPopupId='';
+        function parameterRoutingVisualHost(def,el){return el?.closest?.('.blue-morph-range-host')||el;}
+        function setParameterRoutingVisualState(host,morphOn,audioOn,orangeOn=false){
+            if(!host)return;host.classList.add('parameter-routing-capable');
+            const n=(morphOn?1:0)+(audioOn?1:0)+(orangeOn?1:0);
+            host.classList.toggle('parameter-routing-morph',morphOn&&n===1);
+            host.classList.toggle('parameter-routing-audio',audioOn&&n===1);
+            host.classList.toggle('parameter-routing-orange',orangeOn&&n===1);
+            host.classList.toggle('parameter-routing-both',morphOn&&audioOn&&!orangeOn);
+            host.classList.toggle('parameter-routing-blue-orange',morphOn&&orangeOn&&!audioOn);
+            host.classList.toggle('parameter-routing-audio-orange',audioOn&&orangeOn&&!morphOn);
+            host.classList.toggle('parameter-routing-all',morphOn&&audioOn&&orangeOn);
+            host.classList.toggle('parameter-routing-neutral',n===0);
+        }
+        function ensureParameterRoutingPopup(){
+            if(parameterRoutingPopup?.isConnected)return parameterRoutingPopup;const menu=document.createElement('div');menu.id='parameterRoutingContextMenu';menu.className='parameter-routing-context-menu hidden';menu.setAttribute('role','menu');menu.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();});menu.addEventListener('pointerdown',e=>e.stopPropagation());document.body.appendChild(menu);parameterRoutingPopup=menu;
+            if(!document.documentElement.dataset.parameterRoutingPopupCloseBound){document.documentElement.dataset.parameterRoutingPopupCloseBound='1';document.addEventListener('pointerdown',e=>{if(!parameterRoutingPopup||parameterRoutingPopup.classList.contains('hidden')||parameterRoutingPopup.contains(e.target))return;parameterRoutingPopup.classList.add('hidden');parameterRoutingPopupId='';},true);document.addEventListener('keydown',e=>{if(e.key==='Escape'&&parameterRoutingPopup){parameterRoutingPopup.classList.add('hidden');parameterRoutingPopupId='';}});}
+            return menu;
+        }
+        function parameterRoutingAudioState(paramId){return window.SomataAudioParameterRoutingUI?.state?.(paramId)||{supported:false,added:false,active:false,target:'master',targetName:'Мастер',targets:{supported:false,master:false,layers:[],any:false}};}
+        function renderParameterRoutingPopup(paramId,x,y){
+            const def=window.SomataParameterRegistry?.get?.(paramId),menu=ensureParameterRoutingPopup();if(!def||!menu)return;parameterRoutingPopupId=def.id;const morph=morphParameterRoutingState(def.id),orange=orangeParameterRoutingState(def.id),audio=parameterRoutingAudioState(def.id);menu.innerHTML='';
+            const head=document.createElement('div');head.className='parameter-routing-popup-head';head.appendChild(createMorphRoutingGroupIcon(def.group,true));const headText=document.createElement('div');headText.className='parameter-routing-popup-title';const strong=document.createElement('strong');strong.textContent=def.label;const small=document.createElement('span');small.textContent=def.group;headText.append(strong,small);head.appendChild(headText);menu.appendChild(head);
+            const addOption=(kind,label,color,stateObj,onToggle)=>{const b=document.createElement('button');b.type='button';b.className=`parameter-routing-popup-option routing-${kind}`;b.setAttribute('role','menuitemcheckbox');b.setAttribute('aria-checked',stateObj.active?'true':'false');b.disabled=stateObj.supported===false;const mark=document.createElement('span');mark.className='parameter-routing-popup-check';mark.textContent=stateObj.active?'✓':'';const sw=document.createElement('span');sw.className='parameter-routing-popup-swatch';sw.style.setProperty('--routing-accent',color);const txt=document.createElement('span');txt.className='parameter-routing-popup-option-text';const name=document.createElement('strong');name.textContent=label;const sub=document.createElement('small');sub.textContent=stateObj.supported===false?(stateObj.reason||'Недоступно'):(stateObj.active?'Включено':(stateObj.added?'Добавлено · выключено':'Не назначено'));txt.append(name,sub);b.append(mark,sw,txt);b.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();if(b.disabled)return;onToggle(!stateObj.active);syncMorphRouteDecorations();renderParameterRoutingPopup(def.id,x,y);});menu.appendChild(b);};
+            addOption('morph','Синий морфинг','#38bdf8',morph,on=>setMorphParameterRouteActive(def.id,on));
+            addOption('orange','Оранжевый морфинг','#fb923c',orange,on=>setOrangeParameterRouteActive(def.id,on));
+            const audioBox=document.createElement('div');audioBox.className='parameter-routing-popup-audio';audioBox.classList.toggle('disabled',audio.supported===false);const audioHead=document.createElement('div');audioHead.className='parameter-routing-popup-audio-head';const audioName=document.createElement('strong');audioName.textContent='Аудиосвязь';const audioHint=document.createElement('small');audioHint.textContent=audio.supported===false?(audio.reason||'Недоступно'):'Выберите слои и/или Master';audioHead.append(audioName,audioHint);audioBox.appendChild(audioHead);
+            const targets=audio.targets||window.SomataAudioParameterRoutingUI?.targets?.(def.id)||{master:false,layers:[]};const bubbles=document.createElement('div');bubbles.className='parameter-routing-popup-target-bubbles';
+            const addBubble=(label,targetId,on,title)=>{const b=document.createElement('button');b.type='button';b.className='parameter-routing-target-bubble'+(on?' active':'');b.textContent=label;b.title=title;b.setAttribute('aria-pressed',on?'true':'false');b.disabled=audio.supported===false;b.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();if(b.disabled)return;window.SomataAudioParameterRoutingUI?.setTargetActive?.(def.id,targetId,!on);syncMorphRouteDecorations();renderParameterRoutingPopup(def.id,x,y);});bubbles.appendChild(b);};
+            for(const layerTarget of (targets.layers||[]).slice(0,5))addBubble(String(layerTarget.index+1),layerTarget.id,layerTarget.active===true,`Слой ${layerTarget.index+1}: ${layerTarget.label||''}`);
+            addBubble('М','master',targets.master===true,'Master');audioBox.appendChild(bubbles);menu.appendChild(audioBox);
+            const foot=document.createElement('div');foot.className='parameter-routing-popup-foot';foot.textContent='Blue, Orange и несколько Audio-целей могут использовать один параметр независимо';menu.appendChild(foot);menu.classList.remove('hidden');
+            const r=menu.getBoundingClientRect(),pad=8,left=Math.max(pad,Math.min(innerWidth-r.width-pad,Number(x)||pad)),top=Math.max(pad,Math.min(innerHeight-r.height-pad,Number(y)||pad));menu.style.left=`${left}px`;menu.style.top=`${top}px`;
+        }
+        function openUnifiedParameterRoutingMenuForId(paramId,x,y){renderParameterRoutingPopup(paramId,x,y);}
+        function addParameterRoutingRowCandidate(row,def,host){
+            if(!row||!def||!host)return;let list=parameterRoutingRows.get(row);if(!list){list=[];parameterRoutingRows.set(row,list);}if(!list.some(x=>x.def.id===def.id))list.push({def,host});if(row.dataset.parameterRoutingRowBound==='1')return;row.dataset.parameterRoutingRowBound='1';row.classList.add('parameter-routing-row');row.addEventListener('contextmenu',ev=>{const interactive=ev.target?.closest?.('input,select,textarea,button,a,[contenteditable="true"],.parameter-routing-context-menu');if(interactive)return;const candidates=(parameterRoutingRows.get(row)||[]).filter(x=>x.host?.isConnected);if(!candidates.length)return;let best=candidates[0],dist=Infinity;for(const candidate of candidates){const r=candidate.host.getBoundingClientRect(),cx=Math.max(r.left,Math.min(ev.clientX,r.right)),cy=Math.max(r.top,Math.min(ev.clientY,r.bottom)),d=Math.hypot(ev.clientX-cx,ev.clientY-cy);if(d<dist){dist=d;best=candidate;}}ev.preventDefault();ev.stopPropagation();openUnifiedParameterRoutingMenuForId(best.def.id,ev.clientX,ev.clientY);});
+        }
+        function installParameterRoutingContextTarget(def,el,host){
+            if(!def||!el||!host)return;host.dataset.routingParamId=def.id;host.classList.add('parameter-routing-control');if(host.dataset.parameterRoutingContextBound!=='1'){host.dataset.parameterRoutingContextBound='1';host.addEventListener('contextmenu',ev=>{ev.preventDefault();ev.stopPropagation();ev.stopImmediatePropagation?.();openUnifiedParameterRoutingMenuForId(def.id,ev.clientX,ev.clientY);});}
+            const row=blueMorphParameterRowFor(el)||el.closest?.('.control-row')||el.closest?.('.fill-settings-block')||el.closest?.('.control-group-title')||el.closest?.('label')||el.parentElement;addParameterRoutingRowCandidate(row,def,host);
+        }
+        if(!window.__somataRoutingFrameContextCaptureInstalled){
+            window.__somataRoutingFrameContextCaptureInstalled=true;
+            document.addEventListener('contextmenu',ev=>{
+                if(ev.target?.closest?.('.parameter-routing-context-menu'))return;
+                const control=ev.target?.closest?.('.parameter-routing-control');
+                if(control&&control!==ev.target?.closest?.('input,select,textarea,button')){
+                    const id=control.dataset.routingParamId;if(id){ev.preventDefault();ev.stopImmediatePropagation();openUnifiedParameterRoutingMenuForId(id,ev.clientX,ev.clientY);return;}
+                }
+                const row=ev.target?.closest?.('.parameter-routing-row');if(!row)return;
+                const interactive=ev.target?.closest?.('input,select,textarea,button,a,[contenteditable="true"]');if(interactive)return;
+                const candidates=(parameterRoutingRows.get(row)||[]).filter(x=>x.host?.isConnected);if(!candidates.length)return;let best=candidates[0],dist=Infinity;
+                for(const candidate of candidates){const r=candidate.host.getBoundingClientRect(),cx=Math.max(r.left,Math.min(ev.clientX,r.right)),cy=Math.max(r.top,Math.min(ev.clientY,r.bottom)),d=Math.hypot(ev.clientX-cx,ev.clientY-cy);if(d<dist){dist=d;best=candidate;}}
+                ev.preventDefault();ev.stopImmediatePropagation();openUnifiedParameterRoutingMenuForId(best.def.id,ev.clientX,ev.clientY);
+            },true);
+        }
+        function syncParameterAudioTargetBubbles(def,el,host,audioState){
+            const row=blueMorphParameterRowFor(el)||el.closest?.('.control-row')||el.closest?.('.fill-settings-block')||el.parentElement;if(!row)return;
+            const selector=`.parameter-routing-audio-bubbles[data-routing-param="${CSS.escape(def.id)}"]`;let strip=row.querySelector(selector);const targets=audioState?.targets||window.SomataAudioParameterRoutingUI?.targets?.(def.id)||null;
+            const active=[];if(targets?.supported!==false){for(const t of (targets?.layers||[]).slice(0,5))if(t.active===true)active.push({text:String(t.index+1),title:`Audio · слой ${t.index+1}: ${t.label||''}`});if(targets?.master===true)active.push({text:'М',title:'Audio · Master'});}
+            if(!active.length){strip?.remove();return;}
+            if(!strip){strip=document.createElement('span');strip.className='parameter-routing-audio-bubbles';strip.dataset.routingParam=def.id;row.appendChild(strip);}strip.innerHTML='';for(const item of active){const dot=document.createElement('span');dot.className='parameter-routing-audio-bubble';dot.textContent=item.text;dot.title=item.title;strip.appendChild(dot);}
+            row.classList.add('parameter-routing-badge-row');const rr=row.getBoundingClientRect(),hr=host.getBoundingClientRect();strip.style.left=`${Math.max(0,hr.left-rr.left)}px`;strip.style.maxWidth=`${Math.max(20,Math.min(hr.width,rr.width))}px`;
+        }
+        function syncMorphRouteDecorations(){
+            ensureGenericMorphRangeBindings();const profile=getActiveMorphProfile(),rows=new Set();
+            for(const def of (window.SomataParameterRegistry?.morphable?.()||[])){
+                const el=document.getElementById(def?.ui?.mainId);if(!el)continue;const morph=morphParameterRoutingState(def.id),orange=orangeParameterRoutingState(def.id),audio=parameterRoutingAudioState(def.id),host=parameterRoutingVisualHost(def,el);setParameterRoutingVisualState(host,morph.active===true,audio.active===true,orange.active===true);el.classList.toggle('morph-route-control-enabled',morph.active===true||orange.active===true);installParameterRoutingContextTarget(def,el,host);syncParameterAudioTargetBubbles(def,el,host,audio);
+                const row=blueMorphParameterRowFor(el)||el.closest?.('.control-row')||el.closest?.('.fill-settings-block')||el.closest?.('.control-group-title')||el.closest?.('label')||el.parentElement;if(row)rows.add(row);
+            }
+            for(const row of rows){const list=parameterRoutingRows.get(row)||[],anyMorph=list.some(x=>morphParameterRoutingState(x.def.id).active===true);row.classList.toggle('morph-route-enabled',anyMorph);}
+            syncGenericMorphRangeBindings();
+            if(parameterRoutingPopupId&&!parameterRoutingPopup?.classList.contains('hidden')){const r=parameterRoutingPopup.getBoundingClientRect();renderParameterRoutingPopup(parameterRoutingPopupId,r.left,r.top);}
+        }
+        window.__syncParameterRoutingDecorations=syncMorphRouteDecorations;
+        let morphTransientDecisionDialog=null;
+        function askTransientMorphProfileDecision(kind='blue'){
+            return new Promise(resolve=>{
+                morphTransientDecisionDialog?.remove?.();
+                const overlay=document.createElement('div');overlay.className='morph-transient-decision-overlay';
+                const card=document.createElement('div');card.className='morph-transient-decision-card';card.setAttribute('role','dialog');card.setAttribute('aria-modal','true');
+                const title=document.createElement('strong');title.textContent=kind==='orange'?'Новый Orange ещё не сохранён':'Новый Morph ещё не сохранён';
+                const text=document.createElement('span');text.textContent='Перед созданием следующего профиля сохраните предыдущий или удалите его.';
+                const actions=document.createElement('div');actions.className='morph-transient-decision-actions';
+                const add=(label,action,cls='')=>{const b=document.createElement('button');b.type='button';b.className=cls;b.textContent=label;b.addEventListener('click',()=>{overlay.remove();morphTransientDecisionDialog=null;resolve(action);});actions.appendChild(b);return b;};
+                add('Сохранить предыдущий','save','primary');add('Удалить предыдущий','discard','danger');add('Отмена','cancel');card.append(title,text,actions);overlay.appendChild(card);document.body.appendChild(overlay);morphTransientDecisionDialog=overlay;
+                overlay.addEventListener('pointerdown',e=>{if(e.target===overlay){overlay.remove();morphTransientDecisionDialog=null;resolve('cancel');}});setTimeout(()=>actions.querySelector('button')?.focus(),0);
+            });
+        }
+        function saveCurrentBlueMorphProfile(){
+            const routing=window.SomataMorphParameterRouting,profile=getActiveMorphProfile();if(!routing||!profile)return null;let name=null;
+            if(profile.transient===true){name=(window.prompt?.('Название профиля морфинга','')||'').trim();if(!name)return null;}
+            const saved=routing.saveActiveProfile(state.morph,state.minimalMorph,name);if(!saved)return null;routing.resetRuntime(runtimeState.morph);syncMorphProfileUI();if(runtimeState.morph?.active)activeRebaseMorphing?.();requestMainCanvasRender();return saved;
+        }
+        async function createNewBlueMorphProfile(){
+            const routing=window.SomataMorphParameterRouting;if(!routing)return null;const current=getActiveMorphProfile();
+            if(current?.transient===true){const action=await askTransientMorphProfileDecision('blue');if(action==='cancel')return null;if(action==='save'){if(!saveCurrentBlueMorphProfile())return null;}else if(action==='discard'){routing.deleteProfile(state.morph,state.minimalMorph,current.id);}}
+            const wasRunning=runtimeState.morph?.active===true;if(wasRunning)activeStopMorphing(false);const created=routing.createProfile(state.morph,state.minimalMorph,'standard','');syncMorphSettingsUI();syncMorphProfileUI();if(wasRunning)activeStartMorphing();return created;
+        }
+
+        function installGenericMorphParameterContextMenus(){
+            ensureGenericMorphRangeBindings();for(const def of (window.SomataParameterRegistry?.morphable?.()||[])){
+                const el=document.getElementById(def?.ui?.mainId);if(!el)continue;const host=parameterRoutingVisualHost(def,el);installParameterRoutingContextTarget(def,el,host);
+                if(el.dataset.morphRoutingBound!=='1'){el.dataset.morphRoutingBound='1';const oldTitle=String(el.title||'').trim();const hint=`ПКМ по рамке: Аудиосвязь / Синий / Оранжевый морфинг для «${def.label}»`;el.title=oldTitle?`${oldTitle} · ${hint}`:hint;}
+                const row=blueMorphParameterRowFor(el)||el.closest?.('.control-row')||el.closest?.('.control-group-title')||el.closest?.('label')||el.parentElement;const name=row?.querySelector?.('.row-label > span:first-child')||row?.querySelector?.('label > span:first-child')||el.closest?.('label')?.querySelector?.('span')||row?.querySelector?.('.hint-text');
+                if(name&&name.dataset.morphRoutingLabelBound!=='1'){name.dataset.morphRoutingLabelBound='1';name.classList.add('blue-morph-parameter-name');name.title=`ПКМ: Аудиосвязь / Синий / Оранжевый морфинг для «${def.label}»`;name.addEventListener('contextmenu',ev=>{ev.preventDefault();ev.stopPropagation();openUnifiedParameterRoutingMenuForId(def.id,ev.clientX,ev.clientY);});}
+            }
+        }
+        function morphProfileDisplayName(profile){return profile?.id==='standard'&&profile?.system===true?'Основной':String(profile?.name||profile?.id||'Профиль');}
+        function syncMorphProfileDirtyUI(){
+            const routing=window.SomataMorphParameterRouting,profile=getActiveMorphProfile();if(!routing||!profile)return false;const dirty=routing.isActiveProfileDirty?.(state.morph,state.minimalMorph)===true,transient=profile.transient===true,panel=document.getElementById('morphSettingsPanel');panel?.classList.toggle('morph-profile-dirty',dirty||transient);panel?.classList.toggle('morph-profile-transient',transient);
+            const save=document.getElementById('btnSaveMorphProfile'),reset=document.getElementById('btnResetMorphProfile');if(save){save.disabled=!(dirty||transient);save.classList.toggle('dirty',dirty||transient);save.title=transient?'Сохранить новый профиль и задать имя':(dirty?'Сохранить текущий профиль морфа · есть изменения':'Сохранить текущий профиль морфа');}if(reset)reset.disabled=!dirty;
+            const select=document.getElementById('morphProfileSelect');if(select){for(const option of select.options){const p=(state.morph.profiles||[]).find(x=>x.id===option.value);const unsaved=p?.transient===true?' · не сохранён':'';const changed=option.value===profile.id&&dirty?' · изменён':'';option.textContent=morphProfileDisplayName(p)+unsaved+changed;}}
+            return dirty;
+        }
+        function syncMorphProfileUI(){
+            const routing=window.SomataMorphParameterRouting;if(!routing)return;const profiles=ensureMorphProfileState(),profile=getActiveMorphProfile();pruneLegacyMorphMultiplierBindings();const select=document.getElementById('morphProfileSelect');if(select){const previous=select.value;select.innerHTML='';for(const p of profiles){const o=document.createElement('option');o.value=p.id;o.textContent=morphProfileDisplayName(p);select.appendChild(o);}select.value=profile?.id||previous||'standard';}
+            const panel=document.getElementById('morphSettingsPanel');panel?.classList.remove('morph-profile-orange');
+            const del=document.getElementById('btnDeleteMorphProfile');if(del)del.disabled=profile?.system===true;const rename=document.getElementById('btnRenameMorphProfile');if(rename)rename.disabled=profile?.system===true||profile?.transient===true;
+            const master=document.getElementById('btnMorphMasterMode');if(master){master.classList.add('active');master.setAttribute('aria-pressed','true');master.disabled=false;master.textContent='Master';}
+            const mainBtn=document.getElementById('btnMorph'),isRunning=runtimeState.morph?.active===true;
+            mainBtn?.classList.toggle('active',isRunning);mainBtn?.setAttribute('aria-pressed',isRunning?'true':'false');if(mainBtn)mainBtn.title=isRunning?'Остановить Morph Profile':'Запустить Morph Profile';
+            renderMorphProfileBindings();syncMorphOrderModeUI();renderMorphParameterPicker();renderMorphRoutingTargets();renderMorphRoutingGroups();syncMorphSidebarSettingsFromState();installGenericMorphParameterContextMenus();syncMorphRouteDecorations();syncMorphProfileDirtyUI();
+        }
+        function switchMorphProfile(id){
+            const routing=window.SomataMorphParameterRouting;if(!routing)return;const wasRunning=runtimeState.morph?.active===true;
+            if(wasRunning)activeStopMorphing(false);const profile=routing.selectProfile(state.morph,state.minimalMorph,id);routing.resetRuntime(runtimeState.morph);syncMorphSettingsUI();syncMorphProfileUI();
+            if(wasRunning)activeStartMorphing();requestMainCanvasRender();return profile;
+        }
+        function morphSidebarHost(group,title){
+            if(!group)return null;let host=group.querySelector(`:scope > .morph-sidebar-section[data-title="${title}"]`);if(host)return host;host=document.createElement('div');host.className='morph-sidebar-section';host.dataset.title=title;const head=document.createElement('div');head.className='morph-sidebar-section-title';head.textContent=title;host.appendChild(head);group.appendChild(host);return host;
+        }
+        function moveMorphNode(host,node){if(host&&node&&!host.contains(node))host.appendChild(node);}
+        function installMorphTopSpeedControl(){
+            const host=document.getElementById('morphSpeedToolbar'),el=document.getElementById('morphSpeedType');if(!host||!el||host.dataset.ready==='1')return;host.dataset.ready='1';
+            const label=document.createElement('label');label.className='morph-speed-toolbar-field';label.htmlFor='morphSpeedType';label.title='Тип скорости синего морфинга · восстановлено по стабильной Somata 7.9';
+            const text=document.createElement('span');text.textContent='Тип скорости';label.append(text,el);host.appendChild(label);
+            const cycle=document.getElementById('morphInterval')?.closest('.morph-setting-row');
+            if(cycle){cycle.classList.add('morph-top-cycle-row');host.appendChild(cycle);}
+        }
+        function installMorphCompactProfileControls(){
+            installMorphTopSpeedControl();
+            const host=document.getElementById('morphCompactProfileControls');if(!host||host.dataset.ready==='1')return;host.dataset.ready='1';
+            const addSelect=(id,label,title='')=>{const el=document.getElementById(id);if(!el)return;const wrap=document.createElement('label');wrap.className='morph-compact-profile-field morph-compact-profile-select';if(title)wrap.title=title;const text=document.createElement('span');text.textContent=label;wrap.append(text,el);host.appendChild(wrap);};
+            const addCheck=(id,label,title='')=>{const el=document.getElementById(id);if(!el)return;const wrap=document.createElement('label');wrap.className='morph-compact-profile-field morph-compact-profile-check';if(title)wrap.title=title;const text=document.createElement('span');text.textContent=label;wrap.append(el,text);host.appendChild(wrap);};
+            addSelect('morphSlideType','Слайдинг','Тип слайдинга');
+            addSelect('morphMode','Морфинг','Общий тип морфинга');
+            addSelect('morphSpiralMorphType','Спираль','Тип спирального морфинга');
+            addCheck('morphCircleProfileOverflow','За радиус','Разрешить профилю выходить за исходный радиус');
+            const toolbar=document.querySelector('#morphSettingsPanel .morph-profile-toolbar');
+            if(toolbar){
+                const flags=document.createElement('div');flags.className='morph-profile-toolbar-flags';
+                const addToolbarCheck=(id,label,title='')=>{const el=document.getElementById(id);if(!el)return;const wrap=document.createElement('label');wrap.className='morph-profile-toolbar-check';if(title)wrap.title=title;const text=document.createElement('span');text.textContent=label;wrap.append(el,text);flags.appendChild(wrap);};
+                addToolbarCheck('morphDefaultActive','По умолчанию','Автоматически запускать синий морфинг в проекте');
+                addToolbarCheck('morphDiversity','Разнообразие','Получать новые значения параметров в каждом цикле');
+                toolbar.appendChild(flags);
+            }
+            document.querySelector('.morph-default-diversity-row')?.classList.add('morph-compact-source-row');
+            document.querySelector('.morph-speed-slide-row')?.classList.add('morph-compact-source-row');
+            document.querySelector('.morph-mode-card')?.classList.add('morph-mode-card-compact-source');
+        }
+        function ensureMorphSpiralFixedSettings(menu){
+            if(!menu)return null;let box=menu.querySelector(':scope > .morph-spiral-fixed-settings');if(!box){box=document.createElement('div');box.className='morph-spiral-fixed-settings';const title=document.createElement('div');title.className='morph-spiral-fixed-title';title.textContent='Настройки синего Morph · Спирали';box.appendChild(title);menu.appendChild(box);}const primary=document.getElementById('morphBySpiralLayers')?.closest('.morph-spiral-row-primary'),secondary=document.getElementById('morphSpiralMorphType')?.closest('.morph-spiral-row-secondary');if(primary&&!box.contains(primary))box.appendChild(primary);if(secondary&&!box.contains(secondary))box.appendChild(secondary);return box;
+        }
+        function installMorphSidebarSettings(){
+            const panel=document.getElementById('morphSettingsPanel'),grid=panel?.querySelector('.morph-settings-grid');if(!grid||grid.dataset.sidebarMoved==='1')return;grid.dataset.sidebarMoved='1';
+            const geometry=document.getElementById('geometrySettingsGroup');
+            const general=morphSidebarHost(geometry,'Морфинг');
+            const direct=[...grid.children];
+            const headerTools=panel.querySelector('.morph-checkbox-tools');if(headerTools){headerTools.classList.add('morph-sidebar-actions');moveMorphNode(general,headerTools);}
+            const fade=document.getElementById('morphFadeDurationRow');moveMorphNode(general,fade);
+            // 7.11.1: cycle period belongs with the top Blue timing controls, not in the left sidebar.
+            // 7.10.5: artistic Line/Fill/Geometry/Lamps controls live only in the central Morph routing UI.
+            // Legacy DOM controls stay in the hidden compatibility grid so the existing Blue engine keeps its state contract.
+            // Shape is a real compound Standard Morph row in the central routing list.
+            // Its legacy DOM stays inside the hidden compatibility grid and remains the engine state source.
+            grid.classList.add('morph-compat-grid');
+        }
+        function syncMorphSidebarSettingsFromState(){
+            const map={morphVertexMin:state.morph.vertexMin,morphVertexMax:state.morph.vertexMax,morphStepMin:state.morph.stepMin,morphStepMax:state.morph.stepMax,morphRoundingMin:state.morph.roundingMin,morphRoundingMax:state.morph.roundingMax,morphRotationMin:state.morph.rotationMinPercent,morphRotationMax:state.morph.rotationMaxPercent,morphOpacityMin:state.morph.opacityMin,morphOpacityMax:state.morph.opacityMax,morphStrokeWidthMin:state.morph.strokeWidthMin,morphStrokeWidthMax:state.morph.strokeWidthMax,morphFillOpacityMin:state.morph.fillOpacityMin,morphFillOpacityMax:state.morph.fillOpacityMax};for(const [id,v] of Object.entries(map)){const el=document.getElementById(id);if(el&&document.activeElement!==el&&v!=null)el.value=String(v);}
+        }
+        function renderMorphRoutingTargets(){
+            const host=document.getElementById('morphRoutingTargets');if(!host)return;host.innerHTML='';
+            const master=document.createElement('div');master.className='audio-routing-layer morph-routing-target morph-routing-target-master active';master.setAttribute('aria-current','true');const masterDot=document.createElement('span');masterDot.className='audio-routing-layer-dot morph-master-dot';const masterText=document.createElement('span');masterText.textContent='Master';master.append(masterDot,masterText);host.appendChild(master);
+            for(const layer of state.layers||[]){const b=document.createElement('div');b.className='audio-routing-layer morph-routing-target morph-routing-target-disabled';b.setAttribute('aria-disabled','true');b.title='Per-layer Morph будет включён позже';const dot=document.createElement('span');dot.className='audio-routing-layer-dot';dot.style.color=layer.strokeColor||'#94a3b8';dot.style.background=layer.strokeColor||'#94a3b8';const text=document.createElement('span');text.textContent=layer.name||'Слой';b.append(dot,text);host.appendChild(b);}
+        }
+        let morphRoutingOpenGroup='';
+        function closeMorphRoutingGroupMenus(){morphRoutingOpenGroup='';document.querySelectorAll('.audio-route-group-menu[data-morph-routing-group-menu="1"]').forEach(m=>m.classList.add('hidden'));}
+        function installMorphRoutingGroupOutsideClose(){
+            if(document.documentElement.dataset.morphRoutingGroupOutsideClose==='1')return;document.documentElement.dataset.morphRoutingGroupOutsideClose='1';
+            document.addEventListener('pointerdown',e=>{const open=[...document.querySelectorAll('.audio-route-group-menu[data-morph-routing-group-menu="1"]:not(.hidden)')];if(!open.length)return;if(open.some(m=>m.contains(e.target)))return;if(e.target?.closest?.('#morphRoutingGroups .audio-route-group-btn'))return;closeMorphRoutingGroupMenus();},true);
+            document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMorphRoutingGroupMenus();});
+        }
+        function renderMorphRoutingGroups(){
+            const host=document.getElementById('morphRoutingGroups');if(!host)return;
+            document.querySelectorAll('#audioViewportPopupPortal .audio-route-group-menu[data-morph-routing-group-menu="1"]').forEach(m=>m.remove());host.innerHTML='';const profile=getActiveMorphProfile();if(!profile||profile.type!=='standard')return;window.SomataMorphParameterRouting?.syncActiveLegacyBindings?.(state.morph,state.minimalMorph);pruneLegacyMorphMultiplierBindings();
+            const defs=window.SomataParameterMatrix.all(),defById=new Map(defs.map(d=>[d.id,d])),groups=[];for(const d of defs){const group=morphUiGroup(d);if(!groups.includes(group))groups.push(group);}if(!groups.includes('Геометрия'))groups.unshift('Геометрия');
+            const isActive=id=>getActiveMorphBindings(getActiveMorphProfile()).some(b=>b.parameter===id&&b.enabled!==false);
+            for(const group of groups){
+                const groupBindings=getActiveMorphBindings(profile).filter(binding=>!morphAlwaysOnMultiplier(binding.parameter)&&morphUiGroup(defById.get(binding.parameter))===group),spiralSpecial=group==='Спирали'&&state.morph?.options?.bySpiralLayers===true,shapeSpecial=group==='Геометрия'&&state.morph?.options?.byShape===true,orbitSpecial=group==='Геометрия'&&state.morph?.monoOrbitTransforms===true,chaosSpecial=group==='Геометрия'&&state.morph?.chaosMorphEnabled===true,groupCount=groupBindings.length+(spiralSpecial?1:0)+(shapeSpecial?1:0)+(orbitSpecial?1:0)+(chaosSpecial?1:0),activeCount=groupBindings.filter(binding=>binding.enabled!==false).length+(spiralSpecial?1:0)+(shapeSpecial?1:0)+(orbitSpecial?1:0)+(chaosSpecial?1:0);
+                const wrap=document.createElement('div');wrap.className='audio-route-group';const btn=document.createElement('button');btn.type='button';btn.className='audio-route-group-btn';btn.dataset.morphRoutingGroup=group;
+                if(groupCount){btn.classList.add(activeCount?'morph-group-active':'morph-group-idle');btn.dataset.morphGroupCount=String(groupCount);btn.dataset.morphGroupActive=String(activeCount);}
+                appendMorphGroupLabel(btn,group,true);btn.title=groupCount?(activeCount?`${group}: ${activeCount}/${groupCount} активно · ПКМ — выключить все добавленные связи`:`${group}: ${groupCount} добавлено, все выключены · ПКМ — включить все`):`${group}: связей нет`;
+                const menu=document.createElement('div');menu.className='audio-route-group-menu hidden';menu.dataset.morphRoutingGroupMenu='1';menu.dataset.morphRoutingGroup=group;const optionsHost=document.createElement('div');optionsHost.className='morph-group-parameter-options';menu.appendChild(optionsHost);
+                const render=()=>{
+                    optionsHost.innerHTML='';
+                    for(const def of defs.filter(x=>morphUiGroup(x)===group)){
+                        let on=false,activate=null;
+                        if(def.kind==='shape'){on=state.morph?.options?.byShape===true;activate=()=>setMorphProxyControl('morphByShape',!on,'checked');}
+                        else if(def.kind==='orbits'){on=state.morph?.monoOrbitTransforms===true;activate=()=>setMorphProxyControl('morphMonoOrbitTransforms',!on,'checked');}
+                        else if(def.kind==='chaos'){on=state.morph?.chaosMorphEnabled===true;activate=()=>setMorphProxyControl('chaosMorphEnabled',!on,'checked');}
+                        else if(def.kind==='spiralLayers'){on=state.morph?.options?.bySpiralLayers===true;activate=()=>setMorphProxyControl('morphBySpiralLayers',!on,'checked');}
+                        else {on=isActive(def.id);activate=()=>setMorphParameterBinding(def.id,!on);}
+                        const option=document.createElement('button');option.type='button';option.className='audio-param-option'+(on?' active':'');option.dataset.parameterId=def.id;
+                        option.textContent=`${on?'✓ ':''}${def.label}`;
+                        option.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();morphRoutingOpenGroup=group;activate();});optionsHost.appendChild(option);
+                    }
+                };
+                btn.addEventListener('click',e=>{e.stopPropagation();const opening=morphRoutingOpenGroup!==group||menu.classList.contains('hidden');document.querySelectorAll('.audio-route-group-menu[data-morph-routing-group-menu="1"]').forEach(m=>{if(m!==menu)m.classList.add('hidden')});morphRoutingOpenGroup=opening?group:'';menu.classList.toggle('hidden',!opening);if(opening){render();positionViewportPopup(menu,btn);}});
+                btn.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();if(!groupCount)return;const enableAll=activeCount===0;for(const binding of groupBindings){const def=defById.get(binding.parameter);setMorphRouteBindingActive(def,binding,enableAll);}if(group==='Спирали'&&spiralSpecial&&!enableAll)setMorphProxyControl('morphBySpiralLayers',false,'checked');if(group==='Геометрия'){if(shapeSpecial&&!enableAll)setMorphProxyControl('morphByShape',false,'checked');if(orbitSpecial&&!enableAll)setMorphProxyControl('morphMonoOrbitTransforms',false,'checked');if(chaosSpecial&&!enableAll)setMorphProxyControl('chaosMorphEnabled',false,'checked');}commitMorphRouteActivationChange();});
+                wrap.append(btn,menu);host.appendChild(wrap);
+                if(morphRoutingOpenGroup===group)requestAnimationFrame(()=>{if(!btn.isConnected||!menu.isConnected)return;render();positionViewportPopup(menu,btn);});
+            }
+            installMorphRoutingGroupOutsideClose();
+        }
+        function installMorphAudioStyleLayout(){
+            const panel=document.getElementById('morphSettingsPanel');if(!panel||panel.dataset.audioLayout==='1')return;panel.dataset.audioLayout='1';panel.classList.add('morph-audio-routing-panel');const title=panel.querySelector('.morph-settings-title');title?.classList.add('audio-routing-head');const toolbar=panel.querySelector('.morph-profile-toolbar'),speedToolbar=document.getElementById('morphSpeedToolbar'),routing=panel.querySelector('.morph-parameter-routing-panel');const layout=document.createElement('div');layout.className='morph-routing-layout';const targets=document.createElement('div');targets.id='morphRoutingTargets';targets.className='audio-routing-layers morph-routing-targets';const main=document.createElement('div');main.className='audio-routing-main morph-routing-main';layout.append(targets,main);title?.after(layout);if(toolbar){toolbar.classList.add('audio-routing-preset-bar','morph-routing-preset-bar');main.appendChild(toolbar);}if(speedToolbar)main.appendChild(speedToolbar);if(routing){routing.classList.add('morph-routing-shell');installMorphCompactProfileControls();const head=routing.querySelector('.morph-routing-head');if(head)head.classList.add('morph-routing-visible-head');const groups=document.createElement('div');groups.id='morphRoutingGroups';groups.className='audio-routing-tools morph-routing-groups';if(head)head.after(groups);else routing.prepend(groups);const note=document.createElement('div');note.className='audio-routing-tools-meta morph-routing-tools-meta';const hint=document.createElement('span');hint.className='audio-routing-tools-hint';hint.textContent='Левой кнопкой выбрать параметр · правой кнопкой вкл/выкл';note.appendChild(hint);const order=document.getElementById('morphOrderMode');if(order)note.appendChild(order);groups.after(note);const bindings=document.getElementById('morphProfileBindings');bindings?.classList.add('audio-routing-rows');const add=document.getElementById('btnAddMorphParameter');if(add){add.textContent='＋ Добавить связь';add.classList.add('audio-routing-add');routing.appendChild(add);}const picker=document.getElementById('morphParameterPicker');picker?.classList.add('audio-param-menu');main.appendChild(routing);}const grid=panel.querySelector('.morph-settings-grid');if(grid){grid.classList.add('hidden');main.appendChild(grid);}installMorphSidebarSettings();renderMorphRoutingTargets();renderMorphRoutingGroups();
+        }
+
+        function setupMorphProfileUI(){
+            if(morphProfileUiReady)return;morphProfileUiReady=true;ensureMorphProfileState();installMorphAudioStyleLayout();const select=document.getElementById('morphProfileSelect');select?.addEventListener('change',e=>switchMorphProfile(e.target.value));
+            const createMenu=document.getElementById('morphProfileCreateMenu');createMenu?.classList.add('hidden');document.getElementById('btnNewMorphProfile')?.addEventListener('click',()=>{createNewBlueMorphProfile();});
+            document.getElementById('btnRenameMorphProfile')?.addEventListener('click',()=>{const p=getActiveMorphProfile();if(!p||p.system)return;const name=(window.prompt?.('Новое название профиля',p.name)||'').trim();if(name){p.name=name;syncMorphProfileUI();}});
+            document.getElementById('btnDeleteMorphProfile')?.addEventListener('click',()=>{const p=getActiveMorphProfile();if(!p||p.system)return;if(window.confirm?.(`Удалить профиль «${p.name}»?`)===false)return;window.SomataMorphParameterRouting.deleteProfile(state.morph,state.minimalMorph,p.id);syncMorphSettingsUI();syncMorphProfileUI();});
+            document.getElementById('btnSaveMorphProfile')?.addEventListener('click',()=>{saveCurrentBlueMorphProfile();});
+            document.getElementById('btnResetMorphProfile')?.addEventListener('click',()=>{const routing=window.SomataMorphParameterRouting;if(!routing||routing.isActiveProfileDirty?.(state.morph,state.minimalMorph)!==true)return;routing.resetActiveProfile(state.morph,state.minimalMorph);routing.resetRuntime(runtimeState.morph);syncMorphSettingsUI();syncRandomSettingsUI();syncMorphProfileUI();syncBlueMorphParameterDecorations();if(runtimeState.morph?.active)activeRebaseMorphing?.();requestMainCanvasRender();});
+            document.getElementById('btnMorphMasterMode')?.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();syncMorphProfileUI();});
+            document.getElementById('btnMorphOrderType')?.addEventListener('click',()=>setMorphOrderMode('type'));
+            document.getElementById('btnMorphOrderFree')?.addEventListener('click',()=>setMorphOrderMode('free'));
+            document.getElementById('btnMorphOrderToggle')?.addEventListener('click',()=>setMorphOrderMode(getMorphOrderMode()==='type'?'free':'type'));
+            const dirtyEvent=e=>{const el=e.target;if(!el)return;const id=String(el.id||'');if(id.startsWith('morph')||el.closest?.('.morph-sidebar-section'))queueMicrotask(()=>syncMorphProfileDirtyUI());};document.addEventListener('input',dirtyEvent,true);document.addEventListener('change',dirtyEvent,true);
+            const picker=document.getElementById('morphParameterPicker');document.getElementById('btnAddMorphParameter')?.addEventListener('click',e=>{e.stopPropagation();picker?.classList.toggle('hidden');renderMorphParameterPicker();if(picker&&!picker.classList.contains('hidden')){positionViewportPopup(picker,e.currentTarget);document.getElementById('morphParameterSearch')?.focus();}});document.getElementById('morphParameterSearch')?.addEventListener('input',renderMorphParameterPicker);
+syncMorphProfileUI();
         }
 
         function cloneMasterLayerValue(value){return SomataMasterBroadcastCore.clone(value);}
@@ -1836,8 +2630,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         }
 
         function getMorphIntervalMultiplier(kind='full') {
-            if(kind!=='full') return 1;
-            const v=Number(state.morph?.intervalMultiplier);
+            const v=Number(kind==='minimal'?state.minimalMorph?.intervalMultiplier:state.morph?.intervalMultiplier);
             return Number.isFinite(v)?Math.max(0.015625,Math.min(64,v)):1;
         }
 
@@ -1867,6 +2660,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const minimalInput = document.getElementById('minimalMorphInterval');
             if (fullInput) fullInput.value = formatDisplayNumber(fullAuto ? getTapTempoIntervalSec(state.morph.intervalSec) : state.morph.intervalSec, 2);
             const fullMult=document.getElementById('morphIntervalMultiplier');if(fullMult&&document.activeElement!==fullMult)fullMult.value=formatDisplayNumber(getMorphIntervalMultiplier('full'),6);
+            const orangeMult=document.getElementById('minimalMorphIntervalMultiplier');if(orangeMult&&document.activeElement!==orangeMult)orangeMult.value=formatDisplayNumber(getMorphIntervalMultiplier('minimal'),6);
             if (minimalInput) minimalInput.value = formatDisplayNumber(minimalAuto ? getTapTempoIntervalSec(state.minimalMorph.intervalSec) : state.minimalMorph.intervalSec, 2);
         }
 
@@ -2448,7 +3242,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             tap.syncMinimalMorph = false;
             if (runtimeState.morph.active) activeRebaseMorphing();
             if (runtimeState.minimalMorph.active && !runtimeState.minimalMorph.transitioning) {
-                runtimeState.minimalMorph.nextSwitchAt = performance.now() + Math.max(0.5, state.minimalMorph.intervalSec) * 1000;
+                runtimeState.minimalMorph.nextSwitchAt = performance.now() + getTapMorphIntervalSec(state.minimalMorph.intervalSec, 'minimal') * 1000;
             }
             syncTapUI();
         }
@@ -2575,10 +3369,49 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             setAutoTapEnabled(true, true);
         }
 
+        // One physical mouse-wheel notch changes the displayed tempo by exactly one BPM.
+        // This edits the same TAP state used by Blue/Orange/Green sync, not a display-only value.
+        function stepTapTempoByWheel(deltaY) {
+            if (!Number.isFinite(deltaY) || deltaY === 0) return;
+            const tap = state.tapTempo;
+            const current = Math.max(0, Math.min(300, Math.round(Number(tap.bpm) || 0)));
+            const next = Math.max(0, Math.min(300, current + (deltaY < 0 ? 1 : -1)));
+            if (next === current) return;
+            if (next === 0) {
+                resetTapTempo();
+                capturePlaylistOverridesFromCurrent();
+                return;
+            }
+            // Explicit wheel input takes control away from Auto-TAP, otherwise its next
+            // audio tick would immediately overwrite the user's +/- 1 adjustment.
+            if (tap.autoTap) setAutoTapEnabled(false, false);
+            tap.bpm = next;
+            tap.tapTimes = [];
+            tap.autoBeatTimes = [];
+            tap.lastTapAt = 0;
+            tap.anchorTime = performance.now();
+            tap.lastAppliedBpm = next;
+            tap.syncFullMorph = true;
+            tap.syncMinimalMorph = true;
+            if (current === 0) normalizeProjectMorphSettings().syncTap = true;
+            resyncMorphsToTapTempo();
+            syncTapUI();
+            restartTapPulseAnimation();
+            capturePlaylistOverridesFromCurrent();
+        }
+
         function setupTapTempoUI() {
             const panel = document.getElementById('tapSettingsPanel');
             document.getElementById('btnAutoTapListen')?.addEventListener('click', () => { void toggleAutoTapListenFromHeader(); });
-            document.getElementById('btnTapTempo')?.addEventListener('click', () => registerTapTempo(performance.now(), 'manual'));
+            const tapButton = document.getElementById('btnTapTempo');
+            tapButton?.addEventListener('click', () => registerTapTempo(performance.now(), 'manual'));
+            tapButton?.addEventListener('wheel', (e) => {
+                if (e.ctrlKey) return; // Preserve browser pinch/zoom gestures.
+                if (!Number.isFinite(e.deltaY) || e.deltaY === 0) return;
+                e.preventDefault(); // Do not scroll the page/parameter panel instead.
+                e.stopPropagation();
+                stepTapTempoByWheel(e.deltaY);
+            }, { passive: false });
             document.getElementById('btnTapReset')?.addEventListener('click', resetTapTempo);
             document.getElementById('btnTapSettings')?.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -3256,6 +4089,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const minimalFadeRow = document.getElementById('minimalMorphFadeRow');
             syncOrangeMorphModeOptions();
             if (minimalInterval) minimalInterval.value = formatDisplayNumber(isTapMorphSyncActive('minimal') ? getTapTempoIntervalSec(state.minimalMorph?.intervalSec ?? 5) : (state.minimalMorph?.intervalSec ?? 5), 2);
+            const minimalMult=document.getElementById('minimalMorphIntervalMultiplier');if(minimalMult&&document.activeElement!==minimalMult)minimalMult.value=formatDisplayNumber(getMorphIntervalMultiplier('minimal'),6);
+            document.querySelectorAll('[data-orange-interval]').forEach(b=>b.classList.toggle('active',Number(b.dataset.orangeInterval)===(state.minimalMorph?.intervalSec??5)));
             if (minimalFade) minimalFade.value = formatDisplayNumber(state.minimalMorph?.fadeSec ?? 0.1, 1);
             if (minimalInstant) minimalInstant.checked = state.minimalMorph?.instantSwitch !== false;
             if (minimalDefaultActive) minimalDefaultActive.checked = state.minimalMorph?.defaultActive === true;
@@ -3263,6 +4098,411 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             minimalFadeRow?.classList.toggle('shape-disabled', state.minimalMorph?.instantSwitch !== false);
             syncPlaylistPaletteSelectionUI();
             syncTapTimingIndicators();
+            if(document.getElementById('randomSettingsPanel')?.dataset.orangeProfilesReady==='1')syncOrangeMorphProfileUI();
+        }
+
+
+        function orangeProfileLayerCountHolder(){
+            return {get value(){return state.randomLayerCount||3;},set value(v){state.randomLayerCount=Math.max(1,Math.min(8,Number(v)||3));const el=document.getElementById('randomLayerCount');if(el&&document.activeElement!==el)el.value=String(state.randomLayerCount);}};
+        }
+        function ensureOrangeMorphProfiles(){return window.SomataOrangeMorphProfiles?.ensureProfiles?.(state.minimalMorph,state.randomOptions,state.randomLayerCount)||[];}
+        function getActiveOrangeMorphProfile(){return window.SomataOrangeMorphProfiles?.activeProfile?.(state.minimalMorph,state.randomOptions,state.randomLayerCount)||null;}
+        function syncOrangeMorphProfileDirtyUI(){
+            const store=window.SomataOrangeMorphProfiles;if(!store)return false;const profile=getActiveOrangeMorphProfile(),dirty=store.isDirty?.(state.minimalMorph,state.randomOptions,state.randomLayerCount)===true,transient=profile?.transient===true,panel=document.getElementById('randomSettingsPanel');panel?.classList.toggle('morph-profile-dirty',dirty||transient);panel?.classList.toggle('morph-profile-transient',transient);
+            const save=document.getElementById('btnSaveOrangeMorphProfile'),reset=document.getElementById('btnResetOrangeMorphProfile');if(save){save.disabled=!(dirty||transient);save.classList.toggle('dirty',dirty||transient);save.title=transient?'Сохранить новый профиль Orange и задать имя':(dirty?'Сохранить профиль Orange · есть изменения':'Сохранить профиль Orange');}if(reset)reset.disabled=!dirty;
+            const select=document.getElementById('orangeMorphProfileSelect');if(select&&profile){for(const option of select.options){const p=(state.minimalMorph.profiles||[]).find(x=>x.id===option.value);const unsaved=p?.transient===true?' · не сохранён':'';const changed=option.value===profile.id&&dirty?' · изменён':'';option.textContent=morphProfileDisplayName(p)+unsaved+changed;}}
+            return dirty;
+        }
+        function markOrangeFixedRows(){
+            const panel=document.getElementById('randomSettingsPanel');if(!panel||panel.dataset.orangeRowsMarked==='1')return;panel.dataset.orangeRowsMarked='1';
+            const bind=(id,group)=>{const el=document.getElementById(id),row=el?.closest?.('.morph-setting-row');if(row)row.dataset.orangeGroup=group;};
+            ['minimalMorphFamily','minimalMorphProfileGroupDropdown','randomByShape','randomOnlyLine','randomByVertices','randomBySteps','randomByRounding','randomBySize'].forEach(id=>bind(id,'Геометрия'));
+            ['randomByColor','minimalMorphLinePalette','randomCyclePalettes'].forEach(id=>bind(id,'Палитра'));
+            ['randomBySpiralLayers','randomSpiralLayersMin','randomSpiralLayersMax'].forEach(id=>bind(id,'Спирали'));
+        }
+
+
+        let orangeMorphOpenGroup='';
+        function getOrangeMorphBindings(){
+            return window.SomataOrangeMorphProfiles?.workingBindings?.(state.minimalMorph,state.randomOptions,state.randomLayerCount)||[];
+        }
+        function orangeParameterRoutingState(paramId){
+            const def=window.SomataParameterRegistry?.get?.(paramId);
+            if(!def||def.morph?.supported!==true||def.type==='boolean'||morphAlwaysOnMultiplier(paramId))return{supported:false,added:false,active:false,reason:def?.type==='boolean'?'Параметры только ВКЛ/ВЫКЛ не используются в Orange':'Недоступно'};
+            return window.SomataOrangeMorphProfiles?.routeState?.(state.minimalMorph,state.randomOptions,state.randomLayerCount,paramId)||{supported:true,added:false,active:false};
+        }
+        function syncOrangeGeneratorFlagsFromBindings(){
+            const active=id=>orangeParameterRoutingState(id).active===true,ro=state.randomOptions||(state.randomOptions={});
+            ro.byVertices=active('geometry.N');
+            ro.bySteps=active('geometry.K');
+            ro.byRounding=active('layer.rounding');
+            ro.bySize=active('layer.radius');
+            ro.byColor=active('layer.strokeColor')||active('layer.fillColor');
+            return ro;
+        }
+        function setOrangeParameterRouteActive(paramId,enabled){
+            const store=window.SomataOrangeMorphProfiles,def=window.SomataParameterRegistry?.get?.(paramId);
+            if(!store||!def||def.morph?.supported!==true||def.type==='boolean'||morphAlwaysOnMultiplier(paramId))return false;
+            const current=orangeParameterRoutingState(paramId),range=current.binding||defaultMorphBindingRange(def);
+            if(!store.setBinding?.(state.minimalMorph,state.randomOptions,state.randomLayerCount,paramId,enabled===true,range))return false;
+            syncOrangeGeneratorFlagsFromBindings();syncRandomSettingsUI();renderOrangeMorphBindings();renderOrangeMorphRoutingGroups();syncMorphRouteDecorations();syncOrangeMorphProfileDirtyUI();
+            if(runtimeState.minimalMorph?.active===true)activeRebaseMinimalMorphing?.();
+            requestMainCanvasRender();return true;
+        }
+        function removeOrangeParameterBinding(paramId){
+            const store=window.SomataOrangeMorphProfiles;if(!store?.removeBinding?.(state.minimalMorph,state.randomOptions,state.randomLayerCount,paramId))return false;
+            syncOrangeGeneratorFlagsFromBindings();renderOrangeMorphBindings();renderOrangeMorphRoutingGroups();syncMorphRouteDecorations();syncOrangeMorphProfileDirtyUI();
+            if(runtimeState.minimalMorph?.active===true)activeRebaseMinimalMorphing?.();requestMainCanvasRender();return true;
+        }
+        window.SomataOrangeParameterRoutingUI=Object.freeze({state:orangeParameterRoutingState,setActive:setOrangeParameterRouteActive});
+
+        function replaceOrangeParameterBinding(oldId,newId){
+            if(oldId===newId)return false;const store=window.SomataOrangeMorphProfiles,def=window.SomataParameterRegistry?.get?.(newId)||window.SomataParameterMatrix?.get?.(newId);if(!store||!def)return false;
+            store.removeBinding?.(state.minimalMorph,state.randomOptions,state.randomLayerCount,oldId);
+            if(def.kind)setOrangeSpecialParameterEnabled(newId,true);else store.setBinding?.(state.minimalMorph,state.randomOptions,state.randomLayerCount,newId,true,defaultMorphBindingRange(def));
+            syncOrangeGeneratorFlagsFromBindings();syncRandomSettingsUI();renderOrangeMorphBindings();renderOrangeMorphRoutingGroups();syncMorphRouteDecorations();syncOrangeMorphProfileDirtyUI();if(runtimeState.minimalMorph?.active===true)activeRebaseMinimalMorphing?.();requestMainCanvasRender();return true;
+        }
+        function appendOrangePaletteSelector(parent){
+            const wrap=document.createElement('label');wrap.className='morph-route-inline-control morph-route-palette-select orange-route-palette-select';const t=document.createElement('span');t.textContent='Палитра';const select=document.createElement('select');for(const key of getActivePlaylistPaletteKeys()){const o=document.createElement('option');o.value=key;o.textContent=getPlaylistPaletteDisplayName(key);select.appendChild(o);}select.value=normalizePlaylistPaletteKey(state.randomOptions?.lineColorPalette,'standard');select.addEventListener('change',()=>{state.randomOptions.lineColorPalette=select.value;state.randomOptions.byColor=true;window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);syncRandomSettingsUI();syncOrangeMorphProfileDirtyUI();if(runtimeState.minimalMorph?.active===true)activeRebaseMinimalMorphing?.();requestMainCanvasRender();});wrap.append(t,select);parent.appendChild(wrap);return select;
+        }
+        // Orange has the same three Fill-colour widgets as Blue, with independent
+        // persisted Orange profile data (never changes state.morph.*).
+        function orangeFillOptions(){
+            const ro=state.randomOptions||(state.randomOptions={});
+            ro.fillHarmony=FILL_HARMONY_KEYS.has(ro.fillHarmony)?ro.fillHarmony:'native';
+            ro.fillLayersMin=Math.max(0,Math.min(1,Math.round(Number(ro.fillLayersMin)||0)));
+            ro.fillLayersMax=Math.max(ro.fillLayersMin,Math.min(1,Math.round(Number(ro.fillLayersMax??1))));
+            ro.orbitCount=Math.max(0,Math.min(19,Math.round(Number(ro.orbitCount)||0)));
+            // Presence of the editor is independent from its numerical value:
+            // an *added* orbit parameter may legitimately remain at 0.0.
+            ro.orbitBindingEnabled=ro.orbitBindingEnabled!==false;
+            const oldPercent=v=>Number(v)>0?Math.max(1,Math.min(100,Math.ceil(Number(v)*100/19))):100;
+            const clip=v=>Math.max(1,Math.min(100,Math.round(Number(v)||100)));
+            ro.orbitPercentMin=clip(ro.orbitPercentMin??oldPercent(ro.orbitCountMin??ro.orbitCount));
+            ro.orbitPercentMax=Math.max(ro.orbitPercentMin,clip(ro.orbitPercentMax??oldPercent(ro.orbitCountMax??ro.orbitCount)));
+            return ro;
+        }
+        const FILL_HARMONY_KEYS=new Set(['native','analogous','square','triadic','split','complement','all']);
+        function commitOrangeIndependentOption(key,value){
+            const ro=orangeFillOptions();ro[key]=value;orangeFillOptions();
+            window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,ro,state.randomLayerCount);
+            syncOrangeMorphProfileDirtyUI();
+            if(runtimeState.minimalMorph?.active===true)activeRebaseMinimalMorphing?.();
+            requestMainCanvasRender();
+        }
+        function appendOrangeFillLayersRange(parent){
+            const ro=orangeFillOptions();
+            const wrap=document.createElement('span');wrap.className='morph-route-inline-control morph-route-inline-range morph-route-dependent-range';
+            const caption=document.createElement('span');caption.textContent='Число залитых слоёв';wrap.appendChild(caption);
+            const lo=document.createElement('input'),hi=document.createElement('input'),sep=document.createElement('span');
+            sep.className='morph-route-inline-range-sep';sep.textContent='—';
+            const fillRange=window.SomataParameterMatrix.subcontrolDefinitions('layer.fillColor').find(x=>x.id==='layer.fillColor.fillLayers');
+            for(const [node,value,name] of [[lo,ro.fillLayersMin,'минимум'],[hi,ro.fillLayersMax,'максимум']]){
+                node.type='number';node.min=String(fillRange.min);node.max=String(fillRange.max);node.step=String(fillRange.step);node.className='morph-route-inline-number';node.value=String(value);
+                node.setAttribute('aria-label',`Число залитых слоёв: ${name}`);
+            }
+            const commit=()=>{
+                const a=Math.max(0,Math.min(1,Math.round(Number(lo.value)||0)));
+                const b=Math.max(0,Math.min(1,Math.round(Number(hi.value)||0)));
+                const min=Math.min(a,b),max=Math.max(a,b);lo.value=String(min);hi.value=String(max);
+                const options=orangeFillOptions();options.fillLayersMin=min;options.fillLayersMax=max;
+                commitOrangeIndependentOption('fillLayersMax',max);
+            };
+            lo.addEventListener('change',commit);hi.addEventListener('change',commit);wrap.append(lo,sep,hi);parent.appendChild(wrap);return wrap;
+        }
+        function appendOrangeFillHarmonySelector(parent){
+            const wrap=document.createElement('label');wrap.className='morph-route-inline-control morph-route-harmony-select';
+            const title=document.createElement('span');title.textContent='Гармония цвета заливки';
+            const sel=document.createElement('select');const source=document.getElementById('morphFillHarmonySelect');
+            for(const option of source?.options||[]){const o=document.createElement('option');o.value=option.value;o.textContent=option.textContent;sel.appendChild(o);}
+            sel.value=orangeFillOptions().fillHarmony;
+            sel.addEventListener('change',()=>commitOrangeIndependentOption('fillHarmony',sel.value));
+            wrap.append(title,sel);parent.appendChild(wrap);return sel;
+        }
+        function appendOrangeOrbitCountControl(host){
+            // Absent means removed from the Orange profile, not merely a zero-valued
+            // placeholder that reappears immediately after clicking ×.
+            if(!orangeSpecialParameterEnabled('geometry.orbits'))return;
+            const ro=orangeFillOptions(),enabled=true;
+            appendSharedMorphOrbitRow(host,'orange',enabled,[ro.orbitPercentMin,ro.orbitPercentMax],(a,b)=>{
+                const opts=orangeFillOptions();opts.orbitPercentMin=a;opts.orbitPercentMax=b;
+                commitOrangeIndependentOption('orbitPercentMax',b);
+                // Update group counts without closing the open parameter catalog.
+                renderOrangeMorphRoutingGroups();
+            },enabled=>setOrangeSpecialParameterEnabled('geometry.orbits',enabled));
+        }
+        // Orange uses the exact Blue compound-row vocabulary. Only data ownership differs:
+        // Orange controls permissions and ranges for generation, Blue interpolates a parameter.
+        function appendOrangeCompoundBindingControl(row,paramId,label=''){
+            const def=window.SomataParameterRegistry?.get?.(paramId);
+            if(!def||def.type==='boolean'||def.morph?.supported!==true||morphAlwaysOnMultiplier(paramId))return null;
+            const binding=getOrangeMorphBindings().find(b=>b.parameter===paramId),enabled=!!binding&&binding.enabled!==false;
+            const wrap=document.createElement('div');wrap.className='morph-route-compound-binding';wrap.dataset.childParameter=paramId;
+            const toggle=document.createElement('label');toggle.className='morph-route-compound-toggle';
+            const cb=document.createElement('input');cb.type='checkbox';cb.checked=enabled;
+            cb.title=`Включить / выключить «${label||def.label}» в профиле Orange`;
+            const text=document.createElement('span');text.textContent=label||MORPH_COMPOUND_CHILD_LABELS[paramId]||def.label;
+            toggle.append(cb,text);wrap.appendChild(toggle);
+            cb.addEventListener('change',()=>setOrangeParameterRouteActive(paramId,cb.checked));
+            if(enabled&&binding&&['number','integer','angle','multiplier'].includes(def.type)){
+                const range=document.createElement('span');range.className='morph-route-compound-range';
+                const caption=document.createElement('span');caption.className='morph-route-compound-caption';caption.textContent='Диапазон';range.appendChild(caption);
+                const lo=document.createElement('input'),hi=document.createElement('input');
+                for(const [el,key] of [[lo,'min'],[hi,'max']]){
+                    el.type='number';el.className='morph-route-inline-number morph-route-compound-number';
+                    el.step=String(window.SomataParameterMatrix?.stepFor?.(def)?.step||def.step||'any');if(Number.isFinite(Number(def.min)))el.min=String(def.min);
+                    if(Number.isFinite(Number(def.max)))el.max=String(def.max);
+                    el.value=Number.isFinite(Number(binding[key]))?String(binding[key]):'';
+                    el.setAttribute('aria-label',`${label||def.label}: ${key==='min'?'минимум':'максимум'}`);
+                }
+                const sep=document.createElement('span');sep.className='morph-route-inline-range-sep';sep.textContent='—';
+                const commit=()=>commitOrangeMorphBindingRange(def.id,lo,hi);
+                lo.addEventListener('change',commit);hi.addEventListener('change',commit);
+                range.append(lo,sep,hi);wrap.appendChild(range);
+            }
+            row.appendChild(wrap);return wrap;
+        }
+        function commitOrangeMorphBindingRange(paramId,lo,hi){
+            let a=Number(lo.value),b=Number(hi.value);if(!Number.isFinite(a)||!Number.isFinite(b))return;
+            if(a>b)[a,b]=[b,a];
+            if(window.SomataOrangeMorphProfiles?.setRange?.(state.minimalMorph,state.randomOptions,state.randomLayerCount,paramId,a,b)!==true)return;
+            lo.value=String(a);hi.value=String(b);syncOrangeMorphProfileDirtyUI();
+            if(runtimeState.minimalMorph?.active===true)activeRebaseMinimalMorphing?.();requestMainCanvasRender();
+        }
+        function appendOrangeBindingSpecificControls(row,def){
+            if(def.id==='layer.strokeColor'){
+                appendOrangePaletteSelector(row);
+                appendMorphInlineCheck(row,'randomCyclePalettes','Менять палитру каждый цикл','morph-route-compact-check');
+            }else if(def.id==='layer.fillColor'){
+                appendOrangePaletteSelector(row);
+                appendOrangeFillLayersRange(row);
+                appendOrangeFillHarmonySelector(row);
+            }
+            if(def.type==='enum'&&def.ui?.mainId){
+                // A real bound control, not an inert select whose value is lost on the next render.
+                appendMorphInlineSelect(row,def.ui.mainId,'Значение');
+            }
+            if(def.id==='spiral.step')appendOrangeCompoundBindingControl(row,'spiral.stepLinked','Приравнять шаг спирали к K');
+            if(def.id==='spiral.fillEnabled')appendOrangeCompoundBindingControl(row,'spiral.fillType','Настраивать тип заливки спирали');
+            for(const childId of morphCompoundChildren(def.id)){
+                if(morphAlwaysOnMultiplier(childId)){
+                    // Neutral authored multiplier shared by both Morph editors.
+                    appendMorphAlwaysOnMultiplierControl(row,childId,MORPH_COMPOUND_CHILD_LABELS[childId]||'');
+                }else appendOrangeCompoundBindingControl(row,childId,MORPH_COMPOUND_CHILD_LABELS[childId]||'');
+            }
+        }
+        function appendOrangeSpecialRow(host,kind){
+            const spec=window.SomataParameterMatrix?.special?.find(d=>d.kind===kind);if(!spec)return;
+            if(kind==='chaos'&&!orangeSpecialParameterEnabled(spec.id))return;
+            if(kind==='spiralLayers'&&!orangeSpecialParameterEnabled(spec.id))return;
+            if(kind==='shape'&&!orangeSpecialParameterEnabled(spec.id))return;
+            const row=document.createElement('div');row.className='audio-route-row morph-route-row morph-binding-row morph-special-config-row orange-route-row';row.dataset.orangeSpecial=kind;row.dataset.parameterId=spec.id;
+            const handle=document.createElement('span');handle.className='morph-route-drag-handle morph-route-drag-placeholder';handle.textContent='·';row.appendChild(handle);
+            const cb=document.createElement('input');cb.type='checkbox';cb.checked=true;cb.setAttribute('aria-label',spec.label);cb.addEventListener('change',()=>setOrangeSpecialParameterEnabled(spec.id,cb.checked));row.appendChild(cb);row.appendChild(createMorphRoutingGroupIcon(spec.group,true));
+            const label=document.createElement('div');label.className='morph-special-config-name';label.textContent=spec.label;row.appendChild(label);
+            const proxied=(id,value,isCheck=false)=>{const control=document.getElementById(id);if(!control)return;if(isCheck)control.checked=value===true;else control.value=String(value);control.dispatchEvent(new Event('change',{bubbles:true}));renderOrangeMorphRoutingGroups();};
+            if(kind==='shape'){
+                const select=document.createElement('label');select.className='morph-route-inline-control morph-route-inline-select';const text=document.createElement('span');text.textContent='Семейство формы';const input=document.createElement('select');const source=document.getElementById('minimalMorphFamily');for(const option of source?.options||[]){const o=document.createElement('option');o.value=option.value;o.textContent=option.textContent;input.appendChild(o);}input.value=source?.value||'mix';input.addEventListener('change',()=>proxied('minimalMorphFamily',input.value));select.append(text,input);row.appendChild(select);
+                const ids=[['minimalMorphProfileGroupStandard','Стандарт'],['minimalMorphProfileGroupClosed','Замкнутые'],['minimalMorphProfileGroupLoops','С петлями'],['minimalMorphProfileGroupOpen','Разомкнутые'],['minimalMorphProfileGroupMandala','Мандала']];
+                const details=document.createElement('details');details.className='morph-profile-group-dropdown morph-shape-route-profile-dropdown';const summary=document.createElement('summary');summary.textContent='Наборы профилей';details.appendChild(summary);const menu=document.createElement('div');menu.className='morph-profile-group-menu';for(const [id,name] of ids){const source=document.getElementById(id);const label=document.createElement('label');label.className='morph-profile-group-check';const cb=document.createElement('input');cb.type='checkbox';cb.checked=source?.checked===true;cb.addEventListener('change',()=>proxied(id,cb.checked,true));const t=document.createElement('span');t.textContent=name;label.append(cb,t);menu.appendChild(label);}details.appendChild(menu);row.appendChild(details);
+            }
+            if(kind==='spiralLayers'){
+                for(const [id,text] of [['randomSpiralLayersMin','От'],['randomSpiralLayersMax','До']]){
+                    const source=document.getElementById(id),wrap=document.createElement('label');wrap.className='morph-route-inline-control';const caption=document.createElement('span');caption.textContent=text;const input=document.createElement('input');input.type='number';input.className='morph-route-inline-number';input.min='0';input.max='8';input.step='1';input.value=source?.value||'0';input.addEventListener('change',()=>proxied(id,input.value));wrap.append(caption,input);row.appendChild(wrap);
+                }
+            }
+            if(kind==='chaos'){
+                for(const [key,label,max] of [['chaosStepSpread','Разброс шага ±',120],['chaosClosuresMax','Замыканий до',120]]){
+                    const wrap=document.createElement('label');wrap.className='morph-route-inline-control',span=document.createElement('span');span.textContent=label;const input=document.createElement('input');input.type='number';input.className='morph-route-inline-number';input.min='0';input.max=String(max);input.step='1';input.value=String(Math.max(0,Math.min(max,Number(state.randomOptions?.[key]??(key==='chaosStepSpread'?1:3))||0)));
+                    input.addEventListener('change',()=>{const value=Math.max(0,Math.min(max,Math.round(Number(input.value)||0)));input.value=String(value);state.randomOptions[key]=value;window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);syncOrangeMorphProfileDirtyUI();if(runtimeState.minimalMorph?.active)activeRebaseMinimalMorphing?.();});wrap.append(span,input);row.appendChild(wrap);
+                }
+            }
+            appendSpecialLayerCoverage(row,'orange',spec.id);
+            const remove=document.createElement('button');remove.type='button';remove.className='audio-route-remove morph-binding-remove';remove.textContent='×';remove.title='Отключить '+spec.label;remove.addEventListener('click',()=>setOrangeSpecialParameterEnabled(spec.id,false));row.appendChild(remove);host.appendChild(row);
+        }
+        function renderOrangeMorphBindings(){
+            const host=document.getElementById('orangeMorphBindings');if(!host)return;document.querySelectorAll('#audioViewportPopupPortal .audio-param-menu[data-orange-binding-menu="1"]').forEach(m=>m.remove());host.innerHTML='';appendOrangeSpecialRow(host,'shape');appendOrangeOrbitCountControl(host);appendOrangeSpecialRow(host,'chaos');appendOrangeSpecialRow(host,'spiralLayers');
+            const defs=new Map((window.SomataParameterRegistry?.sharedRoutingDefinitions?.()||[]).map(d=>[d.id,d]));
+            const bindings=getOrangeMorphBindings(),visibleIds=new Set(bindings.map(b=>b.parameter));
+            for(const binding of bindings){
+                const def=defs.get(binding.parameter);if(!def)continue;
+                const parentId=morphCompoundParentId(def.id);
+                if(parentId&&visibleIds.has(parentId))continue;
+                if(def.id==='spiral.stepLinked'&&visibleIds.has('spiral.step'))continue;
+                if(def.id==='spiral.fillType'&&visibleIds.has('spiral.fillEnabled'))continue;
+                const row=document.createElement('div');row.className='audio-route-row morph-route-row morph-binding-row orange-route-row'+(binding.enabled===false?' disabled':'');row.dataset.orangeParam=def.id;
+                const handle=document.createElement('span');handle.className='morph-route-drag-handle morph-route-drag-placeholder';handle.textContent='·';handle.title='Orange генерирует статичное состояние';row.appendChild(handle);
+                const cb=document.createElement('input');cb.type='checkbox';cb.checked=binding.enabled!==false;cb.title='Включить / выключить параметр в генерации Orange';cb.addEventListener('change',()=>setOrangeParameterRouteActive(def.id,cb.checked));row.appendChild(cb);
+                row.appendChild(createMorphRoutingGroupIcon(morphUiGroup(def),true));
+                const picker=document.createElement('div');picker.className='audio-param-picker morph-route-compact-picker orange-route-picker';const pickBtn=document.createElement('button');pickBtn.type='button';pickBtn.className='audio-param-picker-button';pickBtn.textContent=def.label;pickBtn.title=`${morphUiGroup(def)} › ${def.label}`;const menu=document.createElement('div');menu.className='audio-param-menu hidden';menu.dataset.orangeBindingMenu='1';pickBtn.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.audio-param-menu').forEach(m=>{if(m!==menu)m.classList.add('hidden')});menu.classList.toggle('hidden');if(!menu.classList.contains('hidden')){buildMorphParameterMenu(menu,def.id,nextId=>{if(nextId!==def.id)replaceOrangeParameterBinding(def.id,nextId);menu.classList.add('hidden');});positionViewportPopup(menu,pickBtn);}});picker.append(pickBtn,menu);row.appendChild(picker);
+                const numeric=['number','integer','angle','multiplier'].includes(def.type);
+                if(numeric){
+                    appendSharedMorphBindingRange(row,def,binding,(lo,hi)=>commitOrangeMorphBindingRange(def.id,lo,hi),key=>Number.isFinite(Number(binding[key]))?binding[key]:defaultMorphBindingRange(def)[key]);
+                }
+                appendMorphLayerCoverage(row,binding,percent=>{
+                  window.SomataOrangeMorphProfiles?.setCoverage?.(state.minimalMorph,state.randomOptions,state.randomLayerCount,def.id,percent);
+                  syncOrangeMorphProfileDirtyUI();
+                  if(runtimeState.minimalMorph?.active===true)activeRebaseMinimalMorphing?.();requestMainCanvasRender();
+                });
+                appendOrangeBindingSpecificControls(row,def);
+                const close=document.createElement('button');close.type='button';close.className='audio-route-remove morph-binding-remove';close.textContent='×';close.title='Убрать параметр из профиля Orange';close.addEventListener('click',()=>removeOrangeParameterBinding(def.id));row.appendChild(close);host.appendChild(row);
+            }
+            if(!host.children.length){const empty=document.createElement('div');empty.className='hint-text orange-routing-empty';empty.textContent='Связей нет. Добавьте параметр через группы выше или ПКМ по параметру слева.';host.appendChild(empty);}
+        }
+        function closeOrangeRoutingMenus(){document.querySelectorAll('.audio-route-group-menu[data-orange-routing-group-menu="1"]').forEach(m=>m.classList.add('hidden'));orangeMorphOpenGroup='';}
+        function orangeSpecialParameterEnabled(id){
+            const ro=state.randomOptions||{};
+            if(id==='geometry.orbits')return orangeFillOptions().orbitBindingEnabled!==false;
+            if(id==='geometry.shape')return ro.byShape===true;
+            if(id==='geometry.chaos')return ro.chaosStar===true;
+            if(id==='spiral.layers')return ro.bySpiralLayers===true;
+            return false;
+        }
+        function setOrangeSpecialParameterEnabled(id,on){
+            if(id==='geometry.orbits'){const ro=orangeFillOptions();ro.orbitBindingEnabled=on===true;}
+            else if(id==='geometry.shape')state.randomOptions.byShape=on===true;
+            else if(id==='geometry.chaos')state.randomOptions.chaosStar=on===true;
+            else if(id==='spiral.layers')state.randomOptions.bySpiralLayers=on===true;
+            else return false;
+            window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);
+            syncRandomSettingsUI();syncOrangeMorphProfileDirtyUI();renderOrangeMorphRoutingGroups();
+            // Rebuild the special rows *after* an add/remove. In particular × must
+            // physically remove the orbit row; re-adding restores its editor.
+            if(runtimeState.minimalMorph?.active)activeRebaseMinimalMorphing?.();requestMainCanvasRender();return true;
+        }
+        function renderOrangeMorphRoutingGroups(){
+            const host=document.getElementById('orangeMorphRoutingGroups');if(!host)return;document.querySelectorAll('#audioViewportPopupPortal .audio-route-group-menu[data-orange-routing-group-menu="1"]').forEach(m=>m.remove());host.innerHTML='';
+            const defs=window.SomataParameterMatrix.all(),groups=[];for(const d of defs){const g=morphUiGroup(d);if(g&&!groups.includes(g))groups.push(g);}
+            const activeBindings=getOrangeMorphBindings(),byId=new Map(activeBindings.map(b=>[b.parameter,b]));
+            for(const group of groups){
+                const groupDefs=defs.filter(d=>morphUiGroup(d)===group),added=groupDefs.filter(d=>d.kind?orangeSpecialParameterEnabled(d.id):byId.has(d.id)),activeCount=added.filter(d=>d.kind?orangeSpecialParameterEnabled(d.id):byId.get(d.id)?.enabled!==false).length;
+                const wrap=document.createElement('div');wrap.className='audio-route-group';const btn=document.createElement('button');btn.type='button';btn.className='audio-route-group-btn';btn.dataset.orangeGroup=group;if(added.length)btn.classList.add(activeCount?'morph-group-active':'morph-group-idle');
+                appendMorphGroupLabel(btn,group,true);btn.title=added.length?`${group}: ${activeCount}/${added.length} активно · ПКМ — переключить добавленные`:`${group}: выберите параметры`;
+                const menu=document.createElement('div');menu.className='audio-route-group-menu hidden';menu.dataset.orangeRoutingGroupMenu='1';menu.dataset.orangeGroup=group;
+                const renderMenu=()=>{menu.innerHTML='';for(const def of groupDefs){
+                    const special=!!def.kind;
+                    const st=special?{active:orangeSpecialParameterEnabled(def.id)}:orangeParameterRoutingState(def.id);
+                    const x=document.createElement('button');x.type='button';x.className='audio-param-option'+(st.active?' active':'');x.dataset.parameterId=def.id;x.textContent=`${st.active?'✓ ':''}${def.label}`;
+                    x.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();orangeMorphOpenGroup=group;if(special)setOrangeSpecialParameterEnabled(def.id,!st.active);else setOrangeParameterRouteActive(def.id,!st.active);});menu.appendChild(x);
+                }};
+                btn.addEventListener('click',e=>{e.stopPropagation();const open=orangeMorphOpenGroup!==group||menu.classList.contains('hidden');document.querySelectorAll('.audio-route-group-menu[data-orange-routing-group-menu="1"]').forEach(m=>{if(m!==menu)m.classList.add('hidden')});orangeMorphOpenGroup=open?group:'';menu.classList.toggle('hidden',!open);if(open){renderMenu();positionViewportPopup(menu,btn);}});
+                btn.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();if(!added.length)return;const on=activeCount===0;for(const def of added){if(def.kind)setOrangeSpecialParameterEnabled(def.id,on);else setOrangeParameterRouteActive(def.id,on);}});
+                wrap.append(btn,menu);host.appendChild(wrap);if(orangeMorphOpenGroup===group&&btn.isConnected){renderMenu();menu.classList.remove('hidden');positionViewportPopup(menu,btn);}
+            }
+            if(!document.documentElement.dataset.orangeRoutingOutsideBound){document.documentElement.dataset.orangeRoutingOutsideBound='1';document.addEventListener('pointerdown',e=>{const open=[...document.querySelectorAll('.audio-route-group-menu[data-orange-routing-group-menu="1"]:not(.hidden)')];if(!open.length||open.some(m=>m.contains(e.target))||e.target?.closest?.('#orangeMorphRoutingGroups .audio-route-group-btn'))return;closeOrangeRoutingMenus();},true);}
+            renderOrangeMorphBindings();
+        }
+        function syncOrangeMorphProfileUI(){
+            const store=window.SomataOrangeMorphProfiles;if(!store)return;const profiles=ensureOrangeMorphProfiles(),profile=getActiveOrangeMorphProfile(),select=document.getElementById('orangeMorphProfileSelect');if(select){const old=select.value;select.innerHTML='';for(const p of profiles){const o=document.createElement('option');o.value=p.id;o.textContent=morphProfileDisplayName(p);select.appendChild(o);}select.value=profile?.id||old||'orange-standard';}
+            const del=document.getElementById('btnDeleteOrangeMorphProfile'),ren=document.getElementById('btnRenameOrangeMorphProfile');if(del)del.disabled=profile?.system===true;if(ren)ren.disabled=profile?.system===true||profile?.transient===true;
+            const master=document.getElementById('btnOrangeMorphMasterMode');if(master){master.classList.add('active');master.setAttribute('aria-pressed','true');master.disabled=false;}
+            renderOrangeMorphRoutingGroups();syncOrangeMorphProfileDirtyUI();
+        }
+        function switchOrangeMorphProfile(id){
+            const store=window.SomataOrangeMorphProfiles;if(!store)return null;const wasRunning=runtimeState.minimalMorph?.active===true;
+            const p=store.select(state.minimalMorph,state.randomOptions,orangeProfileLayerCountHolder(),id);syncOrangeGeneratorFlagsFromBindings();syncRandomSettingsUI();syncOrangeMorphProfileUI();
+            if(wasRunning)activeRebaseMinimalMorphing?.();
+            requestMainCanvasRender();return p;
+        }
+        function saveCurrentOrangeMorphProfile(){
+            const store=window.SomataOrangeMorphProfiles,profile=getActiveOrangeMorphProfile();if(!store||!profile)return null;let name=null;
+            if(profile.transient===true){name=(window.prompt?.('Название профиля Orange','')||'').trim();if(!name)return null;}
+            const saved=store.save(state.minimalMorph,state.randomOptions,state.randomLayerCount,name);if(!saved)return null;syncOrangeMorphProfileUI();return saved;
+        }
+        async function createNewOrangeMorphProfile(){
+            const store=window.SomataOrangeMorphProfiles;if(!store)return null;const current=getActiveOrangeMorphProfile();
+            if(current?.transient===true){const action=await askTransientMorphProfileDecision('orange');if(action==='cancel')return null;if(action==='save'){if(!saveCurrentOrangeMorphProfile())return null;}else if(action==='discard'){store.remove(state.minimalMorph,state.randomOptions,orangeProfileLayerCountHolder(),current.id);}}
+            const was=runtimeState.minimalMorph?.active===true;if(was)activeStopMinimalMorphing(false);const created=store.create(state.minimalMorph,state.randomOptions,orangeProfileLayerCountHolder(),'');syncOrangeMorphProfileUI();if(was)activeStartMinimalMorphing(true);return created;
+        }
+        function installOrangeMorphHeaderLayout(){
+            const panel=document.getElementById('randomSettingsPanel');
+            if(!panel||panel.dataset.orangeHeaderReady==='1')return;
+            panel.dataset.orangeHeaderReady='1';panel.classList.add('orange-unified-header');
+            const toolbar=panel.querySelector('.orange-profile-toolbar');
+            const routing=panel.querySelector('.orange-routing-shell');
+            if(!toolbar||!routing)return;
+            toolbar.classList.add('audio-routing-preset-bar','morph-routing-preset-bar');
+            const defaultInput=document.getElementById('minimalMorphDefaultActive');
+            if(defaultInput){
+                const flag=document.createElement('label');flag.className='morph-profile-toolbar-check';
+                flag.title='Автоматически запускать оранжевый морфинг в проекте';
+                flag.append(defaultInput,document.createTextNode('По умолчанию'));
+                const flags=document.createElement('div');flags.className='morph-profile-toolbar-flags';flags.appendChild(flag);toolbar.appendChild(flags);
+            }
+            const timing=document.createElement('div');timing.id='orangeMorphHeaderTiming';timing.className='morph-speed-toolbar orange-header-timing';
+            const cycle=document.createElement('div');cycle.className='morph-setting-row interval-row morph-top-cycle-row orange-top-cycle-row';
+            const title=document.createElement('span');title.textContent='Период цикла';
+            const controls=document.createElement('span');controls.className='morph-cycle-controls';
+            const auto=document.getElementById('minimalMorphAutoBadge');if(auto)controls.appendChild(auto);
+            const multi=document.createElement('input');multi.id='minimalMorphIntervalMultiplier';multi.className='morph-interval';
+            multi.type='number';multi.min='0.015625';multi.max='64';multi.step='any';multi.value=String(state.minimalMorph?.intervalMultiplier||1);
+            multi.dataset.binaryMultiplier='1';multi.style.width='58px';multi.setAttribute('aria-label','Множитель периода Orange');
+            multi.title='Множитель периода Orange: ×2 или ÷2';controls.appendChild(multi);
+            const times=document.createElement('span');times.className='morph-multiplier-label';times.textContent='×';controls.appendChild(times);
+            const interval=document.getElementById('minimalMorphInterval');if(interval){interval.max='120';controls.appendChild(interval);}
+            const seconds=document.createElement('span');seconds.className='morph-sec';seconds.textContent='с';controls.appendChild(seconds);
+            for(const secondsValue of [1,2,3,5,8,15]){
+                const button=document.createElement('button');button.type='button';button.className='morph-quick-btn';
+                button.dataset.orangeInterval=String(secondsValue);button.textContent=secondsValue+'s';
+                button.addEventListener('click',()=>{
+                    state.tapTempo.syncMinimalMorph=false;state.minimalMorph.intervalSec=secondsValue;
+                    if(interval)interval.value=String(secondsValue);
+                    interval?.dispatchEvent(new Event('change',{bubbles:true}));syncTapTimingIndicators();
+                    if(runtimeState.minimalMorph?.active&&!runtimeState.minimalMorph.transitioning)
+                        runtimeState.minimalMorph.nextSwitchAt=performance.now()+getTapMorphIntervalSec(secondsValue,'minimal')*1000;
+                    window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);
+                    syncOrangeMorphProfileDirtyUI();
+                    document.querySelectorAll('[data-orange-interval]').forEach(b=>b.classList.toggle('active',Number(b.dataset.orangeInterval)===secondsValue));
+                });controls.appendChild(button);
+            }
+            cycle.append(title,controls);timing.appendChild(cycle);
+            const extras=document.createElement('div');extras.className='orange-header-basics';
+            for(const id of ['randomLayerCount','minimalMorphInstant','minimalMorphFade']){
+                const el=document.getElementById(id),row=el?.closest('.morph-setting-row');
+                if(row)extras.appendChild(row);
+            }
+            timing.appendChild(extras);toolbar.after(timing);
+            multi.addEventListener('input',()=>{
+                const v=Number(multi.value);state.minimalMorph.intervalMultiplier=Number.isFinite(v)?Math.max(0.015625,Math.min(64,v)):1;
+                if(runtimeState.minimalMorph?.active&&!runtimeState.minimalMorph.transitioning)
+                    runtimeState.minimalMorph.nextSwitchAt=performance.now()+getTapMorphIntervalSec(state.minimalMorph.intervalSec,'minimal')*1000;
+                window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);
+                syncOrangeMorphProfileDirtyUI();
+            });
+            multi.addEventListener('change',()=>{multi.value=formatDisplayNumber(getMorphIntervalMultiplier('minimal'),6);});
+            const old=panel.querySelector('.orange-fixed-settings');if(old)old.classList.add('orange-compat-hidden');
+            panel.querySelector('.morph-settings-note')?.classList.add('orange-compat-hidden');
+            const add=document.createElement('button');add.id='btnAddOrangeMorphParameter';add.type='button';
+            add.className='audio-routing-add';add.textContent='＋ Добавить связь';
+            const picker=document.createElement('div');picker.id='orangeMorphParameterPicker';
+            picker.className='audio-param-menu hidden';picker.dataset.orangeAddMenu='1';
+            // A portaled popup lives outside the Orange panel in the DOM. Keep its
+            // own option clicks from reaching the global close-on-outside handler.
+            picker.addEventListener('click',e=>e.stopPropagation());
+            picker.addEventListener('pointerdown',e=>e.stopPropagation());
+            add.addEventListener('click',e=>{
+                e.preventDefault();e.stopPropagation();picker.classList.toggle('hidden');
+                if(!picker.classList.contains('hidden')){
+                    buildMorphParameterMenu(picker,'',id=>{
+                        const def=window.SomataParameterMatrix?.get?.(id);if(!def)return;
+                        if(def.kind)setOrangeSpecialParameterEnabled(id,true);else setOrangeParameterRouteActive(id,true);
+                        picker.classList.add('hidden');
+                    });positionViewportPopup(picker,add);
+                }
+            });
+            routing.append(add,picker);
+        }
+
+        function setupOrangeMorphProfileUI(){
+            const store=window.SomataOrangeMorphProfiles,panel=document.getElementById('randomSettingsPanel');if(!store||!panel||panel.dataset.orangeProfilesReady==='1')return;panel.dataset.orangeProfilesReady='1';installOrangeMorphHeaderLayout();ensureOrangeMorphProfiles();markOrangeFixedRows();renderOrangeMorphRoutingGroups();
+            document.getElementById('orangeMorphProfileSelect')?.addEventListener('change',e=>switchOrangeMorphProfile(e.target.value));
+            document.getElementById('btnNewOrangeMorphProfile')?.addEventListener('click',()=>{createNewOrangeMorphProfile();});
+            document.getElementById('btnRenameOrangeMorphProfile')?.addEventListener('click',()=>{const p=getActiveOrangeMorphProfile();if(!p||p.system)return;const name=(window.prompt?.('Новое название профиля Orange',p.name)||'').trim();if(name&&store.rename(state.minimalMorph,state.randomOptions,state.randomLayerCount,p.id,name))syncOrangeMorphProfileUI();});
+            document.getElementById('btnDeleteOrangeMorphProfile')?.addEventListener('click',()=>{const p=getActiveOrangeMorphProfile();if(!p||p.system)return;if(window.confirm?.(`Удалить профиль «${p.name}»?`)===false)return;store.remove(state.minimalMorph,state.randomOptions,orangeProfileLayerCountHolder(),p.id);syncRandomSettingsUI();syncOrangeMorphProfileUI();});
+            document.getElementById('btnSaveOrangeMorphProfile')?.addEventListener('click',()=>{saveCurrentOrangeMorphProfile();});
+            document.getElementById('btnResetOrangeMorphProfile')?.addEventListener('click',()=>{if(store.isDirty(state.minimalMorph,state.randomOptions,state.randomLayerCount)!==true)return;store.reset(state.minimalMorph,state.randomOptions,orangeProfileLayerCountHolder());syncRandomSettingsUI();syncOrangeMorphProfileUI();if(runtimeState.minimalMorph?.active)activeRebaseMinimalMorphing?.();requestMainCanvasRender();});
+            const dirty=e=>{if(!e.target?.closest?.('#randomSettingsPanel'))return;if(e.target?.closest?.('.orange-profile-toolbar,.orange-routing-shell'))return;syncOrangeMorphProfileDirtyUI();};panel.addEventListener('input',dirty,false);panel.addEventListener('change',dirty,false);
+            syncOrangeMorphProfileUI();
         }
 
         function updateMorphShapeControlsEnabled() {
@@ -3462,6 +4702,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             syncMorphIntervalQuickButtons();
             syncTapTimingIndicators();
             syncBlueMorphParameterDecorations();
+            syncMorphProfileUI();
         }
 
         function syncMorphIntervalQuickButtons() {
@@ -3471,12 +4712,38 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             });
         }
 
+        function viewportPopupBelongsToPanel(target, panelId) {
+            const popup = target?.closest?.('.audio-param-menu,.audio-route-group-menu');
+            if (popup?._viewportOwnerPanelId === panelId) return true;
+            const trigger = popup?._viewportTrigger;
+            return !!trigger?.closest?.(`#${panelId}`);
+        }
+
+        function closeViewportPopupsForPanel(panelId) {
+            document.querySelectorAll('.audio-param-menu,.audio-route-group-menu').forEach((popup) => {
+                const trigger = popup?._viewportTrigger;
+                if (popup?._viewportOwnerPanelId === panelId || trigger?.closest?.(`#${panelId}`)) popup.classList.add('hidden');
+            });
+            if(panelId==='morphSettingsPanel')morphRoutingOpenGroup='';
+        }
+
+        function isMorphRoutingContextTarget(target) {
+            if (!target?.closest) return false;
+            if (target.closest('.blue-morph-parameter-name,[data-morph-routing-bound="1"],[data-morph-routing-label-bound="1"]')) return true;
+            const node=target.closest('[id]'),id=node?.id;if(!id)return false;
+            return (window.SomataParameterRegistry?.morphable?.()||[]).some(def=>def?.ui?.mainId===id);
+        }
+
         function toggleMorphSettingsPanel(forceOpen) {
             const panel = document.getElementById('morphSettingsPanel');
             if (!panel) return;
             const shouldOpen = forceOpen !== undefined ? forceOpen : panel.classList.contains('hidden');
             panel.classList.toggle('hidden', !shouldOpen);
-            if (!shouldOpen) panel.style.visibility = '';
+            if (!shouldOpen) {
+                panel.style.visibility = '';
+                closeViewportPopupsForPanel('morphSettingsPanel');
+                const rows=document.getElementById('morphProfileBindings');if(rows)rows.innerHTML='';
+            }
         }
 
         function bindEditableNumericDisplays() {
@@ -5519,11 +6786,27 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     return clamped >= total ? null : clamped;
                 }
 
-                const minPct = Math.max(0, Math.min(100, Math.round(Number(state.morph.orbitPercentMin) || 0)));
-                const maxPct = Math.max(minPct, Math.min(100, Math.round(Number(state.morph.orbitPercentMax) || 0)));
+                // Canonical 0..19 orbit count, independently persisted per Blue profile.
+                // Historical 0..100% presets continue using the legacy branch below.
+                if(state.morph.orbitCountMin!=null&&state.morph.orbitCountMax!=null){
+                    const schema=window.SomataParameterMatrix?.get?.('geometry.orbits');
+                    const cap=schema?.max||19;
+                    let lo=Math.max(0,Math.min(cap,Math.round(Number(state.morph.orbitCountMin)||0))),hi=Math.max(0,Math.min(cap,Math.round(Number(state.morph.orbitCountMax)||0)));
+                    if(lo>hi)[lo,hi]=[hi,lo];if(hi===0)return null;
+                    const next=Math.max(1,Math.min(total,randomInt(Math.max(1,lo),Math.max(1,hi))));
+                    return next>=total?null:next;
+                }
+                const originalMin=Math.max(0,Math.min(100,Math.round(Number(state.morph.orbitPercentMin)||0)));
+                const originalMax=Math.max(originalMin,Math.min(100,Math.round(Number(state.morph.orbitPercentMax)||0)));
+                // Historical [0,0] meant do not restrict orbital paths. New authored
+                // values are 1..100%; preserve the old factory scene at full count.
+                const minPct=originalMax===0?100:Math.max(1,originalMin);
+                const maxPct=originalMax===0?100:Math.max(minPct,originalMax);
 
-                const minCount = Math.max(1, Math.min(total, 1 + Math.round((minPct / 100) * (total - 1))));
-                const maxCount = Math.max(minCount, Math.min(total, 1 + Math.round((maxPct / 100) * (total - 1))));
+                // The percentage measures the *available* orbital paths of this
+                // particular polygon, rather than an absolute orbit count. Always ceil.
+                const minCount = Math.max(1, Math.min(total, Math.ceil((Math.max(1,minPct) / 100) * total)));
+                const maxCount = Math.max(minCount, Math.min(total, Math.ceil((Math.max(1,maxPct) / 100) * total)));
                 const sourceCount = getActiveOrbitCount(layer.N, layer.K, layer.customSuborbits);
                 const currentForTarget = Math.max(minCount, Math.min(maxCount, sourceCount));
                 const targetCount = state.morph.diversity
@@ -5532,11 +6815,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 return targetCount >= total ? null : targetCount;
             };
 
-            const getMorphSizeVariationFactor = () => {
-                const pct = Math.max(0, Math.min(100, Number(state.morph.sizeVariation ?? 50))) / 100;
-                const mult = Math.max(0, Math.min(10, Number(state.morph.sizeVariationMultiplier ?? 2)));
-                return pct * mult;
-            };
+            const getMorphSizeVariationFactor = () => 1;
 
             const chooseMorphSpiralLayerSet = (layers) => {
 
@@ -5594,7 +6873,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 let minPct = Math.max(0, Math.min(100, Number(state.morph.rotationMinPercent ?? 0)));
                 let maxPct = Math.max(0, Math.min(100, Number(state.morph.rotationMaxPercent ?? 50)));
                 if (minPct > maxPct) [minPct, maxPct] = [maxPct, minPct];
-                const mult = Math.max(0, Math.min(20, Number(state.morph.rotationMultiplier ?? 0.1)));
+                const mult = Math.max(0, Math.min(20, Number(state.morph.rotationMultiplier ?? 1)));
                 const pct = minPct + Math.random() * (maxPct - minPct);
                 let degrees = pct * 3.6 * mult;
                 if (state.morph.rotationRandomDirection !== false && Math.random() < 0.5) degrees *= -1;
@@ -6267,6 +7546,46 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 }));
 
                 runtimeState.morph.targetVisuals = buildMorphVisualTargets(state.layers);
+                {
+                  const ids=state.layers.map((l,i)=>l.id??i),src=runtimeState.morph.sourceVisuals,dst=runtimeState.morph.targetVisuals;
+                  const profile=window.SomataMorphParameterRouting?.activeProfile?.(state.morph,state.minimalMorph);
+                  const bindings=window.SomataMorphParameterRouting?.workingBindings?.(state.morph,state.minimalMorph,profile)||[];
+                  const fields={
+                    'geometry.N':['N'],'geometry.K':['K'],'layer.radius':['radius'],
+                    'layer.rotation':['rotation'],'layer.rounding':['rounding'],
+                    'layer.strokeWidth':['strokeWidth'],'layer.opacity':['opacity'],
+                    'layer.strokeColor':['strokeColor'],'layer.fillColor':['fill','fillHueOffset','fillColor'],
+                    'layer.fillOpacity':['fillOpacity']
+                  };
+                  for(const b of bindings){
+                    if(b.enabled===false||!fields[b.parameter]||window.SomataParameterCoverage.percent(b)===100)continue;
+                    const affected=window.SomataParameterCoverage.select(b,ids);
+                    for(let i=0;i<dst.length;i++)if(!affected.has(ids[i]))
+                      for(const key of fields[b.parameter])dst[i][key]=src[i][key];
+                  }
+                  const specials={
+                    'geometry.orbits':['customSuborbits'],
+                    'geometry.chaos':['chaosStar','chaosStepMinus','chaosStepPlus','chaosClosures','chaosSeed'],
+                    'spiral.layers':['spiralEnabled','spiralOrder','spiralStep','spiralStepLinked','spiralClosed','spiralTangential','spiralRoundSeams']
+                  };
+                  for(const [id,keys] of Object.entries(specials)){
+                    const p=morphSpecialLayerCoverage(state.morph,id);if(p===100)continue;
+                    const affected=window.SomataParameterCoverage.select({layerPercent:p},ids);
+                    for(let i=0;i<dst.length;i++)if(!affected.has(ids[i]))
+                      for(const key of keys)dst[i][key]=src[i][key];
+                  }
+                  const shapePct=morphSpecialLayerCoverage(state.morph,'geometry.shape');
+                  if(shapePct<100){
+                    const affected=window.SomataParameterCoverage.select({layerPercent:shapePct},ids);
+                    for(let i=0;i<dst.length;i++)if(!affected.has(ids[i])){
+                      const layer=state.layers[i],v=dst[i],origin=runtimeState.morph.sourceProfiles?.[i];
+                      v.mode=origin?.mode||layer.profileMode||'segments';
+                      v.nodes=(origin?.nodes||layer.profileNodes||[]).map(x=>({...x}));
+                      v.rawNodes=(origin?.rawNodes||layer.profileNodes||[]).map(x=>({...x}));
+                      v.closedLoop=layer.closedLoop!==false;
+                    }
+                  }
+                }
 
                 if(getSpiralMorphType()==='continuous'&&state.morph.mode!=='fade'){
                     for(let i=0;i<runtimeState.morph.targetVisuals.length;i++){
@@ -7414,13 +8733,69 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 return true;
             };
 
+            // Orange replaces the authored composition with fresh layer IDs. Audio Link
+            // is intentionally keyed by authored layer ID, not by a transient Morph
+            // carrier. Transfer those user-authored links by slot *before* replacing
+            // state.layers, otherwise ensureAudioRoutingState() prunes the old IDs.
+            // Master routes and independent routing settings remain untouched.
+            const preserveOrangeAudioRoutes = (sourceLayers, targetLayers) => {
+                const ar=state.audioReactive;
+                if(!ar?.routingInitialized || !ar.routes?.layers || !Array.isArray(sourceLayers) || !Array.isArray(targetLayers))return;
+                const current=ar.routes.layers, enabled=ar.layerSignalEnabled||{};
+                const nextRoutes={}, nextEnabled={};
+                let nextTarget=ar.routingTarget||'master';
+                for(let i=0;i<targetLayers.length;i++){
+                    const fromId=sourceLayers[i]?.id, toId=targetLayers[i]?.id;
+                    if(!toId)continue;
+                    if(fromId && Array.isArray(current[fromId])){
+                        nextRoutes[toId]=current[fromId].map(route=>({...route}));
+                    }else if(Array.isArray(current[toId])){
+                        nextRoutes[toId]=current[toId].map(route=>({...route}));
+                    }
+                    if(fromId && Object.prototype.hasOwnProperty.call(enabled,fromId))nextEnabled[toId]=enabled[fromId];
+                    else if(Object.prototype.hasOwnProperty.call(enabled,toId))nextEnabled[toId]=enabled[toId];
+                    if(fromId && nextTarget===fromId)nextTarget=toId;
+                }
+                ar.routes.layers=nextRoutes;
+                ar.layerSignalEnabled=nextEnabled;
+                ar.routingTarget=nextTarget;
+            };
+
+            // Orange regenerates authored geometries, not the user's visibility intent.
+            // Match composition slots rather than IDs (new Orange layers have new IDs).
+            // This is deliberately limited to layer/Line visibility: generated Fill,
+            // Web and Lamp recipes retain their authored design unless the user
+            // explicitly changed their effect override.
+            const preserveOrangeLayerVisibility = (sourceLayers, targetLayers) => {
+                if(!Array.isArray(sourceLayers)||!sourceLayers.length||!Array.isArray(targetLayers))return targetLayers;
+                for(let i=0;i<targetLayers.length;i++){
+                    const target=targetLayers[i];
+                    const source=sourceLayers[i]||sourceLayers[i%sourceLayers.length];
+                    if(!target||!source)continue;
+                    target.lineVisible=source.lineVisible!==false;
+                    target.visible=source.visible!==false;
+                }
+                return targetLayers;
+            };
+            const carryOrangeLineToggleMemory = (sourceLayers,targetLayers) => {
+                const old=state.sidebarFeatureToggleMemory;
+                const lines=old?.lines;
+                if(!lines?.armed || !Array.isArray(lines.layerIds))return null;
+                const active=new Set(lines.layerIds);
+                return {armed:true,layerIds:targetLayers.filter((layer,i)=>layer&&active.has(sourceLayers[i]?.id)).map(layer=>layer.id)};
+            };
+
             const commitMinimalMorphTarget = () => {
                 const mm = state.minimalMorph, mmRt = runtimeState.minimalMorph;
                 if (!mmRt.targetLayers?.length) return;
 
+                window.__somataApplyOrangeGlobalTargets?.(mmRt.targetLayers.__somataOrangeGlobalTargets);
+                preserveOrangeLayerVisibility(state.layers,mmRt.targetLayers);
+                const orangeLineMemory=carryOrangeLineToggleMemory(state.layers,mmRt.targetLayers);
+                preserveOrangeAudioRoutes(state.layers,mmRt.targetLayers);
                 state.layers = mmRt.targetLayers.slice();
                 state.activeLayerId = state.layers[0]?.id || null;
-                state.sidebarFeatureToggleMemory = {};
+                state.sidebarFeatureToggleMemory = orangeLineMemory?{lines:orangeLineMemory}:{};
                 document.getElementById('presetSelect').value = '';
 
                 animationScheduler.afterNextPaint('minimal-morph-ui-sync', () => {
@@ -7439,8 +8814,45 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 'graffitiSizeVariation','graffitiSizeFocus','graffitiRotationVariationEnabled',
                 'graffitiRotationVariation','graffitiRotationMultiplier','graffitiRotationFocus','graffitiBaseStrokeWidth'
             ];
+            function enforceOrangeLampAdaptiveBrightness(layers){
+                for(const layer of (Array.isArray(layers)?layers:[])){if(!layer)return;ensureLayerEffectState(layer);if(!getLayerLampsEnabled(layer))continue;const lamps=ensureLayerLampState(layer);lamps.adaptiveBrightness=true;lamps.adaptiveAdjustBrightness=true;lamps.adaptiveStrength=Math.max(80,Number(lamps.adaptiveStrength)||100);}
+                return layers;
+            }
+            function applyOrangeFeatureOverrides(layers){
+                const overrides=state.minimalMorph?.featureOverrides;if(!overrides||typeof overrides!=='object')return layers;
+                for(const layer of (Array.isArray(layers)?layers:[])){if(!layer)continue;ensureLayerEffectState(layer);
+                    for(const [mode,on] of Object.entries(overrides)){
+                        if(typeof on!=='boolean')continue;
+                        // Line style is stored per authored layer. Never let an old global
+                        // sidebar toggle turn a one-layer Graffiti choice into Point (or vice versa).
+                        if(mode==='graffiti')continue;
+                        if(['lamps','web','glint','lightning','particles'].includes(mode))setSidebarFeatureEnabled(mode,layer,on);
+                    }
+                }
+                return layers;
+            }
             const preserveMinimalMorphEffects = (targetLayers, sourceLayers = state.layers) => {
                 if(!Array.isArray(targetLayers)||!targetLayers.length)return targetLayers;
+                const curatedStatic=String(state.minimalMorph?.generatorStyle||'standard')!=='standard';
+                // Preserve the user's per-slot choice of Line/Graffiti across new Orange IDs.
+                // The Orange generator changes geometry, not the authored appearance mode.
+                const sourceSlots=Array.isArray(sourceLayers)&&sourceLayers.length?sourceLayers:state.layers;
+                targetLayers.forEach((target,i)=>{
+                    const source=sourceSlots[i];if(!target||!source)return;
+                    target.lineProfileApplication=source.lineProfileApplication==='graffiti'?'graffiti':'stroke';
+                    if(target.lineProfileApplication==='graffiti'){
+                        for(const key of MINIMAL_GRAFFITI_KEYS){
+                            if(Object.prototype.hasOwnProperty.call(source,key))target[key]=cloneEffectConfig(source[key]);
+                        }
+                    }
+                });
+                if(curatedStatic){
+                    // Curated Orange 7.11.1 presets own the complete generated composition.
+                    // Do not inherit animated effects from the previous scene; keep only the
+                    // static Web/Lamps authored by the recipe itself.
+                    targetLayers.forEach(layer=>{if(!layer)return;ensureLayerEffectState(layer);if(layer.motionRotation)layer.motionRotation.enabled=false;if(layer.lineMotionFx){layer.lineMotionFx.enabled=false;layer.lineMotionFx.speedPercent=0;}if(layer.sprite){layer.sprite.enabled=false;layer.sprite.speedPercent=0;}if(layer.particles){layer.particles.enabled=false;layer.particles.speedPercent=0;}if(layer.sweep){layer.sweep.enabled=false;layer.sweep.glintEnabled=false;layer.sweep.lightningEnabled=false;}if(layer.web)layer.web.oscillating=false;if(layer.lamps){layer.lamps.freezeLight=false;layer.lamps.freezeRain=false;}});
+                    enforceOrangeLampAdaptiveBrightness(targetLayers);applyOrangeFeatureOverrides(targetLayers);return targetLayers;
+                }
                 const sources=Array.isArray(sourceLayers)&&sourceLayers.length?sourceLayers:state.layers;
                 const fallbackSource=sources[0]||null;
                 targetLayers.forEach((layer,idx)=>{
@@ -7458,8 +8870,13 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     }
                     effectStateReadyLayers.delete(layer);
                     ensureLayerEffectState(layer);
+                    // Routing is authoritative for an explicitly added Orange parameter.
+                    // Restore its *same random sample* after copying effect state from source.
+                    for(const [path,value] of layer.__somataOrangeSampledEffects||[]){
+                        window.SomataParameterRegistry?.applyPath?.(layer,path,cloneEffectConfig(value));
+                    }
                 });
-                return targetLayers;
+                enforceOrangeLampAdaptiveBrightness(targetLayers);applyOrangeFeatureOverrides(targetLayers);return targetLayers;
             };
 
             const prepareMinimalMorphLampPointCache = (layers, drawData) => {
@@ -7492,16 +8909,16 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 captureMorphOrigin(mmRt);
 
                 const liveSourceLayers = state.layers;
-                const targetLayers = preserveMinimalMorphEffects(
+                const targetLayers = preserveOrangeLayerVisibility(liveSourceLayers,preserveMinimalMorphEffects(
                     createOrangeComposition(state.randomLayerCount, state.minimalMorph?.mode),
                     liveSourceLayers
-                );
+                ));
 
                 mmRt.fadeStart = now;
                 mmRt.progress = 0;
                 mmRt.nextSwitchAt = isTapMorphSyncActive('minimal')
                     ? getNextTapBoundary(now, 'minimal')
-                    : now + Math.max(0.5, mm.intervalSec) * 1000;
+                    : now + getTapMorphIntervalSec(mm.intervalSec, 'minimal') * 1000;
 
                 if (mm.instantSwitch) {
 
@@ -7548,6 +8965,10 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 mmRt.raf = 0;
 
                 if (mmRt.transitioning) {
+                    // Visibility switches during a Fade must affect both live carriers,
+                    // not only the next committed authored composition.
+                    preserveOrangeLayerVisibility(state.layers,mmRt.sourceLayers);
+                    preserveOrangeLayerVisibility(state.layers,mmRt.targetLayers);
                     const fadeMs = Math.max(100, mm.fadeSec * 1000);
                     const linear = Math.max(0, Math.min(1, (now - mmRt.fadeStart) / fadeMs));
 
@@ -7605,7 +9026,15 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 btn?.setAttribute('aria-pressed', 'false');
                 btn?.setAttribute('aria-label', 'Включить слайдшоу');
                 btn && (btn.title = 'Слайдшоу');
-                if (restoreOrigin) restoreMorphOrigin(mmRt);
+                if (restoreOrigin) {
+                    // restoreMorphOrigin() refreshes the UI and can prune unknown Audio
+                    // layer IDs, so rebind to the restored IDs *before* that refresh.
+                    preserveOrangeLayerVisibility(state.layers,mmRt.originLayers);
+                    const restoredLineMemory=carryOrangeLineToggleMemory(state.layers,mmRt.originLayers);
+                    preserveOrangeAudioRoutes(state.layers,mmRt.originLayers);
+                    restoreMorphOrigin(mmRt);
+                    if(restoredLineMemory)state.sidebarFeatureToggleMemory={...state.sidebarFeatureToggleMemory,lines:restoredLineMemory};
+                }
                 clearMorphOrigin(mmRt);
                 if (runtimeState.morph.active && runtimeState.morph.pausedByOrangeProject === true) {
                     rebaseFullMorphAfterOrangeSwitch();
@@ -7688,8 +9117,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             };
 
             const toggleMinimalMorphing = () => {
-                if (runtimeState.minimalMorph.active) stopMinimalMorphing(!runtimeState.morph.active);
+                // Instant: keep the current generated composition. Fade: state.layers
+                // is the last fully committed composition until a transition completes;
+                // stopping mid-fade discards the unfinished target, not the entire session.
+                if (runtimeState.minimalMorph.active) stopMinimalMorphing(false);
                 else startMinimalMorphing(true);
+                syncMorphProfileUI?.();
             };
 
             const blueMorphOwnerGuard = () => {
@@ -7931,7 +9364,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     return true;
                 };
                 if (!pauseOnSpace) {
-                    if (runtimeState.minimalMorph.active) return stopMinimalMorphing(true);
+                    if (runtimeState.minimalMorph.active) return stopMinimalMorphing(false);
                     if (runtimeState.morph.active) return stopMorphing(false);
                     return startPreferredMorph();
                 }
@@ -7950,10 +9383,11 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 // to the last Morph paint (including N/K/profile/spiral/chaos visual fields).
                 if (runtimeState.morph.active) stopMorphing(false);
                 else startMorphing();
+                syncMorphProfileUI?.();
             };
 
             return Object.freeze({
-                prepareMorphCycle, applyFillMorphFrame, commitLightMorphTransient, getMorphLongPeriodDetailScale, getLightMorphGeometryIntervalMs, updateLightMorphKeyframe, rebaseMorphCycle, animateMorph, cloneMorphOriginLayers, captureMorphOrigin, restoreMorphOrigin, clearMorphOrigin, stopMorphing, syncMinimalMorphTimingFromUI, commitMinimalMorphTarget, beginMinimalMorphTransition, minimalMorphFrame, stopMinimalMorphing, startMinimalMorphing, toggleMinimalMorphing, startMorphing, pauseMorphPlayback, resumeMorphPlayback, toggleMorphPlaybackBySpace, toggleMorphing
+                prepareMorphCycle, applyFillMorphFrame, commitLightMorphTransient, getMorphLongPeriodDetailScale, getLightMorphGeometryIntervalMs, updateLightMorphKeyframe, rebaseMorphCycle, animateMorph, cloneMorphOriginLayers, captureMorphOrigin, restoreMorphOrigin, clearMorphOrigin, stopMorphing, syncMinimalMorphTimingFromUI, preserveOrangeAudioRoutes, preserveOrangeLayerVisibility, commitMinimalMorphTarget, beginMinimalMorphTransition, minimalMorphFrame, stopMinimalMorphing, startMinimalMorphing, toggleMinimalMorphing, startMorphing, pauseMorphPlayback, resumeMorphPlayback, toggleMorphPlaybackBySpace, toggleMorphing
             });
         }
 
@@ -8659,15 +10093,10 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 const raw=(getPlaylistPaletteColors(paletteKey)||[]).filter(Boolean);
                 const unique=[];const seen=new Set();
                 for(const c of raw){const key=String(c).toLowerCase();if(seen.has(key))continue;seen.add(key);unique.push(c);}
-                const out=shuffle(unique).slice(0,Math.max(0,count));
-                let seedIndex=0;
-                while(out.length<count){
-                    const base=unique.length?unique[seedIndex%unique.length]:'#ffffff';seedIndex++;
-                    const rgb=hexToRgb(base),hsl=rgbToHsl(rgb.r,rgb.g,rgb.b);
-                    const h=(hsl.h+.137*seedIndex)%1,l=Math.max(.34,Math.min(.76,hsl.l+(seedIndex%2?.06:-.04)));
-                    const c=hslToHex(h,Math.max(.45,hsl.s),l),key=String(c).toLowerCase();if(seen.has(key))continue;seen.add(key);out.push(c);
-                }
-                return out;
+                // Fixed palette semantics: never fabricate hues when a composition
+                // has more layers than colours. Reuse palette entries in original order.
+                const palette=unique.length?unique:['#ffffff'];
+                return Array.from({length:Math.max(0,count)},(_,i)=>palette[i%palette.length]);
             };
 
             const makeRandomCandidate = (requestedCount = state.randomLayerCount || 3, profileGroups = normalizedOrangeMorphProfileGroups(), family = normalizeOrangeMorphFamily()) => {
@@ -8832,16 +10261,280 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 return layers;
             };
 
+            function orangeSampleBindingValue(def,binding){
+                if(!def||!binding)return undefined;
+                if(def.type==='enum'){
+                    const values=Array.isArray(def.values)?def.values:[];
+                    return values.length?values[Math.floor(Math.random()*values.length)]:undefined;
+                }
+                if(def.type==='color')return undefined;
+                let lo=Number(binding.min),hi=Number(binding.max);
+                if(!Number.isFinite(lo))lo=Number(def.min);if(!Number.isFinite(hi))hi=Number(def.max);
+                if(!Number.isFinite(lo)||!Number.isFinite(hi))return undefined;if(lo>hi)[lo,hi]=[hi,lo];
+                let v=lo+Math.random()*(hi-lo);
+                const stepInfo=window.SomataParameterMatrix?.stepFor?.(def);
+                if(def.type==='integer')v=Math.round(v);
+                else if(stepInfo?.mode==='linear'&&stepInfo.step>=1){
+                    // Percentage controls generate whole percentage points as well
+                    // as stepping by one in the three shared editors.
+                    v=Math.max(lo,Math.min(hi,Math.round(v/stepInfo.step)*stepInfo.step));
+                }
+                return v;
+            }
+            function orangeLayerParameterValue(layer,def){
+                if(!layer||!def)return undefined;
+                if(def.id==='layer.fillOpacity')return getFillOpacityPercent(layer.fillColor);
+                return window.SomataParameterRegistry?.valueAt?.(layer,def.morph?.framePath);
+            }
+            function setOrangeLayerParameterValue(layer,def,value){
+                if(!layer||!def)return false;
+                if(def.id==='layer.fillOpacity'){
+                    if(!Number.isFinite(Number(value)))return false;
+                    layer.fillOpacity=Math.max(0,Math.min(100,Number(value)));
+                    layer.fillColor=colorWithPercentAlpha(layer.fillColor||layer.strokeColor||'#ffffff',layer.fillOpacity);
+                    return true;
+                }
+                if(def.id==='geometry.N')value=Math.max(2,Math.round(Number(value)||2));
+                else if(def.id==='geometry.K')value=Math.max(0,Math.round(Number(value)||0));
+                const path=def.morph?.framePath;if(!path)return false;
+                window.SomataParameterRegistry?.applyPath?.(layer,path,cloneEffectConfig(value));
+                return true;
+            }
+            function orangeGlobalParameterValue(def){
+                if(!def)return undefined;
+                if(def.id==='tunnel.speed')return Math.max(-100,Math.min(100,(Number(state.tunnel?.speedStrength)||0)*100));
+                if(def.id==='tunnel.spacing')return Math.max(20,Math.min(2000,(Number(state.tunnel?.spacingStrength)||3)*100));
+                if(def.id==='tunnel.colorShift')return Math.max(0,Math.min(360,Number(state.tunnel?.colorShiftDegrees)||0));
+                if(def.id==='tunnel.vignette')return Math.max(0,Math.min(1200,Number(state.tunnel?.vignetteAmount)||0));
+                if(def.id==='palette.hueOffset')return Number(state.playlistPaletteHueOffset)||0;
+                return undefined;
+            }
+            function applyOrangeGlobalTargets(targets){
+                if(!targets||typeof targets!=='object')return false;let changed=false;
+                for(const [id,raw] of Object.entries(targets)){
+                    const value=Number(raw);if(!Number.isFinite(value))continue;
+                    if(id==='tunnel.speed'){state.tunnel.speedStrength=Math.max(-1,Math.min(1,value/100));changed=true;}
+                    else if(id==='tunnel.spacing'){state.tunnel.spacingStrength=Math.max(.2,Math.min(20,value/100));changed=true;}
+                    else if(id==='tunnel.colorShift'){state.tunnel.colorShiftDegrees=Math.max(0,Math.min(360,value));changed=true;}
+                    else if(id==='tunnel.vignette'){state.tunnel.vignetteAmount=Math.max(0,Math.min(1200,value));changed=true;}
+                    else if(id==='palette.hueOffset'){state.playlistPaletteHueOffset=normalizePlaylistHueOffset(value);changed=true;}
+                }
+                if(changed){syncPlaylistPaletteHueOffsetUI?.();syncTunnelSettingsUI?.();}
+                return changed;
+            }
+            window.__somataApplyOrangeGlobalTargets=applyOrangeGlobalTargets;
+            function applyOrangeRoutingBindingsToComposition(layers,sourceLayers=state.layers){
+                if(!Array.isArray(layers)||!layers.length)return layers||[];
+                const defs=window.SomataParameterRegistry?.sharedRoutingDefinitions?.()||[];
+                const active=new Map(getOrangeMorphBindings().filter(b=>b?.enabled!==false).map(b=>[b.parameter,b]));
+                const layerIds=layers.map((l,i)=>i),coverage=new Map(),allLayers=new Set(layerIds);
+                for(const [id,b] of active)coverage.set(id,
+                    window.SomataParameterCoverage.percent(b)===100?allLayers:window.SomataParameterCoverage.select(b,layerIds));
+                const curated=String(state.minimalMorph?.generatorStyle||'standard')!=='standard';
+                const sources=Array.isArray(sourceLayers)&&sourceLayers.length?sourceLayers:[];
+                const specialCoverage=new Map();
+                for(const id of ['geometry.shape','geometry.orbits','geometry.chaos','spiral.layers']){
+                  const percent=morphSpecialLayerCoverage(state.randomOptions,id);
+                  specialCoverage.set(id,percent===100?allLayers:window.SomataParameterCoverage.select({layerPercent:percent},layerIds));
+                }
+                Object.defineProperty(layers,'__somataCoverage',{value:{coverage,specialCoverage},configurable:true});
+                for(let i=0;i<layers.length;i++){
+                    const layer=layers[i],src=sources[i%sources.length]||sources[0]||null;if(!layer)continue;ensureLayerEffectState(layer);if(src)ensureLayerEffectState(src);
+                    for(const def of defs){
+                        if(def?.morph?.frameTarget==='global'||!def?.morph?.framePath)continue;
+                        const b=active.get(def.id);
+                        if(b&&coverage.get(def.id)?.has(i)){
+                            if(def.type==='color')continue;
+                            const v=orangeSampleBindingValue(def,b);
+                            if(v!==undefined){
+                                setOrangeLayerParameterValue(layer,def,v);
+                                // Preserve the actual sampled value, not just the route flag:
+                                // the later Effect-inheritance pass may replace lamps/web/sweep
+                                // object graphs with the preceding generation's objects.
+                                const path=def.morph?.framePath||'';
+                                if(/^(lamps|web|sweep|lineMotionFx|sprite|particles)\./.test(path)||/^graffiti/.test(path)){
+                                    let sampled=layer.__somataOrangeSampledEffects;
+                                    if(!sampled){
+                                        sampled=[];
+                                        Object.defineProperty(layer,'__somataOrangeSampledEffects',{value:sampled,configurable:true});
+                                    }
+                                    sampled.push([path,cloneEffectConfig(v)]);
+                                }
+                            }
+                        }else if(src&&(!curated||b)){
+                            const prior=orangeLayerParameterValue(src,def);if(prior!==undefined)setOrangeLayerParameterValue(layer,def,prior);
+                        }
+                    }
+                    if(Number.isFinite(Number(layer.N))&&Number.isFinite(Number(layer.K)))layer.K=Math.max(0,Math.min(Math.max(1,Math.round(layer.N)-1),Math.round(layer.K)));
+                }
+                const globals={};
+                for(const def of defs){if(def?.morph?.frameTarget!=='global')continue;const b=active.get(def.id);if(!b)continue;const v=orangeSampleBindingValue(def,b);if(Number.isFinite(Number(v)))globals[def.id]=Number(v);}
+                try{Object.defineProperty(layers,'__somataOrangeGlobalTargets',{value:globals,writable:true,configurable:true,enumerable:false});}catch(_){layers.__somataOrangeGlobalTargets=globals;}
+                return layers;
+            }
+
+            const ORANGE_STATIC_STYLE_RECIPES=Object.freeze({
+                solarRosette:Object.freeze({profiles:['md_lotus','md_petal','md_double_lotus','md_wave','md_drop'],n:[12,16,18,20,24],ratios:[1,.82,.65,.49,.34,.23],rounding:[8,12,16,20],stroke:[1.7,1.5,1.3,1.1,.95],glow:[12,10,8,7,6],fillPattern:[false,false,false,false,false],rotationMode:'halfSector',lampMode:'innerOuter'}),
+                stainedGlass:Object.freeze({profiles:['cl_halo','cl_petal','cl_diamond','cl_frame','cl_softwave','cl_crown'],n:[6,8,10,12,14],ratios:[1,.78,.58,.40,.26],rounding:[6,10,14,18,22],stroke:[2.2,1.8,1.5,1.25,1.05],glow:[5,4,3,3,2],fillPattern:[true,true,true,true,true],fillOpacity:[15,22,28,24,18],rotationMode:'offset'}),
+                lace:Object.freeze({profiles:['lp_ribbon','lp_doublepetal','lp_eight','lp_curl','cl_doublepetal','md_knot'],n:[14,16,18,20,24],ratios:[1,.83,.68,.53,.39,.28],rounding:[12,16,20,24,28],stroke:[1.15,1,.9,.8,.7,.65],glow:[7,6,5,4,4,3],fillPattern:[false,false,false,false,false,false],rotationMode:'lace',webMode:'lace'}),
+                crystalCathedral:Object.freeze({profiles:['md_diamond','cl_diamond','md_crown','cl_triknot','triangle','cl_crown'],n:[8,10,12,14,16,18],ratios:[1,.80,.61,.43,.28],rounding:[0],stroke:[2.4,1.8,1.45,1.15,.95],glow:[14,10,8,6,5],fillPattern:[false,false,true,false,false],fillOpacity:[0,0,12,0,0],rotationMode:'facet',lampMode:'corners'}),
+                spiralHerbarium:Object.freeze({profiles:['md_petal','lp_teardrop','md_lotus','lp_ribbon','cl_petal','md_drop'],n:[7,9,11,13,15,18],ratios:[1,.81,.64,.49,.35,.24],rounding:[14,18,22,28,34],stroke:[1.7,1.45,1.2,1,.85,.75],glow:[9,8,7,6,5,4],fillPattern:[false,true,false,true,false,true],fillOpacity:[0,11,0,9,0,7],rotationMode:'botanical',spiralMode:'alternating'})
+            });
+            const orangeStaticAlphaHex=pct=>Math.round(Math.max(0,Math.min(100,Number(pct)||0))*2.55).toString(16).padStart(2,'0');
+            const forceStaticOrangeLayer=layer=>{
+                if(!layer)return layer;
+                if(layer.motionRotation)layer.motionRotation.enabled=false;
+                if(layer.lineMotionFx){layer.lineMotionFx.enabled=false;layer.lineMotionFx.speedPercent=0;}
+                if(layer.sprite){layer.sprite.enabled=false;layer.sprite.speedPercent=0;}
+                if(layer.particles){layer.particles.enabled=false;layer.particles.speedPercent=0;}
+                if(layer.sweep){layer.sweep.enabled=false;layer.sweep.glintEnabled=false;layer.sweep.lightningEnabled=false;}
+                if(layer.web)layer.web.oscillating=false;
+                if(layer.lamps){layer.lamps.freezeLight=false;layer.lamps.freezeRain=false;layer.lamps.adaptiveBrightness=true;layer.lamps.adaptiveAdjustBrightness=true;layer.lamps.adaptiveStrength=Math.max(80,Number(layer.lamps.adaptiveStrength)||100);}
+                return layer;
+            };
+            const createCuratedStaticOrangeComposition=(style,requestedCount=state.randomLayerCount||3)=>{
+                const recipe=ORANGE_STATIC_STYLE_RECIPES[style];if(!recipe)return null;
+                const options=state.randomOptions||{},count=Math.max(1,Math.min(8,Number(requestedCount)||3));
+                const paletteKey=normalizePlaylistPaletteKey(options.lineColorPalette,'standard');
+                const colors=randomDistinctPaletteColors(paletteKey,Math.max(3,count));
+                const outerR=randomInt(style==='stainedGlass'?235:245,style==='solarRosette'?280:270);
+                const sharedN=randomChoice(recipe.n),baseN=options.byVertices?null:sharedN;
+                const spiralLo=Math.max(0,Math.min(count,Number(options.spiralLayersMin)||1)),spiralHi=Math.max(spiralLo,Math.min(count,Number(options.spiralLayersMax)||2));
+                const staticSpiralCount=recipe.spiralMode==='alternating'&&options.bySpiralLayers!==false?randomInt(spiralLo,spiralHi):0;
+                const layers=[];
+                for(let idx=0;idx<count;idx++){
+                    const N=baseN||randomChoice(recipe.n.filter(n=>idx===0||!layers.some(l=>l.N===n)).length?recipe.n.filter(n=>idx===0||!layers.some(l=>l.N===n)):recipe.n);
+                    const ratio=options.bySize===false?1:(recipe.ratios[idx]??Math.max(.16,1-idx*.14));
+                    const radius=Math.max(24,Math.round(outerR*ratio));
+                    const profileKey=(options.onlyLine||options.byShape===false)?'line':recipe.profiles[idx%recipe.profiles.length];
+                    const sector=360/Math.max(1,N);let rotation=randomInt(0,359);
+                    if(recipe.rotationMode==='halfSector')rotation=Math.round(rotation/sector)*sector+(idx%2?sector*.5:0);
+                    else if(recipe.rotationMode==='facet')rotation=Math.round(rotation/sector)*sector+idx*sector*.25;
+                    else if(recipe.rotationMode==='lace')rotation=(idx*sector*.45)+randomChoice([0,sector*.25,sector*.5]);
+                    else if(recipe.rotationMode==='botanical')rotation=idx*11+randomInt(-5,5);
+                    else rotation=idx*randomChoice([6,9,12,15])+randomInt(-4,4);
+                    let kMode='simple';if(options.bySteps!==false){if(style==='crystalCathedral')kMode=idx%2?'harmonic':'star';else if(style==='lace')kMode=idx%3===0?'star':'harmonic';else if(style==='spiralHerbarium')kMode=idx%2?'petal':'harmonic';else if(style==='solarRosette')kMode=idx===0?'simple':(idx%2?'petal':'harmonic');else kMode=idx%2?'petal':'simple';}
+                    const rounding=options.byRounding===false?0:randomChoice(recipe.rounding);
+                    const color=options.byColor===false?colors[0]:colors[idx%colors.length];
+                    const fill=recipe.fillPattern[idx%recipe.fillPattern.length]===true;
+                    const layer=createRandomLayer({name:`${style==='solarRosette'?'Розетка':style==='stainedGlass'?'Витраж':style==='lace'?'Кружево':style==='crystalCathedral'?'Кристалл':'Гербарий'} ${idx+1}`,N,radius,color,profileKey,rotation,strokeWidth:recipe.stroke[idx%recipe.stroke.length],glow:recipe.glow[idx%recipe.glow.length],opacity:Math.max(68,100-idx*4),fill,rounding,kMode});
+                    layer.paletteKey=paletteKey;layer.fillMatchStroke=true;
+                    if(fill){const pct=(recipe.fillOpacity?.[idx%recipe.fillOpacity.length]??12);layer.fillColor=`${String(color).slice(0,7)}${orangeStaticAlphaHex(pct)}`;}
+                    else layer.fillColor='#00000000';
+                    if(options.bySteps===false)layer.K=1;
+                    layer.showWeb=false;layer.showLamps=false;
+                    if(recipe.webMode==='lace'&&(idx===1||idx===Math.max(1,count-2))){layer.showWeb=true;layer.web={...layer.web,style:'web',inside:true,outsideStraight:false,outsideArc:false,placementMode:'corners',oscillating:false,matchLineColor:true,color,secondaryColor:colors[(idx+1)%colors.length]||color,width:.32,distance:randomChoice([34,42,50]),spacing:randomChoice([7,8,9]),angleVariation:3,depthMultiplier:1};}
+                    if(recipe.lampMode&&((recipe.lampMode==='innerOuter'&&(idx===0||idx===count-1))||(recipe.lampMode==='corners'&&(idx===0||idx===Math.min(2,count-1))))){layer.showLamps=true;layer.lamps={...layer.lamps,positionMode:'corners',colorMode:'line',matchLineColor:true,rainbow:false,brightness:style==='crystalCathedral'?115:82,radius:style==='crystalCathedral'?18:24,radiusMultiplier:1,softness:style==='crystalCathedral'?48:78,softnessMultiplier:1,density:100,densityMultiplier:1,scatter:0,sizeVariation:0,freezeLight:false,freezeRain:false,adaptiveBrightness:true,adaptiveAdjustBrightness:true,adaptiveStrength:100};}
+                    if(recipe.spiralMode==='alternating'){
+                        // Stable pattern rather than a time animation: selected layers are authored as Spiral geometry.
+                        const spiral=staticSpiralCount>0&&idx>0&&idx<=staticSpiralCount;layer.spiralOrder=spiral?1:0;layer.spiralStepLinked=true;layer.spiralStep=normalizeSpiralStep(layer.K||1,layer);layer.spiralClosed=true;
+                        if(spiral){layer.closedLoop=false;layer.fill=false;layer.fillColor='#00000000';}
+                    }
+                    forceStaticOrangeLayer(layer);layers.push(layer);
+                }
+                return layers;
+            };
+
+            // Orange settings apply identically to Standard, Mandala and all curated types.
+            // Keep N/K separate: an orbit is NOT a vertex. Zero means no orbit override.
+            const applyOrangeOrbitAndFillSettings=(layers)=>{
+                if(!Array.isArray(layers)||!layers.length)return layers;
+                const ro=orangeFillOptions();
+                for(const layer of layers){
+                    if(!layer||layer.chaosStar===true)continue;
+                    const n=Math.max(2,Math.round(Number(layer.N)||2)),k=Math.max(0,Math.round(Number(layer.K)||0));
+                    const maxOrbits=Math.max(1,gcd(n,k));
+                    if(ro.orbitBindingEnabled===true){
+                        const pct=randomInt(ro.orbitPercentMin,ro.orbitPercentMax);
+                        const selected=Math.max(1,Math.min(maxOrbits,Math.ceil(maxOrbits*pct/100)));
+                        layer.customSuborbits=selected<maxOrbits?selected:null;
+                    }
+                }
+                // Only the active Fill-colour route owns these randomised Fill targets;
+                // absent/disabled bindings leave curated composition's authored Fill unchanged.
+                const fillRoute=getOrangeMorphBindings().some(b=>b.parameter==='layer.fillColor'&&b.enabled!==false);
+                if(!fillRoute)return layers;
+                const candidates=shuffle(layers.map((layer,i)=>({layer,i})).filter(x=>x.layer&&x.layer.closedLoop!==false
+                    &&!(x.layer.spiralEnabled===true&&!x.layer.spiralFillEnabled)))
+                    .sort((a,b)=>(b.layer.fill===true?1:0)-(a.layer.fill===true?1:0));
+                const min=Math.min(candidates.length,ro.fillLayersMin),max=Math.min(candidates.length,ro.fillLayersMax);
+                const count=randomInt(min,max);
+                const selected=new Set(candidates.slice(0,count).map(x=>x.i));
+                const offsets=getFillHarmonyOffsets(ro.fillHarmony);
+                for(let i=0;i<layers.length;i++){
+                    const layer=layers[i];if(!layer)continue;
+                    if(!selected.has(i)||layer.spiralEnabled===true&&!layer.spiralFillEnabled){layer.fill=false;layer.fillColor=colorWithPercentAlpha(layer.fillColor||layer.strokeColor,0);continue;}
+                    const base=colorBaseHex6(layer.strokeColor,'#ffffff');
+                    const shifted=shiftHueHex(base,randomChoice(offsets));
+                    const prev=getFillOpacityPercent(layer.fillColor,0);
+                    const opacity=prev>0?prev:DEFAULT_FILL_OPACITY_PERCENT;
+                    layer.fill=true;layer.fillMatchStroke=ro.fillHarmony==='native';
+                    layer.fillColor=colorWithPercentAlpha(shifted,opacity);
+                }
+                return layers;
+            };
             const createOrangeComposition = (requestedCount = state.randomLayerCount || 3, _legacyMode = state.minimalMorph?.mode) => {
+                const style=String(state.minimalMorph?.generatorStyle||'standard');
+                const curated=createCuratedStaticOrangeComposition(style,requestedCount);
                 const groups = normalizedOrangeMorphProfileGroups();
                 const family = normalizeOrangeMorphFamily(state.minimalMorph?.family);
                 const mandalaOnly = groups.length === 1 && groups[0] === 'mandala';
-                const layers=mandalaOnly
+                const layers=curated||(mandalaOnly
                     ? createMandalaComposition(requestedCount, family)
-                    : createRandomComposition(requestedCount, groups, family);
+                    : createRandomComposition(requestedCount, groups, family));
                 // One shared final colour pass for both the dice and Orange Morph.
-                // This prevents profile-generation details from falling back to palette slots 0/1/2.
-                return applyOrangeRandomPaletteColors(layers);
+                // Every target composition is authored/static; Orange only replaces or fades between states.
+                const colored=applyOrangeRandomPaletteColors(layers);
+                applyOrangeRoutingBindingsToComposition(colored,state.layers);
+                applyOrangeOrbitAndFillSettings(colored);
+                if(state.randomOptions?.chaosStar===true){
+                    const layer=colored.find(l=>l&&l.spiralEnabled!==true&&Math.round(Number(l.spiralOrder)||0)===0);
+                    if(layer){
+                        layer.chaosStar=true;layer.customSuborbits=null;layer.closedLoop=true;
+                        layer.chaosStepMinus=randomInt(0,Math.max(0,Math.min(120,Number(state.randomOptions.chaosStepSpread??1)||0)));
+                        layer.chaosStepPlus=randomInt(0,Math.max(0,Math.min(120,Number(state.randomOptions.chaosStepSpread??1)||0)));
+                        layer.chaosClosures=Math.max(1,Math.min(Math.round(Number(layer.N)||4),Math.round(Number(state.randomOptions.chaosClosuresMax??3)||1)));
+                        layer.chaosSeed=(Math.random()*0xffffffff)>>>0;
+                    }
+                }
+                // Final mask, *after* palette / orbits / fill / chaos generators.
+                const info=colored.__somataCoverage,sources=state.layers||[];
+                const hasPartialCoverage=getOrangeMorphBindings().some(b=>b?.enabled!==false&&window.SomataParameterCoverage.percent(b)<100)||
+                    ['geometry.shape','geometry.orbits','geometry.chaos','spiral.layers'].some(id=>morphSpecialLayerCoverage(state.randomOptions,id)<100);
+                if(info&&hasPartialCoverage){
+                  const fields={
+                    'geometry.shape':['profileMode','profileNodes','profileKey','closedLoop'],
+                    'geometry.orbits':['customSuborbits'],
+                    'geometry.chaos':['chaosStar','chaosStepMinus','chaosStepPlus','chaosClosures','chaosSeed'],
+                    'spiral.layers':['spiralEnabled','spiralOrder','spiralStep','spiralStepLinked','spiralClosed','spiralTangential','spiralRoundSeams']
+                  };
+                  const active=getOrangeMorphBindings().filter(b=>b?.enabled!==false);
+                  for(let i=0;i<colored.length;i++){
+                    const target=colored[i],src=sources[i%sources.length]||sources[0];
+                    if(!target||!src)continue;
+                    for(const binding of active){
+                      if(info.coverage.get(binding.parameter)?.has(i))continue;
+                      const def=window.SomataParameterRegistry?.get?.(binding.parameter);
+                      if(!def||def.morph?.frameTarget==='global')continue;
+                      if(def.id==='layer.fillColor'){
+                        for(const key of ['fill','fillColor','fillMatchStroke','fillOpacity'])
+                          if(src[key]!==undefined)target[key]=cloneEffectConfig(src[key]);
+                      }else if(def.id==='layer.strokeColor'){
+                        target.strokeColor=src.strokeColor;target.paletteKey=src.paletteKey;
+                      }else{
+                        const prior=orangeLayerParameterValue(src,def);
+                        if(prior!==undefined)setOrangeLayerParameterValue(target,def,prior);
+                      }
+                    }
+                    for(const [id,keys] of Object.entries(fields)){
+                      if(info.specialCoverage.get(id)?.has(i))continue;
+                      for(const key of keys)if(src[key]!==undefined)target[key]=cloneEffectConfig(src[key]);
+                    }
+                  }
+                }
+                // Retain the non-enumerable global targets and avoid a throwaway array.
+                colored.forEach(forceStaticOrangeLayer);
+                return colored;
             };
 
             const MorphInterpolation = createMorphInterpolationModule();
@@ -8881,7 +10574,11 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 stopMorphing();
                 state.randomLayerCount = Math.max(1, Math.min(8, parseInt(document.getElementById('randomLayerCount')?.value, 10) || state.randomLayerCount || 3));
                 if (document.getElementById('randomLayerCount')) document.getElementById('randomLayerCount').value = state.randomLayerCount;
-                state.layers = createOrangeComposition(state.randomLayerCount, state.minimalMorph?.mode);
+                const generatedOrangeLayers = createOrangeComposition(state.randomLayerCount, state.minimalMorph?.mode);
+                window.__somataApplyOrangeGlobalTargets?.(generatedOrangeLayers.__somataOrangeGlobalTargets);
+                MorphPlayback.preserveOrangeAudioRoutes(state.layers,generatedOrangeLayers);
+                MorphPlayback.preserveOrangeLayerVisibility(state.layers,generatedOrangeLayers);
+                state.layers = generatedOrangeLayers;
                 state.activeLayerId = state.layers[0].id;
                 document.getElementById('presetSelect').value = '';
                 updateLayerListUI();
@@ -8951,7 +10648,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     if (runtimeState.minimalMorph.active && !runtimeState.minimalMorph.transitioning) {
                         runtimeState.minimalMorph.nextSwitchAt = isTapMorphSyncActive('minimal')
                             ? getNextTapBoundary(performance.now(), 'minimal')
-                            : performance.now() + state.minimalMorph.intervalSec * 1000;
+                            : performance.now() + getTapMorphIntervalSec(state.minimalMorph.intervalSec, 'minimal') * 1000;
                     }
                 });
             });
@@ -9031,7 +10728,9 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             document.getElementById('morphSettingsPanel')?.addEventListener('click', (e) => e.stopPropagation());
             document.addEventListener('click', (e) => {
                 const nav = document.querySelector('.morph-nav');
-                if (nav && !nav.contains(e.target)) toggleMorphSettingsPanel(false);
+                if (nav && !nav.contains(e.target) && !viewportPopupBelongsToPanel(e.target, 'morphSettingsPanel')) {
+                    toggleMorphSettingsPanel(false);
+                }
             });
             document.getElementById('btnCloseMinimalMorphPanel')?.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -9060,7 +10759,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     else if(mode==='lines')toggleSidebarFeatureWithMemory('graffiti');
                     else if(mode==='lamps')toggleSidebarFeatureWithMemory('lamps');
                     else if(mode==='web')toggleSidebarFeatureWithMemory('web');
-                    else if(mode==='sweep')toggleSidebarFeatureWithMemory('sweep');
+                    else if(mode==='sweep')toggleSidebarFeatureWithMemory('glint');
+                    else if(mode==='lightning')toggleSidebarFeatureWithMemory('lightning');
                     else if(mode==='particles')toggleSidebarFeatureWithMemory('particles');
                     else if(mode==='motion')toggleMotionQuickGroup();
                     else if(mode==='fourier')setFourierMode(state.fourierMode!==true);
@@ -9077,20 +10777,29 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             document.getElementById('motionCameraEnabled')?.addEventListener('change',e=>{normalizeMotionState().quickToggleCamera=e.target.checked===true;});
             document.getElementById('motionColorEnabled')?.addEventListener('change',e=>{normalizeMotionState().quickToggleColor=e.target.checked===true;});
             document.getElementById('motionRotationDirection')?.addEventListener('click',e=>{const targets=getMotionRotationTargets();if(!targets.length)return;const next=normalizeLayerMotionRotation(targets[0]).direction==='cw'?'ccw':'cw';for(const layer of targets)normalizeLayerMotionRotation(layer).direction=next;e.currentTarget.value=next;syncMotionUI();requestMainCanvasRender();});
+            function recordActiveMorphFeatureOverride(mode,enabled){
+                const on=enabled===true;
+                if(runtimeState.minimalMorph?.active===true){if(!state.minimalMorph.featureOverrides||typeof state.minimalMorph.featureOverrides!=='object')state.minimalMorph.featureOverrides={};if(mode==='graffiti')delete state.minimalMorph.featureOverrides.graffiti;else state.minimalMorph.featureOverrides[mode]=on;window.SomataOrangeMorphProfiles?.captureDraft?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);}
+                if(runtimeState.morph?.active===true){if(!state.morph.featureOverrides||typeof state.morph.featureOverrides!=='object')state.morph.featureOverrides={};state.morph.featureOverrides[mode]=on;}
+                return on;
+            }
+            window.__somataRecordMorphFeatureOverride=recordActiveMorphFeatureOverride;
             document.getElementById('showLines')?.addEventListener('change',e=>{e.target.indeterminate=false;applyLineVisibilityToTargets(e.target.checked===true);});
-            document.getElementById('showLamps')?.addEventListener('change',e=>{for(const layer of getEffectTargets())setLayerLampsEnabled(layer,e.target.checked===true);if(state.masterLayerEdit===true||sidebarFeatureStatesAreUniform('lamps'))state.showLamps=e.target.checked===true;syncLampSettingsUI();syncSidebarToolStates();requestMainCanvasRender();});
-            document.getElementById('showWeb')?.addEventListener('change',e=>{queueWebSwitchForNextMorph({showWeb:e.target.checked===true});if(state.masterLayerEdit===true)state.showWeb=e.target.checked===true;syncSidebarToolStates();});
-            document.getElementById('showSweep')?.addEventListener('change',e=>{for(const layer of getEffectTargets())setLayerSweepEnabled(layer,e.target.checked===true);if(state.masterLayerEdit===true)state.sweep.enabled=e.target.checked===true;syncSweepUI();syncSidebarToolStates();ensureSweepAnimation();requestMainCanvasRender();});
+            document.getElementById('showLamps')?.addEventListener('change',e=>{for(const layer of getEffectTargets())setLayerLampsEnabled(layer,e.target.checked===true);if(state.masterLayerEdit===true||sidebarFeatureStatesAreUniform('lamps'))state.showLamps=e.target.checked===true;recordActiveMorphFeatureOverride('lamps',e.target.checked===true);syncLampSettingsUI();syncSidebarToolStates();requestMainCanvasRender();});
+            document.getElementById('showWeb')?.addEventListener('change',e=>{queueWebSwitchForNextMorph({showWeb:e.target.checked===true});if(state.masterLayerEdit===true)state.showWeb=e.target.checked===true;recordActiveMorphFeatureOverride('web',e.target.checked===true);syncSidebarToolStates();});
+            document.getElementById('showSweep')?.addEventListener('change',e=>{for(const layer of getEffectTargets())setLayerGlintEnabled(layer,e.target.checked===true);if(state.masterLayerEdit===true){normalizeSweepConfig(state.sweep);state.sweep.glintEnabled=e.target.checked===true;state.sweep.enabled=state.sweep.glintEnabled===true||state.sweep.lightningEnabled===true;}recordActiveMorphFeatureOverride('glint',e.target.checked===true);syncSweepUI();syncSidebarToolStates();ensureSweepAnimation();requestMainCanvasRender();});
+            document.getElementById('showLightning')?.addEventListener('change',e=>{for(const layer of getEffectTargets())setLayerLightningEnabled(layer,e.target.checked===true);if(state.masterLayerEdit===true){normalizeSweepConfig(state.sweep);state.sweep.lightningEnabled=e.target.checked===true;state.sweep.enabled=state.sweep.glintEnabled===true||state.sweep.lightningEnabled===true;}recordActiveMorphFeatureOverride('lightning',e.target.checked===true);syncSweepUI();syncSidebarToolStates();ensureSweepAnimation();requestMainCanvasRender();});
             const updateParticlesFromUI=(changedId='')=>{const active=getActiveEffectLayer();if(!active)return;const seed=getLayerParticleConfig(active),next=normalizeParticleConfig({...seed,enabled:document.getElementById('showParticles')?.checked===true,style:document.getElementById('particleStyle')?.value,mode:document.getElementById('particleMode')?.value,colorMode:document.getElementById('particleColorMode')?.value,paletteKey:document.getElementById('particlePalette')?.value||seed.paletteKey,density:Number(document.getElementById('particleDensity')?.value),densityMultiplier:Number(document.getElementById('particleDensityMultiplier')?.value),sizePx:Number(document.getElementById('particleSize')?.value),scatter:Number(document.getElementById('particleScatter')?.value),scatterMultiplier:Number(document.getElementById('particleScatterMultiplier')?.value),sizeVariation:Number(document.getElementById('particleSizeVariation')?.value),sizeVariationMultiplier:Number(document.getElementById('particleSizeVariationMultiplier')?.value),speedPercent:Number(document.getElementById('particleSpeed')?.value),speedMultiplier:Number(document.getElementById('particleSpeedMultiplier')?.value),opacity:Number(document.getElementById('particleOpacity')?.value),twinkle:Number(document.getElementById('particleTwinkle')?.value),spiralRadiusPx:Number(document.getElementById('particleSpiralRadius')?.value),spiralRadiusMultiplier:Number(document.getElementById('particleSpiralRadiusMultiplier')?.value),spiralTurns:Number(document.getElementById('particleSpiralTurns')?.value)});const targets=(state.masterLayerEdit===true||hasMultiLayerSelection())?getLayerEditTargets():[active];for(const layer of targets){setLayerParticlesConfig(layer,{...next},changedId==='showParticles'?'particles-enabled':'particles-ui');}try{WebGPUParticleRenderer?.warmup?.();}catch(_){}ensureParticleAnimation();syncParticleUI();syncSidebarToolStates();requestMainCanvasRender();};
-            document.getElementById('showParticles')?.addEventListener('change',()=>updateParticlesFromUI('showParticles'));
+            document.getElementById('showParticles')?.addEventListener('change',e=>{recordActiveMorphFeatureOverride('particles',e.target.checked===true);updateParticlesFromUI('showParticles');});
             ['particleStyle','particleMode','particleColorMode','particlePalette'].forEach(id=>document.getElementById(id)?.addEventListener('change',()=>updateParticlesFromUI(id)));
             ['particleDensity','particleDensityMultiplier','particleSize','particleScatter','particleScatterMultiplier','particleSizeVariation','particleSizeVariationMultiplier','particleSpeed','particleSpeedMultiplier','particleOpacity','particleTwinkle','particleSpiralRadius','particleSpiralRadiusMultiplier','particleSpiralTurns'].forEach(id=>document.getElementById(id)?.addEventListener('input',()=>updateParticlesFromUI(id)));
-            const updateSweepFromUI=()=>{
-                const active=getActiveEffectLayer();if(!active)return;const sweep=getLayerSweepConfig(active);normalizeSweepConfig(sweep);const previousEffect=sweep.effectType;
-                const effect=document.getElementById('sweepEffectType')?.value;sweep.effectType=effect==='lightning'?'lightning':'glint';sweep.profileShape=document.getElementById('sweepProfileShape')?.value==='line'?'line':'current';sweep.coreBlendMode=normalizeSweepBlendMode(document.getElementById('sweepCoreBlendMode')?.value);sweep.glowBlendMode=normalizeSweepBlendMode(document.getElementById('sweepGlowBlendMode')?.value);
+            const updateSweepFromUI=(ev)=>{
+                const active=getActiveEffectLayer();if(!active)return;const sweep=getLayerSweepConfig(active);normalizeSweepConfig(sweep);const previousEffect=sweep.effectType,changedId=ev?.currentTarget?.id||'';
+                if(changedId==='sweepEffectType'){const effect=document.getElementById('sweepEffectType')?.value;sweep.effectType=effect==='lightning'?'lightning':'glint';if(sweep.enabled===true){sweep.glintEnabled=sweep.effectType==='glint';sweep.lightningEnabled=sweep.effectType==='lightning';}}
+                sweep.profileShape=document.getElementById('sweepProfileShape')?.value==='line'?'line':'current';const coreSource=changedId==='sweepLightningCoreBlendMode'?'sweepLightningCoreBlendMode':'sweepCoreBlendMode',glowSource=changedId==='sweepLightningGlowBlendMode'?'sweepLightningGlowBlendMode':'sweepGlowBlendMode';sweep.coreBlendMode=normalizeSweepBlendMode(document.getElementById(coreSource)?.value);sweep.glowBlendMode=normalizeSweepBlendMode(document.getElementById(glowSource)?.value);
                 sweep.flashMode=normalizeSweepFlashMode(document.getElementById('sweepFlashMode')?.value);{const v=document.getElementById('sweepGlintPrecision')?.value;sweep.flashType=normalizeGlintPrecisionValue(v??sweep.flashType??sweep.glintPrecision);if(sweep.flashType==='spectral')sweep.flashType='high';sweep.glintPrecision=sweep.flashType;}
                 {const v=Number(document.getElementById('sweepSpectralSectorDegrees')?.value);sweep.spectralSectorDegrees=Number.isFinite(v)?Math.max(1,Math.min(360,v)):45;}{const v=Number(document.getElementById('sweepSpectralAngularSpeed')?.value);sweep.spectralAngularSpeed=Number.isFinite(v)?Math.max(-720,Math.min(720,v)):90;}
-                if(previousEffect!=='lightning'&&sweep.effectType==='lightning'){sweep.phase=0;sweep.lastUpdate=0;sweep.currentVelocity=0;sweep.cycleCount=0;sweep.lightningPhase=0;sweep.lightningLastUpdate=0;sweep.lightningCycleCount=0;resetLightningClock(state.layers.indexOf(active),sweep,0);}
+                if(changedId==='sweepEffectType'&&previousEffect!=='lightning'&&sweep.effectType==='lightning'){sweep.phase=0;sweep.lastUpdate=0;sweep.currentVelocity=0;sweep.cycleCount=0;sweep.lightningPhase=0;sweep.lightningLastUpdate=0;sweep.lightningCycleCount=0;resetLightningClock(state.layers.indexOf(active),sweep,0);}
                 const mode=document.getElementById('sweepMode')?.value;sweep.mode=['perSegment','everyNth','across','perPath','whole'].includes(mode)?mode:'whole';sweep.everyN=Math.max(2,Math.min(24,Math.round(Number(document.getElementById('sweepEveryN')?.value)||2)));sweep.direction=document.getElementById('sweepDirection')?.value==='backward'?'backward':'forward';sweep.syncMusic=document.getElementById('sweepSyncMusic')?.checked!==false;sweep.speed=Math.max(.02,Math.min(2,Number(document.getElementById('sweepSpeed')?.value)||.25));{const v=Number(document.getElementById('sweepSpeedMultiplier')?.value);sweep.speedMultiplier=Number.isFinite(v)?Math.max(.015625,Math.min(64,v)):1;}
                 sweep.lengthPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLength')?.value)||18));{const v=Number(document.getElementById('sweepWidthPercent')?.value);sweep.widthPercent=Number.isFinite(v)?Math.max(0,Math.min(200,v)):75;}sweep.color=document.getElementById('sweepColor')?.value||'#ffffff';{const v=Number(document.getElementById('sweepOpacity')?.value);sweep.opacity=Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}sweep.brightness=Math.max(0,Math.min(200,Number(document.getElementById('sweepBrightness')?.value)||0));sweep.glow=Math.max(0,Number(document.getElementById('sweepGlow')?.value)||0);{const v=Number(document.getElementById('sweepGlowMultiplier')?.value);sweep.glowMultiplier=Number.isFinite(v)?Math.max(0,v):1;}{const v=Number(document.getElementById('sweepGlowIntensity')?.value);sweep.glowIntensity=Number.isFinite(v)?Math.max(0,Math.min(200,v)):100;}{const v=Number(document.getElementById('sweepGlowIntensityMultiplier')?.value);sweep.glowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;}sweep.softness=Math.max(0,Math.min(150,Number(document.getElementById('sweepSoftness')?.value)||0));{const v=Number(document.getElementById('sweepSoftnessMultiplier')?.value);sweep.softnessMultiplier=Number.isFinite(v)?Math.max(0,v):1;}
                 sweep.lightningProfileShape=document.getElementById('sweepLightningProfileShape')?.value==='line'?'line':'current';const lbehavior=document.getElementById('sweepLightningBehavior')?.value;sweep.lightningBehavior=normalizeLightningBehaviorValue(lbehavior,'symmetric');const lprecision=document.getElementById('sweepLightningPrecision')?.value;sweep.lightningPrecision=normalizeLightningPrecisionValue(lprecision);const lmode=document.getElementById('sweepLightningMode')?.value;sweep.lightningMode=['perSegment','everyNth','across','perPath','whole'].includes(lmode)?lmode:'perPath';sweep.lightningEveryN=Math.max(2,Math.min(24,Math.round(Number(document.getElementById('sweepLightningEveryN')?.value)||2)));sweep.lightningRandomPosition=document.getElementById('sweepLightningRandomPosition')?.checked===true;sweep.lightningColor=document.getElementById('sweepLightningColor')?.value||'#ffffff';sweep.lightningSecondaryColor=document.getElementById('sweepLightningSecondaryColor')?.value||'#7dd3fc';sweep.lightningSegmentPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLightningSegmentPercent')?.value)||100));
@@ -9100,7 +10809,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 sweep.lightningSmoothLighting=true;sweep.lightningShowLines=document.getElementById('sweepLightningShowLines')?.checked!==false;sweep.lightningLineOpacity=Math.max(0,Math.min(100,Number(document.getElementById('sweepLightningLineOpacity')?.value)||100));sweep.lightningAfterglow=document.getElementById('sweepLightningAfterglow')?.checked!==false;sweep.lightningAfterglowMs=Math.max(0,Math.min(900,Number(document.getElementById('sweepLightningAfterglowMs')?.value)||280));{const v=Number(document.getElementById('sweepLightningMicroStrikes')?.value);sweep.lightningMicroStrikes=Number.isFinite(v)?Math.max(0,Math.round(v)):0;}
                 normalizeSweepConfig(sweep);if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(active,'sweep-ui');if(state.masterLayerEdit===true||hasMultiLayerSelection()){for(const layer of getLayerEditTargets()){if(layer===active)continue;ensureLayerEffectState(layer);layer.sweep=cloneEffectConfig(sweep);if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'sweep-ui');}}if(lightningRateSyncEnabled())syncLightningRateValuesFrom(sweep);syncSweepUI();ensureSweepAnimation();requestMainCanvasRender();
             };
-            ['sweepEffectType','sweepProfileShape','sweepCoreBlendMode','sweepGlowBlendMode','sweepFlashMode','sweepGlintPrecision','sweepSpectralSectorDegrees','sweepSpectralAngularSpeed','sweepMode','sweepEveryN','sweepLightningProfileShape','sweepLightningBehavior','sweepLightningPrecision','sweepLightningMode','sweepLightningEveryN','sweepLightningRandomPosition','sweepDirection','sweepSyncMusic','sweepSpeed','sweepSpeedMultiplier','sweepLength','sweepWidthPercent','sweepColor','sweepOpacity','sweepBrightness','sweepGlow','sweepGlowMultiplier','sweepGlowIntensity','sweepGlowIntensityMultiplier','sweepSoftness','sweepSoftnessMultiplier','sweepLightningColor','sweepLightningSecondaryColor','sweepLightningSegmentPercent','sweepLightningRatePercent','sweepLightningRateMultiplier','sweepLightningDuration','sweepLightningWidthPercent','sweepLightningUseGlintMultiplier','sweepLightningGlintMultiplier','sweepLightningBrightness','sweepLightningGlow','sweepLightningGlowMultiplier','sweepLightningGlowIntensity','sweepLightningGlowIntensityMultiplier','sweepLightningSoftness','sweepLightningSoftnessMultiplier','sweepLightningShowLines','sweepLightningLineOpacity','sweepLightningAfterglow','sweepLightningAfterglowMs','sweepLightningMicroStrikes'].forEach(id=>{document.getElementById(id)?.addEventListener('input',updateSweepFromUI);document.getElementById(id)?.addEventListener('change',updateSweepFromUI);});
+            ['sweepEffectType','sweepProfileShape','sweepCoreBlendMode','sweepGlowBlendMode','sweepLightningCoreBlendMode','sweepLightningGlowBlendMode','sweepFlashMode','sweepGlintPrecision','sweepSpectralSectorDegrees','sweepSpectralAngularSpeed','sweepMode','sweepEveryN','sweepLightningProfileShape','sweepLightningBehavior','sweepLightningPrecision','sweepLightningMode','sweepLightningEveryN','sweepLightningRandomPosition','sweepDirection','sweepSyncMusic','sweepSpeed','sweepSpeedMultiplier','sweepLength','sweepWidthPercent','sweepColor','sweepOpacity','sweepBrightness','sweepGlow','sweepGlowMultiplier','sweepGlowIntensity','sweepGlowIntensityMultiplier','sweepSoftness','sweepSoftnessMultiplier','sweepLightningColor','sweepLightningSecondaryColor','sweepLightningSegmentPercent','sweepLightningRatePercent','sweepLightningRateMultiplier','sweepLightningDuration','sweepLightningWidthPercent','sweepLightningUseGlintMultiplier','sweepLightningGlintMultiplier','sweepLightningBrightness','sweepLightningGlow','sweepLightningGlowMultiplier','sweepLightningGlowIntensity','sweepLightningGlowIntensityMultiplier','sweepLightningSoftness','sweepLightningSoftnessMultiplier','sweepLightningShowLines','sweepLightningLineOpacity','sweepLightningAfterglow','sweepLightningAfterglowMs','sweepLightningMicroStrikes'].forEach(id=>{document.getElementById(id)?.addEventListener('input',updateSweepFromUI);document.getElementById(id)?.addEventListener('change',updateSweepFromUI);});
             document.getElementById('sweepLightningRateSync')?.addEventListener('change',e=>{const active=getActiveEffectLayer();if(!active)return;const cfg=getLayerSweepConfig(active);setLightningRateSynchronization(e.target.checked===true,cfg,state.layers.indexOf(active));syncSweepUI();ensureSweepAnimation();requestMainCanvasRender();});
             document.querySelectorAll('[data-line-main-mode]').forEach(btn=>btn.addEventListener('click',()=>{
                 const active=getActiveLayer();if(!active)return;const mode=btn.dataset.lineMainMode;const targets=getLayerEditTargets();
@@ -9122,7 +10831,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             document.getElementById('graffitiAngle')?.addEventListener('input',e=>{const active=getActiveLayer();if(!active)return;const angle=Math.max(-90,Math.min(90,Number(e.target.value)||0));for(const layer of getLayerEditTargets()){layer.graffitiAngle=angle;if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'graffiti-angle');}const v=document.getElementById('graffitiAngleValue');if(v)v.textContent=`${Math.round(angle)}°`;WebGPUGraffitiRibbonRenderer.warmup();WebGPUGraffitiMorphRenderer.warmup();requestMainCanvasRender();});
             document.getElementById('graffitiAngleMode')?.addEventListener('change',e=>{const active=getActiveLayer();if(!active)return;const mode=e.target.value==='relative'?'relative':'absolute';for(const layer of getLayerEditTargets()){layer.graffitiAngleMode=mode;if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'graffiti-angle-mode');}WebGPUGraffitiRibbonRenderer.warmup();WebGPUGraffitiMorphRenderer.warmup();requestMainCanvasRender();});
             document.getElementById('graffitiNibShape')?.addEventListener('change',e=>{const active=getActiveLayer();if(!active)return;const shape=['pointed','blunt','pinched','round'].includes(e.target.value)?e.target.value:'pointed';for(const layer of getLayerEditTargets()){layer.graffitiNibShape=shape;layer.lineProfileGraffiti='slash';if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'graffiti-nib');}document.querySelectorAll('[data-graffiti-nib]').forEach(btn=>btn.classList.toggle('active',btn.dataset.graffitiNib===shape));WebGPUGraffitiRibbonRenderer.warmup();WebGPUGraffitiMorphRenderer.warmup();requestMainCanvasRender();});
-            const syncGraffitiNibLength=()=>{const active=getActiveLayer();if(!active)return;const value=Math.max(1,Math.min(20,Number(document.getElementById('graffitiNibLength')?.value)||10));const mulRaw=Number(document.getElementById('graffitiNibLengthMultiplier')?.value);const mul=Number.isFinite(mulRaw)?Math.max(.01,mulRaw):1;for(const layer of getLayerEditTargets()){layer.graffitiNibLength=value;layer.graffitiNibLengthMultiplier=mul;if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'graffiti-nib-length');}const t=document.getElementById('graffitiNibLengthText');if(t)t.textContent=value.toFixed(value%1?2:0);WebGPUGraffitiRibbonRenderer.warmup();WebGPUGraffitiMorphRenderer.warmup();requestMainCanvasRender();};
+            const syncGraffitiNibLength=()=>{const active=getActiveLayer();if(!active)return;const value=Math.max(1,Math.min(20,Number(document.getElementById('graffitiNibLength')?.value)||3));const mulRaw=Number(document.getElementById('graffitiNibLengthMultiplier')?.value);const mul=Number.isFinite(mulRaw)?Math.max(.01,mulRaw):1;for(const layer of getLayerEditTargets()){layer.graffitiNibLength=value;layer.graffitiNibLengthMultiplier=mul;if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'graffiti-nib-length');}const t=document.getElementById('graffitiNibLengthText');if(t)t.textContent=value.toFixed(value%1?2:0);WebGPUGraffitiRibbonRenderer.warmup();WebGPUGraffitiMorphRenderer.warmup();requestMainCanvasRender();};
             document.getElementById('graffitiNibLength')?.addEventListener('input',syncGraffitiNibLength);
             document.getElementById('graffitiNibLengthMultiplier')?.addEventListener('input',syncGraffitiNibLength);
             document.getElementById('graffitiNibLengthMultiplier')?.addEventListener('change',syncGraffitiNibLength);
@@ -9167,7 +10876,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 web.outsideArc=document.getElementById('webOutsideArc')?.checked===true;
 
                 web.region=web.inside?(web.outsideArc?'combined':'inside'):(web.outsideArc?'outside':'inside');
-                web.placementMode=['corners','selfIntersection','selfIntersectionCorridor'].includes(document.getElementById('webPlacementMode')?.value)?document.getElementById('webPlacementMode').value:'corners';
+                web.placementMode=['corners','selfIntersection','selfIntersectionCorridor'].includes(document.getElementById('webPlacementMode')?.value)?document.getElementById('webPlacementMode').value:'selfIntersection';
                 web.oscillating=document.getElementById('webOscillating')?.checked===true;
                 {const v=Number(document.getElementById('webOscillationStrength')?.value);web.oscillationStrength=Number.isFinite(v)?Math.max(0,Math.min(100,v)):10;}
                 {const v=Number(document.getElementById('webOscillationStrengthMultiplier')?.value);web.oscillationStrengthMultiplier=Number.isFinite(v)?Math.max(.015625,Math.min(64,v)):1;}
@@ -9178,7 +10887,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 web.widthPercent=Math.max(1,Math.min(400,Number(document.getElementById('webWidthPercent')?.value)||40));
                 web.matchLineColor=document.getElementById('webMatchLineColor')?.checked===true;
                 web.color=document.getElementById('webColor')?.value||'#ffffff';web.secondaryColor=document.getElementById('webSecondaryColor')?.value||'#00ffff';web.sunDegrees=Math.max(5,Math.min(90,Number(document.getElementById('webSunDegrees')?.value)||20));
-                web.distance=Math.max(0,Math.min(100,Number(document.getElementById('webDistance')?.value)||60));
+                web.distance=Math.max(0,Math.min(100,Number(document.getElementById('webDistance')?.value)||30));
                 web.depthMultiplier=Math.max(0,Number(document.getElementById('webDepthMultiplier')?.value)||0);
                 web.spacing=Math.max(2,Math.min(40,Number(document.getElementById('webSpacing')?.value)||10));
                 web.angleVariation=Math.max(0,Math.min(30,Number(document.getElementById('webAngleVariation')?.value)||0));
@@ -9231,9 +10940,9 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     adaptiveStrength:Math.max(0,Math.min(100,Number(document.getElementById('lampAdaptiveStrength')?.value) ?? 100)),
                     adaptiveStrengthMultiplier:Math.max(0,Number(document.getElementById('lampAdaptiveStrengthMultiplier')?.value) || 0),
                     adaptiveFadeSec:Math.max(0,Number(document.getElementById('lampAdaptiveFadeSec')?.value) || 0),
-                    morphEnabled:document.getElementById('lampMorphEnabled')?.checked === true,
-                    morphSize:Math.max(0,Math.min(100,Number(document.getElementById('lampMorphSize')?.value) ?? 20)),
-                    morphBrightness:Math.max(0,Math.min(100,Number(document.getElementById('lampMorphBrightness')?.value) ?? 25)),
+                    morphEnabled:false,
+                    morphSize:0,
+                    morphBrightness:0,
                     cornerInertiaLinked:document.getElementById('lampCornerInertiaLinked')?.checked !== false,
                     calmMode:document.getElementById('lampCalmMode')?.checked === true
                 };
@@ -9473,7 +11182,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         function bindViewportEvents() {
 
             const viewportSurface=document.getElementById('mainContainer')||mainCanvas;
-            const viewportGestureAllowed=(target)=>!target?.closest?.('button,input,select,textarea,a,[contenteditable=\"true\"],.no-viewport-gesture');
+            const viewportGestureAllowed=(target)=>!target?.closest?.('button,input,select,textarea,a,label,[role=\"button\"],#floatingViewportControls,#fpsCounter,[contenteditable=\"true\"],.no-viewport-gesture');
             document.getElementById('btnZoomIn').addEventListener('click', () => {
                 state.zoom = Math.min(state.zoom * 1.2, 5.0);
                 document.getElementById('zoomDisplay').textContent = Math.round(state.zoom * 100) + '%';
@@ -9600,6 +11309,10 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             }, { passive: false });
 
             viewportSurface.addEventListener('touchend', (e) => {
+                // Only a gesture that began on the canvas may cancel the native touch.
+                // Touches on the floating bottom toolbar bubble through mainContainer;
+                // cancelling them here suppresses their synthesized click on phones.
+                if (!canvasTouchMode) return;
                 e.preventDefault();
                 if (e.touches.length === 1) {
                     canvasTouchMode = 'pan';
@@ -9641,7 +11354,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             activeStopMorphing();
             state.lamps = {
                 positionMode:'key', colorMode:'line', matchLineColor:true, rainbow:false, color:'#ffe600', webgl:true, freezeLight:false, freezeTailSec:1.5, freezeHardness:50, freezeColorMode:'lamp', freezeColor:'#00ffcc', freezeHueDegrees:45, freezeChromatic:false, freezeChromaticColor:'#22d3ee', freezeRain:false, freezeRainDirectionVersion:2, freezeRainDegrees:180, freezeRainSource:'core', freezeRainSpeed:50, freezeRainTailSec:1.5, freezeRainHardness:50,
-                brightness:100, radius:50, radiusMultiplier:1, softness:100, softnessMultiplier:1,
+                brightness:60, radius:25, radiusMultiplier:1, softness:100, softnessMultiplier:1,
                 blendMode:'lighter', type:'whiteCore', density:100, densityMultiplier:1,
                 scatter:0, scatterMultiplier:1, sizeVariation:0, sizeVariationMultiplier:1,
                 brightnessVariation:0, brightnessVariationMultiplier:1,
@@ -9658,7 +11371,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.audioReactive.routingInitialized = false;
             state.audioReactive.routingTarget = 'master';
             state.audioReactive.masterEditEnabled = false;
-            state.audioReactive.routingPreset = 'geometry';
+            state.audioReactive.routingPreset = 'geometryLamps';
             state.audioReactive.routes = {master:[],layers:{}};
             state.audioReactive.masterRouteMultipliers = {};
             audioMasterRouteStateRef=null;audioMasterRouteRuntime.clear();
@@ -9687,6 +11400,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             setTunnelMode(false);
             state.tunnel.defaultActive = false;
             state.tunnel.speedStrength = 1;
+            state.tunnel.signedSpeedVersion = 1;
             state.tunnel.speedMultiplier = 1;
             state.tunnel.spacingStrength = 3;
             state.tunnel.spacingMultiplier = 1;
@@ -9703,11 +11417,13 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.tunnel.fadeDurationSec = 3;
             state.tunnel.optimizedCalculation = true;
             syncTunnelSettingsUI();
-            state.minimalMorph.intervalSec = 5;
+            state.minimalMorph.intervalSec = 5;state.minimalMorph.intervalMultiplier=1;
             state.minimalMorph.mode = 'standard';
             state.minimalMorph.family = 'mix';
             state.minimalMorph.profileGroups = ['standard'];
             state.minimalMorph.defaultActive = false;
+            state.minimalMorph.profiles = [];
+            state.minimalMorph.activeProfileId = 'orange-standard';
             runtimeState.minimalMorph.autoStartedByProject = false;
             state.minimalMorph.fadeSec = 0.1;
             state.minimalMorph.instantSwitch = true;
@@ -9772,11 +11488,14 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.morph.normalizeSizes = true;
             state.morph.rotationMinPercent = 0;
             state.morph.rotationMaxPercent = 50;
-            state.morph.rotationMultiplier = 0.1;
+            state.morph.rotationMultiplier = 1;
             state.morph.rotationRandomDirection = true;
             state.morph.monoOrbitTransforms = true;
             state.morph.orbitPercentMin = 0;
             state.morph.orbitPercentMax = 0;
+            // Numeric Orbit override is opt-in; factory/startup must restore legacy defaults.
+            delete state.morph.orbitCountMin;
+            delete state.morph.orbitCountMax;
             state.morph.fillOpacityMin = 10;
             state.morph.fillOpacityMax = 10;
             state.morph.splinePoints = 12;
@@ -9884,15 +11603,19 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
 
             ensureAudioRoutingState();
             const persistentTunnel = cloneData(state.tunnel);
-            const persistentMorph = cloneData(state.morph);
-            const persistentMinimalMorph = cloneData(state.minimalMorph);
+            delete persistentTunnel.direction;
+            persistentTunnel.signedSpeedVersion=1;
+            const persistentMorph = window.SomataMorphParameterRouting?.persistentMorphSnapshot?.(state.morph,state.minimalMorph) || cloneData(state.morph);
+            const persistentMinimalMorph = window.SomataMorphParameterRouting?.persistentMinimalMorphSnapshot?.(state.morph,state.minimalMorph) || cloneData(state.minimalMorph);
+            const persistentRandomOptions = window.SomataOrangeMorphProfiles?.persistentRandomOptions?.(state.minimalMorph,state.randomOptions,state.randomLayerCount) || cloneData(state.randomOptions);
+            const persistentRandomLayerCount = window.SomataOrangeMorphProfiles?.persistentLayerCount?.(state.minimalMorph,state.randomOptions,state.randomLayerCount) || state.randomLayerCount || 3;
             const persistentTapTempo = cloneData(state.tapTempo);
             const persistentAudioReactive = cloneData(state.audioReactive);
             const camera = currentProjectCameraSnapshot();
             return {
                 format: 'SpiroStarProject',
                 extension: '.sproj',
-                version: 56,
+                version: 58,
                 savedAt: new Date().toISOString(),
                 settings: {
                     activeProjectPaletteKey: normalizePlaylistPaletteKey(state.activeProjectPaletteKey || state.morph?.lineColorPalette || 'standard','standard'),
@@ -9934,6 +11657,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                         ...persistentTunnel,
                         defaultActive: state.tunnel.defaultActive === true,
                         speedStrength: state.tunnel.speedStrength,
+                        signedSpeedVersion: 1,
                         speedMultiplier: state.tunnel.speedMultiplier,
                         spacingStrength: state.tunnel.spacingStrength,
                         spacingMultiplier: state.tunnel.spacingMultiplier,
@@ -9942,7 +11666,6 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                         colorShiftDegrees: state.tunnel.colorShiftDegrees,
                         colorShiftCumulative: state.tunnel.colorShiftCumulative === true,
                         paletteLagEnabled: state.tunnel.paletteLagEnabled === true,
-                        direction: state.tunnel.direction,
                         fadeOversize: state.tunnel.fadeOversize,
                         fadeOffsetSteps: state.tunnel.fadeOffsetSteps,
                         vignetteAmount: state.tunnel.vignetteAmount,
@@ -10015,14 +11738,10 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                         options: cloneData(state.morph.options),
                         shapeOptions: cloneData(state.morph.shapeOptions)
                     },
-                    randomLayerCount: state.randomLayerCount || 3,
-                    randomOptions: cloneData(state.randomOptions),
+                    randomLayerCount: persistentRandomLayerCount,
+                    randomOptions: persistentRandomOptions,
                     minimalMorph: {
-                        ...persistentMinimalMorph,
-                        defaultActive: state.minimalMorph.defaultActive === true,
-                        intervalSec: state.minimalMorph.intervalSec,
-                        fadeSec: state.minimalMorph.fadeSec,
-                        instantSwitch: state.minimalMorph.instantSwitch !== false
+                        ...persistentMinimalMorph
                     },
                     tapTempo: {
                         ...persistentTapTempo,
@@ -10931,10 +12650,10 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         function applyProjectMorphTunnelFrame(frame) {
             if (!frame || typeof frame !== 'object') return;
             const t=state.tunnel;
-            for (const key of ['speedStrength','speedMultiplier','spacingStrength','spacingMultiplier','centerHiddenCopies','colorShiftEnabled','colorShiftDegrees','paletteLagEnabled','direction','fadeOversize','fadeOffsetSteps','vignetteAmount','vignetteUnit','fadeDurationSec']) {
+            for (const key of ['speedStrength','speedMultiplier','spacingStrength','spacingMultiplier','centerHiddenCopies','colorShiftEnabled','colorShiftDegrees','paletteLagEnabled','fadeOversize','fadeOffsetSteps','vignetteAmount','vignetteUnit','fadeDurationSec']) {
                 if (Object.prototype.hasOwnProperty.call(frame,key)) t[key]=cloneData(frame[key]);
             }
-            t.speedStrength=Math.max(0,Number(t.speedStrength)||0);
+            t.speedStrength=Math.max(-1,Math.min(1,Number(t.speedStrength)||0));
             t.speedMultiplier=Math.max(0,Number(t.speedMultiplier)||0);
             t.spacingStrength=Math.max(.01,Number(t.spacingStrength)||.01);
             t.spacingMultiplier=Math.max(0,Number(t.spacingMultiplier)||0);
@@ -11889,6 +13608,10 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
 
             if (Array.isArray(parsed)) { state.lightningRateSync=true;state.layers.forEach(ensureLayerEffectState);resetLightningRateRuntimeForProject(getLayerSweepConfig(state.layers[0]));ensureSweepAnimation();requestMainCanvasRender();return; }
             const settings = parsed.settings || {};
+            // Legacy projects have no Morph Profile collection. Do not let profiles from the
+            // previously opened project leak through merge-by-key loading; they migrate to a
+            // fresh system Standard after the legacy Blue settings below are restored.
+            if(!Array.isArray(settings.morph?.profiles)){state.morph.profiles=[];state.morph.activeProfileId='standard';}
             mergePersistentProjectSection('tunnel', settings.tunnel);
             mergePersistentProjectSection('morph', settings.morph);
             mergePersistentProjectSection('minimalMorph', settings.minimalMorph);
@@ -11926,7 +13649,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             if (typeof settings.showBoundingCircle === 'boolean') state.showBoundingCircle = settings.showBoundingCircle;
             if (typeof settings.boundingCircleColor === 'string') state.boundingCircleColor = settings.boundingCircleColor;
             if (typeof settings.showVignette === 'boolean') applyVignetteVisibility(settings.showVignette, false);
-            if (['shape','lines','lamps','web','sweep','particles','motion','palette','fourier'].includes(settings.sidebarMode)) state.sidebarMode = settings.sidebarMode;
+            if (['shape','lines','lamps','web','sweep','lightning','particles','motion','palette','fourier'].includes(settings.sidebarMode)) state.sidebarMode = settings.sidebarMode;
             state.fourierMode = settings.fourierMode === true;
             state.fourierStrength = Number.isFinite(Number(settings.fourierStrength)) ? Math.max(0,Math.min(100,Number(settings.fourierStrength))) : 50;
             state.forceAllLinesHidden=false;const _lineMemory=ensureSidebarFeatureToggleMemory();if(_lineMemory.lines)delete _lineMemory.lines;
@@ -12086,7 +13809,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 state.lamps.adaptiveStrength=Math.max(0,Math.min(100,Number(state.lamps.adaptiveStrength??100)));
                 state.lamps.adaptiveStrengthMultiplier=Math.max(0,Number(state.lamps.adaptiveStrengthMultiplier??1));
                 state.lamps.adaptiveFadeSec=Math.max(0,Number(state.lamps.adaptiveFadeSec??1));
-                if (typeof settings.lamps.morphEnabled !== 'boolean') state.lamps.morphEnabled = false;
+                state.lamps.morphEnabled = false;
                 state.lamps.density=Math.max(0,Math.min(200,Number(state.lamps.density??100)));
                 state.lamps.densityMultiplier=Math.max(0,Number(state.lamps.densityMultiplier??1));
                 state.lamps.scatter=Math.max(0,Math.min(100,Number(state.lamps.scatter)||0));
@@ -12095,8 +13818,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 state.lamps.sizeVariationMultiplier=Math.max(0,Number(state.lamps.sizeVariationMultiplier??1));
                 state.lamps.brightnessVariation=Math.max(0,Math.min(100,Number(state.lamps.brightnessVariation??0)));
                 state.lamps.brightnessVariationMultiplier=Math.max(0,Number(state.lamps.brightnessVariationMultiplier??1));
-                state.lamps.morphSize=Math.max(0,Math.min(100,Number(state.lamps.morphSize??20)));
-                state.lamps.morphBrightness=Math.max(0,Math.min(100,Number(state.lamps.morphBrightness??25)));
+                state.lamps.morphSize=0;
+                state.lamps.morphBrightness=0;
                 if (!settings.lamps.colorMode) state.lamps.colorMode = settings.lamps.rainbow ? 'rainbow' : settings.lamps.matchLineColor === false ? 'selected' : 'line';
             }
             for(const layer of state.layers){if(!layer.lamps||typeof layer.lamps!=='object')layer.lamps=cloneLampConfig(state.lamps);ensureLayerLampState(layer);}
@@ -12114,7 +13837,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.motion.rotationEnabled=false;motionRuntime.lastTime=0;motionRuntime.rotationRad=0;motionRuntime.layerRotationRad.clear();motionRuntime.cameraPhase=0;motionRuntime.colorPhase=0;ensureMotionAnimation();syncMotionUI();
 
             const tunnelSettings = settings.tunnel || {};
-            if (Number.isFinite(Number(tunnelSettings.speedStrength))) state.tunnel.speedStrength = Math.max(0, Math.min(3, Number(tunnelSettings.speedStrength)));
+            if (Number.isFinite(Number(tunnelSettings.speedStrength))) {
+                let signed=Math.max(-1,Math.min(1,Number(tunnelSettings.speedStrength)));
+                if(Number(tunnelSettings.signedSpeedVersion||0)<1 && tunnelSettings.direction==='away')signed=-Math.abs(signed);
+                state.tunnel.speedStrength=signed;
+            }
+            state.tunnel.signedSpeedVersion=1;
             if (Number.isFinite(Number(tunnelSettings.speedMultiplier))) state.tunnel.speedMultiplier = Math.max(0, Number(tunnelSettings.speedMultiplier));
             if (Number.isFinite(Number(tunnelSettings.spacingStrength))) state.tunnel.spacingStrength = Math.max(0.2, Number(tunnelSettings.spacingStrength));
             if (Number.isFinite(Number(tunnelSettings.spacingMultiplier))) state.tunnel.spacingMultiplier = Math.max(0, Number(tunnelSettings.spacingMultiplier));
@@ -12127,7 +13855,6 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             else state.tunnel.colorShiftCumulative = false;
             if (typeof tunnelSettings.paletteLagEnabled === 'boolean') state.tunnel.paletteLagEnabled = tunnelSettings.paletteLagEnabled;
             normalizeTunnelColorShiftState();
-            if (tunnelSettings.direction === 'away' || tunnelSettings.direction === 'toward') state.tunnel.direction = tunnelSettings.direction;
             if (typeof tunnelSettings.fadeOversize === 'boolean') state.tunnel.fadeOversize = tunnelSettings.fadeOversize;
 
             let loadedFadeOffset = Number(tunnelSettings.fadeOffsetSteps);
@@ -12260,6 +13987,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             if (Number.isFinite(Number(settings.randomLayerCount))) state.randomLayerCount = Math.max(1, Math.min(8, Number(settings.randomLayerCount)));
             if (settings.randomOptions && typeof settings.randomOptions === 'object') state.randomOptions = { ...state.randomOptions, ...settings.randomOptions };
             state.randomOptions.lineColorPalette = normalizePlaylistPaletteKey(state.randomOptions.lineColorPalette,'standard');
+            if(Number.isFinite(Number(settings.randomLayerCount)))state.randomLayerCount=Math.max(1,Math.min(8,Number(settings.randomLayerCount)));
             state.minimalMorph.defaultActive = settings.minimalMorph?.defaultActive === true;
             if (settings.minimalMorph && typeof settings.minimalMorph === 'object') {
                 const incomingOrangeGroups=Array.isArray(settings.minimalMorph.profileGroups)
@@ -12269,9 +13997,15 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 state.minimalMorph.mode=state.minimalMorph.profileGroups[0]||'standard';
                 state.minimalMorph.family=normalizeOrangeMorphFamily(settings.minimalMorph.family);
                 if (Number.isFinite(Number(settings.minimalMorph.intervalSec))) state.minimalMorph.intervalSec = Math.max(0.5, Math.min(120, Number(settings.minimalMorph.intervalSec)));
+                state.minimalMorph.intervalMultiplier=Number.isFinite(Number(settings.minimalMorph.intervalMultiplier))
+                    ?Math.max(0.015625,Math.min(64,Number(settings.minimalMorph.intervalMultiplier))):1;
                 if (Number.isFinite(Number(settings.minimalMorph.fadeSec))) state.minimalMorph.fadeSec = Math.max(0.1, Math.min(30, Number(settings.minimalMorph.fadeSec)));
                 if (typeof settings.minimalMorph.instantSwitch === 'boolean') state.minimalMorph.instantSwitch = settings.minimalMorph.instantSwitch;
             }
+            window.SomataMorphParameterRouting?.ensureProfiles?.(state.morph,state.minimalMorph);
+            window.SomataOrangeMorphProfiles?.ensureProfiles?.(state.minimalMorph,state.randomOptions,state.randomLayerCount);
+            if(state.minimalMorph?.activeProfileId)window.SomataOrangeMorphProfiles?.select?.(state.minimalMorph,state.randomOptions,orangeProfileLayerCountHolder(),state.minimalMorph.activeProfileId);
+            window.SomataMorphParameterRouting?.resetRuntime?.(runtimeState.morph);
             if (settings.tapTempo && typeof settings.tapTempo === 'object') {
                 const t = settings.tapTempo;
                 if (Number.isFinite(Number(t.bpm))) state.tapTempo.bpm = Math.max(0, Math.min(300, Number(t.bpm)));
@@ -12341,7 +14075,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     state.audioReactive.routingInitialized = false;
                 }
                 if (typeof a.routingTarget === 'string') state.audioReactive.routingTarget = a.routingTarget;
-                state.audioReactive.routingPreset=AUDIO_ROUTING_PRESETS.has(a.routingPreset)?a.routingPreset:(a.routes?'free':'geometry');
+                state.audioReactive.routingPreset=AUDIO_ROUTING_PRESETS.has(a.routingPreset)?a.routingPreset:(a.routes?'free':'geometryLamps');
                 ensureAudioRoutingState();renderAudioMeters();renderAudioCustomBandRows();syncAudioCutoffs();
             }
             if (settings.playback && typeof settings.playback === 'object' && ['full','minimal'].includes(settings.playback.lastMorphType)) {
@@ -12719,7 +14453,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.audioReactive.routingInitialized = false;
             state.audioReactive.routingTarget = 'master';
             state.audioReactive.masterEditEnabled = false;
-            state.audioReactive.routingPreset = 'geometry';
+            state.audioReactive.routingPreset = 'geometryLamps';
             state.audioReactive.defaultRoutesEnabled = true;
             state.audioReactive.masterRouteMultipliers = {};
             state.audioReactive.groupToggleMemory = {};
@@ -12900,9 +14634,11 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         });
         document.getElementById('btnSaveShape').addEventListener('click', saveCurrentShape);
 
-        const FACTORY_MORPH_SETTINGS = {intervalSec:5,intervalMultiplier:1,splinePoints:12,profileModeTransition:'phase',profileModeTransitionPercent:20,defaultActive:false,spiralOrderMin:-1,spiralOrderMax:1,spiralOrderLinked:false,spiralLayersMin:0,spiralLayersMax:1,chaosMorphEnabled:false,chaosMorphStepSpread:1,chaosMorphClosuresMax:3,preserveSpiralContinuity:true,spiralMorphType:'phaseCircle',spiralRotationCompensation:false,pauseOnSpace:false,diversity:false,vertexMin:4,vertexMax:19,vertexMultiplier:1,roundingMin:0,roundingMax:30,stepMin:0,stepMax:100,monoOrbitTransforms:true,orbitPercentMin:0,orbitPercentMax:0,strokeWidthMin:.8,strokeWidthMax:3.2,opacityMin:70,opacityMax:100,fillLayersMin:0,fillLayersMax:1,fillHueMin:-15,fillHueMax:15,fillHueReset:true,fillHueHarmony:'native',lineColorPalette:'standard',cyclePalettes:false,morphGlobalHueOffset:false,globalHueOffsetRange:180,sizeVariation:100,sizeVariationMultiplier:1,radiusMin:20,radiusMax:500,normalizeSizes:true,rotationMinPercent:0,rotationMaxPercent:50,rotationMultiplier:.1,rotationRandomDirection:true,fillOpacityMin:10,fillOpacityMax:10,mode:'circleSlide',fadePercent:0,circleProfileOverflow:true,slideType:'sector',speedType:'linear',lightningWhite:true,lightningRandom:false,lightningColor:'#ffffff',lightningSegmentPercent:30,lightningGlow:18,options:{byShape:true,byVertices:true,bySteps:true,byRounding:false,byStrokeWidth:true,bySize:true,byColor:true,byFillColor:true,byOpacity:true,byRotation:true,bySpiralOrder:false,bySpiralLayers:false},shapeOptions:{noLoops:true,loops:false,closed:false,open:false,family:'mix',profileGroups:['standard'],profileGroup:'all',standardOnly:false}};
+        const FACTORY_MORPH_SETTINGS = {intervalSec:5,intervalMultiplier:1,splinePoints:12,profileModeTransition:'phase',profileModeTransitionPercent:20,defaultActive:false,spiralOrderMin:-1,spiralOrderMax:1,spiralOrderLinked:false,spiralLayersMin:0,spiralLayersMax:1,chaosMorphEnabled:false,chaosMorphStepSpread:1,chaosMorphClosuresMax:3,preserveSpiralContinuity:true,spiralMorphType:'phaseCircle',spiralRotationCompensation:false,pauseOnSpace:false,diversity:false,vertexMin:4,vertexMax:19,vertexMultiplier:1,roundingMin:0,roundingMax:30,stepMin:0,stepMax:100,monoOrbitTransforms:true,orbitPercentMin:0,orbitPercentMax:0,strokeWidthMin:.8,strokeWidthMax:3.2,opacityMin:70,opacityMax:100,fillLayersMin:0,fillLayersMax:1,fillHueMin:-15,fillHueMax:15,fillHueReset:true,fillHueHarmony:'native',lineColorPalette:'standard',cyclePalettes:false,morphGlobalHueOffset:false,globalHueOffsetRange:180,sizeVariation:100,sizeVariationMultiplier:1,radiusMin:20,radiusMax:500,normalizeSizes:true,rotationMinPercent:0,rotationMaxPercent:50,rotationMultiplier:1,rotationRandomDirection:true,fillOpacityMin:10,fillOpacityMax:10,mode:'circleSlide',fadePercent:0,circleProfileOverflow:true,slideType:'sector',speedType:'linear',lightningWhite:true,lightningRandom:false,lightningColor:'#ffffff',lightningSegmentPercent:30,lightningGlow:18,options:{byShape:true,byVertices:true,bySteps:true,byRounding:false,byStrokeWidth:true,bySize:true,byColor:true,byFillColor:true,byOpacity:false,byRotation:true,bySpiralOrder:false,bySpiralLayers:false},shapeOptions:{noLoops:true,loops:false,closed:false,open:false,family:'mix',profileGroups:['standard'],profileGroup:'standard',standardOnly:true}};
 
         function resetMorphSettingsToFactory(){
+            delete state.morph.orbitCountMin;
+            delete state.morph.orbitCountMax;
             for(const [key,value] of Object.entries(FACTORY_MORPH_SETTINGS))state.morph[key]=cloneData(value);
             syncMorphSettingsUI();syncSidebarInputs();
             if(runtimeState.morph.active)activeRebaseMorphing();
@@ -12965,6 +14701,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const vw = Math.max(document.documentElement.clientWidth || 0, window.innerWidth || 0);
             const vh = Math.max(document.documentElement.clientHeight || 0, window.innerHeight || 0);
             menu._viewportTrigger = trigger;
+            menu._viewportOwnerPanelId = trigger.closest?.('#morphSettingsPanel,#randomSettingsPanel,#audioRoutingPanel')?.id || '';
             const portal=getAudioViewportPopupPortal();
             if(menu.parentElement!==portal)portal.appendChild(menu);
             menu.style.pointerEvents='auto';
@@ -13013,6 +14750,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const panel=document.getElementById(id);if(!panel)return;
             panel.classList.add('hidden');panel.style.visibility='';
             if(id==='audioRoutingPanel')document.querySelectorAll('.audio-param-menu,.audio-route-group-menu').forEach(m=>m.classList.add('hidden'));
+            if(id==='morphSettingsPanel')closeViewportPopupsForPanel('morphSettingsPanel');
+            if(id==='randomSettingsPanel'){closeViewportPopupsForPanel('randomSettingsPanel');orangeMorphOpenGroup='';}
             const ids={morphSettingsPanel:['btnMorphSettings'],randomSettingsPanel:['btnRandomSettings'],tunnelSettingsPanel:['btnTunnelSettings'],tapSettingsPanel:['btnTapSettings'],projectMorphSettingsPanel:['btnProjectMorphSettings'],audioReactivePanel:['btnAudioReactive','btnMobileMic'],audioRoutingPanel:['btnAudioRouting','btnMobileAudioRouting']}[id]||[];
             ids.forEach(btnId=>{const b=document.getElementById(btnId);b?.setAttribute('aria-expanded','false');if(id==='audioRoutingPanel')b?.classList.remove('active');});
         }
@@ -13038,6 +14777,9 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                     if(panel.contains(event.target))continue;
 
                     if(spec.panel==='audioRoutingPanel'&&event.target?.closest?.('#audioViewportPopupPortal'))continue;
+                    if(spec.panel==='randomSettingsPanel'&&viewportPopupBelongsToPanel(event.target,'randomSettingsPanel'))continue;
+                    if(spec.panel==='morphSettingsPanel'&&viewportPopupBelongsToPanel(event.target,'morphSettingsPanel'))continue;
+                    if(spec.panel==='morphSettingsPanel'&&event.type==='contextmenu'&&isMorphRoutingContextTarget(event.target))continue;
                     if(spec.triggers.some(id=>document.getElementById(id)?.contains(event.target)))continue;
                     v286CloseFloatingPanel(spec.panel);
                 }
@@ -13776,12 +15518,19 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 const meterInterval = Math.max(16, Number(ar.meterIntervalMs) || 40);
                 if (!ar.lastMeterPaint || now - ar.lastMeterPaint >= meterInterval) {
                     ar.lastMeterPaint = now;
-                    for(const key of getActiveAudioBandKeys()){
-                        const i=AUDIO_BAND_INDEX[key],pct=Math.round((Number(ar.levels[i])||0)*100);
-                        const meter=document.querySelector(`[data-audio-meter="${key}"]`),val=document.querySelector(`[data-audio-value="${key}"]`);
-                        if(meter)meter.style.width=pct+'%';if(val)val.textContent=pct+'%';
+                    // Hidden meters must not consume DOM/layout time on the audio tick.
+                    // Only presentation is skipped; frequency analysis, routing and Morph
+                    // modulation are intentionally left untouched.
+                    const audioPanel=document.getElementById('audioReactivePanel');
+                    if(audioPanel&&!audioPanel.classList.contains('hidden')){
+                        for(const key of getActiveAudioBandKeys()){
+                            const i=AUDIO_BAND_INDEX[key],pct=Math.round((Number(ar.levels[i])||0)*100);
+                            const meter=audioPanel.querySelector(`[data-audio-meter="${key}"]`),val=audioPanel.querySelector(`[data-audio-value="${key}"]`);
+                            if(meter&&meter.style.width!==pct+'%')meter.style.width=pct+'%';
+                            if(val&&val.textContent!==pct+'%')val.textContent=pct+'%';
+                        }
+                        paintAudioInputMonitor();
                     }
-                    paintAudioInputMonitor();
                     paintAudioRoutingMeters();
                 }
                 requestMainCanvasRender();
@@ -14147,24 +15896,17 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const applyMobileAudioSourceDefaults = () => {
                 const mobile = mobileAudioQuery.matches || isMobileAudioEnvironment();
                 if (systemOption) {
-                    systemOption.disabled = mobile;
+                    // Selecting PC audio is the default on every device. An unsupported
+                    // mobile browser will explain the limitation upon Start; it must
+                    // never silently switch the project to the microphone.
+                    systemOption.disabled = false;
                     systemOption.textContent = mobile
-                        ? 'Системный звук — недоступен в мобильном браузере'
-                        : 'Системный звук / экран';
+                        ? 'Слушать ПК (на мобильном может быть недоступно)'
+                        : 'Слушать ПК (системный звук / экран)';
                 }
                 const status = document.getElementById('audioStatus');
-                if (mobile && sourceSelect && !state.audioReactive.active) {
-                    sourceSelect.value = 'microphone';
-                    state.audioReactive.source = 'microphone';
-                    if (status) {
-                        if (isTelegramProviderContext()) {
-                            status.textContent = 'Микрофон выбран. Сейчас файл открыт через Telegram provider: такой просмотрщик может блокировать системный запрос Android. Для рабочего микрофона откройте приложение напрямую в Chrome по HTTPS и нажмите «Старт».';
-                        } else if (navigator.mediaDevices?.getUserMedia || navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia) {
-                            status.textContent = 'Микрофон выбран. Нажмите «Старт» — браузер запросит разрешение Android на микрофон.';
-                        } else {
-                            status.textContent = 'Этот просмотрщик не предоставляет API микрофона. Откройте приложение напрямую в Chrome/Firefox по HTTPS.';
-                        }
-                    }
+                if (mobile && sourceSelect && !state.audioReactive.active && state.audioReactive.source === 'system' && status) {
+                    status.textContent = 'По умолчанию выбран звук ПК. На мобильных системный захват может быть недоступен; при необходимости выберите микрофон вручную.';
                 }
             };
 
@@ -14676,6 +16418,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.minimalMorph.family = 'mix';
             state.minimalMorph.profileGroups = ['standard'];
             state.minimalMorph.defaultActive = false;
+            state.minimalMorph.profiles = [];
+            state.minimalMorph.activeProfileId = 'orange-standard';
             runtimeState.minimalMorph.autoStartedByProject = false;
             state.minimalMorph.fadeSec = 0.1;
             state.minimalMorph.instantSwitch = true;
@@ -14759,11 +16503,14 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             state.morph.normalizeSizes = true;
             state.morph.rotationMinPercent = 0;
             state.morph.rotationMaxPercent = 50;
-            state.morph.rotationMultiplier = 0.1;
+            state.morph.rotationMultiplier = 1;
             state.morph.rotationRandomDirection = true;
             state.morph.monoOrbitTransforms = true;
             state.morph.orbitPercentMin = 0;
             state.morph.orbitPercentMax = 0;
+            // Numeric Orbit override is opt-in; factory/startup must restore legacy defaults.
+            delete state.morph.orbitCountMin;
+            delete state.morph.orbitCountMax;
             state.morph.fillOpacityMin = 10;
             state.morph.fillOpacityMax = 10;
             state.morph.splinePoints = 12;
@@ -14809,6 +16556,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             renderAudioMeters();renderAudioCustomBandRows();syncAudioCutoffs();
             setupAudioReactiveUI();
             setupAudioRoutingUI();
+            setupMorphProfileUI();
+            setupOrangeMorphProfileUI();
             setupMobileMediaActions();
             setupMobileNumberSteppers();
             setupGlobalHotkeys();
@@ -14896,7 +16645,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 }else if(mode==='lines')toggleSidebarFeatureWithMemory('graffiti');
                 else if(mode==='lamps')toggleSidebarFeatureWithMemory('lamps');
                 else if(mode==='web')toggleSidebarFeatureWithMemory('web');
-                else if(mode==='sweep')toggleSidebarFeatureWithMemory('sweep');
+                else if(mode==='sweep')toggleSidebarFeatureWithMemory('glint');
+                    else if(mode==='lightning')toggleSidebarFeatureWithMemory('lightning');
                 else if(mode==='particles')toggleSidebarFeatureWithMemory('particles');
                 else if(mode==='motion')toggleMotionQuickGroup();
                 else if(mode==='palette'){togglePaletteQuickMenu();}

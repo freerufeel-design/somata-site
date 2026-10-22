@@ -1,0 +1,51 @@
+const fs=require('fs');
+const path=require('path');
+const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness');
+const assert=(condition,message)=>{if(!condition)throw new Error(message);};
+const ROOT=path.resolve(__dirname,'..');
+const css=fs.readFileSync(path.join(ROOT,'styles/app.css'),'utf8');
+
+(async()=>{
+  const h=await createBrowserHarness({disableGpu:true,loadDelayMs:250,evalTimeoutMs:9000});
+  try{
+    await h.evaluate(`Object.defineProperty(window,'localStorage',{configurable:true,value:{_saved:{},getItem(k){return this._saved[k]??null},setItem(k,v){this._saved[k]=String(v)}}})`);
+    await h.evaluate(`(()=>{const style=document.createElement('style');style.textContent=${JSON.stringify(css)};document.head.appendChild(style);})()`);
+    const measure=()=>h.evaluate(`(()=>{const sw=document.getElementById('uiModeSwitch'),cs=getComputedStyle(sw),brand=document.querySelector('.header-brand-zone');const r=sw.getBoundingClientRect();return {mode:document.body.dataset.uiMode,display:cs.display,accessible:sw.getClientRects().length>0,rectWidth:r.width,brandWidth:brand.getBoundingClientRect().width,pref:localStorage.getItem('somata.uiMode.v1'),mobile:matchMedia('(max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse)').matches};})()`);
+    await h.call('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+    await h.evaluate(`document.querySelector('#uiModeSwitch [data-ui-mode="easy"]').click()`);
+    let desktop=await measure();
+    assert(desktop.mode==='easy'&&desktop.display!=='none'&&desktop.pref==='easy','Desktop Easy selection must remain available and persisted');
+    await h.call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:2,mobile:true});
+    await h.call('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:5});
+    await h.call('Emulation.setUserAgentOverride',{userAgent:'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/141.0 Mobile Safari/537.36'});
+    await h.sleep(100);
+    const phone=await measure();
+    assert(phone.mobile&&phone.mode==='pro'&&phone.display==='none'&&!phone.accessible&&phone.rectWidth===0,'Phone should have no Easy/Pro switch and full Pro controls');
+    assert(phone.pref==='easy','Phone must not modify the saved desktop preference');
+    await h.evaluate(`window.SomataUIMode.setMode('easy')`);
+    const forced=await measure();
+    assert(forced.mode==='pro'&&forced.pref==='easy','Mobile mode cannot be overridden or persisted through the API');
+    await h.call('Emulation.setDeviceMetricsOverride',{width:360,height:640,deviceScaleFactor:2,mobile:true});
+    await h.sleep(60);
+    const narrow=await measure();
+    assert(narrow.mode==='pro'&&narrow.display==='none','Small phone must stay single-mode');
+    await h.call('Emulation.setDeviceMetricsOverride',{width:844,height:390,deviceScaleFactor:2,mobile:true});
+    await h.sleep(80);
+    const landscape=await measure();
+    assert(landscape.mobile&&landscape.mode==='pro'&&landscape.display==='none','Coarse-pointer landscape mobile viewport must stay single-mode');
+    await h.call('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+    await h.call('Emulation.setTouchEmulationEnabled',{enabled:false});
+    await h.sleep(100);
+    const restored=await measure();
+    assert(restored.mode==='easy'&&restored.display!=='none'&&restored.pref==='easy','Desktop mode must restore after mobile');
+    await h.evaluate(`document.querySelector('#uiModeSwitch [data-ui-mode="pro"]').click()`);
+    const pro=await measure();
+    assert(pro.mode==='pro'&&pro.pref==='pro'&&pro.display!=='none','Desktop Pro toggle must still work');
+    await h.call('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:2,mobile:true});
+    await h.sleep(70);
+    const phonePro=await measure();
+    assert(phonePro.mode==='pro'&&phonePro.display==='none','Phone always hides switch, including with a stored Pro setting');
+    assert(!uncaughtExceptions(h.events).length,`Unhandled browser exceptions: ${uncaughtExceptions(h.events).join('; ')}`);
+    console.log('7.11.2 MOBILE SINGLE MODE: PASS',JSON.stringify({desktop,phone,narrow,landscape,restored,pro,phonePro}));
+  }finally{await h.close();}
+})().catch(error=>{console.error(error);process.exit(1);});

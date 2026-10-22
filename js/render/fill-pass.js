@@ -13,6 +13,23 @@ const fillRuntimeDiagnostic={
     nativeCandidate:false,nativeComplete:false,gpuMaskEligible:false,lastUpdatedAt:0
 };
 const fillFailureSignatures=new Set();
+const fillWarmupStartedAtByLayer=new Map();
+const FILL_WARMUP_GRACE_MS=2500;
+function isFillGpuWarming(frameCtx){
+    // Cold GPU startup is asynchronous, not a permanent Fill failure. Unlike a
+    // generic skip, this branch expires and exposes a real failure in diagnostics.
+    let status=null;
+    try{status=FillGPURenderer.status?.()||null;}catch(_){return false;}
+    const mesh=status?.nativeMesh||{},mask=status?.webgpuMask||{};
+    const warming=Boolean((mesh.initializing===true||mask.initializing===true)&&
+        mesh.available!==true&&mask.available!==true&&!mesh.lost&&!mask.lost&&
+        !mesh.lastError&&!mask.lastError);
+    const id=String(frameCtx?.effectLayer?.id||frameCtx?.layer?.id||'unknown');
+    if(!warming){fillWarmupStartedAtByLayer.delete(id);return false;}
+    const now=performance.now();
+    if(!fillWarmupStartedAtByLayer.has(id))fillWarmupStartedAtByLayer.set(id,now);
+    return now-fillWarmupStartedAtByLayer.get(id)<FILL_WARMUP_GRACE_MS;
+}
 function noteFillRuntime(frameCtx,patch={}){
     const c=frameCtx?._geometryContract||null,g=c?.geometry||null,mesh=frameCtx?._fillMeshShadow||null;
     Object.assign(fillRuntimeDiagnostic,{
@@ -348,15 +365,24 @@ const SomataFillPassService=(()=>{
             }
         }
         if(!fillHandled&&contract?.fillRequested){
+            if(isFillGpuWarming(frameCtx)){
+                noteFillRuntime(frameCtx,{handled:false,stage:'gpu-warming',backend:'webgpu',reason:'GPU Fill initialization pending; repaint on ready'});
+                // The WebGPU Fill initializers request a new frame when ready. Do not
+                // spin a CPU render loop or misreport the very first frame as a crash.
+                return false;
+            }
             fillMaskValidationStats.canvasFallback++;stats.misses++;
             const g=contract?.geometry||{};let reason='GPU Fill backends returned false';
             if(frameCtx?.geometryPlan?.dynamic!==true&&g.hasClosedFillTopology!==true)reason=`no closed fill topology (closed=${Number(g.closedPathCount)||0}, open=${Number(g.openPathCount)||0}, fillContours=${Number(g.fillContourCount)||0})`;
             else{try{const fs=FillGPURenderer.status?.();const e=fs?.nativeMesh?.lastError||fs?.webgpuMask?.lastError||fs?.webgl2?.lastError;if(e)reason=String(e);}catch(_){} }
             noteFillFailureOnce(frameCtx,'gpu-backend-chain',reason);
-            somataGpuDiagnosticError('fill','gpu-only',reason,frameCtx,{fallback:'skip-fill-pass',recovered:true});
+            somataGpuDiagnosticError('fill','gpu-only',reason,frameCtx,{fallback:'skip-fill-pass',recovered:true,fillStatus:FillGPURenderer.status?.()||null,fillContract:{requested:contract?.fillRequested===true,nativeEligible:contract?.nativeGpuFillEligible===true,maskEligible:contract?.gpuMaskEligible===true,closedContours:Number(g?.closedPathCount)||0,fillContours:Number(g?.fillContourCount)||0},fillRuntime:{...fillRuntimeDiagnostic}});
             try{requestMainCanvasRender?.();}catch(_){}
         }
-        if(fillHandled)frameCtx._baseFillCommitted=true;
+        if(fillHandled){
+            frameCtx._baseFillCommitted=true;
+            fillWarmupStartedAtByLayer.delete(String(frameCtx?.effectLayer?.id||frameCtx?.layer?.id||'unknown'));
+        }
         return fillHandled;
     }
     function status(){return{...stats,contract:'Base consumes a compact Fill plan; Fill renderer selection, diagnostics and fallback policy are owned only by fill-pass.js.'};}

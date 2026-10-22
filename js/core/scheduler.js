@@ -53,6 +53,8 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             let externalRafGapCount=0,lastExternalRafGap=null;
             let lastMorphFreezeAt=-1e9;
             let lastMorphFreezeKey='';
+            let lastPerformanceConsoleAt=-1e9,performanceConsoleNotes=0,performanceConsoleSuppressed=0;
+            let lastWatchdogErrorAt=-1e9;
             let lastVisibilityResumeAt=performance.now();
             let lastTaskTiming={name:'',ms:0,at:0};
             let lastPaintTiming={ms:0,at:0};
@@ -130,14 +132,35 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                     morph:compactMorphFreezeContext(),
                     scheduler:{lastTickDurationMs:roundFreezeMs(lastTickDurationMs),lastTask:lastTaskTiming.name||null,lastTaskMs:roundFreezeMs(lastTaskTiming.ms),lastPaintMs:roundFreezeMs(lastPaintTiming.ms),watchdogRecoveries},
                     performance:{emaFps:Number(governor?.emaFps)||0,emaRenderMs:Number(governor?.emaRenderMs)||0,emaGpuMs:Number(governor?.emaGpuMs)||0,bottleneck:governor?.bottleneck||'unknown',topCpuPasses:compactFreezePasses()},
-                    recentGpu:recentFullGpu?{type:'FullGPU',code:recentFullGpu.code,frameId:recentFullGpu.frameId}:recentGpuRuntime?{type:'GPU-path',feature:recentGpuRuntime.feature,stage:recentGpuRuntime.stage,reason:recentGpuRuntime.reason}:null
+                    recentGpu:recentFullGpu?{type:'FullGPU',code:recentFullGpu.code,frameId:recentFullGpu.frameId}:recentGpuRuntime?{type:'GPU-path',feature:recentGpuRuntime.feature,stage:recentGpuRuntime.stage,reason:recentGpuRuntime.reason}:null,
+                    // Only include stage timing for render-related warnings; never
+                    // label an unmeasured GPU timestamp as a GPU stall.
+                    framePhases:(code==='MORPH_RENDER_SLOW'||code==='MORPH_RAF_GAP')?safeFreezeRead(window.__somataFramePhaseStatus)?.last||null:null
                 };
                 morphFreezeCount++;
                 const rec={at:roundFreezeMs(at),...payload};morphFreezeHistory.push(rec);if(morphFreezeHistory.length>32)morphFreezeHistory.shift();
                 lastMorphFreezeAt=at;lastMorphFreezeKey=key;
 
-                console.error('[Somata Morph Freeze]',payload);
-                try{window.__somataDiagNote?.('morph.freeze',`${payload.code}: ${payload.cause}`);}catch(_){ }
+                // Long frames are performance samples, not JavaScript exceptions.
+                // Retain full structured evidence in freezeStats() without pushing
+                // megabyte-sized per-frame objects through DevTools/error overlay.
+                // A genuinely stalled scheduler remains a distinct console.error.
+                if(code==='MORPH_SCHEDULER_WATCHDOG'&&durationMs>=1000){
+                    if(at-lastWatchdogErrorAt>=4000){lastWatchdogErrorAt=at;console.error('[Somata Morph Freeze]',{
+                        code:payload.code,durationMs,cause:payload.cause,scheduler:payload.scheduler
+                    });}
+                }else if(at-lastPerformanceConsoleAt>=8000){
+                    lastPerformanceConsoleAt=at;performanceConsoleNotes++;
+                    const phases=payload.framePhases;
+                    const heaviest=phases?.layerDetails?.reduce?.((a,b)=>!a||b.totalMs>a.totalMs?b:a,null)||null;
+                    console.warn('[Somata Performance]',{
+                        code:payload.code,durationMs,
+                        slowLayer:heaviest?{index:heaviest.index,kind:heaviest.kind,totalMs:heaviest.totalMs,steps:heaviest.steps}:null,
+                        emaRenderMs:payload.performance.emaRenderMs,
+                        detail:'Full timing history: animationScheduler.freezeStats() / __somataFramePhaseStatus()'
+                    });
+                }else performanceConsoleSuppressed++;
+                try{window.__somataDiagNote?.('morph.slow-frame',`${payload.code}: ${durationMs}ms`);}catch(_){ }
                 return payload;
             };
             document.addEventListener?.('visibilitychange',()=>{if(document.visibilityState!=='hidden')lastVisibilityResumeAt=performance.now();});
@@ -305,8 +328,8 @@ window.__spiroRegisterModule?.('js/core/scheduler');
                 hasAfterPaint(name) { return afterPaint.has(name); },
                 isMorphActive() { return hasMorphActivity(); },
                 reportMorphFreeze(code,detail={}) { return reportMorphFreeze(code,detail); },
-                freezeStats() { return {count:morphFreezeCount,externalRafGapCount,lastExternalRafGap,thresholds:{gapMs:MORPH_FREEZE_GAP_MS,workMs:MORPH_FREEZE_WORK_MS,renderMs:MORPH_RENDER_FREEZE_MS,watchdogReportMs:MORPH_WATCHDOG_REPORT_MS,longTaskMs:MORPH_FREEZE_LONG_TASK_MS},last:morphFreezeHistory.at(-1)||null,history:morphFreezeHistory.slice()}; },
-                stats() { return { activeTasks: tasks.size, frameCount, paintCount, paintErrors, lastPaintError, inFrame, rafPending: Boolean(raf), renderPending, lastTickAt, lastInvalidateAt, lastScheduledPaintAt, invalidateCount, watchdogArmed:Boolean(watchdogTimer), watchdogRecoveries, watchdogLastRecoveryAt, lastTickDurationMs:roundFreezeMs(lastTickDurationMs), lastTask:lastTaskTiming.name||null, lastTaskMs:roundFreezeMs(lastTaskTiming.ms), lastPaintMs:roundFreezeMs(lastPaintTiming.ms), morphFreezeCount, externalRafGapCount, lastExternalRafGap, fpsLimit, fpsFrameIntervalMs:roundFreezeMs(1000/Math.max(FPS_LIMIT_MIN,fpsLimit)), fpsGateSkips }; }
+                freezeStats() { return {count:morphFreezeCount,performanceConsoleNotes,performanceConsoleSuppressed,externalRafGapCount,lastExternalRafGap,thresholds:{gapMs:MORPH_FREEZE_GAP_MS,workMs:MORPH_FREEZE_WORK_MS,renderMs:MORPH_RENDER_FREEZE_MS,watchdogReportMs:MORPH_WATCHDOG_REPORT_MS,longTaskMs:MORPH_FREEZE_LONG_TASK_MS},last:morphFreezeHistory.at(-1)||null,history:morphFreezeHistory.slice()}; },
+                stats() { return { activeTasks: tasks.size, frameCount, paintCount, paintErrors, lastPaintError, inFrame, rafPending: Boolean(raf), renderPending, lastTickAt, lastInvalidateAt, lastScheduledPaintAt, invalidateCount, watchdogArmed:Boolean(watchdogTimer), watchdogRecoveries, watchdogLastRecoveryAt, lastTickDurationMs:roundFreezeMs(lastTickDurationMs), lastTask:lastTaskTiming.name||null, lastTaskMs:roundFreezeMs(lastTaskTiming.ms), lastPaintMs:roundFreezeMs(lastPaintTiming.ms), morphFreezeCount, performanceConsoleNotes, performanceConsoleSuppressed, externalRafGapCount, lastExternalRafGap, fpsLimit, fpsFrameIntervalMs:roundFreezeMs(1000/Math.max(FPS_LIMIT_MIN,fpsLimit)), fpsGateSkips }; }
             };
         })();
         function applyFpsLimit(value, persist = true) {
@@ -520,8 +543,15 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             fpsWindowStart: 0,
             fpsLastFrameAt: 0,
             fpsFrames: 0,
-            lastFpsText: ''
+            lastFpsText: '',
+            currentFramePhases: null,
+            lastFramePhases: null,
+            recentSlowFramePhases: []
         };
+        // Full-frame phase timing is always captured, unlike the per-effect sampler
+        // (every tenth frame). A rare driver/submit hitch must not be attributed
+        // to whichever CPU effect happened to be sampled in an earlier frame.
+        window.__somataFramePhaseStatus=()=>({last:renderPerf.lastFramePhases,slow:renderPerf.recentSlowFramePhases.slice()});
 
         const renderPassProfiler = {
             sampleEvery:10, frameSerial:0, active:false, frameStart:0,

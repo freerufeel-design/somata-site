@@ -110,15 +110,18 @@ window.__spiroRegisterModule?.('js/core/palette');
             return Math.max(0,Math.min(360,Number.isFinite(n)?n:0));
         }
         function getEffectivePlaylistHueOffset(){
+            let base=normalizePlaylistHueOffset(state.playlistPaletteHueOffset);
             try{
                 const blue=runtimeState?.morph;
                 const orange=runtimeState?.minimalMorph;
                 const green=runtimeState?.projectMorph;
                 const frameHue=Number(blue?.frameGlobalHueOffset);
-                if(blue?.active===true && state?.morph?.morphGlobalHueOffset===true && orange?.transitioning!==true && green?.active!==true && Number.isFinite(frameHue))
-                    return ((frameHue%360)+360)%360;
+                if(blue?.active===true && state?.morph?.morphGlobalHueOffset===true && orange?.transitioning!==true && green?.active!==true && Number.isFinite(frameHue))base=((frameHue%360)+360)%360;
+                const morphValue=window.SomataMorphParameterRouting?.resolveGlobalValue?.('palette.hueOffset',base);
+                if(Number.isFinite(Number(morphValue)))base=Number(morphValue);
+                if(typeof audioApplyNumeric==='function')base=audioApplyNumeric('palette.hueOffset',base,-1);
             }catch(_){}
-            return normalizePlaylistHueOffset(state.playlistPaletteHueOffset);
+            return normalizePlaylistHueOffset(base);
         }
         function paletteRotateHueHex(hex,degrees){
             const h=normalizePaletteHex(hex)||'#000000';

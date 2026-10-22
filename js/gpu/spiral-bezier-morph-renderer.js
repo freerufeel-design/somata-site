@@ -100,8 +100,8 @@ struct Vin { @location(0) corner:vec2<f32>, };
 struct Vout {
  @builtin(position) position:vec4<f32>, @location(0) local:vec2<f32>,
  @location(1) @interpolate(flat) segLen:f32,
- @location(2) @interpolate(flat) halfWidth0:f32,
- @location(3) @interpolate(flat) halfWidth1:f32,
+ @location(2) @interpolate(flat) logHalfWidth0:f32,
+ @location(3) @interpolate(flat) logHalfWidth1:f32,
  @location(4) @interpolate(flat) glowRadius:f32,
  @location(5) @interpolate(flat) alpha:f32,
  @location(6) @interpolate(flat) color:vec4<f32>,
@@ -113,10 +113,10 @@ fn centerShade(screenPos:vec2<f32>)->f32{if(u.phase.w<=.5){return 1.0;}let cente
  let cp0=copyData[ci*3u];let cp1=copyData[ci*3u+1u];let cp2=copyData[ci*3u+2u];let a=vec2<f32>(cp0.x*a0.x+cp0.y*a0.y,cp1.x*a0.x+cp1.y*a0.y);let bb=vec2<f32>(cp0.x*b0.x+cp0.y*b0.y,cp1.x*b0.x+cp1.y*b0.y);
  let sp0=screenPoint(a);let sp1=screenPoint(bb);let delta=sp1-sp0;let len=max(length(delta),0.0001);let dir=delta/len;let normal=vec2<f32>(-dir.y,dir.x);let l0=g1.x;let l1=g1.y;let sc=max(.000001,abs(cp0.w));
  let hw0=max(.18,u.params.x*sc*l0);let hw1=max(.18,u.params.x*sc*l1);let gr=max(0.0,u.params.y*sc);let pad=max(hw0,hw1)+gr+2.0;let tx=(v.corner.x+1.0)*.5;let lx=mix(-pad,len+pad,tx);let ly=v.corner.y*pad;let pos=sp0+dir*lx+normal*ly;
- o.position=vec4<f32>(pos.x/u.viewport.x*2.0-1.0,1.0-pos.y/u.viewport.y*2.0,0.0,1.0);o.local=vec2<f32>(lx,ly);o.segLen=len;o.halfWidth0=hw0;o.halfWidth1=hw1;o.glowRadius=gr;o.alpha=cp0.z*g1.z;o.color=vec4<f32>(cp1.z,cp1.w,cp2.x,cp2.y);return o;
+ o.position=vec4<f32>(pos.x/u.viewport.x*2.0-1.0,1.0-pos.y/u.viewport.y*2.0,0.0,1.0);o.local=vec2<f32>(lx,ly);o.segLen=len;o.logHalfWidth0=log(max(.001,hw0));o.logHalfWidth1=log(max(.001,hw1));o.glowRadius=gr;o.alpha=cp0.z*g1.z;o.color=vec4<f32>(cp1.z,cp1.w,cp2.x,cp2.y);return o;
 }
 @fragment fn fs(v:Vout)->@location(0) vec4<f32>{
- if(v.alpha<=.00001||v.color.a<=.00001){discard;}let cx=clamp(v.local.x,0.0,v.segLen);let q=cx/max(.0001,v.segLen);let hw=exp(mix(log(max(.001,v.halfWidth0)),log(max(.001,v.halfWidth1)),q));let d=length(vec2<f32>(v.local.x-cx,v.local.y));var cov=0.0;
+ if(v.alpha<=.00001||v.color.a<=.00001){discard;}let cx=clamp(v.local.x,0.0,v.segLen);let q=cx/max(.0001,v.segLen);let hw=exp(mix(v.logHalfWidth0,v.logHalfWidth1,q));let d=length(vec2<f32>(v.local.x-cx,v.local.y));var cov=0.0;
  if(u.params.w>.00001&&v.glowRadius>.01){let edge=max(0.0,d-hw);let z=edge/max(.55,v.glowRadius*.44);cov=exp(-z*z*1.65)*(1.0-smoothstep(v.glowRadius*.76,v.glowRadius+2.0,edge))*u.params.w;}else{cov=clamp(hw+.75-d,0.0,1.0)*u.params.z;}
  let centerMask=centerShade(v.position.xy);
  let a=clamp(cov*centerMask*v.alpha*v.color.a,0.0,1.0);if(a<.0001){discard;}return vec4<f32>(v.color.rgb*a,a);
@@ -230,7 +230,17 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
     function cubicArcLut(q,steps=12){const ts=new Float32Array(steps+1),ls=new Float32Array(steps+1);let total=0;for(let i=1;i<=steps;i++){const a=(i-1)/steps,t=i/steps;total+=cubicArcLengthGauss3(q,a,t);ts[i]=t;ls[i]=total;}return{ts,ls,total:Math.max(1e-9,total)};}
     function buildRailArcMap(cubics){const src=Array.isArray(cubics)?cubics:[],entries=[],knots=[0];let total=0;for(let i=0;i<src.length;i++){const lut=cubicArcLut(src[i]);entries.push({q:src[i],lut,start:total,end:total+lut.total});total+=lut.total;}total=Math.max(1e-9,total);for(const e of entries)knots.push(e.end/total);knots[knots.length-1]=1;return{entries,total,knots};}
     function localTAtArcFraction(entry,localFraction){const f=clamp(localFraction,0,1),target=f*entry.lut.total,ls=entry.lut.ls,ts=entry.lut.ts;let hi=1;while(hi<ls.length&&ls[hi]<target)hi++;if(hi>=ls.length)return 1;const lo=Math.max(0,hi-1),den=Math.max(1e-9,ls[hi]-ls[lo]),u=(target-ls[lo])/den;return ts[lo]+(ts[hi]-ts[lo])*u;}
-    function railLocationAtFraction(map,f){const target=clamp(f,0,1)*map.total;let i=0;while(i<map.entries.length-1&&target>map.entries[i].end+1e-9)i++;const e=map.entries[i],local=(target-e.start)/Math.max(1e-9,e.end-e.start);return{index:i,t:localTAtArcFraction(e,local)};}
+    function railLocationAtFraction(map,f){
+        const target=clamp(f,0,1)*map.total, entries=map.entries;
+        // Arc-map endpoints are monotonically increasing. Find precisely the first
+        // endpoint accepted by the old linear walk, using the SAME 1e-9 tolerance.
+        // Morph may query thousands of common knots per branch: O(log N) instead
+        // of revisiting O(N) entries for each query.
+        let lo=0,hi=entries.length-1;
+        while(lo<hi){const mid=(lo+hi)>>>1;if(target>entries[mid].end+1e-9)lo=mid+1;else hi=mid;}
+        const e=entries[lo],local=(target-e.start)/Math.max(1e-9,e.end-e.start);
+        return{index:lo,t:localTAtArcFraction(e,local)};
+    }
     function uniqueFractions(values){const a=(values||[]).map(v=>clamp(Number(v)||0,0,1)).sort((x,y)=>x-y),out=[];for(const v of a)if(!out.length||Math.abs(v-out[out.length-1])>1e-6)out.push(v);if(!out.length||out[0]>1e-8)out.unshift(0);else out[0]=0;if(out[out.length-1]<1-1e-8)out.push(1);else out[out.length-1]=1;return out;}
     function splitRailAtFractions(map,fractions){const out=[];for(let k=0;k<fractions.length-1;k++){const fa=fractions[k],fb=fractions[k+1];if(fb-fa<1e-8)continue;const a=railLocationAtFraction(map,fa),b=railLocationAtFraction(map,fb);if(a.index!==b.index){/* union includes all original knots, so only floating-point boundary drift can land here */const boundary=map.knots[Math.min(a.index,b.index)+1];const aa=railLocationAtFraction(map,Math.min(fb,boundary-1e-8)),bb=railLocationAtFraction(map,Math.max(fa,boundary+1e-8));if(a.index!==aa.index||bb.index!==b.index)continue;}
         const e=map.entries[a.index];let tb=b.index===a.index?b.t:1;let ta=a.t;if(k===fractions.length-2&&fb>=1-1e-8){const last=map.entries.length-1;if(a.index===last)tb=1;}const r=cubicSubsegment(e.q,ta,tb),lw0=Math.log(Math.max(.02,Number(e.q.widthScale0)||1)),lw1=Math.log(Math.max(.02,Number(e.q.widthScale1)||1));r.widthScale0=Math.exp(lw0+(lw1-lw0)*ta);r.widthScale1=Math.exp(lw0+(lw1-lw0)*tb);out.push(r);
@@ -264,8 +274,8 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         if(profileMorphMode==='calm'){const lim=Math.PI*4;for(let i=0;i<Math.min(sp.length,dp.length);i++){const d=dp[i].a-sp[i].a;dp[i].a=sp[i].a+Math.max(-lim,Math.min(lim,d));}}
         const at=(arr,i,slot)=>arr[i*3+slot],minimal=spiralTransport==='minimalTurn',forceCartesian=profileMorphMode==='topology'||spiralTransport==='continuous'||spiralTransport==='topology';
 
-        let pathMaxRadius=1e-9;for(let i=0;i<n;i++){const S=[at(sp,i,0),at(sp,i,1),at(sp,i,2),at(sp,i,3)],D=[at(dp,i,0),at(dp,i,1),at(dp,i,2),at(dp,i,3)];for(let k=0;k<4;k++)pathMaxRadius=Math.max(pathMaxRadius,S[k].r,D[k].r);}
-        let pathMaxPolarTurn=0,pathNearOriginTurn=0,visibleTurnEnergy=0,visibleTurnWeight=0,outerMaxTurn=0,outerTurnEnergy=0,outerTurnWeight=0,outerSignedTurn=0;for(let i=0;i<n;i++){const S=[at(sp,i,0),at(sp,i,1),at(sp,i,2),at(sp,i,3)],D=[at(dp,i,0),at(dp,i,1),at(dp,i,2),at(dp,i,3)];for(let k=0;k<4;k++){const signed=D[k].a-S[k].a,turn=Math.abs(signed),r=Math.max(S[k].r,D[k].r);pathMaxPolarTurn=Math.max(pathMaxPolarTurn,turn);if(Math.min(S[k].r,D[k].r)<pathMaxRadius*.006)pathNearOriginTurn=Math.max(pathNearOriginTurn,turn);const w=Math.max(.01,r/pathMaxRadius);visibleTurnEnergy+=turn*turn*w;visibleTurnWeight+=w;if(r>=pathMaxRadius*.28){outerMaxTurn=Math.max(outerMaxTurn,turn);outerTurnEnergy+=turn*turn*w;outerSignedTurn+=signed*w;outerTurnWeight+=w;}}}
+        let pathMaxRadius=1e-9;for(let i=0;i<n;i++)for(let k=0;k<4;k++){const s=at(sp,i,k),d=at(dp,i,k);pathMaxRadius=Math.max(pathMaxRadius,s.r,d.r);}
+        let pathMaxPolarTurn=0,pathNearOriginTurn=0,visibleTurnEnergy=0,visibleTurnWeight=0,outerMaxTurn=0,outerTurnEnergy=0,outerTurnWeight=0,outerSignedTurn=0;for(let i=0;i<n;i++)for(let k=0;k<4;k++){const s=at(sp,i,k),d=at(dp,i,k);const signed=d.a-s.a,turn=Math.abs(signed),r=Math.max(s.r,d.r);pathMaxPolarTurn=Math.max(pathMaxPolarTurn,turn);if(Math.min(s.r,d.r)<pathMaxRadius*.006)pathNearOriginTurn=Math.max(pathNearOriginTurn,turn);const w=Math.max(.01,r/pathMaxRadius);visibleTurnEnergy+=turn*turn*w;visibleTurnWeight+=w;if(r>=pathMaxRadius*.28){outerMaxTurn=Math.max(outerMaxTurn,turn);outerTurnEnergy+=turn*turn*w;outerSignedTurn+=signed*w;outerTurnWeight+=w;}}
         const visibleTurnRms=Math.sqrt(visibleTurnEnergy/Math.max(1e-9,visibleTurnWeight)),outerTurnRms=Math.sqrt(outerTurnEnergy/Math.max(1e-9,outerTurnWeight)),coherentOuterTurn=Math.abs(outerSignedTurn/Math.max(1e-9,outerTurnWeight));
 
         // Polar transport is what gives Phase / Phase-circle their circular motion, but a
@@ -672,7 +682,13 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
     function packCopies(frameCtx,rec){
         const fid=Number(frameCtx?.frameId)||0;if(rec.copyBuffer&&rec.copyPackedFrameId===fid)return rec.copyPackedCount;
         const corridor=state.tunnel?.active===true,copies=corridor?frameCtx.visibleInstances?.copies:[{scale:1}],alphas=corridor?frameCtx.visibleInstances?.alphas:[1],src=Array.isArray(copies)&&copies.length?copies:[{scale:1}],centerShade=spiralCenterShadeSpec(frameCtx);rec.lastCenterShade=centerShade;ensureCopyCapacity(rec,src.length);let k=0,firstStyle=null,multiColor=false;
-        for(let i=0;i<src.length;i++){const cp=src[i]||{};let ca=clamp(Number(alphas?.[i]??1),0,1);if(ca<=.0001)continue;const sc=corridor?Math.max(.000001,Math.abs(Number(cp.scale)||0)):1,ang=corridor&&typeof getMotionTunnelLagRadians==='function'?getMotionTunnelLagRadians(cp,frameCtx.layer):0,cs=Math.cos(ang),sn=Math.sin(ang);const style=corridor&&typeof getTunnelCopyColor==='function'?getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,cp,frameCtx.tunnelPaletteProfile):(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#fff'),styleKey=String(style||''),c=rgba(style),o=k*12;if(firstStyle===null)firstStyle=styleKey;else if(styleKey!==firstStyle)multiColor=true;rec.copyData[o]=sc*cs;rec.copyData[o+1]=-sc*sn;rec.copyData[o+2]=ca;rec.copyData[o+3]=sc;rec.copyData[o+4]=sc*sn;rec.copyData[o+5]=sc*cs;rec.copyData[o+6]=c[0];rec.copyData[o+7]=c[1];rec.copyData[o+8]=c[2];rec.copyData[o+9]=c[3];k++;}
+        const shared=corridor&&typeof SomataCorridorCopyFrame!=='undefined'?SomataCorridorCopyFrame:null;
+        const sharedBatch=shared?.peek(frameCtx)||null;
+        for(let i=0;i<src.length;i++){const cp=src[i]||{};let ca=clamp(Number(alphas?.[i]??1),0,1);if(ca<=.0001)continue;const sc=corridor?Math.max(.000001,Math.abs(Number(cp.scale)||0)):1;
+            // Share the authoritative Corridor colour/angle values with Glow/Base/Fill.
+            // Missing stroke base keeps the original direct rule (no cache substitution).
+            const ang=corridor&&typeof getMotionTunnelLagRadians==='function'?(sharedBatch&&sharedBatch.copies[i]===cp&&sharedBatch.angleVersion[i]===sharedBatch.serial?sharedBatch.angles[i]:getMotionTunnelLagRadians(cp,frameCtx.layer)):0,cs=Math.cos(ang),sn=Math.sin(ang);
+            const style=corridor&&typeof getTunnelCopyColor==='function'?(sharedBatch&&frameCtx.tunnelBaseStrokeColor&&sharedBatch.copies[i]===cp&&sharedBatch.strokeVersion[i]===sharedBatch.serial?sharedBatch.stroke[i]:getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,cp,frameCtx.tunnelPaletteProfile)):(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#fff'),styleKey=String(style||''),c=rgba(style),o=k*12;if(firstStyle===null)firstStyle=styleKey;else if(styleKey!==firstStyle)multiColor=true;rec.copyData[o]=sc*cs;rec.copyData[o+1]=-sc*sn;rec.copyData[o+2]=ca;rec.copyData[o+3]=sc;rec.copyData[o+4]=sc*sn;rec.copyData[o+5]=sc*cs;rec.copyData[o+6]=c[0];rec.copyData[o+7]=c[1];rec.copyData[o+8]=c[2];rec.copyData[o+9]=c[3];k++;}
         if(k){device.queue.writeBuffer(rec.copyBuffer,0,rec.copyData.buffer,0,k*48);stats.uploads+=k*48;}else stats.uploadSkips++;
         rec.copyPackedFrameId=fid;rec.copyPackedCount=k;rec.copyPackedMultiColor=multiColor;return k;
     }

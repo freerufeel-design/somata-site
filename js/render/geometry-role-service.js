@@ -6,12 +6,16 @@ window.__spiroRegisterModule?.('js/render/geometry-role-service');
 // Topology or Green therefore cannot edit the appearance/effect dispatch core.
 const SomataGeometryRoleService=(()=>{
     const adapters=[];
+    // Native priority depends only on adapter registration, never on the frame.
+    let nativeOrder=[];
     const stats={renders:0,glow:0,glowBase:0,base:0,misses:0,registrations:0,lastBackend:'none',lastReason:''};
     function register(name,api={},priority=0){
         const key=String(name||'').trim();if(!key||!api||typeof api!=='object')throw new Error('Geometry role adapter requires name/api');
         const rec={name:key,api,priority:Number(priority)||0,nativePriority:Number(api.nativePriority??priority)||0};
         const i=adapters.findIndex(x=>x.name===key);if(i>=0)adapters.splice(i,1);
-        adapters.push(rec);adapters.sort((a,b)=>b.priority-a.priority||a.name.localeCompare(b.name));stats.registrations++;return true;
+        adapters.push(rec);adapters.sort((a,b)=>b.priority-a.priority||a.name.localeCompare(b.name));
+        nativeOrder=adapters.slice().sort((a,b)=>b.nativePriority-a.nativePriority||b.priority-a.priority);
+        stats.registrations++;return true;
     }
     function adapter(name){return adapters.find(a=>a.name===String(name||''))||null;}
     function isStrict(frameCtx){try{return SomataGeometryPolicy?.isStrict?.(frameCtx)===true;}catch(_){return false;}}
@@ -57,8 +61,7 @@ const SomataGeometryRoleService=(()=>{
     function backendEligible(frameCtx,name,role='base'){const rec=adapter(name);if(!rec||!allowed(rec,frameCtx))return false;try{return rec.api.eligible?.(frameCtx,role)===true;}catch(_){return false;}}
     function nativeBaseKind(frameCtx,opt={}){
         const replacement=typeof isPathFxBaseReplacementActive==='function'&&isPathFxBaseReplacementActive(frameCtx);if(replacement)return null;
-        const ordered=adapters.slice().sort((a,b)=>b.nativePriority-a.nativePriority||b.priority-a.priority);
-        for(const rec of ordered){if(!allowed(rec,frameCtx))continue;try{if(rec.api.nativeEligible?.(frameCtx,opt)===true){if(opt.warmup!==false)rec.api.warmup?.(frameCtx);return rec.name;}}catch(_){}}
+        for(const rec of nativeOrder){if(!allowed(rec,frameCtx))continue;try{if(rec.api.nativeEligible?.(frameCtx,opt)===true){if(opt.warmup!==false)rec.api.warmup?.(frameCtx);return rec.name;}}catch(_){}}
         return null;
     }
     function canRenderRole(frameCtx,role='base'){for(const rec of adapters)if(eligibleRec(rec,frameCtx,role))return true;return batchHas(frameCtx,role);}

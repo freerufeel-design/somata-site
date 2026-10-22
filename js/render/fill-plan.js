@@ -85,10 +85,12 @@ var FillMeshPreparer = (() => {
         return contours.length*2===paths.length?contours:null;
     }
 
-    function transformSpiralFillPoint(p,copy,layer){
-        const sc=Math.max(.000001,Math.abs(Number(copy?.scale)||1));
-        let ang=0;try{ang=typeof getMotionTunnelLagRadians==='function'?(Number(getMotionTunnelLagRadians(copy,layer))||0):0;}catch(_){}
-        const c=Math.cos(ang),sn=Math.sin(ang),x=Number(p?.x)||0,y=Number(p?.y)||0;
+    // Transform does not depend on the source point.  A Spiral/Corridor fill may
+    // project tens of thousands of points per frame: compute scale/sin/cos once
+    // per copy, rather than calling the Morph phase resolver for *every point*.
+    // Preserve the exact arithmetic order of the original point mapping.
+    function transformSpiralFillPoint(p,transform){
+        const {sc,c,sn}=transform,x=Number(p?.x)||0,y=Number(p?.y)||0;
         return{x:(c*x-sn*y)*sc,y:(sn*x+c*y)*sc};
     }
     function branchDelta(path){
@@ -126,14 +128,20 @@ var FillMeshPreparer = (() => {
         const sourceAlphas=frameCtx?.visibleInstances?.fillAlphas||frameCtx?.visibleInstances?.alphas||[];
         const copies=sourceCopies.map((copy,i)=>({copy,alpha:Number(sourceAlphas[i]??1)})).filter(r=>r.alpha>.0005&&Number(r.copy?.scale)>0).sort((a,b)=>Number(b.copy.scale)-Number(a.copy.scale));
         if(!copies.length)return null;
-        const n=paths.length,TWO=Math.PI*2,lags=copies.map(r=>{try{return typeof getMotionTunnelLagRadians==='function'?(Number(getMotionTunnelLagRadians(r.copy,layer))||0):0;}catch(_){return 0;}});
+        const n=paths.length,TWO=Math.PI*2;
+        const transforms=copies.map(r=>{
+            const copy=r.copy,sc=Math.max(.000001,Math.abs(Number(copy?.scale)||1));
+            let ang=0;try{ang=typeof getMotionTunnelLagRadians==='function'?(Number(getMotionTunnelLagRadians(copy,layer))||0):0;}catch(_){}
+            return{sc,c:Math.cos(ang),sn:Math.sin(ang),ang};
+        });
+        const branchDeltas=paths.map(branchDelta);
         const rails=[];
         for(let seed=0;seed<n;seed++){
             const rail=[];let idx=seed;
             for(let ci=0;ci<copies.length;ci++){
-                const pts=samples[idx],copy=copies[ci].copy;
-                for(let pi=0;pi<pts.length;pi++){const q=transformSpiralFillPoint(pts[pi],copy,layer);if(!rail.length||pi>0||Math.hypot(q.x-rail[rail.length-1].x,q.y-rail[rail.length-1].y)>1e-7)rail.push(q);}
-                if(ci+1<copies.length){const d=branchDelta(paths[idx]),shift=Math.round((d+lags[ci]-lags[ci+1])*n/TWO);idx=((idx+shift)%n+n)%n;}
+                const pts=samples[idx],transform=transforms[ci];
+                for(let pi=0;pi<pts.length;pi++){const q=transformSpiralFillPoint(pts[pi],transform);if(!rail.length||pi>0||Math.hypot(q.x-rail[rail.length-1].x,q.y-rail[rail.length-1].y)>1e-7)rail.push(q);}
+                if(ci+1<copies.length){const d=branchDeltas[idx],shift=Math.round((d+transforms[ci].ang-transforms[ci+1].ang)*n/TWO);idx=((idx+shift)%n+n)%n;}
             }
             rails.push(rail);
         }

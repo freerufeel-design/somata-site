@@ -3425,6 +3425,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         const WebGPUBufferRecycler = (() => {
             let device=null,generation=0,ready=[],retired=[];
             let readyBytes=0,retiredBytes=0,acquires=0,hits=0,misses=0,recycles=0,promotions=0,destroys=0,prunes=0,resets=0;
+            let fenceRequests=0,fencedBuffers=0,largestFenceBatch=0,fenceFailures=0;
             const currentFrame=()=>Math.max(0,Number(renderRuntime?.frameId)||0);
             const align256=n=>Math.max(256,Math.ceil(Math.max(1,Number(n)||1)/256)*256);
             function destroyRec(rec){if(!rec||rec.dead)return;rec.dead=true;try{rec.buffer?.destroy?.();}catch(_){}destroys++;}
@@ -3434,7 +3435,41 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             function limits(){const scale=Math.max(1,(performanceGovernor.residencyScale?.()||1));return{count:32*scale,bytes:48*1024*1024*scale};}
             function removeRetired(rec){const i=retired.indexOf(rec);if(i>=0){retired.splice(i,1);retiredBytes=Math.max(0,retiredBytes-rec.size);}}
             function prune(){const lim=limits();while(ready.length>lim.count||readyBytes>lim.bytes){let idx=0;for(let i=1;i<ready.length;i++)if((ready[i].lastUsedFrame||0)<(ready[idx].lastUsedFrame||0))idx=i;const [rec]=ready.splice(idx,1);readyBytes=Math.max(0,readyBytes-rec.size);destroyRec(rec);prunes++;}}
-            function armRetired(){if(!device)return;const now=currentFrame();for(const rec of retired.slice()){if(rec.dead||rec.armed||now-rec.retireFrame<2)continue;rec.armed=true;const done=device.queue?.onSubmittedWorkDone?.();if(!done||typeof done.then!=='function'){removeRetired(rec);destroyRec(rec);continue;}Promise.resolve(done).then(()=>{if(rec.dead)return;removeRetired(rec);if(device!==rec.device||generation!==rec.generation){destroyRec(rec);return;}rec.lastUsedFrame=currentFrame();ready.push(rec);readyBytes+=rec.size;promotions++;prune();}).catch(()=>{removeRetired(rec);destroyRec(rec);});}}
+            // Retired buffers from the same submitted GPU timeline need one completion
+            // fence, not one onSubmittedWorkDone() promise per buffer.  The recycler
+            // still waits two render frames before arming and cannot reuse a buffer
+            // until the shared fence resolves. A device generation change destroys
+            // old resources instead of promoting them into the new device's pool.
+            function armRetired(){
+                if(!device)return;
+                const now=currentFrame(),eligible=[];
+                for(const rec of retired){
+                    if(rec.dead||rec.armed||now-rec.retireFrame<2)continue;
+                    rec.armed=true;eligible.push(rec);
+                }
+                if(!eligible.length)return;
+                const owner=device,ownerGeneration=generation;
+                let done;
+                try{done=owner.queue?.onSubmittedWorkDone?.();}catch(_){done=null;}
+                if(!done||typeof done.then!=='function'){
+                    fenceFailures++;
+                    for(const rec of eligible){removeRetired(rec);destroyRec(rec);}
+                    return;
+                }
+                fenceRequests++;fencedBuffers+=eligible.length;largestFenceBatch=Math.max(largestFenceBatch,eligible.length);
+                Promise.resolve(done).then(()=>{
+                    for(const rec of eligible){
+                        if(rec.dead)continue;
+                        removeRetired(rec);
+                        if(device!==owner||generation!==ownerGeneration){destroyRec(rec);continue;}
+                        rec.lastUsedFrame=currentFrame();ready.push(rec);readyBytes+=rec.size;promotions++;
+                    }
+                    if(device===owner&&generation===ownerGeneration)prune();
+                }).catch(()=>{
+                    fenceFailures++;
+                    for(const rec of eligible){removeRetired(rec);destroyRec(rec);}
+                });
+            }
             function acquire(dev,gen,size,usage,label='SpiroStar recycled GPU buffer'){
                 acquires++;if(!sync(dev,gen))return null;armRetired();const need=align256(size),use=Number(usage)||0;let best=-1,bestSize=Infinity;
                 for(let i=0;i<ready.length;i++){const rec=ready[i];if(rec.dead||rec.usage!==use||rec.size<need)continue;if(rec.size<bestSize){best=i;bestSize=rec.size;}}
@@ -3446,7 +3481,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 const size=Math.max(0,Number(buffer.size)||0),usage=Number(buffer.usage)||0;if(!size||!usage){try{buffer.destroy?.();}catch(_){}return false;}
                 const rec={buffer,size,usage,device,generation,retireFrame:currentFrame(),lastUsedFrame:currentFrame(),armed:false,dead:false};retired.push(rec);retiredBytes+=size;recycles++;armRetired();return true;
             }
-            function status(){armRetired();const lim=limits();return{generation,readyBuffers:ready.length,retiredBuffers:retired.length,readyBytes,retiredBytes,limitBuffers:lim.count,limitBytes:lim.bytes,acquires,hits,misses,recycles,promotions,destroys,prunes,resets,policy:'best-fit usage-compatible VRAM recycler; 2-frame retirement + queue.onSubmittedWorkDone safety; pressure-aware sticky pool; no shader/bind-layout changes'};}
+            function status(){armRetired();const lim=limits();return{generation,readyBuffers:ready.length,retiredBuffers:retired.length,readyBytes,retiredBytes,limitBuffers:lim.count,limitBytes:lim.bytes,acquires,hits,misses,recycles,promotions,destroys,prunes,resets,fenceRequests,fencedBuffers,largestFenceBatch,fenceFailures,policy:'best-fit usage-compatible VRAM recycler; 2-frame retirement + queue.onSubmittedWorkDone safety; pressure-aware sticky pool; no shader/bind-layout changes'};}
             return{acquire,recycle,reset,status};
         })();
         window.__spiroGPUBufferRecyclerStatus=()=>WebGPUBufferRecycler.status();
@@ -3494,7 +3529,12 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 if(rec&&rec.frameId===frameId&&rec.copies===copies&&rec.alphas===alphas){transformCpuHits++;return rec;}
                 const need=copies.length;if(!rec)rec={frameId:-1,copies:null,alphas:null,capacity:0,data:null};
                 if(need>rec.capacity||!rec.data){rec.capacity=performanceGovernor.capacityFor(need,rec.capacity,64,1.6);rec.data=new Float32Array(rec.capacity*6);}
-                for(let i=0;i<need;i++){const copy=copies[i],raw=Number(copy?.scale)||0,scAbs=Math.max(.000001,Math.abs(raw)),scLamp=Math.max(.000001,raw),ca=Math.max(0,Math.min(1,Number(alphas?.[i]??1))),ang=getMotionTunnelLagRadians(copy,owner),cs=Math.cos(ang),sn=Math.sin(ang),o=i*6;rec.data[o]=scAbs;rec.data[o+1]=scLamp;rec.data[o+2]=cs;rec.data[o+3]=sn;rec.data[o+4]=ca;rec.data[o+5]=0;}
+                // When the GPU store consumes the same authored layer as the current frame,
+                // use the already-authoritative Corridor angle cache. Dynamic Morph
+                // owner mismatch deliberately keeps the old owner-specific formula.
+                const angles=frameCtx?.layer===owner&&typeof SomataCorridorCopyFrame!=='undefined'?SomataCorridorCopyFrame:null;
+                const angleBatch=angles?.peek(frameCtx)||null;
+                for(let i=0;i<need;i++){const copy=copies[i],raw=Number(copy?.scale)||0,scAbs=Math.max(.000001,Math.abs(raw)),scLamp=Math.max(.000001,raw),ca=Math.max(0,Math.min(1,Number(alphas?.[i]??1))),ang=angleBatch&&angleBatch.copies[i]===copy&&angleBatch.angleVersion[i]===angleBatch.serial?angleBatch.angles[i]:getMotionTunnelLagRadians(copy,owner),cs=Math.cos(ang),sn=Math.sin(ang),o=i*6;rec.data[o]=scAbs;rec.data[o+1]=scLamp;rec.data[o+2]=cs;rec.data[o+3]=sn;rec.data[o+4]=ca;rec.data[o+5]=0;}
                 rec.frameId=frameId;rec.copies=copies;rec.alphas=alphas;transformCpuByLayer.set(owner,rec);transformCpuBuilds++;return rec;
             }
             function acquire(deviceRef,generationRef,frameCtx,copies,alphas,kind,footprint=1,layer=null){
@@ -3850,14 +3890,14 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
                     // the established sharp/multisample Fade shader and never disables Fill.
                     fadeBlurPipelineH=null;fadeBlurPipelineV=null;fadeSmoothCompositePipeline=null;fadeAdvancedError='';
                     try{
-                        const blurModule=device.createShaderModule({label:'Somata 7.9 smooth Fill separable blur WGSL',code:FADE_BLUR_WGSL});
-                        const smoothModule=device.createShaderModule({label:'Somata 7.9 smooth Fill composite WGSL',code:FADE_SMOOTH_COMPOSITE_WGSL});
-                        await assertWebGPUShaderModule(blurModule,'Somata 7.9 smooth Fill separable blur WGSL');
-                        await assertWebGPUShaderModule(smoothModule,'Somata 7.9 smooth Fill composite WGSL');
-                        fadeBlurPipelineH=device.createRenderPipeline({label:'Somata 7.9 Fade field horizontal',layout:'auto',vertex:{module:blurModule,entryPoint:'vs'},fragment:{module:blurModule,entryPoint:'fsH',targets:[{format}]},primitive:{topology:'triangle-list'}});
-                        fadeBlurPipelineV=device.createRenderPipeline({label:'Somata 7.9 Fade field vertical',layout:'auto',vertex:{module:blurModule,entryPoint:'vs'},fragment:{module:blurModule,entryPoint:'fsV',targets:[{format}]},primitive:{topology:'triangle-list'}});
-                        fadeSmoothCompositePipeline=device.createRenderPipeline({label:'Somata 7.9 continuous Fade composite',layout:'auto',vertex:{module:smoothModule,entryPoint:'vs'},fragment:{module:smoothModule,entryPoint:'fs',targets:[{format,blend}]},primitive:{topology:'triangle-list'}});
-                        fadeBlurUniformBuffer=device.createBuffer({label:'Somata 7.9 Fade blur uniform',size:16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+                        const blurModule=device.createShaderModule({label:'Somata 7.11.0 smooth Fill separable blur WGSL',code:FADE_BLUR_WGSL});
+                        const smoothModule=device.createShaderModule({label:'Somata 7.11.0 smooth Fill composite WGSL',code:FADE_SMOOTH_COMPOSITE_WGSL});
+                        await assertWebGPUShaderModule(blurModule,'Somata 7.11.0 smooth Fill separable blur WGSL');
+                        await assertWebGPUShaderModule(smoothModule,'Somata 7.11.0 smooth Fill composite WGSL');
+                        fadeBlurPipelineH=device.createRenderPipeline({label:'Somata 7.11.0 Fade field horizontal',layout:'auto',vertex:{module:blurModule,entryPoint:'vs'},fragment:{module:blurModule,entryPoint:'fsH',targets:[{format}]},primitive:{topology:'triangle-list'}});
+                        fadeBlurPipelineV=device.createRenderPipeline({label:'Somata 7.11.0 Fade field vertical',layout:'auto',vertex:{module:blurModule,entryPoint:'vs'},fragment:{module:blurModule,entryPoint:'fsV',targets:[{format}]},primitive:{topology:'triangle-list'}});
+                        fadeSmoothCompositePipeline=device.createRenderPipeline({label:'Somata 7.11.0 continuous Fade composite',layout:'auto',vertex:{module:smoothModule,entryPoint:'vs'},fragment:{module:smoothModule,entryPoint:'fs',targets:[{format,blend}]},primitive:{topology:'triangle-list'}});
+                        fadeBlurUniformBuffer=device.createBuffer({label:'Somata 7.11.0 Fade blur uniform',size:16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
                     }catch(advancedErr){
                         fadeBlurPipelineH=null;fadeBlurPipelineV=null;fadeSmoothCompositePipeline=null;fadeAdvancedError=String(advancedErr?.message||advancedErr);
                         try{fadeBlurUniformBuffer?.destroy?.();}catch(_){}fadeBlurUniformBuffer=null;
@@ -3991,7 +4031,11 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
                 return null;
             }
             function prepareUniformSlot(frameCtx,targetCtx,copyIndex=null,mesh=null){
-                const rgba=GPUColorCache.rgba(frameCtx.layer?.fillColor||frameCtx.layer?.strokeColor||'#ffffff'),copies=frameCtx.visibleInstances?.copies||[],copy=copyIndex==null?null:copies[copyIndex];
+                const copies=frameCtx.visibleInstances?.copies||[],copy=copyIndex==null?null:copies[copyIndex];
+                const fillColor=frameCtx.layer?.fillColor||frameCtx.layer?.strokeColor||'#ffffff';
+                const shiftedFill=copy&&mesh?.corridorBaked!==true&&typeof getTunnelCopyColor==='function'
+                    ?getTunnelCopyColor(fillColor,copy,frameCtx.tunnelFillPaletteProfile):fillColor;
+                const rgba=GPUColorCache.rgba(shiftedFill);
                 const alphaList=frameCtx.visibleInstances?.fillAlphas||frameCtx.visibleInstances?.alphas||[];
                 const copyAlpha=mesh?.corridorBaked===true?1:Math.max(0,Math.min(1,Number(alphaList[copyIndex==null?0:copyIndex]??1)));
                 const alpha=Math.max(0,Math.min(1,rgba[3]*Math.max(0,Number(frameCtx.baseAlpha)||0)*copyAlpha));
@@ -4007,7 +4051,17 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
                 return{empty:false,slot};
             }
             function encodeMeshPass(encoder,targetTexture,frameCtx,mesh,targetCtx,corridor=false,preserveTarget=false){
-                if(!encoder||!targetTexture||!frameCtx||!mesh?.nativeComplete||!targetCtx||!ensureSize(mainCanvas.width,mainCanvas.height))return{handled:false,triangles:0,windingTriangles:0};
+                // A Layer Scene can outlive a canvas resize. GPU resolveTarget and MSAA
+                // attachment *must* have identical pixel dimensions: never encode against
+                // mainCanvas dimensions while the supplied GPUTexture is a different size.
+                if(!encoder||!targetTexture||!frameCtx||!mesh?.nativeComplete||!targetCtx)return{handled:false,triangles:0,windingTriangles:0};
+                const targetW=Number(targetTexture.width)||mainCanvas.width;
+                const targetH=Number(targetTexture.height)||mainCanvas.height;
+                if(targetW!==mainCanvas.width||targetH!==mainCanvas.height){
+                    lastError=`Fill scene/viewport resize pending: ${targetW}x${targetH} vs ${mainCanvas.width}x${mainCanvas.height}`;
+                    return{handled:false,triangles:0,windingTriangles:0,reason:lastError};
+                }
+                if(!ensureSize(targetW,targetH))return{handled:false,triangles:0,windingTriangles:0};
                 const gpu=getGpuMesh(mesh);if(!gpu)return{handled:false,triangles:0,windingTriangles:0};
                 const copyCount=corridor?Math.max(0,frameCtx.visibleInstances?.copies?.length||0):1;
                 if(corridor&&!copyCount)return{handled:true,triangles:0,windingTriangles:0};
@@ -4063,8 +4117,8 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
                 const bw=Math.max(1,Math.ceil(width*.5)),bh=Math.max(1,Math.ceil(height*.5));
                 if(fadeBlurTextureA&&fadeBlurTextureB&&fadeBlurWidth===bw&&fadeBlurHeight===bh&&fadeBlurBindGroupH&&fadeBlurBindGroupV)return true;
                 try{fadeBlurTextureA?.destroy?.();}catch(_){}try{fadeBlurTextureB?.destroy?.();}catch(_){}
-                fadeBlurTextureA=device.createTexture({label:'Somata 7.9 Fade field H 1/2-res',size:[bw,bh,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
-                fadeBlurTextureB=device.createTexture({label:'Somata 7.9 Fade field V 1/2-res',size:[bw,bh,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
+                fadeBlurTextureA=device.createTexture({label:'Somata 7.11.0 Fade field H 1/2-res',size:[bw,bh,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
+                fadeBlurTextureB=device.createTexture({label:'Somata 7.11.0 Fade field V 1/2-res',size:[bw,bh,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
                 fadeBlurViewA=fadeBlurTextureA.createView();fadeBlurViewB=fadeBlurTextureB.createView();fadeBlurWidth=bw;fadeBlurHeight=bh;
                 fadeBlurBindGroupH=device.createBindGroup({layout:fadeBlurPipelineH.getBindGroupLayout(0),entries:[{binding:0,resource:isolatedFillView},{binding:1,resource:fadeSmoothSampler},{binding:2,resource:{buffer:fadeBlurUniformBuffer}}]});
                 fadeBlurBindGroupV=device.createBindGroup({layout:fadeBlurPipelineV.getBindGroupLayout(0),entries:[{binding:0,resource:fadeBlurViewA},{binding:1,resource:fadeSmoothSampler},{binding:2,resource:{buffer:fadeBlurUniformBuffer}}]});
@@ -4134,15 +4188,41 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
                     pass.setPipeline(fadeCompositePipeline);pass.setBindGroup(0,bindGroup);pass.draw(3);pass.end();return true;
                 }catch(err){lastError=String(err?.message||err);return false;}
             }
+            // Accumulating Fill owns a full-resolution GPUTexture per layer ID.
+            // Orange regenerates those IDs indefinitely; without eviction, the
+            // old history textures and timer closures survive until device reset.
+            function disposeAccumulatingFillHistory(key,rec){
+                try{clearTimeout(rec?.timerHandle);}catch(_){}
+                try{rec?.texture?.destroy?.();}catch(_){}
+                fillHistoryRecords.delete(key);
+            }
+            function pruneAccumulatingFillHistory(frameId,activeKey){
+                const maxRecords=8,staleFrames=150;
+                for(const [key,rec] of fillHistoryRecords){
+                    if(key!==activeKey&&frameId-(Number(rec.lastUsedFrame)||0)>staleFrames)
+                        disposeAccumulatingFillHistory(key,rec);
+                }
+                if(fillHistoryRecords.size>maxRecords){
+                    const oldest=[...fillHistoryRecords.entries()].filter(([key])=>key!==activeKey)
+                        .sort((a,b)=>(a[1].lastUsedFrame||0)-(b[1].lastUsedFrame||0));
+                    for(const [key,rec] of oldest){
+                        if(fillHistoryRecords.size<=maxRecords)break;
+                        if(frameId-(Number(rec.lastUsedFrame)||0)>4)disposeAccumulatingFillHistory(key,rec);
+                    }
+                }
+            }
             function accumulationHistoryRecord(frameCtx){
                 const key=String(frameCtx?.layer?.id||`layer-${Number(frameCtx?.layerIndex)||0}`);
+                const frameId=Number(frameCtx?.frameId)||Number(renderRuntime?.frameId)||1;
                 let rec=fillHistoryRecords.get(key);
                 if(!rec||rec.generation!==hubGeneration||rec.width!==width||rec.height!==height){
-                    try{rec?.texture?.destroy?.();}catch(_){}
+                    if(rec)disposeAccumulatingFillHistory(key,rec);
                     const texture=device.createTexture({label:`Somata accumulating Fill history ${key}`,size:[width,height,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});
                     rec={generation:hubGeneration,width,height,texture,view:texture.createView(),bindGroup:null,cycleStartMs:0,lastFrameId:-1,timerSec:0,timerHandle:null,forceReset:false};
                     fillHistoryRecords.set(key,rec);
                 }
+                rec.lastUsedFrame=frameId;
+                pruneAccumulatingFillHistory(frameId,key);
                 if(!rec.bindGroup)rec.bindGroup=device.createBindGroup({layout:isolatedCompositePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:rec.view},{binding:1,resource:isolatedCompositeSampler}]});
                 return rec;
             }
@@ -4176,7 +4256,15 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
                 return appendIsolatedFillComposite(encoder,targetTexture,clearTarget);
             }
             function encodeIsolatedMeshCommandToTexture(targetTexture,frameCtx,mesh,targetCtx=mainCtx,corridor=false,clearTarget=false){
-                if(!targetTexture||!canEncodeToTexture(frameCtx,mesh)||!isolatedFillTexture)return{handled:false,commandBuffer:null,reason:lastError||'isolated Fill renderer not ready'};
+                if(!targetTexture||!canEncodeToTexture(frameCtx,mesh))return{handled:false,commandBuffer:null,reason:lastError||'isolated Fill renderer not ready'};
+                // Synchronize the isolated source with the destination *before* encoding;
+                // the old code could keep a stale 1415x828 source while the Layer Scene
+                // had already changed to 1920x1080 (and vice versa).
+                const targetW=Number(targetTexture.width)||mainCanvas.width;
+                const targetH=Number(targetTexture.height)||mainCanvas.height;
+                if(targetW!==mainCanvas.width||targetH!==mainCanvas.height)
+                    return{handled:false,commandBuffer:null,reason:`Fill scene/viewport resize pending: ${targetW}x${targetH} vs ${mainCanvas.width}x${mainCanvas.height}`};
+                if(!ensureSize(targetW,targetH)||!isolatedFillTexture)return{handled:false,commandBuffer:null,reason:lastError||'isolated Fill resize not ready'};
                 try{
                     const encoder=device.createCommandEncoder({label:corridor?'Somata isolated Corridor Fill encoder':'Somata isolated ordered Fill encoder'});
                     // Critical invariant: the MSAA attachment always starts from transparent for
@@ -4221,7 +4309,7 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
                 }catch(err){lastError=String(err?.message||err);fallbacks++;return false;}
             }
             function clear(){/* render pass clears every presentation */}
-            function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost&&WebGPUDeviceHub.isReady(),attempted,initializing,lost,lastError,width,height,submissions,draws,bufferBuilds,bufferHits,gpuEvictions,residentMeshRecords:gpuMeshRecords.size,fallbacks,renderedTriangles,directEncodes,directTriangles,isolatedEncodes,windingDraws,windingCovers,parityDraws,parityCovers,windingTriangles,uniformSlots:uniformSlots.length,uniformSlotGrows,dynamicMeshUploads,dynamicMeshUploadBytes,dynamicMeshGrows,dynamicMeshReuses,fillHistoryLayers:fillHistoryRecords.size,fadeStyleLayers:fadeStyleRecords.size,fadeAvailable:!!fadeCompositePipeline,fadeError:fadeCompositeError,fadeContinuousAvailable:!!(fadeBlurPipelineH&&fadeBlurPipelineV&&fadeSmoothCompositePipeline),fadeContinuousError:fadeAdvancedError,fadeFieldResolution:fadeBlurWidth&&fadeBlurHeight?[fadeBlurWidth,fadeBlurHeight]:null,msaa:4,stencilFormat:'depth24plus-stencil8',hubGeneration};}
+            function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost&&WebGPUDeviceHub.isReady(),attempted,initializing,lost,lastError,width,height,submissions,draws,bufferBuilds,bufferHits,gpuEvictions,residentMeshRecords:gpuMeshRecords.size,fallbacks,renderedTriangles,directEncodes,directTriangles,isolatedEncodes,windingDraws,windingCovers,parityDraws,parityCovers,windingTriangles,uniformSlots:uniformSlots.length,uniformSlotGrows,dynamicMeshUploads,dynamicMeshUploadBytes,dynamicMeshGrows,dynamicMeshReuses,fillHistoryLayers:fillHistoryRecords.size,fillHistoryLimit:8,fadeStyleLayers:fadeStyleRecords.size,fadeAvailable:!!fadeCompositePipeline,fadeError:fadeCompositeError,fadeContinuousAvailable:!!(fadeBlurPipelineH&&fadeBlurPipelineV&&fadeSmoothCompositePipeline),fadeContinuousError:fadeAdvancedError,fadeFieldResolution:fadeBlurWidth&&fadeBlurHeight?[fadeBlurWidth,fadeBlurHeight]:null,msaa:4,stencilFormat:'depth24plus-stencil8',hubGeneration};}
             return{warmup,isReady:()=>warmup(),canEncodeToTexture,encodeToTexture,encodeMeshCommandToTexture,encodeCorridorCommandToTexture,encodeMeshIsolatedCommandToTexture,encodeCorridorIsolatedCommandToTexture,render,clear,status};
         })();
 
@@ -4600,7 +4688,7 @@ fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
             function retry(){if(ready&&!lost)return true;if(initializing)return false;attempted=false;lost=false;retryCount++;void initAsync();return false;}
             function vignetteInfo(frame){
                 if(state.showBoundingCircle||!state.showVignette||!state.tunnel?.active||!state.tunnel.fadeOversize)return{on:false,fx:0,fy:0};
-                const amountPx=Math.max(0,Math.min(1200,audioApplyNumeric('tunnel.vignette',Number(state.tunnel.vignetteAmount)||0,-1)));if(amountPx<=.0001)return{on:false,fx:0,fy:0};
+                const authored=Math.max(0,Math.min(1200,Number(state.tunnel.vignetteAmount)||0)),morphed=Number(window.SomataMorphParameterRouting?.resolveGlobalValue?.('tunnel.vignette',authored));const amountPx=Math.max(0,Math.min(1200,audioApplyNumeric('tunnel.vignette',Number.isFinite(morphed)?morphed:authored,-1)));if(amountPx<=.0001)return{on:false,fx:0,fy:0};
                 const cssW=Math.max(1,Number(frame?.w)||mainCanvas.clientWidth||1),cssH=Math.max(1,Number(frame?.h)||mainCanvas.clientHeight||1),dpr=Math.max(.25,Number(frame?.dpr)||window.devicePixelRatio||1);
                 const mv=getMotionViewportTransform(cssW,cssH),ox=cssW*.5+(Number(state.panX)||0)+(Number(mv.panX)||0),oy=cssH*.5+(Number(state.panY)||0)+(Number(mv.panY)||0);
                 const ex=Math.max(1,Math.min(ox,cssW-ox)),ey=Math.max(1,Math.min(oy,cssH-oy));
@@ -4617,7 +4705,7 @@ fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
                 const layers=(state?.layers||[]).filter(l=>l?.visible!==false);
                 for(const l of layers){
                     const sw=getLayerSweepConfig?.(l);
-                    if(sw?.enabled===true&&sw.effectType==='lightning'&&normalizeLightningBehaviorValue(sw.lightningBehavior,'symmetric')!=='symmetric')return true;
+                    if(sw?.lightningEnabled===true&&normalizeLightningBehaviorValue(sw.lightningBehavior,'symmetric')!=='symmetric')return true;
                     if(l?.lineProfileApplication==='graffiti')return true;
                     if(l?.sprite?.enabled===true||l?.lineMotionFx?.enabled===true)return true;
                 }
@@ -4722,7 +4810,8 @@ fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
                     const lampsEmbedded=Boolean(wantsLampInterleave&&lampLayerSceneCommand),lampSource=lampsEmbedded?null:rawLampSource,lt=lampSource?.texture||dummyLampTexture;
 
                     const strictSpiral=frame?.strictSpiralGpuPresentRequired===true,lateCanvasOverlay=Boolean(strictSpiral&&frame?.strictSpiralLateCanvasOverlay===true&&frame?.gpuMainCanvasHasContent===true&&renderBackendTelemetry.hasMaterialization?.()!==true),mainSceneEmpty=Boolean(layerSource&&(lateCanvasOverlay?false:(strictSpiral?frame?.gpuMainCanvasHasContent!==true:frame?.gpuMainSceneEmpty)));const st=mainSceneEmpty?dummyLampTexture:sceneTexture;
-                    if(mainSceneEmpty)sceneUploadSkips++;else{device.queue.copyExternalImageToTexture({source:mainCanvas},{texture:sceneTexture,premultipliedAlpha:false},[width,height]);sceneUploads++;}
+                    const framePhase=renderPerf?.currentFramePhases||null;
+                    if(mainSceneEmpty)sceneUploadSkips++;else{const uploadAt=performance.now();device.queue.copyExternalImageToTexture({source:mainCanvas},{texture:sceneTexture,premultipliedAlpha:false},[width,height]);sceneUploads++;if(framePhase)framePhase.gpuMainUploadMs=performance.now()-uploadAt;}
                     if(!bindGroup||boundBgTexture!==bt||boundLampTexture!==lt||boundLayerTexture!==ltx||boundUnderlayTexture!==utx||boundSceneTexture!==st){bindGroup=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:st.createView()},{binding:1,resource:bt.createView()},{binding:2,resource:lt.createView()},{binding:3,resource:ltx.createView()},{binding:4,resource:utx.createView()},{binding:5,resource:sampler},{binding:6,resource:{buffer:uniformBuffer}}]});boundBgTexture=bt;boundLampTexture=lt;boundLayerTexture=ltx;boundUnderlayTexture=utx;boundSceneTexture=st;finalRenderBundle=null;finalRenderBundleList.length=0;if(typeof device.createRenderBundleEncoder==='function'){try{const rbe=device.createRenderBundleEncoder({label:'SpiroStar final composite render bundle',colorFormats:[format]});rbe.setPipeline(pipeline);rbe.setBindGroup(0,bindGroup);rbe.draw(3);finalRenderBundle=rbe.finish();finalRenderBundleList[0]=finalRenderBundle;finalBundleBuilds++;}catch(_){finalRenderBundle=null;finalRenderBundleList.length=0;}}}
                     const cfg=normalizeSceneBlendState(),c=GPUColorCache.rgba(state.bgColor||'#090d16'),v=vignetteInfo(frame),dpr=Math.max(.25,Number(frame?.dpr)||window.devicePixelRatio||1);
                     uniformData.fill(0);
@@ -4742,7 +4831,7 @@ fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
                     const frameCommands=frameCommandScratch;frameCommands.length=0;const gpuTimer=beginGpuTiming(frame?.id??renderRuntime.frameId);if(gpuTimer?.begin)frameCommands.push(gpuTimer.begin);
                     if(underlayCommands?.clearCommand)frameCommands.push(underlayCommands.clearCommand);for(const cmd of underlayCommands?.effectCommands||[])if(cmd)frameCommands.push(cmd);if(Array.isArray(frameSceneCommands))for(const cmd of frameSceneCommands)if(cmd)frameCommands.push(cmd);if(layerCommand)frameCommands.push(layerCommand);
                     if(lampsEmbedded){for(const item of layerEffects)if(Number(item?.phase)<lampPhase&&item?.commandBuffer)frameCommands.push(item.commandBuffer);if(rawLampCommand)frameCommands.push(rawLampCommand);frameCommands.push(lampLayerSceneCommand);for(const item of layerEffects)if(Number(item?.phase)>=lampPhase&&item?.commandBuffer)frameCommands.push(item.commandBuffer);}else{for(const item of layerEffects)if(item?.commandBuffer)frameCommands.push(item.commandBuffer);if(rawLampCommand)frameCommands.push(rawLampCommand);}
-                    frameCommands.push(finalCommand);const gpuTimerEnd=finishGpuTiming(gpuTimer);if(gpuTimerEnd)frameCommands.push(gpuTimerEnd);mergedFrameCommandBuffers+=frameCommands.length;device.queue.submit(frameCommands);try{notifyLayerSceneEffectCommandsSubmitted?.(frame);}catch(_){}try{notifyFrameSceneEffectCommandsSubmitted?.(frame);}catch(_){}if(gpuTimerEnd)readGpuTiming(gpuTimer);submissions++;if(rawLampCommand){LampGPURenderer.markDeferredSubmitted();mergedLampSubmissions++;}if(layerSource?.globalFrameScene){WebGPUStrokeRenderer.markFrameScenePresented?.(renderRuntime.frameId);clearLayerSceneEffectCommands(frame);}else if(layerSource){WebGPUStrokeRenderer.markDeferredLayerScenePresented?.(renderRuntime.frameId);clearLayerSceneEffectCommands(frame);}
+                    frameCommands.push(finalCommand);const gpuTimerEnd=finishGpuTiming(gpuTimer);if(gpuTimerEnd)frameCommands.push(gpuTimerEnd);mergedFrameCommandBuffers+=frameCommands.length;const submitAt=performance.now();device.queue.submit(frameCommands);if(framePhase)framePhase.gpuQueueSubmitMs=performance.now()-submitAt;try{notifyLayerSceneEffectCommandsSubmitted?.(frame);}catch(_){}try{notifyFrameSceneEffectCommandsSubmitted?.(frame);}catch(_){}if(gpuTimerEnd)readGpuTiming(gpuTimer);submissions++;if(rawLampCommand){LampGPURenderer.markDeferredSubmitted();mergedLampSubmissions++;}if(layerSource?.globalFrameScene){WebGPUStrokeRenderer.markFrameScenePresented?.(renderRuntime.frameId);clearLayerSceneEffectCommands(frame);}else if(layerSource){WebGPUStrokeRenderer.markDeferredLayerScenePresented?.(renderRuntime.frameId);clearLayerSceneEffectCommands(frame);}
                     if(underlaySource){WebGPUStrokeRenderer.markFrameUnderlayCommandsSubmitted?.(renderRuntime.frameId);WebGPUStrokeRenderer.markFrameUnderlayPresented?.(renderRuntime.frameId);}frames++;updatePresentationCss(true);return true;
                 }catch(err){lastError=String(err?.message||err);updatePresentationCss(false);return false;}
             }
@@ -4948,8 +5037,8 @@ struct VSOut {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) segLen: f32,
-    @location(2) @interpolate(flat) halfWidthStart: f32,
-    @location(3) @interpolate(flat) halfWidthEnd: f32,
+    @location(2) @interpolate(flat) halfWidthStart: f32, // logarithm of clamped width, precomputed in VS
+    @location(3) @interpolate(flat) halfWidthEnd: f32, // logarithm of clamped width, precomputed in VS
     @location(4) @interpolate(flat) color: vec4<f32>,
     @location(5) @interpolate(flat) baseHalfWidth: f32,
 };
@@ -4976,10 +5065,10 @@ fn effectRadius(hw:f32,baseHw:f32)->f32{
     }
     let maxHw=max(hw0,hw1);var pad=maxHw+effectRadius(maxHw,g4.x)+2.5;if(u.mode>3.5){pad=maxHw+2.025;}
     let tx=(v.corner.x+1.0)*0.5;let lx=mix(-pad,len+pad,tx);let ly=v.corner.y*pad;let p=start+dir*lx+n*ly;
-    var o:VSOut;o.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);o.local=vec2<f32>(lx,ly);o.segLen=len;o.halfWidthStart=hw0;o.halfWidthEnd=hw1;o.color=color;o.baseHalfWidth=g4.x;return o;
+    var o:VSOut;o.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);o.local=vec2<f32>(lx,ly);o.segLen=len;o.halfWidthStart=log(max(0.001,hw0));o.halfWidthEnd=log(max(0.001,hw1));o.color=color;o.baseHalfWidth=g4.x;return o;
 }
 @fragment fn fsMain(v:VSOut)->@location(0) vec4<f32>{
-    let cx=clamp(v.local.x,0.0,v.segLen);let t=clamp(cx/max(0.0001,v.segLen),0.0,1.0);let hw=max(0.001,exp(mix(log(v.halfWidthStart),log(v.halfWidthEnd),t)));let d=length(vec2<f32>(v.local.x-cx,v.local.y));
+    let cx=clamp(v.local.x,0.0,v.segLen);let t=clamp(cx/max(0.0001,v.segLen),0.0,1.0);let hw=max(0.001,exp(mix(v.halfWidthStart,v.halfWidthEnd,t)));let d=length(vec2<f32>(v.local.x-cx,v.local.y));
     var cov=0.0;let radius=effectRadius(hw,v.baseHalfWidth);
     if(u.mode>3.5){let cc=min(1.0,2.0*hw);cov=min(cc,clamp(hw+0.5-d,0.0,1.0));}
     else if(u.mode<0.5){let r=max(0.001,radius);let q=max(0.0,d-hw)/r;cov=exp(-3.15*q*q)*(1.0-smoothstep(0.82,1.04,q));}
@@ -5174,8 +5263,8 @@ struct VSOut {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) segLen: f32,
-    @location(2) @interpolate(flat) halfWidthStart: f32,
-    @location(3) @interpolate(flat) halfWidthEnd: f32,
+    @location(2) @interpolate(flat) halfWidthStart: f32, // logarithm of clamped width, precomputed in VS
+    @location(3) @interpolate(flat) halfWidthEnd: f32, // logarithm of clamped width, precomputed in VS
     @location(4) @interpolate(flat) rawColor: vec4<f32>,
     @location(5) @interpolate(flat) rawAlpha: f32,
 };
@@ -5224,8 +5313,8 @@ fn finalColor(base:vec4<f32>,rawAlpha:f32)->vec4<f32>{
     out.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);
     out.local=vec2<f32>(lx,ly);
     out.segLen=len;
-    out.halfWidthStart=halfWidthStart;
-    out.halfWidthEnd=halfWidthEnd;
+    out.halfWidthStart=log(max(0.001,halfWidthStart));
+    out.halfWidthEnd=log(max(0.001,halfWidthEnd));
     out.rawColor=cmd.color;
     out.rawAlpha=select(cmd.params.y,segmentAlpha[iid],topo.w!=0u)*select(0.0,1.0,rawLen>=0.000001);
     return out;
@@ -5234,7 +5323,7 @@ fn finalColor(base:vec4<f32>,rawAlpha:f32)->vec4<f32>{
 @fragment fn fsMain(v:VSOut)->@location(0) vec4<f32>{
     let cx=clamp(v.local.x,0.0,v.segLen);
     let widthT=clamp(cx/max(0.0001,v.segLen),0.0,1.0);
-    let halfWidth=max(0.001,exp(mix(log(max(0.001,v.halfWidthStart)),log(max(0.001,v.halfWidthEnd)),widthT)));
+    let halfWidth=max(0.001,exp(mix(v.halfWidthStart,v.halfWidthEnd,widthT)));
     let d=length(vec2<f32>(v.local.x-cx,v.local.y));
     let radius=effectRadius(halfWidth);
     var cov=0.0;
@@ -5305,8 +5394,8 @@ struct VSOut {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) segLen: f32,
-    @location(2) @interpolate(flat) halfWidthStart: f32,
-    @location(3) @interpolate(flat) halfWidthEnd: f32,
+    @location(2) @interpolate(flat) halfWidthStart: f32, // logarithm of clamped width, precomputed in VS
+    @location(3) @interpolate(flat) halfWidthEnd: f32, // logarithm of clamped width, precomputed in VS
     @location(4) @interpolate(flat) rawColor: vec4<f32>,
     @location(5) @interpolate(flat) rawAlpha: f32,
 };
@@ -5356,8 +5445,8 @@ fn finalColor(base:vec4<f32>,rawAlpha:f32)->vec4<f32>{
     out.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);
     out.local=vec2<f32>(lx,ly);
     out.segLen=len;
-    out.halfWidthStart=halfWidthStart;
-    out.halfWidthEnd=halfWidthEnd;
+    out.halfWidthStart=log(max(0.001,halfWidthStart));
+    out.halfWidthEnd=log(max(0.001,halfWidthEnd));
     out.rawColor=cmd.color;
     out.rawAlpha=select(cmd.params.y,segmentAlpha[iid],topo.w!=0u)*select(0.0,1.0,rawLen>=0.000001);
     return out;
@@ -5366,7 +5455,7 @@ fn finalColor(base:vec4<f32>,rawAlpha:f32)->vec4<f32>{
 @fragment fn fsMain(v:VSOut)->@location(0) vec4<f32>{
     let cx=clamp(v.local.x,0.0,v.segLen);
     let widthT=clamp(cx/max(0.0001,v.segLen),0.0,1.0);
-    let halfWidth=max(0.001,exp(mix(log(max(0.001,v.halfWidthStart)),log(max(0.001,v.halfWidthEnd)),widthT)));
+    let halfWidth=max(0.001,exp(mix(v.halfWidthStart,v.halfWidthEnd,widthT)));
     let d=length(vec2<f32>(v.local.x-cx,v.local.y));
     let radius=effectRadius(halfWidth);
     var cov=0.0;
@@ -5422,8 +5511,8 @@ struct VSOut {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) segLen: f32,
-    @location(2) @interpolate(flat) halfWidthStart: f32,
-    @location(3) @interpolate(flat) halfWidthEnd: f32,
+    @location(2) @interpolate(flat) halfWidthStart: f32, // logarithm of clamped width, precomputed in VS
+    @location(3) @interpolate(flat) halfWidthEnd: f32, // logarithm of clamped width, precomputed in VS
     @location(4) @interpolate(flat) radiusMax: f32,
     @location(5) @interpolate(flat) color: vec4<f32>,
 };
@@ -5471,8 +5560,8 @@ fn transformPoint(p:vec2<f32>,m:vec4<f32>,t:vec4<f32>)->vec2<f32>{
     out.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);
     out.local=vec2<f32>(lx,ly);
     out.segLen=len;
-    out.halfWidthStart=hwStart;
-    out.halfWidthEnd=hwEnd;
+    out.halfWidthStart=log(max(0.001,hwStart));
+    out.halfWidthEnd=log(max(0.001,hwEnd));
     out.radiusMax=radiusMax;
     out.color=vec4<f32>(rgb,colorAlpha);
     return out;
@@ -5480,7 +5569,7 @@ fn transformPoint(p:vec2<f32>,m:vec4<f32>,t:vec4<f32>)->vec2<f32>{
 @fragment fn fsMain(v:VSOut)->@location(0) vec4<f32>{
     let cx=clamp(v.local.x,0.0,v.segLen);
     let widthT=clamp(cx/max(0.0001,v.segLen),0.0,1.0);
-    let halfWidth=max(0.001,exp(mix(log(max(0.001,v.halfWidthStart)),log(max(0.001,v.halfWidthEnd)),widthT)));
+    let halfWidth=max(0.001,exp(mix(v.halfWidthStart,v.halfWidthEnd,widthT)));
     let d=length(vec2<f32>(v.local.x-cx,v.local.y));
     var radius=v.radiusMax;
     if(u.mode==1u || u.mode==3u){radius=max(0.0,u.effect.x*((2.0*halfWidth)/max(0.001,u.effect.y)));}
@@ -5530,8 +5619,8 @@ struct BodyOut {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) segLen: f32,
-    @location(2) @interpolate(flat) halfWidthStart: f32,
-    @location(3) @interpolate(flat) halfWidthEnd: f32,
+    @location(2) @interpolate(flat) halfWidthStart: f32, // logarithm of clamped width, precomputed in VS
+    @location(3) @interpolate(flat) halfWidthEnd: f32, // logarithm of clamped width, precomputed in VS
     @location(4) @interpolate(flat) rawAlpha: f32,
 };
 struct PointOut {
@@ -5612,14 +5701,14 @@ fn coverage(d:f32,halfWidth:f32)->f32{
     o.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);
     o.local=vec2<f32>(lx,ly);
     o.segLen=len;
-    o.halfWidthStart=hw0;
-    o.halfWidthEnd=hw1;
+    o.halfWidthStart=log(max(0.001,hw0));
+    o.halfWidthEnd=log(max(0.001,hw1));
     o.rawAlpha=sd.y;
     return o;
 }
 @fragment fn fsBody(v:BodyOut)->@location(0) vec4<f32>{
     let t=clamp(v.local.x/max(0.0001,v.segLen),0.0,1.0);
-    let hw=max(0.001,exp(mix(log(max(0.001,v.halfWidthStart)),log(max(0.001,v.halfWidthEnd)),t)));
+    let hw=max(0.001,exp(mix(v.halfWidthStart,v.halfWidthEnd,t)));
     let cov=coverage(abs(v.local.y),hw);
     let c=finalColor(v.rawAlpha);
     let a=clamp(c.a*cov,0.0,1.0);
@@ -5680,8 +5769,8 @@ struct VSOut {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) segLen: f32,
-    @location(2) @interpolate(flat) halfWidthStart: f32,
-    @location(3) @interpolate(flat) halfWidthEnd: f32,
+    @location(2) @interpolate(flat) halfWidthStart: f32, // logarithm of clamped width, precomputed in VS
+    @location(3) @interpolate(flat) halfWidthEnd: f32, // logarithm of clamped width, precomputed in VS
     @location(4) @interpolate(flat) radiusMax: f32,
     @location(5) @interpolate(flat) color: vec4<f32>,
 };
@@ -5728,8 +5817,8 @@ fn transformPoint(p:vec2<f32>,m:vec4<f32>,t:vec4<f32>)->vec2<f32>{
     out.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);
     out.local=vec2<f32>(lx,ly);
     out.segLen=len;
-    out.halfWidthStart=hwStart;
-    out.halfWidthEnd=hwEnd;
+    out.halfWidthStart=log(max(0.001,hwStart));
+    out.halfWidthEnd=log(max(0.001,hwEnd));
     out.radiusMax=radiusMax;
     out.color=vec4<f32>(rgb,colorAlpha);
     return out;
@@ -5737,7 +5826,7 @@ fn transformPoint(p:vec2<f32>,m:vec4<f32>,t:vec4<f32>)->vec2<f32>{
 @fragment fn fsCorridor(v:VSOut)->@location(0) vec4<f32>{
     let cx=clamp(v.local.x,0.0,v.segLen);
     let widthT=clamp(cx/max(0.0001,v.segLen),0.0,1.0);
-    let halfWidth=max(0.001,exp(mix(log(max(0.001,v.halfWidthStart)),log(max(0.001,v.halfWidthEnd)),widthT)));
+    let halfWidth=max(0.001,exp(mix(v.halfWidthStart,v.halfWidthEnd,widthT)));
     let d=length(vec2<f32>(v.local.x-cx,v.local.y));
     var radius=v.radiusMax;
     if(u.mode==1u || u.mode==3u){radius=max(0.0,u.effect.x*((2.0*halfWidth)/max(0.001,u.effect.y)));}
@@ -5780,8 +5869,8 @@ struct VSOut {
     @builtin(position) position: vec4<f32>,
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) segLen: f32,
-    @location(2) @interpolate(flat) halfWidthStart: f32,
-    @location(3) @interpolate(flat) halfWidthEnd: f32,
+    @location(2) @interpolate(flat) halfWidthStart: f32, // logarithm of clamped width, precomputed in VS
+    @location(3) @interpolate(flat) halfWidthEnd: f32, // logarithm of clamped width, precomputed in VS
     @location(4) @interpolate(flat) radiusMax: f32,
     @location(5) @interpolate(flat) color: vec4<f32>,
 };
@@ -5819,11 +5908,11 @@ fn transformPoint(p:vec2<f32>,m:vec4<f32>,t:vec4<f32>)->vec2<f32>{
     var pad=hwMax+radiusMax+2.5;if(u.mode==4u){pad=hwMax+2.025;}
     let tx=(v.corner.x+1.0)*0.5;let lx=mix(-pad,len+pad,tx);let ly=v.corner.y*pad;let p=start+dir*lx+n*ly;
     out.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);
-    out.local=vec2<f32>(lx,ly);out.segLen=len;out.halfWidthStart=hwStart;out.halfWidthEnd=hwEnd;out.radiusMax=radiusMax;out.color=vec4<f32>(rgb,colorAlpha);return out;
+    out.local=vec2<f32>(lx,ly);out.segLen=len;out.halfWidthStart=log(max(0.001,hwStart));out.halfWidthEnd=log(max(0.001,hwEnd));out.radiusMax=radiusMax;out.color=vec4<f32>(rgb,colorAlpha);return out;
 }
 @fragment fn fsCorridor(v:VSOut)->@location(0) vec4<f32>{
     let cx=clamp(v.local.x,0.0,v.segLen);let widthT=clamp(cx/max(0.0001,v.segLen),0.0,1.0);
-    let halfWidth=max(0.001,exp(mix(log(max(0.001,v.halfWidthStart)),log(max(0.001,v.halfWidthEnd)),widthT)));
+    let halfWidth=max(0.001,exp(mix(v.halfWidthStart,v.halfWidthEnd,widthT)));
     let d=length(vec2<f32>(v.local.x-cx,v.local.y));var radius=v.radiusMax;
     if(u.mode==1u || u.mode==3u){radius=max(0.0,u.effect.x*((2.0*halfWidth)/max(0.001,u.effect.y)));}
     else if(u.mode==0u || u.mode==2u){radius=max(0.1,u.effect.x);}
@@ -6163,7 +6252,22 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                     rec={id:++layerSceneUniformSerial,key:id,buffer:device.createBuffer({size:48,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST,label:`SpiroStar Layer Scene uniform ${id}`}),lastData:new Float32Array(12),hasLast:false,generation:hubGeneration,lastUsedFrame:frameId};
                     layerSceneUniformRecords.set(id,rec);layerSceneUniformRecordBuilds++;
                 }else layerSceneUniformRecordHits++;
-                rec.lastUsedFrame=frameId;return rec;
+                rec.lastUsedFrame=frameId;
+                // The logical key contains the Orange-authored layer ID. Release old
+                // uniforms and their cached bind groups after their frame window.
+                if(layerSceneUniformRecords.size>32){
+                    const old=[...layerSceneUniformRecords.entries()].sort((a,b)=>a[1].lastUsedFrame-b[1].lastUsedFrame);
+                    for(const [oldKey,oldRec] of old){
+                        if(layerSceneUniformRecords.size<=32)break;
+                        if(frameId-(Number(oldRec.lastUsedFrame)||0)<=8)continue;
+                        for(const bindKey of layerSceneBindGroupCache.keys()){
+                            if(bindKey.startsWith(`u${oldRec.id}|`))layerSceneBindGroupCache.delete(bindKey);
+                        }
+                        try{oldRec.buffer?.destroy?.();}catch(_){}
+                        layerSceneUniformRecords.delete(oldKey);
+                    }
+                }
+                return rec;
             }
             function writeLayerSceneUniformRecord(key){
                 const rec=getLayerSceneUniformRecord(key);
@@ -6405,12 +6509,27 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                 for(const cmd of commands){
                     const rgba=parseColor(cmd?.strokeStyle),baseHw=Math.max(.001,(Number(cmd?.screenLineWidth)||1)*.5),all=cmd.bezierSegments||[],qn=Math.max(1,all.length);
                     const lastScale=Math.max(.000001,Number(all[all.length-1]?.widthScale1)||1),logSpan=Math.log(lastScale);
-                    const seamOf=(ws,fallback)=>{const w=Math.max(.000001,Number(ws)||1);const t=Math.abs(logSpan)>1e-8?Math.log(w)/logSpan:fallback;return spiralSmoothStep01(Math.max(0,Math.min(1,t)));};
+                    const hasWidthSeamSpan=Math.abs(logSpan)>1e-8;
+                    const seamOf=(ws,fallback)=>{const w=Math.max(.000001,Number(ws)||1);const t=hasWidthSeamSpan?Math.log(w)/logSpan:fallback;return spiralSmoothStep01(Math.max(0,Math.min(1,t)));};
+                    // Consecutive retained cubics share the same boundary width. Reuse the
+                    // exact already computed end seam for the next start seam. With a
+                    // degenerate log span, seamOf uses the segment-position fallback;
+                    // these are different at a shared boundary, so do not reuse them.
+                    let precedingWidth,precedingSeam=0,hasPrecedingWidth=false;
                     for(let qi=0;qi<all.length;qi++){const q=all[qi];
-                        const p0=q?.p0,c1=q?.c1,c2=q?.c2,p3=q?.p3;if(!p0||!c1||!c2||!p3)continue;const vals=[p0.x,p0.y,c1.x,c1.y,c2.x,c2.y,p3.x,p3.y];if(vals.some(v=>!Number.isFinite(Number(v))))continue;
-                        const o=k*BEZIER_FLOATS_PER_CUBIC;for(let i=0;i<8;i++)out[o+i]=Number(vals[i]);out[o+8]=baseHw*Math.max(.02,Number(q.widthScale0)||1);out[o+9]=baseHw*Math.max(.02,Number(q.widthScale1)||1);out[o+10]=Math.max(0,Math.min(1,Number(q.alpha0??cmd.alpha)||0));out[o+11]=Math.max(0,Math.min(1,Number(q.alpha1??cmd.alpha)||0));out[o+12]=rgba[0];out[o+13]=rgba[1];out[o+14]=rgba[2];out[o+15]=rgba[3];out[o+16]=baseHw;
+                        const p0=q?.p0,c1=q?.c1,c2=q?.c2,p3=q?.p3;if(!p0||!c1||!c2||!p3)continue;
+                        // Performance: avoid a new Array + Array.some callback and a second
+                        // Number() conversion for every exact retained Spiral cubic.
+                        // Preserve the original finite gate and Float32 ordering.
+                        const x0=Number(p0.x),y0=Number(p0.y),x1=Number(c1.x),y1=Number(c1.y),x2=Number(c2.x),y2=Number(c2.y),x3=Number(p3.x),y3=Number(p3.y);
+                        if(!Number.isFinite(x0)||!Number.isFinite(y0)||!Number.isFinite(x1)||!Number.isFinite(y1)||!Number.isFinite(x2)||!Number.isFinite(y2)||!Number.isFinite(x3)||!Number.isFinite(y3))continue;
+                        const o=k*BEZIER_FLOATS_PER_CUBIC;out[o]=x0;out[o+1]=y0;out[o+2]=x1;out[o+3]=y1;out[o+4]=x2;out[o+5]=y2;out[o+6]=x3;out[o+7]=y3;out[o+8]=baseHw*Math.max(.02,Number(q.widthScale0)||1);out[o+9]=baseHw*Math.max(.02,Number(q.widthScale1)||1);out[o+10]=Math.max(0,Math.min(1,Number(q.alpha0??cmd.alpha)||0));out[o+11]=Math.max(0,Math.min(1,Number(q.alpha1??cmd.alpha)||0));out[o+12]=rgba[0];out[o+13]=rgba[1];out[o+14]=rgba[2];out[o+15]=rgba[3];out[o+16]=baseHw;
 
-                        out[o+17]=seamOf(q.widthScale0,qi/qn);out[o+18]=seamOf(q.widthScale1,(qi+1)/qn);out[o+19]=(qi===0?1:0)+(qi===all.length-1?2:0);k++;
+                        const startingSeam=hasWidthSeamSpan&&hasPrecedingWidth&&q.widthScale0===precedingWidth
+                            ?precedingSeam:seamOf(q.widthScale0,qi/qn);
+                        const endingSeam=seamOf(q.widthScale1,(qi+1)/qn);
+                        out[o+17]=startingSeam;out[o+18]=endingSeam;out[o+19]=(qi===0?1:0)+(qi===all.length-1?2:0);
+                        precedingWidth=q.widthScale1;precedingSeam=endingSeam;hasPrecedingWidth=true;k++;
                     }
                 }
                 if(!k)return null;return{data:out,cubicCount:k,byteLength:k*BEZIER_FLOATS_PER_CUBIC*4,blendKind:multiStyle?'over':'max'};
@@ -6757,24 +6876,45 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
             function indexedMorphTopologyIdentity(commands){
                 return `${Number(commands?.__spiroTopologyHash)||0}|${commands?.length||0}|${Number(commands?.__spiroPhaseSerial)||0}`;
             }
-            function buildIndexedMorphTopology(commands){
-                if(!canUseIndexedMorphCapsules(commands))return null;
-                const identity=indexedMorphTopologyIdentity(commands),hit=indexedMorphTopologyCache.get(commands),frameId=frameResidentDynamicFrameId(commands);
-                if(hit?.identity===identity&&hit?.buffer){indexedMorphTopologyHits++;return hit;}
-                if(hit?.buffer){
-                    indexedMorphTopologyChanges++;
-                    indexedMorphTopologyCache.delete(commands);
-                    indexedMorphTopologyRecords.delete(hit);
-                    indexedMorphRetiredTopologies.push({record:hit,retireAfterFrame:frameId+4});
-                }
+            // WeakMap keys alone are not enough: indexedMorphTopologyRecords is a
+            // strong Set and Orange replaces the command owner on every generation.
+            // Retire old topology buffers after the GPU in-flight safety window.
+            function retireIndexedMorphTopologyRecord(rec,frameId){
+                if(!rec||!indexedMorphTopologyRecords.has(rec))return;
+                if(rec.cacheCommands)indexedMorphTopologyCache.delete(rec.cacheCommands);
+                rec.cacheCommands=null;
+                indexedMorphTopologyRecords.delete(rec);
+                indexedMorphRetiredTopologies.push({record:rec,retireAfterFrame:frameId+4});
+            }
+            function pruneIndexedMorphTopologies(frameId){
                 if(indexedMorphRetiredTopologies.length){
                     const keep=[];
                     for(const item of indexedMorphRetiredTopologies){
-                        if(item.retireAfterFrame<=frameId){try{item.record?.buffer?.destroy?.();}catch(_){}}
+                        if(item.retireAfterFrame<=frameId){try{item.record?.buffer?.destroy?.();}catch(_){}item.record.buffer=null;}
                         else keep.push(item);
                     }
                     indexedMorphRetiredTopologies=keep;
                 }
+                const limit=32,staleAfterFrames=150;
+                for(const rec of [...indexedMorphTopologyRecords]){
+                    if(frameId-(Number(rec.lastUsedFrame)||0)>staleAfterFrames)retireIndexedMorphTopologyRecord(rec,frameId);
+                }
+                if(indexedMorphTopologyRecords.size>limit){
+                    const old=[...indexedMorphTopologyRecords].sort((a,b)=>(a.lastUsedFrame||0)-(b.lastUsedFrame||0));
+                    for(const rec of old){
+                        if(indexedMorphTopologyRecords.size<=limit)break;
+                        if(frameId-(Number(rec.lastUsedFrame)||0)>8)retireIndexedMorphTopologyRecord(rec,frameId);
+                    }
+                }
+            }
+            function buildIndexedMorphTopology(commands){
+                if(!canUseIndexedMorphCapsules(commands))return null;
+                const identity=indexedMorphTopologyIdentity(commands),hit=indexedMorphTopologyCache.get(commands),frameId=frameResidentDynamicFrameId(commands);
+                if(hit?.identity===identity&&hit?.buffer){
+                    hit.lastUsedFrame=frameId;indexedMorphTopologyHits++;pruneIndexedMorphTopologies(frameId);return hit;
+                }
+                if(hit?.buffer){indexedMorphTopologyChanges++;retireIndexedMorphTopologyRecord(hit,frameId);}
+                pruneIndexedMorphTopologies(frameId);
                 const pointEntries=[],segmentEntries=[],commandEntries=[];
                 let segmentCount=0,hasPerSegmentAlpha=false;
                 for(let ci=0;ci<commands.length;ci++){
@@ -6799,8 +6939,8 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                 const buffer=device.createBuffer({size:Math.max(16,topoData.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST,label:'SpiroStar indexed Morph topology'});
                 device.queue.writeBuffer(buffer,0,topoData.buffer,topoData.byteOffset,topoData.byteLength);
                 indexedMorphTopologyUploadBytes+=topoData.byteLength;indexedMorphTopologyBuilds++;
-                const rec={identity,buffer,pointEntries,segmentEntries,commandEntries,pointCount:pointEntries.length,segmentCount,commandCount:commandEntries.length,hasPerSegmentAlpha,generation:hubGeneration};
-                indexedMorphTopologyCache.set(commands,rec);indexedMorphTopologyRecords.add(rec);return rec;
+                const rec={identity,buffer,pointEntries,segmentEntries,commandEntries,pointCount:pointEntries.length,segmentCount,commandCount:commandEntries.length,hasPerSegmentAlpha,generation:hubGeneration,cacheCommands:commands,lastUsedFrame:frameId};
+                indexedMorphTopologyCache.set(commands,rec);indexedMorphTopologyRecords.add(rec);pruneIndexedMorphTopologies(frameId);return rec;
             }
             function ensureIndexedMorphSlot(index,topology){
                 let rec=indexedMorphSlots[index];
@@ -7241,6 +7381,15 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                 if(grow){corridorCopyCapacity=Math.max(count,Math.ceil(Math.max(performanceGovernor.minDynamicCapacity(64),corridorCopyCapacity*performanceGovernor.growthFactor())));corridorCopyData=new Float32Array(corridorCopyCapacity*16);for(const b of corridorCopyBuffers)if(b)WebGPUBufferRecycler.recycle(device,hubGeneration,b);corridorCopyBuffers=[];corridorCopyGeneration++;}
                 while(corridorCopyBuffers.length<desired)corridorCopyBuffers.push(WebGPUBufferRecycler.acquire(device,hubGeneration,corridorCopyCapacity*16*4,usage,`SpiroStar Corridor copies ${corridorCopyBuffers.length}`));
             }
+            // Allocate the copy ring before Corridor's first rendered frame. No copy
+            // contents are uploaded here: phase/alpha/colour still come from the
+            // authoritative frame packer, so visuals and ordering are unchanged.
+            function prewarmCorridorCopies(count=256){
+                if(!ready||lost||!device||!WebGPUDeviceHub.isReady())return false;
+                const n=Math.max(1,Math.min(256,Math.ceil(Number(count)||256)));
+                try{ensureCorridorCopyCapacity(n);return true;}
+                catch(err){lastError=String(err?.message||err);return false;}
+            }
             function canUseIndexedMorphCorridor(commands){
                 return Boolean(commands?.__spiroSpiralCorridorSeam!==true&&canUseIndexedMorphCapsules(commands)&&indexedMorphCorridorBindGroupLayout&&indexedMorphCorridorPipelineMax&&indexedMorphCorridorPipelineOver);
             }
@@ -7388,7 +7537,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                 try{const br=bezierGeometryCache.get(commands);if(br){br.frameId=-1;br.geometryVersion=-1;br.profileSignature='';}}catch(_){}
                 return true;
             }
-            return{warmup,retry,isReady:()=>{warmup();return ready&&!lost;},supportsBezierSpiral:()=>Boolean(ready&&!lost&&bezierPipelineMax&&bezierPipelineOver),supportsBezierSpiralCorridor:()=>Boolean(ready&&!lost&&bezierPipelineMax&&bezierPipelineOver&&bezierCorridorPipelineMax&&bezierCorridorPipelineOver),renderGeometry,renderEffects,renderCorridor,renderLayerBatch,compositeLayerBatch,compositeLayerScene,deferLayerScene,canUseExternalLayerScene,getExternalLayerSceneTarget,beginExternalLayerScene,deferExternalLayerScene,getDeferredLayerSceneTexture,getDeferredLayerSceneCommandBuffer,markDeferredLayerScenePresented,presentDeferredLayerSceneToMain,clearDeferredLayerScene,canUseFrameScene,prepareFrameScene,getFrameSceneTexture,getFrameSceneCommandBuffers,getExternalFrameSceneTarget,deferExternalFrameScene,sealDeferredLayerSceneToFrame,markFrameScenePresented,discardFrameScene,presentFrameSceneToMain,abandonFrameScene,canUseFrameUnderlay,prepareFrameUnderlay,getFrameUnderlayTexture,getFrameUnderlayCommandBuffers,markFrameUnderlayCommandsSubmitted,submitFrameUnderlayCommand,appendFrameUnderlayCommands,compositeLayerBatchToFrameUnderlay,presentFrameUnderlayToMain,markFrameUnderlayPresented,discardFrameUnderlay,abandonFrameUnderlay,canEncodeGeometryCirclesToLayerScene,encodeGeometryCirclesToLayerScene,inspectCommands:getCommandSegmentMeta,invalidateMutableCommands,composite:compositeTo,releaseStatic,releaseCorridorStatic,clear,status};
+            return{warmup,retry,prewarmCorridorCopies,isReady:()=>{warmup();return ready&&!lost;},supportsBezierSpiral:()=>Boolean(ready&&!lost&&bezierPipelineMax&&bezierPipelineOver),supportsBezierSpiralCorridor:()=>Boolean(ready&&!lost&&bezierPipelineMax&&bezierPipelineOver&&bezierCorridorPipelineMax&&bezierCorridorPipelineOver),renderGeometry,renderEffects,renderCorridor,renderLayerBatch,compositeLayerBatch,compositeLayerScene,deferLayerScene,canUseExternalLayerScene,getExternalLayerSceneTarget,beginExternalLayerScene,deferExternalLayerScene,getDeferredLayerSceneTexture,getDeferredLayerSceneCommandBuffer,markDeferredLayerScenePresented,presentDeferredLayerSceneToMain,clearDeferredLayerScene,canUseFrameScene,prepareFrameScene,getFrameSceneTexture,getFrameSceneCommandBuffers,getExternalFrameSceneTarget,deferExternalFrameScene,sealDeferredLayerSceneToFrame,markFrameScenePresented,discardFrameScene,presentFrameSceneToMain,abandonFrameScene,canUseFrameUnderlay,prepareFrameUnderlay,getFrameUnderlayTexture,getFrameUnderlayCommandBuffers,markFrameUnderlayCommandsSubmitted,submitFrameUnderlayCommand,appendFrameUnderlayCommands,compositeLayerBatchToFrameUnderlay,presentFrameUnderlayToMain,markFrameUnderlayPresented,discardFrameUnderlay,abandonFrameUnderlay,canEncodeGeometryCirclesToLayerScene,encodeGeometryCirclesToLayerScene,inspectCommands:getCommandSegmentMeta,invalidateMutableCommands,composite:compositeTo,releaseStatic,releaseCorridorStatic,clear,status};
         })();
 
         window.__spiroGraffitiGPUStatus=()=>({mode:'gpu-ribbon-morph',ribbon:WebGPUGraffitiRibbonRenderer.status?.()||null,morph:WebGPUGraffitiMorphRenderer.status?.()||null});
@@ -7545,12 +7694,13 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
         function sameTunnelMasterStrokeSignature(a,b){if(!a||!b||a.drawData!==b.drawData||a.roundedKey!==b.roundedKey||a.geometryKey!==b.geometryKey||a.geometryVersion!==b.geometryVersion||a.spiralProfileSignature!==b.spiralProfileSignature||a.width!==b.width||a.height!==b.height||a.lineCap!==b.lineCap||a.lineJoin!==b.lineJoin||a.kind!==b.kind||a.spiralClosed!==b.spiralClosed||a.variableWidthGpu!==b.variableWidthGpu)return false;if(Math.abs(a.combinedScale-b.combinedScale)>1e-10||Math.abs(a.combinedRotation-b.combinedRotation)>1e-10||Math.abs(a.strokeWidth-b.strokeWidth)>1e-10||Math.abs(a.miterLimit-b.miterLimit)>1e-10)return false;for(let i=0;i<6;i++)if(Math.abs(a.matrix[i]-b.matrix[i])>1e-10)return false;return true;}
         function getTunnelMasterStrokeCommands(frameCtx,allowHiddenGraffitiCarrier=false){
             if(frameCtx?._tunnelMasterStrokeFrameId===frameCtx?.frameId&&frameCtx?._tunnelMasterStrokeHiddenGraffiti===Boolean(allowHiddenGraffitiCarrier))return frameCtx._tunnelMasterStrokeCommands||null;if(!frameCtx)return null;frameCtx._tunnelMasterStrokeFrameId=frameCtx.frameId;frameCtx._tunnelMasterStrokeHiddenGraffiti=Boolean(allowHiddenGraffitiCarrier);frameCtx._tunnelMasterStrokeCommands=null;const sig=tunnelMasterStrokeSignature(frameCtx,allowHiddenGraffitiCarrier);if(!sig)return null;
-            const cached=persistentTunnelMasterStrokeCache.get(frameCtx.layer);
+            const staticOwner=frameCtx.effectLayerSource||frameCtx.sourceLayer||frameCtx.layer;
+            const cached=persistentTunnelMasterStrokeCache.get(staticOwner);
             if(cached&&sameTunnelMasterStrokeSignature(cached.sig,sig)&&cached.commands?.length){
                 if(validateSpiralCorridorMasterCommands(cached.commands,frameCtx)){
                     persistentTunnelMasterStats.hits++;if(cached.commands?.__spiroSpiralCorridorSeam===true)spiralCorridorMasterScopeStats.hits++;frameCtx._tunnelMasterStrokeCommands=cached.commands;return cached.commands;
                 }
-                spiralCorridorMasterGuardStats.cachedRejects++;persistentTunnelMasterStats.invalidations++;try{WebGPUStrokeRenderer.releaseCorridorStatic(cached.commands);}catch(_){}persistentTunnelMasterStrokeCache.delete(frameCtx.layer);
+                spiralCorridorMasterGuardStats.cachedRejects++;persistentTunnelMasterStats.invalidations++;try{WebGPUStrokeRenderer.releaseCorridorStatic(cached.commands);}catch(_){}persistentTunnelMasterStrokeCache.delete(staticOwner);
             }else if(cached){persistentTunnelMasterStats.invalidations++;try{WebGPUStrokeRenderer.releaseCorridorStatic(cached.commands);}catch(_){}}
             const rec=createGeometryGLRecordingContext(mainCtx);rec.__suppressFill=true;rec.strokeStyle=frameCtx.tunnelBaseStrokeColor||'#ffffff';rec.__disableAdaptiveSpiral=isSpiralLayer(frameCtx.layer)&&frameCtx.layer?.spiralClosed!==false;const oldBase=frameCtx.baseAlpha;try{frameCtx.baseAlpha=1;frameCtx.drawLayerGeometry(rec,1);}catch(_){frameCtx.baseAlpha=oldBase;return null;}finally{frameCtx.baseAlpha=oldBase;}
             if(rec.unsupported||!rec.commands?.length)return null;
@@ -7558,14 +7708,23 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
             if(isSpiralLayer(frameCtx.layer)&&frameCtx.layer?.spiralClosed!==false){markSpiralCorridorMaster(rec.commands,true);spiralCorridorMasterScopeStats.builds++;}
 
             markPersistentStrokeCommands(rec.commands,sig.geometryVersion,sig.spiralProfileSignature);
-            frameCtx._tunnelMasterStrokeCommands=rec.commands;persistentTunnelMasterStrokeCache.set(frameCtx.layer,{sig,commands:rec.commands});persistentTunnelMasterStats.builds++;return rec.commands;
+            frameCtx._tunnelMasterStrokeCommands=rec.commands;persistentTunnelMasterStrokeCache.set(staticOwner,{sig,commands:rec.commands});persistentTunnelMasterStats.builds++;return rec.commands;
         }
         window.__spiroTunnelMasterCacheStatus=()=>({...persistentTunnelMasterStats});
 
         const dynamicTunnelMorphMasterRecorderCache=new WeakMap();
-        const dynamicTunnelMorphMasterStats={builds:0,reuses:0,rejects:0,colorRejects:0,topologyRejects:0,frames:0};
+        // FeatureHost gives Glow/Base separate scoped views of the same frame.
+        // Derived geometry may be shared, but artistic outputs remain isolated.
+        // WeakMap avoids adding mutable scratch fields to those feature views.
+        const dynamicTunnelMasterFrameCache=new WeakMap();
+        function sharedCorridorFrameOwner(ctx){
+            let owner=ctx,depth=0;
+            while(owner?.__somataFeatureParent&&depth++<8)owner=owner.__somataFeatureParent;
+            return owner||ctx;
+        }
+        const dynamicTunnelMorphMasterStats={builds:0,reuses:0,rejects:0,colorRejects:0,topologyRejects:0,frames:0,sharedFrameHits:0};
         function getDynamicTunnelMorphMasterRecorder(frameCtx){
-            const layer=frameCtx?.layer;if(!layer)return null;
+            const layer=frameCtx?.effectLayerSource||frameCtx?.sourceLayer||frameCtx?.layer;if(!layer)return null;
             let entry=dynamicTunnelMorphMasterRecorderCache.get(layer);
             const plan=frameCtx.geometryPlan||{},phase={kind:String(plan.kind||'dynamic'),source:plan.sourceGeometry||plan.sourcePaths||plan.sourceData||plan.sourceLayer||null,target:plan.targetGeometry||plan.targetPaths||plan.targetData||plan.targetLayer||null};
             if(!entry){
@@ -7580,6 +7739,15 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
         function getDynamicTunnelMorphMasterStrokeCommands(frameCtx,allowHiddenGraffitiCarrier=false){
             const hiddenGraffitiCarrier=allowHiddenGraffitiCarrier===true&&frameCtx?.lineProfileStrokeOnly===true&&frameCtx?.lineProfileApplication==='graffiti';
             if(!frameCtx||state.tunnel?.active!==true||frameCtx.geometryPlan?.dynamic!==true||frameCtx.geometryPlan?.kind==='lightning'||(frameCtx.lineProfileStrokeOnly&&!hiddenGraffitiCarrier)||state.showRoundingGuides)return null;
+            const sharedOwner=sharedCorridorFrameOwner(frameCtx);
+            const shared=dynamicTunnelMasterFrameCache.get(sharedOwner);
+            if(shared&&shared.frameId===frameCtx.frameId&&shared.hidden===hiddenGraffitiCarrier){
+                dynamicTunnelMorphMasterStats.sharedFrameHits++;
+                frameCtx._dynamicTunnelMorphMasterFrameId=frameCtx.frameId;
+                frameCtx._dynamicTunnelMorphMasterHiddenGraffiti=hiddenGraffitiCarrier;
+                frameCtx._dynamicTunnelMorphMasterCommands=shared.commands;
+                return shared.commands;
+            }
             if(frameCtx._dynamicTunnelMorphMasterFrameId===frameCtx.frameId&&frameCtx._dynamicTunnelMorphMasterHiddenGraffiti===hiddenGraffitiCarrier)return frameCtx._dynamicTunnelMorphMasterCommands||null;
             frameCtx._dynamicTunnelMorphMasterFrameId=frameCtx.frameId;frameCtx._dynamicTunnelMorphMasterHiddenGraffiti=hiddenGraffitiCarrier;frameCtx._dynamicTunnelMorphMasterCommands=null;dynamicTunnelMorphMasterStats.frames++;
             const rec=getDynamicTunnelMorphMasterRecorder(frameCtx);if(!rec)return null;
@@ -7595,6 +7763,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
             frameCtx._dynamicTunnelMorphMasterCommands=markFrameResidentDynamicStrokeCommands(rec.commands,frameCtx,rec);
             if(!validateSpiralCorridorMasterCommands(frameCtx._dynamicTunnelMorphMasterCommands,frameCtx)){dynamicTunnelMorphMasterStats.topologyRejects++;frameCtx._dynamicTunnelMorphMasterCommands=null;return null;}
             if(isSpiralLayer(frameCtx.layer)&&frameCtx.layer?.spiralClosed!==false){markSpiralCorridorMaster(frameCtx._dynamicTunnelMorphMasterCommands,true);spiralCorridorMasterScopeStats.builds++;}
+            dynamicTunnelMasterFrameCache.set(sharedOwner,{frameId:frameCtx.frameId,hidden:hiddenGraffitiCarrier,commands:frameCtx._dynamicTunnelMorphMasterCommands});
             return frameCtx._dynamicTunnelMorphMasterCommands;
         }
         window.__spiroDynamicTunnelMorphMasterStatus=()=>({...dynamicTunnelMorphMasterStats});
@@ -7635,13 +7804,13 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
             frameCtx._glStrokeCommandFrameId=frameCtx.frameId;frameCtx._glStrokeCommandHiddenGraffitiCarrier=hiddenGraffitiCarrier;frameCtx._glStrokeCommands=null;
             const sig=staticStrokeCommandSignature(frameCtx,hiddenGraffitiCarrier);
             if(sig){
-                const cached=persistentStrokeCommandCache.get(frameCtx.layer);
+                const cached=persistentStrokeCommandCache.get(frameCtx.effectLayerSource||frameCtx.sourceLayer||frameCtx.layer);
                 if(cached&&sameStaticStrokeSignature(cached.sig,sig)&&cached.commands?.length){persistentStrokeCommandStats.hits++;frameCtx._glStrokeCommands=cached.commands;GeometryKernel.bindStrokeCommands(frameCtx,cached.commands);return cached.commands;}
                 if(cached){persistentStrokeCommandStats.invalidations++;try{WebGPUStrokeRenderer.releaseStatic(cached.commands);}catch(_){}}
             }
             const usePhaseResident=frameCtx.geometryPlan?.dynamic===true&&frameCtx.geometryPlan?.kind!=='lightning';
             const useStaticTunnelPool=state.tunnel?.active===true&&!usePhaseResident;
-            const rec=usePhaseResident?getPhaseResidentMorphGLRecorder(frameCtx):(useStaticTunnelPool?acquireReusableTunnelStrokeRecorder(frameCtx.layer,false):createGeometryGLRecordingContext(mainCtx));
+            const rec=usePhaseResident?getPhaseResidentMorphGLRecorder(frameCtx):(useStaticTunnelPool?acquireReusableTunnelStrokeRecorder(frameCtx.effectLayerSource||frameCtx.sourceLayer||frameCtx.layer,false):createGeometryGLRecordingContext(mainCtx));
             // FrameContour/Line recording must be self-contained.  Do not inherit the
             // ambient mainCtx style: effect preparation can run before the visible
             // Base pass has configured mainCtx for this layer.
@@ -7661,7 +7830,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
             frameCtx._glStrokeCommands=markFrameResidentDynamicStrokeCommands(rec.commands,frameCtx,rec);
             const topo=GeometryKernel.bindStrokeCommands(frameCtx,frameCtx._glStrokeCommands);
             if(topo?.continuityRisk===true)return null;
-            if(sig){markPersistentStrokeCommands(rec.commands,sig.geometryVersion,sig.spiralProfileSignature);persistentStrokeCommandCache.set(frameCtx.layer,{sig,commands:rec.commands});persistentStrokeCommandStats.builds++;}
+            if(sig){markPersistentStrokeCommands(rec.commands,sig.geometryVersion,sig.spiralProfileSignature);persistentStrokeCommandCache.set(frameCtx.effectLayerSource||frameCtx.sourceLayer||frameCtx.layer,{sig,commands:rec.commands});persistentStrokeCommandStats.builds++;}
             return frameCtx._glStrokeCommands;
         }
         window.__spiroPersistentStrokeCacheStatus=()=>({...persistentStrokeCommandStats});
@@ -8342,7 +8511,9 @@ fn markerSd(p:vec2<f32>)->f32{
         }
 
         function getPhaseResidentMorphGLRecorder(frameCtx){
-            const layer=frameCtx?.layer;if(!layer)return null;
+            // Frame layer is a fresh sealed snapshot. Key the reusable, fully reset
+            // recorder by its authored owner, or every Morph frame allocates anew.
+            const layer=frameCtx?.effectLayerSource||frameCtx?.sourceLayer||frameCtx?.layer;if(!layer)return null;
             let entry=phaseResidentMorphRecorderCache.get(layer);
             const plan=frameCtx.geometryPlan||{},phase={
                 kind:String(plan.kind||'dynamic'),
@@ -8374,21 +8545,21 @@ fn markerSd(p:vec2<f32>)->f32{
         }
         window.__spiroMorphRecorderPoolStatus=()=>({...phaseResidentMorphRecorderStats});
 
-        let corridorGpuFrameColorCacheBuilds=0,corridorGpuFrameColorCacheHits=0;
         const SOMATA_CORRIDOR_INTERPOLATE_COPY_ALPHA_ALONG_SPIRAL=false;
         function buildCorridorGPUOptions(frameCtx,extra={}){
-            const tr=mainCtx.getTransform(),copies=frameCtx.visibleInstances?.copies||[],alphas=frameCtx.visibleInstances?.alphas||[],baseColor=frameCtx.tunnelBaseStrokeColor||frameCtx.layer?.strokeColor||'#ffffff',profile=frameCtx.tunnelPaletteProfile||null;
-            let cc=frameCtx._corridorGpuColorCache;if(!cc||cc.frameId!==frameCtx.frameId||cc.copies!==copies||cc.baseColor!==baseColor||cc.profile!==profile){cc={frameId:frameCtx.frameId,copies,baseColor,profile,values:new Array(copies.length)};frameCtx._corridorGpuColorCache=cc;corridorGpuFrameColorCacheBuilds++;}
-            const colorForCopy=(copy,i)=>{const idx=Number.isInteger(i)?i:copies.indexOf(copy);if(idx>=0&&cc.values[idx]!==undefined){corridorGpuFrameColorCacheHits++;return cc.values[idx];}const color=getTunnelCopyColor(baseColor,copy,profile);if(idx>=0)cc.values[idx]=color;return color;};
+            const tr=mainCtx.getTransform(),alphas=frameCtx.visibleInstances?.alphas||[];
+            const sharedOwner=sharedCorridorFrameOwner(frameCtx);
+            const colorForCopy=(copy,i)=>SomataCorridorCopyFrame.stroke(frameCtx,copy,i);
+            const rotationForCopy=(copy,i)=>SomataCorridorCopyFrame.rotation(frameCtx,copy,i);
             // 7.6.5: copy reveal/fade is an instance property. Never interpolate
             // the alpha of one Corridor copy into the next along the Spiral rail:
             // that creates a radial-looking dark patch on every older copy that
             // crosses the center. Static/general GPU Corridor now matches retained
             // Spiral Morph: each copy keeps one alpha for its whole geometry.
-            return{originX:tr.e,originY:tr.f,baseAlpha:frameCtx.baseAlpha,alphas,spiralSeamAlpha:SOMATA_CORRIDOR_INTERPOLATE_COPY_ALPHA_ALONG_SPIRAL,copyCacheKey:frameCtx,copyCacheFrameId:frameCtx.frameId,copyCacheVariant:'effect',copyResidencyKey:frameCtx.layer,residentCopyPayload:true,sharedCorridorTransformBasis:true,rotationForCopy:(copy)=>getMotionTunnelLagRadians(copy,frameCtx.layer),colorForCopy,...extra};
+            return{originX:tr.e,originY:tr.f,baseAlpha:frameCtx.baseAlpha,alphas,spiralSeamAlpha:SOMATA_CORRIDOR_INTERPOLATE_COPY_ALPHA_ALONG_SPIRAL,copyCacheKey:sharedOwner,copyCacheFrameId:frameCtx.frameId,copyCacheVariant:'effect',copyResidencyKey:frameCtx.effectLayerSource||frameCtx.sourceLayer||frameCtx.layer,residentCopyPayload:true,sharedCorridorTransformBasis:true,rotationForCopy,colorForCopy,...extra};
         }
         window.__spiroCorridorRevealPolicy=()=>({version:'7.6.5',owner:'copy-alpha',alphaScope:'whole-copy',interpolateAlongSpiral:SOMATA_CORRIDOR_INTERPOLATE_COPY_ALPHA_ALONG_SPIRAL,radialMask:false});
-        window.__spiroCorridorGpuCpuCacheStatus=()=>({colorCacheBuilds:corridorGpuFrameColorCacheBuilds,colorCacheHits:corridorGpuFrameColorCacheHits,transformBasis:WebGPUCorridorCopyStore.status().transformCpu});
+        window.__spiroCorridorGpuCpuCacheStatus=()=>({colorCacheBuilds:SomataCorridorCopyFrame.status().frames,colorCacheHits:SomataCorridorCopyFrame.status().strokeHits,transformBasis:WebGPUCorridorCopyStore.status().transformCpu});
 
         function tryRenderCorridorLineEffectGPU(frameCtx,opt={}){
             if(state.tunnel?.active!==true||state.showRoundingGuides||frameCtx.lineProfileStrokeOnly)return false;
@@ -8430,7 +8601,7 @@ fn markerSd(p:vec2<f32>)->f32{
                 if(instanced){if(cpuWeight)frameCtx.drawLayerInstances(mainCtx,true,cpuWeight);GeometryGPURenderer.composite(mainCtx);return true;}
             }
 
-            const rec=acquireReusableTunnelStrokeRecorder(frameCtx.layer,true);
+            const rec=acquireReusableTunnelStrokeRecorder(frameCtx.effectLayerSource||frameCtx.sourceLayer||frameCtx.layer,true);
             try{frameCtx.drawLayerInstances(rec,true,glWeight);}catch(_){return false;}
             if(rec.unsupported)return false;
             if(!rec.commands.length){if(cpuWeight)frameCtx.drawLayerInstances(mainCtx,true,cpuWeight);return true;}
@@ -8441,24 +8612,65 @@ fn markerSd(p:vec2<f32>)->f32{
         }
 
         const warmPrimaryGpuPipelines=()=>{
+            // Boot just the mandatory renderer paths; avoid launching a dozen
+            // shader compilations together as soon as requestDevice resolves.
             try{WebGPUDeviceHub.warmup();}catch(_e){}
             try{WebGPUStrokeRenderer.warmup();}catch(_e){}
-            try{WebGPUSweepRenderer.warmup();}catch(_e){}
-            try{WebGPULampRenderer.warmup();}catch(_e){}
             try{WebGPUFinalCompositeRenderer.warmup();}catch(_e){}
-            try{}catch(_e){}
-
-            try{WebGPUTopologyMorphBaseRenderer?.warmup?.();}catch(_e){}
-            try{WebGPUGreenProjectMorphRenderer?.warmup?.();}catch(_e){}
-            try{WebGPUGraffitiMorphRenderer?.warmup?.();}catch(_e){}
-            try{WebGPULightningArcRenderer?.warmup?.();}catch(_e){}
-            try{WebGPUWebMorphRenderer?.warmup?.();}catch(_e){}
-            try{WebGPUParticleRenderer?.warmup?.();}catch(_e){}
-            try{warmupGpuMorphArcResource?.();}catch(_e){}
-            try{warmupGpuWebCornerResource?.();}catch(_e){}
         };
         if(typeof requestIdleCallback==='function')requestIdleCallback(warmPrimaryGpuPipelines,{timeout:800});
         else setTimeout(warmPrimaryGpuPipelines,0);
+
+        // The primary warmup may fire while requestAdapter/requestDevice is still
+        // pending. Prepare the specialised Corridor + Blue paths after acquisition,
+        // in separate idle turns rather than compiling all pipelines on first play.
+        const startupModeWarmup={stage:0,completed:false,corridorRingReady:false,error:''};
+        const queueModeWarmupIdle=(step)=>{
+            if(typeof requestIdleCallback==='function')requestIdleCallback(step);
+            else setTimeout(step,40);
+        };
+        void WebGPUDeviceHub.acquire().then(()=>{
+            const stages=[
+                ()=>{
+                    try{WebGPUStrokeRenderer.warmup();}catch(_){}
+                    startupModeWarmup.corridorRingReady=WebGPUStrokeRenderer.prewarmCorridorCopies(256);
+                    // A renderer may still be completing its own asynchronous init.
+                    // If so, retry when idle; never put allocations in the first draw.
+                    return startupModeWarmup.corridorRingReady;
+                },
+                ()=>{try{WebGPUSpiralBezierMorphRenderer?.warmup?.();}catch(_){};try{WebGPUTopologyMorphBaseRenderer?.warmup?.();}catch(_){};return true;},
+                ()=>{try{WebGPUBezierSweepRenderer?.warmup?.();}catch(_){};try{WebGPUCanonicalSweepRenderer?.warmup?.();}catch(_){};return true;},
+                ()=>{try{WebGPUWebThreadSceneRenderer?.warmup?.();}catch(_){};try{WebGPUProfileArcMarkerRenderer?.warmup?.();}catch(_){};return true;},
+                ()=>{try{WebGPUSweepRenderer?.warmup?.();}catch(_){};try{WebGPULampRenderer?.warmup?.();}catch(_){};return true;},
+                ()=>{try{WebGPUGraffitiMorphRenderer?.warmup?.();}catch(_){};try{WebGPULightningArcRenderer?.warmup?.();}catch(_){};return true;},
+                ()=>{try{WebGPUWebMorphRenderer?.warmup?.();}catch(_){};try{WebGPUParticleRenderer?.warmup?.();}catch(_){};return true;},
+                ()=>{try{warmupGpuMorphArcResource?.();}catch(_){};try{warmupGpuWebCornerResource?.();}catch(_){};return true;},
+                ()=>{try{WebGPUPathFxRenderer?.warmup?.();}catch(_){};try{WebGPUGreenProjectMorphRenderer?.warmup?.();}catch(_){};return true;}
+            ];
+            let copyRetries=0;
+            const run=(deadline)=>{
+                if(startupModeWarmup.completed)return;
+                // Optional compilation must not steal a frame from active animations.
+                if(runtimeState?.morph?.active===true){
+                    setTimeout(()=>queueModeWarmupIdle(run),1200);return;
+                }
+                // During Corridor motion only compile when there is actual spare
+                // time, never on a timeout that forcibly runs inside a busy frame.
+                // This lets Blue warm while Corridor remains switched on.
+                if(state?.tunnel?.active===true && typeof requestIdleCallback==='function' &&
+                   deadline?.timeRemaining?.()<8){
+                    setTimeout(()=>queueModeWarmupIdle(run),250);return;
+                }
+                try{
+                    const done=stages[startupModeWarmup.stage]();
+                    if(done||startupModeWarmup.stage!==0||++copyRetries>=20)startupModeWarmup.stage++;
+                    if(startupModeWarmup.stage>=stages.length){startupModeWarmup.completed=true;return;}
+                }catch(err){startupModeWarmup.error=String(err?.message||err);startupModeWarmup.stage++;}
+                queueModeWarmupIdle(run);
+            };
+            queueModeWarmupIdle(run);
+        }).catch(err=>{startupModeWarmup.error=String(err?.message||err);});
+        window.__somataStartupModeWarmupStatus=()=>({...startupModeWarmup});
 
         window.__spiroGeometryWebGLStatus=()=>GeometryWebGLRenderer.status();
         window.__spiroLineEffectsWebGLStatus=()=>LineEffectsWebGLRenderer.status();
@@ -8526,7 +8738,8 @@ fn markerSd(p:vec2<f32>)->f32{
         window.__spiroSweepWebGLStatus=()=>SweepWebGLRenderer.status();
         window.__spiroSweepGPUStatus=()=>SweepGPURenderer.status();
 
-        const AUDIO_PARAM_DEFS = [
+        const AUDIO_PARAM_DEFS = [...(window.SomataParameterRegistry?.audioDefinitions?.() || []),...(window.SomataParameterMatrix?.audioDefinitions?.()||[])];
+        const AUDIO_PARAM_LEGACY_FALLBACK = [
             {key:'layer.scale',group:'Геометрия',label:'Размер фигуры',mode:'centerFactor',span:.74,min:.05,max:8},
             {key:'layer.rotation',group:'Геометрия',label:'Вращение',mode:'derivativeAdd',span:45,min:-720,max:720},
             {key:'layer.opacity',group:'Линия',label:'Прозрачность',mode:'fadeFactor',span:1,min:0,max:100},
@@ -8574,7 +8787,8 @@ fn markerSd(p:vec2<f32>)->f32{
             {key:'tunnel.spacing',group:'Коридор',label:'Дистанция между фигурами',mode:'add',span:3.0,min:0.01,max:1000000},
             {key:'tunnel.vignette',group:'Коридор',label:'Виньетирование (px)',mode:'add',span:90,min:0,max:1200}
         ];
-        const AUDIO_PARAM_BY_KEY = new Map(AUDIO_PARAM_DEFS.map(d=>[d.key,d]));
+        const AUDIO_PARAM_COMPAT_DEFS = window.SomataParameterRegistry?.audioCompatibilityDefinitions?.() || [];
+        const AUDIO_PARAM_BY_KEY = new Map([...AUDIO_PARAM_DEFS,...AUDIO_PARAM_COMPAT_DEFS].map(d=>[d.key,d]));
         const AUDIO_BAND_COLORS = {low:'#fb7185',lowMid:'#fb923c',mid:'#fbbf24',midHigh:'#22c55e',high:'#67e8f9',combined:'#ffffff'};
         const AUDIO_CUSTOM_BAND_DEFAULTS = Object.freeze({low:Object.freeze([20,120]),lowMid:Object.freeze([120,500]),mid:Object.freeze([500,2000]),midHigh:Object.freeze([2000,5000]),high:Object.freeze([5000,20000])});
         function getDefaultAudioCustomBandRange(key){const r=AUDIO_CUSTOM_BAND_DEFAULTS[key]||[20,20000];return [r[0],r[1]];}
@@ -8583,8 +8797,8 @@ fn markerSd(p:vec2<f32>)->f32{
         let audioRouteSerial = 1;
         const AUDIO_SIGNAL_MODES = new Set(['add','median','subtract']);
         function normalizeAudioSignalMode(mode){return AUDIO_SIGNAL_MODES.has(mode)?mode:'add';}
-        function createAudioRoute(band='low',param='layer.scale',strength=100,multiplier=1,enabled=true,derivative=false,signalMode='add'){
-            return {id:`ar_${Date.now()}_${audioRouteSerial++}`,enabled:enabled!==false,derivative:derivative===true,signalMode:normalizeAudioSignalMode(signalMode),band:['low','lowMid','mid','midHigh','high','combined'].includes(band)?band:'low',param:AUDIO_PARAM_BY_KEY.has(param)?param:'layer.scale',strength:Math.max(0,Math.min(200,Number(strength)||0)),multiplier:Math.max(0,Number(multiplier)||0)};
+        function createAudioRoute(band='low',param='layer.radius',strength=100,multiplier=1,enabled=true,derivative=false,signalMode='add'){
+            return {id:`ar_${Date.now()}_${audioRouteSerial++}`,enabled:enabled!==false,derivative:derivative===true,signalMode:normalizeAudioSignalMode(signalMode),band:['low','lowMid','mid','midHigh','high','combined'].includes(band)?band:'low',param:AUDIO_PARAM_BY_KEY.has(param)?param:'layer.radius',strength:Math.max(0,Math.min(200,Number(strength)||0)),multiplier:Math.max(0,Number(multiplier)||0)};
         }
         function normalizeAudioRoute(route){
             if(!route||typeof route!=='object')return createAudioRoute();
@@ -8600,22 +8814,24 @@ fn markerSd(p:vec2<f32>)->f32{
         }
         function createDefaultAudioRoutesForLayerIndex(idx){
             if(state.audioReactive?.defaultRoutesEnabled===false)return [];
-            const band=ensureAudioLayerNativeBand(state.layers?.[idx],idx);
-            return [
-                createAudioRoute(band,'layer.scale',100,1,true,false),
-                createAudioRoute(band,'lamps.radius',100,1,false,false)
-            ];
+            return createPresetRoutesForLayerIndex(idx,'geometryLamps');
         }
         const AUDIO_ROUTING_PRESETS = new Set(['free','geometry','lamps','geometryLamps']);
         const AUDIO_ROUTE_GROUP_SPECS = [
-            {button:'audioGroupGeometry',menu:'audioGroupGeometryMenu',label:'Геометрия',match:d=>d.group==='Геометрия'},
-            {button:'audioGroupLine',menu:'audioGroupLineMenu',label:'Линия / обводка',match:d=>d.group==='Линия'},
-            {button:'audioGroupGraffiti',menu:'audioGroupGraffitiMenu',label:'Граффити',match:d=>d.group==='Граффити'},
-            {button:'audioGroupLamps',menu:'audioGroupLampsMenu',label:'Лампочки',match:d=>d.group==='Лампочки'},
-            {button:'audioGroupWeb',menu:'audioGroupWebMenu',label:'Паутина',match:d=>d.group==='Паутина'},
-            {button:'audioGroupSweep',menu:'audioGroupSweepMenu',label:'Проблеск',match:d=>d.group==='Проблеск'},
-            {button:'audioGroupLightning',menu:'audioGroupLightningMenu',label:'Молния',match:d=>d.group==='Молния'},
-            {button:'audioGroupTunnel',menu:'audioGroupTunnelMenu',label:'Коридор',globalOnly:true,match:d=>d.group==='Коридор'}
+            {button:'audioGroupGeometry',menu:'audioGroupGeometryMenu',label:'Геометрия',group:'Геометрия',match:d=>d.group==='Геометрия'},
+            {button:'audioGroupLine',menu:'audioGroupLineMenu',label:'Линия',group:'Линия',match:d=>d.group==='Линия'},
+            {button:'audioGroupFill',menu:'audioGroupFillMenu',label:'Заливка',group:'Заливка',match:d=>d.group==='Заливка'},
+            {button:'audioGroupGraffiti',menu:'audioGroupGraffitiMenu',label:'Граффити',group:'Граффити',match:d=>d.group==='Граффити'},
+            {button:'audioGroupLamps',menu:'audioGroupLampsMenu',label:'Лампочки',group:'Лампочки',match:d=>d.group==='Лампочки'},
+            {button:'audioGroupWeb',menu:'audioGroupWebMenu',label:'Паутина',group:'Паутина',match:d=>d.group==='Паутина'},
+            {button:'audioGroupSweep',menu:'audioGroupSweepMenu',label:'Проблеск',group:'Проблеск',match:d=>d.group==='Проблеск'},
+            {button:'audioGroupLightning',menu:'audioGroupLightningMenu',label:'Молния',group:'Молния',match:d=>d.group==='Молния'},
+            {button:'audioGroupCorridor',menu:'audioGroupCorridorMenu',label:'Коридор',group:'Коридор',match:d=>d.group==='Коридор'},
+            {button:'audioGroupPalette',menu:'audioGroupPaletteMenu',label:'Палитра',group:'Палитра',match:d=>d.group==='Палитра'},
+            {button:'audioGroupLineMotion',menu:'audioGroupLineMotionMenu',label:'Подвижная линия',group:'Подвижная линия',match:d=>d.group==='Подвижная линия'},
+            {button:'audioGroupSprite',menu:'audioGroupSpriteMenu',label:'Спрайт линии',group:'Спрайт линии',match:d=>d.group==='Спрайт линии'},
+            {button:'audioGroupParticles',menu:'audioGroupParticlesMenu',label:'Частицы',group:'Частицы',match:d=>d.group==='Частицы'},
+            {button:'audioGroupSpiral',menu:'audioGroupSpiralMenu',label:'Спирали',group:'Спирали',match:d=>d.group==='Спирали'}
         ];
         function setAudioRoutingPresetMode(mode){
             const ar=state.audioReactive||(state.audioReactive={});
@@ -8625,9 +8841,9 @@ fn markerSd(p:vec2<f32>)->f32{
         function routeBandForLayerIndex(idx){const order=['low','mid','high','lowMid','midHigh'];return order[Math.max(0,Number(idx)||0)%order.length];}
         function createPresetRoutesForLayerIndex(idx,mode){
             const band=ensureAudioLayerNativeBand(state.layers?.[idx],idx);
-            if(mode==='geometry')return [createAudioRoute(band,'layer.scale',100,1,true,false),createAudioRoute(band,'layer.rotation',100,1,false,false)];
+            if(mode==='geometry')return [createAudioRoute(band,'layer.radius',100,1,true,false),createAudioRoute(band,'layer.rotation',100,1,false,false)];
             if(mode==='lamps')return [createAudioRoute(band,'lamps.brightness',100,1,true,false),createAudioRoute(band,'lamps.radius',100,1,true,false),createAudioRoute(band,'lamps.softness',100,1,true,false)];
-            if(mode==='geometryLamps')return [createAudioRoute(band,'layer.scale',100,1,true,false),createAudioRoute(band,'layer.rotation',100,1,false,false),createAudioRoute(band,'lamps.brightness',100,1,true,false),createAudioRoute(band,'lamps.radius',100,1,true,false),createAudioRoute(band,'lamps.softness',100,1,true,false)];
+            if(mode==='geometryLamps')return [createAudioRoute(band,'layer.radius',100,1,true,false),createAudioRoute(band,'layer.rotation',100,1,false,false),createAudioRoute(band,'lamps.brightness',100,1,true,false),createAudioRoute(band,'lamps.radius',100,1,true,false),createAudioRoute(band,'lamps.softness',100,1,true,false)];
             return null;
         }
         function applyAudioRoutingPreset(mode){
@@ -8680,7 +8896,7 @@ fn markerSd(p:vec2<f32>)->f32{
                 audioMasterRouteRuntime.set(param,cfg);
             }
             if(!cfg && create){
-                cfg={strength:100,multiplier:1,polarity:'plus'};
+                cfg={strength:100,multiplier:1,polarity:param==='lamps.softness'?'minus':'plus'};
                 audioMasterRouteRuntime.set(param,cfg);
             }
             if(cfg)map[param]={strength:cfg.strength,multiplier:cfg.multiplier,polarity:cfg.polarity};
@@ -8698,7 +8914,7 @@ fn markerSd(p:vec2<f32>)->f32{
         function audioMasterParamsInUse(){
             const routes=ensureAudioRoutingState(),seen=new Set();
             for(const rows of Object.values(routes.layers||{}))for(const r of rows||[])if(r&&AUDIO_PARAM_BY_KEY.has(r.param))seen.add(r.param);
-            return AUDIO_PARAM_DEFS.map(d=>d.key).filter(k=>seen.has(k));
+            return [...AUDIO_PARAM_DEFS,...AUDIO_PARAM_COMPAT_DEFS].map(d=>d.key).filter((k,i,a)=>seen.has(k)&&a.indexOf(k)===i);
         }
         function getAudioMasterRouteGain(param){
             const cfg=getAudioMasterRouteConfig(param,true);
@@ -8738,7 +8954,7 @@ fn markerSd(p:vec2<f32>)->f32{
             for(const id of Object.keys(ar.routes.layers))if(!state.layers.some(l=>l.id===id))delete ar.routes.layers[id];
             for(const id of Object.keys(ar.layerSignalEnabled))if(!state.layers.some(l=>l.id===id))delete ar.layerSignalEnabled[id];
             if(ar.routingTarget!=='master'&&!state.layers.some(l=>l.id===ar.routingTarget))ar.routingTarget='master';
-            if(!AUDIO_ROUTING_PRESETS.has(ar.routingPreset))ar.routingPreset='geometry';
+            if(!AUDIO_ROUTING_PRESETS.has(ar.routingPreset))ar.routingPreset='geometryLamps';
             return ar.routes;
         }
         function isAudioLayerSignalEnabled(layerOrIndex=-1){
@@ -8815,6 +9031,57 @@ fn markerSd(p:vec2<f32>)->f32{
             if(!audioFlooredAtZero&&Number.isFinite(def.min))out=Math.max(def.min,out);
             if(Number.isFinite(def.max))out=Math.min(def.max,out);return out;
         }
+        function audioApplyRawNumeric(key,base,layerIndex=-1){
+            const def=AUDIO_PARAM_BY_KEY.get(key);let out=Number(base);if(!Number.isFinite(out))out=0;
+            if(!def||!state.audioReactive?.active||!isAudioLayerSignalEnabled(layerIndex))return out;
+            const effectsAmplitude=getAudioEffectsAmplitudeGain(),routes=ensureAudioRoutingState();
+            for(const r of routes.master||[])if(r?.param===key)out=audioApplyRouteToValue(out,def,r,effectsAmplitude,1);
+            for(const r of audioRoutesForLayer(layerIndex)){if(r?.param!==key)continue;out=audioApplyRouteToValue(out,def,r,effectsAmplitude,getAudioMasterRouteGain(r.param));}
+            if(Number.isFinite(def.min))out=Math.max(def.min,out);if(Number.isFinite(def.max))out=Math.min(def.max,out);return out;
+        }
+        function audioShiftHexHue(key,color,layerIndex=-1){
+            const raw=String(color||''),m=/^#([0-9a-f]{6})$/i.exec(raw);if(!m)return raw;
+            const n=parseInt(m[1],16),r=((n>>16)&255)/255,g=((n>>8)&255)/255,b=(n&255)/255,max=Math.max(r,g,b),min=Math.min(r,g,b),d=max-min;
+            let h=0,s=0,l=(max+min)/2;if(d>1e-9){s=d/(1-Math.abs(2*l-1));if(max===r)h=60*(((g-b)/d)%6);else if(max===g)h=60*((b-r)/d+2);else h=60*((r-g)/d+4);if(h<0)h+=360;}
+            h=(h+audioApplyRawNumeric(key,0,layerIndex)+3600)%360;
+            const c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),mm=l-c/2;let rr=0,gg=0,bb=0;
+            if(h<60)[rr,gg,bb]=[c,x,0];else if(h<120)[rr,gg,bb]=[x,c,0];else if(h<180)[rr,gg,bb]=[0,c,x];else if(h<240)[rr,gg,bb]=[0,x,c];else if(h<300)[rr,gg,bb]=[x,0,c];else [rr,gg,bb]=[c,0,x];
+            const hx=v=>Math.max(0,Math.min(255,Math.round((v+mm)*255))).toString(16).padStart(2,'0');return `#${hx(rr)}${hx(gg)}${hx(bb)}`;
+        }
+        function applySharedAudioParameterFrameRouting(frameCtx){
+            if(!frameCtx||!state.audioReactive?.active)return frameCtx;
+            const R=window.SomataParameterRegistry,idx=Number(frameCtx.layerIndex)||0;if(!R)return frameCtx;
+            for(const audioDef of AUDIO_PARAM_DEFS){
+                if(audioDef?.genericFrame!==true||!audioDef.framePath)continue;
+                // 7.11.0: while Blue owns the current carrier, radius cannot be applied by
+                // mutating the already-resolved Morph snapshot: that changes state/extent but
+                // not the authoritative path. The transform stage composes layer.radius as a
+                // post-Morph scale instead (same visible semantics as the stable Audio scale).
+                if(audioDef.key==='layer.radius'&&frameCtx?.blueMorphProvider?.active===true)continue;
+                if(audioDef.key==='geometry.orbits'){
+                    const layer=frameCtx.layer;if(!layer||!hasActiveAudioRoute('geometry.orbits'))continue;
+                    const n=Math.max(2,Math.round(Number(layer.N)||2)),k=Math.max(1,Math.round(Number(layer.K)||1));
+                    const gcd=(a,b)=>b?gcd(b,a%b):a,maxOrbits=Math.max(1,gcd(n,k));
+                    const base=layer.customSuborbits==null?100:Math.ceil(Math.max(1,Number(layer.customSuborbits)||1)*100/maxOrbits);
+                    const pct=Math.max(1,Math.min(100,audioApplyNumeric('geometry.orbits',base,idx)));
+                    const count=Math.max(1,Math.min(maxOrbits,Math.ceil(maxOrbits*pct/100)));
+                    layer.customSuborbits=count<maxOrbits?count:null;
+                    continue;
+                }
+                const def=R.get(audioDef.parameterId);if(!def)continue;
+                const target=audioDef.frameTarget==='layer'?frameCtx.layer:frameCtx.effectLayer;if(!target)continue;
+                const base=R.valueAt(target,audioDef.framePath);if(base==null)continue;
+                let value=base;
+                if(def.type==='color')value=audioShiftHexHue(audioDef.key,base,idx);
+                else if(def.type==='boolean')value=audioApplyNumeric(audioDef.key,base?1:0,idx)>=.5;
+                else if(def.type==='enum'){const values=Array.isArray(def.values)?def.values:[],baseIndex=Math.max(0,values.indexOf(base));if(values.length){const next=Math.max(0,Math.min(values.length-1,Math.round(audioApplyNumeric(audioDef.key,baseIndex,idx))));value=values[next];}}
+                else if(Number.isFinite(Number(base))){value=audioApplyNumeric(audioDef.key,Number(base),idx);if(def.type==='integer')value=Math.round(value);}
+                if((def.type==='color'||def.type==='boolean'||def.type==='enum')||Number.isFinite(Number(value)))R.applyPath(target,audioDef.framePath,value);
+            }
+            return frameCtx;
+        }
+        window.applySharedAudioParameterFrameRouting=applySharedAudioParameterFrameRouting;
+
         function hasActiveAudioRoute(param=null){
             if(!state.audioReactive?.active)return false;if(!state.audioReactive.routingInitialized)ensureAudioRoutingState();
             const routes=ensureAudioRoutingState();
@@ -8856,7 +9123,7 @@ fn markerSd(p:vec2<f32>)->f32{
                 for(const other of rows)if(other&&String(other.param)===oldParam)other.param=newParam;
             }
         }
-        function addAudioRouteForTarget(param='layer.scale',prototype=null){
+        function addAudioRouteForTarget(param='layer.radius',prototype=null){
             const routes=ensureAudioRoutingState(),target=state.audioReactive.routingTarget||'master';
             const proto=prototype||{};
             if(target==='master'){
@@ -8882,6 +9149,40 @@ fn markerSd(p:vec2<f32>)->f32{
             const routes=ensureAudioRoutingState(),target=state.audioReactive.routingTarget||'master';
             return target==='master'?routes.master:(routes.layers[target]||(routes.layers[target]=[]));
         }
+        function audioDefinitionForParameterId(paramId){
+            const id=String(paramId||'');return AUDIO_PARAM_DEFS.find(d=>String(d.parameterId||'')===id)||AUDIO_PARAM_DEFS.find(d=>String(d.key||'')===id)||null;
+        }
+        function audioRowsForTargetId(targetId){
+            const routes=ensureAudioRoutingState(),id=String(targetId||'master');
+            if(id==='master')return routes.master;
+            if(!state.layers.some(l=>l.id===id))return null;
+            return routes.layers[id]||(routes.layers[id]=[]);
+        }
+        function audioParameterTargetStates(paramId){
+            const def=audioDefinitionForParameterId(paramId);if(!def)return{supported:false,key:null,master:false,layers:[],any:false};
+            const routes=ensureAudioRoutingState(),key=String(def.key),activeIn=rows=>Array.isArray(rows)&&rows.some(r=>String(r?.param||'')===key&&r?.enabled!==false);
+            const layers=state.layers.map((layer,index)=>({id:layer.id,index,label:layer.name||`Слой ${index+1}`,active:activeIn(routes.layers?.[layer.id])}));
+            const master=activeIn(routes.master);return{supported:true,key,master,layers,any:master||layers.some(x=>x.active)};
+        }
+        function audioParameterRoutingState(paramId){
+            const def=audioDefinitionForParameterId(paramId),target=state.audioReactive?.routingTarget||'master';if(!def)return{supported:false,added:false,active:false,target,targetName:audioRouteTargetName?.()||'Мастер',targets:audioParameterTargetStates(paramId)};
+            const rows=getAudioRouteTargetRows(),matches=rows.filter(r=>String(r?.param||'')===String(def.key)),targets=audioParameterTargetStates(paramId);return{supported:true,added:matches.length>0,active:targets.any,target,targetName:audioRouteTargetName(),key:def.key,count:matches.length,targets};
+        }
+        function setAudioParameterTargetActive(paramId,targetId,enabled){
+            const def=audioDefinitionForParameterId(paramId),rows=audioRowsForTargetId(targetId);if(!def||!rows)return false;const key=String(def.key),matches=rows.filter(r=>String(r?.param||'')===key),on=enabled===true;
+            if(on){
+                if(matches.length)for(const route of matches)route.enabled=true;
+                else{
+                    const idx=state.layers.findIndex(l=>l.id===targetId),band=targetId==='master'?'combined':ensureAudioLayerNativeBand(state.layers[idx],idx);
+                    rows.push(createAudioRoute(band,key,100,1,true,false,'add'));
+                }
+            }else for(const route of matches)route.enabled=false;
+            if(targetId!=='master')markAudioRoutingFree();renderAudioRoutingPanel();requestMainCanvasRender();window.__syncParameterRoutingDecorations?.();return true;
+        }
+        function setAudioParameterRoutingActive(paramId,enabled){
+            const target=state.audioReactive?.routingTarget||'master';return setAudioParameterTargetActive(paramId,target,enabled);
+        }
+        window.SomataAudioParameterRoutingUI=Object.freeze({state:audioParameterRoutingState,targets:audioParameterTargetStates,setActive:setAudioParameterRoutingActive,setTargetActive:setAudioParameterTargetActive});
         function audioRouteTargetName(){
             const id=state.audioReactive.routingTarget||'master';if(id==='master')return'Мастер';return state.layers.find(l=>l.id===id)?.name||'Слой';
         }
@@ -8908,9 +9209,16 @@ fn markerSd(p:vec2<f32>)->f32{
             };
             add('master','Мастер','#f472b6',false);state.layers.forEach(l=>add(l.id,l.name,l.strokeColor||'#94a3b8',true));
         }
+        function createAudioRoutingGroupIcon(group,row=false){
+            return window.SomataParameterGroupIcons?.create?.(group,row?'morph-route-row-icon audio-route-row-icon':'morph-routing-group-icon audio-routing-group-icon')||document.createElement('span');
+        }
+        function appendAudioGroupLabel(target,group,arrow=false){
+            if(!target)return;target.textContent='';const label=document.createElement('span');label.className='audio-routing-group-label';
+            label.appendChild(createAudioRoutingGroupIcon(group,false));const name=document.createElement('span');name.className='audio-routing-group-name';name.textContent=group+(arrow?' ▾':'');label.appendChild(name);target.appendChild(label);
+        }
         function buildAudioParamMenu(container,route,onPick){
             container.innerHTML='';const input=document.createElement('input');input.type='search';input.className='audio-param-search';input.placeholder='Поиск параметра…';container.appendChild(input);const body=document.createElement('div');container.appendChild(body);
-            const render=()=>{const q=input.value.trim().toLowerCase();body.innerHTML='';let last='';const masterTarget=(state.audioReactive.routingTarget||'master')==='master';for(const def of AUDIO_PARAM_DEFS){if(def.group==='Коридор'&&!masterTarget)continue;const hay=`${def.group} ${def.label} ${def.key}`.toLowerCase();if(q&&!hay.includes(q))continue;if(def.group!==last){const t=document.createElement('div');t.className='audio-param-group-title';t.textContent=def.group;body.appendChild(t);last=def.group;}const b=document.createElement('button');b.type='button';b.className='audio-param-option'+(route.param===def.key?' active':'');b.textContent=def.label;b.addEventListener('click',()=>onPick(def.key));body.appendChild(b);}};input.addEventListener('input',render);render();setTimeout(()=>input.focus(),0);
+            const render=()=>{const q=input.value.trim().toLowerCase();body.innerHTML='';let last='';const masterTarget=(state.audioReactive.routingTarget||'master')==='master';for(const def of (window.SomataParameterMatrix?.all?.()||AUDIO_PARAM_DEFS)){if((def.morph?.group||def.group)==='Коридор'&&!masterTarget)continue;const hay=`${def.morph?.group||def.group} ${def.label} ${def.key||def.id}`.toLowerCase();if(q&&!hay.includes(q))continue;if((def.morph?.group||def.group)!==last){const t=document.createElement('div');t.className='audio-param-group-title';appendAudioGroupLabel(t,def.morph?.group||def.group,false);body.appendChild(t);last=def.morph?.group||def.group;}const key=def.key||def.id,unsupported=!!def.kind&&!def.audioSupported;const b=document.createElement('button');b.type='button';b.className='audio-param-option'+(route.param===key?' active':'');b.dataset.parameterId=def.id||key;b.textContent=def.label;b.disabled=unsupported;if(unsupported)b.title=def.reason;b.addEventListener('click',()=>{if(!unsupported)onPick(key);});body.appendChild(b);}};input.addEventListener('input',render);render();setTimeout(()=>input.focus(),0);
         }
         function renderAudioMasterRouteControls(paramKeys){
             const box=document.getElementById('audioMasterRouteControls'),host=document.getElementById('audioMasterRouteControlRows');
@@ -8925,7 +9233,7 @@ fn markerSd(p:vec2<f32>)->f32{
                 const def=AUDIO_PARAM_BY_KEY.get(key);if(!def)continue;
                 const initial=getAudioMasterRouteConfig(key,true);
                 const row=document.createElement('div');row.className='audio-master-route-row';row.dataset.param=key;
-                const label=document.createElement('div');label.className='audio-master-route-label';label.textContent=`${def.group} › ${def.label}`;label.title=`Мультипликативная регулировка всех существующих связей «${def.label}»`;
+                const label=document.createElement('div');label.className='audio-master-route-label';label.appendChild(createAudioRoutingGroupIcon(def.group,true));const labelText=document.createElement('span');labelText.textContent=`${def.group} › ${def.label}`;label.appendChild(labelText);label.title=`Мультипликативная регулировка всех существующих связей «${def.label}»`;
                 const range=document.createElement('input');range.type='range';range.min='0';range.max='200';range.step='1';range.value=String(initial.strength);range.setAttribute('aria-label',`Мастер ${def.label}: сила`);
                 const value=document.createElement('div');value.className='audio-master-route-value';
                 const mult=document.createElement('input');mult.type='number';mult.min='0';mult.step='any';mult.dataset.logMultiplier='1';mult.value=String(initial.multiplier);mult.title='Мастер-множитель связи';mult.setAttribute('aria-label',`Мастер ${def.label}: множитель`);
@@ -8944,7 +9252,7 @@ fn markerSd(p:vec2<f32>)->f32{
                 range.addEventListener('input',sync);range.addEventListener('change',sync);
                 mult.addEventListener('input',sync);mult.addEventListener('change',sync);
                 polarity.addEventListener('click',()=>{const cfg=getAudioMasterRouteConfig(key,true);setAudioMasterRouteConfig(key,{polarity:cfg.polarity==='minus'?'plus':'minus'});paint();requestMainCanvasRender();});
-                value.addEventListener('dblclick',e=>{e.preventDefault();setAudioMasterRouteConfig(key,{strength:100,multiplier:1,polarity:'plus'});range.value='100';mult.value='1';paint();requestMainCanvasRender();});
+                value.addEventListener('dblclick',e=>{e.preventDefault();setAudioMasterRouteConfig(key,{strength:100,multiplier:1,polarity:key==='lamps.softness'?'minus':'plus'});range.value='100';mult.value='1';paint();requestMainCanvasRender();});
                 paint();row.append(label,range,value,mult,polarity);host.appendChild(row);
             }
         }
@@ -8975,13 +9283,23 @@ fn markerSd(p:vec2<f32>)->f32{
             const presetSel=document.getElementById('audioRoutingPreset');if(presetSel)presetSel.value=AUDIO_ROUTING_PRESETS.has(state.audioReactive.routingPreset)?state.audioReactive.routingPreset:'free';
             renderAudioMasterRouteControls(masterParams);
 
-            const groupRows=isMaster?[...rows,...allAudioRouteCollections().flat()]:rows;
-            for(const spec of AUDIO_ROUTE_GROUP_SPECS){const b=document.getElementById(spec.button);if(b)b.classList.toggle('group-enabled',groupRows.some(r=>r?.enabled!==false&&spec.match(AUDIO_PARAM_BY_KEY.get(r.param)||{})));}
+            const groupRows=rows;
+            for(const spec of AUDIO_ROUTE_GROUP_SPECS){
+                const b=document.getElementById(spec.button);if(!b)continue;
+                const relevant=groupRows.filter(r=>spec.match(AUDIO_PARAM_BY_KEY.get(r?.param)||{}));
+                const activeCount=relevant.filter(r=>r?.enabled!==false).length;
+                b.classList.remove('group-enabled','audio-group-active','audio-group-idle');
+                if(relevant.length)b.classList.add(activeCount?'audio-group-active':'audio-group-idle');
+                b.dataset.audioGroupCount=String(relevant.length);
+                b.dataset.audioGroupActive=String(activeCount);
+                b.title=relevant.length?(activeCount?`${spec.label}: ${activeCount}/${relevant.length} активно · ПКМ — выключить все добавленные связи`:`${spec.label}: ${relevant.length} добавлено, все выключены · ПКМ — включить все`):`${spec.label}: связей нет`;
+            }
             rows.forEach((route,idx)=>{const row=document.createElement('div');row.className='audio-route-row'+(route.enabled===false?' disabled':'');row.dataset.band=route.band;row.dataset.routeId=route.id;row.dataset.derivative=route.derivative===true?'1':'0';
                 const cb=document.createElement('input');cb.type='checkbox';cb.checked=route.enabled!==false;cb.title='Включить / выключить связь';cb.addEventListener('change',()=>{mirrorAudioRouteField(route,'enabled',cb.checked);if(!isMaster)markAudioRoutingFree();renderAudioRoutingPanel();requestMainCanvasRender();});row.appendChild(cb);
+                const def=AUDIO_PARAM_BY_KEY.get(route.param)||AUDIO_PARAM_DEFS[0];row.appendChild(createAudioRoutingGroupIcon(def.group,true));
                 const dot=document.createElement('span');dot.className='audio-route-band-dot';dot.style.setProperty('--band-color',AUDIO_BAND_COLORS[route.band]||'#fff');row.appendChild(dot);
                 const band=document.createElement('select');[['low','НЧ'],['lowMid','Ниж.СЧ'],['mid','СЧ'],['midHigh','Ср.ВЧ'],['high','ВЧ'],['combined','Комбо']].forEach(([v,t])=>{const o=document.createElement('option');o.value=v;o.textContent=t;if(route.band===v)o.selected=true;band.appendChild(o);});band.addEventListener('change',()=>{mirrorAudioRouteField(route,'band',band.value);if(!isMaster)markAudioRoutingFree();renderAudioRoutingPanel();requestMainCanvasRender();});row.appendChild(band);
-                const picker=document.createElement('div');picker.className='audio-param-picker';const pickBtn=document.createElement('button');pickBtn.type='button';pickBtn.className='audio-param-picker-button';const def=AUDIO_PARAM_BY_KEY.get(route.param)||AUDIO_PARAM_DEFS[0];pickBtn.textContent=`${def.group} › ${def.label}`;const menu=document.createElement('div');menu.className='audio-param-menu hidden';pickBtn.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.audio-param-menu').forEach(m=>{if(m!==menu)m.classList.add('hidden')});menu.classList.toggle('hidden');if(!menu.classList.contains('hidden')){buildAudioParamMenu(menu,route,key=>{mirrorAudioRouteParam(route,key);if(!isMaster)markAudioRoutingFree();menu.classList.add('hidden');renderAudioRoutingPanel();requestMainCanvasRender();});positionViewportPopup(menu,pickBtn);}});picker.append(pickBtn,menu);row.appendChild(picker);
+                const picker=document.createElement('div');picker.className='audio-param-picker';const pickBtn=document.createElement('button');pickBtn.type='button';pickBtn.className='audio-param-picker-button';pickBtn.textContent=`${def.group} › ${def.label}`;const menu=document.createElement('div');menu.className='audio-param-menu hidden';pickBtn.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.audio-param-menu').forEach(m=>{if(m!==menu)m.classList.add('hidden')});menu.classList.toggle('hidden');if(!menu.classList.contains('hidden')){buildAudioParamMenu(menu,route,key=>{mirrorAudioRouteParam(route,key);if(!isMaster)markAudioRoutingFree();menu.classList.add('hidden');renderAudioRoutingPanel();requestMainCanvasRender();});positionViewportPopup(menu,pickBtn);}});picker.append(pickBtn,menu);row.appendChild(picker);
                 const modeWrap=document.createElement('div');modeWrap.className='audio-route-mode-wrap';
                 const derivativeLabel=document.createElement('label');derivativeLabel.className='audio-route-derivative';derivativeLabel.title='Производная реагирует на изменение уровня. Внутренне она в 10 раз слабее линейного режима; отображаемый множитель не меняется.';const derivativeCb=document.createElement('input');derivativeCb.type='checkbox';derivativeCb.checked=route.derivative===true;const derivativeText=document.createElement('span');derivativeText.textContent='Производная';derivativeCb.addEventListener('change',()=>{mirrorAudioRouteField(route,'derivative',derivativeCb.checked);row.dataset.derivative=route.derivative?'1':'0';if(!isMaster)markAudioRoutingFree();paintAudioRoutingMeters();requestMainCanvasRender();});derivativeLabel.append(derivativeCb,derivativeText);modeWrap.appendChild(derivativeLabel);
                 {
@@ -9001,37 +9319,32 @@ fn markerSd(p:vec2<f32>)->f32{
                     const canonical=target==='master'?routes.master:(routes.layers[target]||(routes.layers[target]=[]));
                     const id=String(route.id||'');let pos=id?canonical.findIndex(r=>String(r?.id||'')===id):-1;if(pos<0)pos=canonical.indexOf(route);if(pos>=0)canonical.splice(pos,1);
                     if(target!=='master')markAudioRoutingFree();renderAudioRoutingPanel();requestMainCanvasRender();
-                });row.appendChild(del);rowsHost.appendChild(row);});paintAudioRoutingMeters();
+                });row.appendChild(del);rowsHost.appendChild(row);});paintAudioRoutingMeters();window.__syncParameterRoutingDecorations?.();
         }
         function paintAudioRoutingMeters(){
-            document.querySelectorAll('.audio-route-row').forEach(row=>{const band=row.dataset.band||'combined',derivative=row.dataset.derivative==='1';let level=audioBandValue(band,derivative);level=derivative?Math.max(0,Math.min(1,Math.abs(level))):Math.max(0,Math.min(1,level));row.style.setProperty('--audio-level',String(level));const dot=row.querySelector('.audio-route-band-dot');if(dot)dot.style.setProperty('--band-color',AUDIO_BAND_COLORS[band]||'#fff');});
-        }
-        function audioRouteGroupMemoryKey(spec){
-            const target=state.audioReactive?.routingTarget||'master';
-            return `${target}::${spec.label}`;
+            // Meter painting is purely presentational. Keep audio modulation active when the
+            // routing panel is closed, but do not traverse its rows or mutate DOM every tick.
+            const panel=document.getElementById('audioRoutingPanel');
+            if(!panel||panel.classList.contains('hidden'))return;
+            panel.querySelectorAll('.audio-route-row').forEach(row=>{
+                const band=row.dataset.band||'combined',derivative=row.dataset.derivative==='1';
+                let level=audioBandValue(band,derivative);
+                level=derivative?Math.max(0,Math.min(1,Math.abs(level))):Math.max(0,Math.min(1,level));
+                // 0.1% visual resolution is finer than the visible meter, and avoids
+                // style invalidation for repeated values during Morph / audio analysis.
+                const rounded=Math.round(level*1000)/1000;
+                if(row.__somataMeterLevel!==rounded){row.style.setProperty('--audio-level',String(rounded));row.__somataMeterLevel=rounded;}
+                const dot=row.querySelector('.audio-route-band-dot'),color=AUDIO_BAND_COLORS[band]||'#fff';
+                if(dot&&dot.__somataMeterColor!==color){dot.style.setProperty('--band-color',color);dot.__somataMeterColor=color;}
+            });
         }
         function toggleAudioRouteGroupWithMemory(spec){
-            const target=state.audioReactive.routingTarget||'master';
-            const routes=ensureAudioRoutingState();
-            const collections=target==='master'?[routes.master,...allAudioRouteCollections()]:[getAudioRouteTargetRows()];
-            const relevant=collections.flatMap(rows=>(rows||[]).filter(r=>spec.match(AUDIO_PARAM_BY_KEY.get(r.param)||{})));
+            const relevant=getAudioRouteTargetRows().filter(r=>spec.match(AUDIO_PARAM_BY_KEY.get(r?.param)||{}));
             if(!relevant.length){showShortcutToast(`Нет связей группы «${spec.label}»`);return;}
-            const memory=state.audioReactive.groupToggleMemory||(state.audioReactive.groupToggleMemory={});
-            const key=audioRouteGroupMemoryKey(spec);
-            const enabled=relevant.filter(r=>r.enabled!==false);
-            const remembered=memory[key];
-            if(remembered?.armed===true && enabled.length===0){
-                const ids=new Set(Array.isArray(remembered.routeIds)?remembered.routeIds:[]);
-                relevant.forEach(r=>{r.enabled=ids.has(r.id);});
-                delete memory[key];
-            }else if(enabled.length){
-                memory[key]={armed:true,routeIds:enabled.map(r=>r.id)};
-                enabled.forEach(r=>{r.enabled=false;});
-            }else{
-
-                relevant.forEach(r=>{r.enabled=true;});
-                delete memory[key];
-            }
+            const enableAll=!relevant.some(r=>r?.enabled!==false);
+            for(const route of relevant)mirrorAudioRouteField(route,'enabled',enableAll);
+            if((state.audioReactive.routingTarget||'master')!=='master')markAudioRoutingFree();
+            state.audioReactive.groupToggleMemory={};
             renderAudioRoutingPanel();requestMainCanvasRender();
         }
         function setupAudioRoutingUI(){
@@ -9067,8 +9380,8 @@ fn markerSd(p:vec2<f32>)->f32{
             const setOpen=open=>{panel?.classList.toggle('hidden',!open);btn?.classList.toggle('active',open);btn?.setAttribute('aria-expanded',open?'true':'false');if(open)renderAudioRoutingPanel();else document.querySelectorAll('.audio-param-menu,.audio-route-group-menu').forEach(m=>m.classList.add('hidden'));};
             btn?.addEventListener('click',e=>{e.stopPropagation();setOpen(panel?.classList.contains('hidden')!==false);});document.getElementById('btnCloseAudioRouting')?.addEventListener('click',()=>setOpen(false));panel?.addEventListener('click',e=>e.stopPropagation());
             document.getElementById('btnAudioMasterEdit')?.addEventListener('click',()=>{if((state.audioReactive.routingTarget||'master')==='master')return;setAudioMasterEditEnabled(!isAudioMasterEditActive());renderAudioRoutingPanel();});
-            document.getElementById('btnAddAudioRoute')?.addEventListener('click',()=>{addAudioRouteForTarget('layer.scale',{strength:100,multiplier:1,enabled:true,signalMode:'add'});markAudioRoutingFree();renderAudioRoutingPanel();requestMainCanvasRender();});
-            document.getElementById('btnAddAudioMasterRoute')?.addEventListener('click',()=>{const routes=ensureAudioRoutingState();routes.master.push(createAudioRoute('combined','layer.scale',100,1,true));renderAudioRoutingPanel();requestMainCanvasRender();});
+            document.getElementById('btnAddAudioRoute')?.addEventListener('click',()=>{addAudioRouteForTarget('layer.radius',{strength:100,multiplier:1,enabled:true,signalMode:'add'});markAudioRoutingFree();renderAudioRoutingPanel();requestMainCanvasRender();});
+            document.getElementById('btnAddAudioMasterRoute')?.addEventListener('click',()=>{const routes=ensureAudioRoutingState();routes.master.push(createAudioRoute('combined','layer.radius',100,1,true));renderAudioRoutingPanel();requestMainCanvasRender();});
             const presetSelect=document.getElementById('audioRoutingPreset');if(presetSelect){presetSelect.value=AUDIO_ROUTING_PRESETS.has(state.audioReactive.routingPreset)?state.audioReactive.routingPreset:'geometry';presetSelect.addEventListener('change',()=>applyAudioRoutingPreset(presetSelect.value));}
             document.getElementById('btnClearAllAudioRoutes')?.addEventListener('click',()=>{if(!confirm('Убрать все аудиосвязи из текущего проекта?'))return;const routes=ensureAudioRoutingState();routes.master=[];for(const id of Object.keys(routes.layers||{}))routes.layers[id]=[];state.audioReactive.masterRouteMultipliers={};audioMasterRouteStateRef=null;audioMasterRouteRuntime.clear();state.audioReactive.groupToggleMemory={};setAudioRoutingPresetMode('free');renderAudioRoutingPanel();requestMainCanvasRender();});
             const ampStrength=document.getElementById('audioMasterEffectsAmplitudeStrength'),ampMultiplier=document.getElementById('audioMasterEffectsAmplitudeMultiplier');
@@ -9084,8 +9397,32 @@ fn markerSd(p:vec2<f32>)->f32{
             const defaultsCb=document.getElementById('audioDefaultRoutesEnabled');if(defaultsCb){defaultsCb.checked=state.audioReactive.defaultRoutesEnabled!==false;defaultsCb.addEventListener('change',()=>{state.audioReactive.defaultRoutesEnabled=defaultsCb.checked;});}
             for(const spec of AUDIO_ROUTE_GROUP_SPECS){
                 const b=document.getElementById(spec.button),m=document.getElementById(spec.menu);if(!b||!m)continue;
-                const fill=()=>{m.innerHTML='';AUDIO_PARAM_DEFS.filter(spec.match).forEach(def=>{const x=document.createElement('button');x.type='button';x.textContent=def.label;x.addEventListener('click',e=>{e.stopPropagation();const target=(state.audioReactive.routingTarget||'master');const routes=ensureAudioRoutingState();if(spec.globalOnly===true){if(target!=='master')return;if(!routes.master.some(r=>r?.param===def.key))routes.master.push(createAudioRoute('combined',def.key,100,1,true,false));}else if(target==='master'){if(!routes.master.some(r=>r?.param===def.key))routes.master.push(createAudioRoute('combined',def.key,100,1,true,false));}else{addAudioRouteForTarget(def.key,{strength:100,multiplier:1,enabled:true,derivative:false,signalMode:'add'});}markAudioRoutingFree();m.classList.add('hidden');renderAudioRoutingPanel();requestMainCanvasRender();});m.appendChild(x);});};fill();
-                b.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.audio-route-group-menu').forEach(other=>{if(other!==m)other.classList.add('hidden');});m.classList.toggle('hidden');if(!m.classList.contains('hidden'))positionViewportPopup(m,b);});
+                const available=(window.SomataParameterMatrix?.all?.()||AUDIO_PARAM_DEFS).filter(d=>(d.morph?.group||d.group)===spec.group),wrap=b.closest('.audio-route-group');if(wrap)wrap.classList.toggle('hidden',available.length===0);if(!available.length)continue;
+                appendAudioGroupLabel(b,spec.group||spec.label,true);
+                const fill=()=>{m.innerHTML='';const target=(state.audioReactive.routingTarget||'master'),rows=getAudioRouteTargetRows();available.forEach(def=>{const key=def.key||def.id,unsupported=!!def.kind&&!def.audioSupported;const on=rows.some(r=>r?.param===key),x=document.createElement('button');x.type='button';x.className='audio-param-option'+(on?' active':'');x.dataset.parameterId=def.id||key;x.textContent=`${on?'✓ ':''}${def.label}`;if(unsupported){x.disabled=true;x.title=def.reason||'Для аудиосвязи требуется отдельный адаптер';}x.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();const liveTarget=(state.audioReactive.routingTarget||'master'),routes=ensureAudioRoutingState();if(spec.globalOnly===true&&liveTarget!=='master')return;const collection=liveTarget==='master'?routes.master:(routes.layers[liveTarget]||(routes.layers[liveTarget]=[]));const existing=collection.filter(r=>r?.param===key);if(existing.length){for(let i=collection.length-1;i>=0;i--)if(collection[i]?.param===key)collection.splice(i,1);}else if(liveTarget==='master')collection.push(createAudioRoute('combined',key,100,1,true,false));else addAudioRouteForTarget(key,{strength:100,multiplier:1,enabled:true,derivative:false,signalMode:'add'});markAudioRoutingFree();renderAudioRoutingPanel();fill();m.classList.remove('hidden');positionViewportPopup(m,b);requestMainCanvasRender();});m.appendChild(x);
+                const mat=window.SomataParameterMatrix;
+                const sub=mat?.subcontrols?.(def.id||key)||[];
+                if(sub.length){
+                    const nest=document.createElement('details');nest.className='audio-param-subsettings';nest.dataset.parentParameter=def.id||key;
+                    const caption=document.createElement('summary');caption.textContent='Поднастройки ('+sub.length+')';nest.appendChild(caption);
+                    const childMap=new Map((mat?.descendants?.(def.id||key)||[]).map(x=>[x.label,x.id]));
+                    for(const label of sub){
+                        const id=childMap.get(label),supported=!!id&&AUDIO_PARAM_BY_KEY.has(id);
+                        const child=document.createElement('button');child.type='button';child.className='audio-param-option audio-param-child';child.textContent=label;
+                        child.dataset.childParameter=id||'';child.disabled=!supported;
+                        if(!supported)child.title='Настройка доступна в Blue/Orange; для Audio требуется отдельный адаптер';
+                        child.addEventListener('click',ev=>{ev.preventDefault();ev.stopPropagation();
+                            const target=state.audioReactive.routingTarget||'master',routes=ensureAudioRoutingState();
+                            const collection=target==='master'?routes.master:(routes.layers[target]||(routes.layers[target]=[]));
+                            const pos=collection.findIndex(r=>r?.param===id);
+                            if(pos>=0)collection.splice(pos,1);else collection.push(createAudioRoute('combined',id,100,1,true,false));
+                            markAudioRoutingFree();renderAudioRoutingPanel();requestMainCanvasRender();
+                        });nest.appendChild(child);
+                    }
+                    m.appendChild(nest);
+                }
+                });};fill();
+                b.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.audio-route-group-menu').forEach(other=>{if(other!==m)other.classList.add('hidden');});m.classList.toggle('hidden');if(!m.classList.contains('hidden')){fill();positionViewportPopup(m,b);}});
                 b.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();document.querySelectorAll('.audio-route-group-menu').forEach(other=>other.classList.add('hidden'));toggleAudioRouteGroupWithMemory(spec);});
             }
             document.addEventListener('click',e=>{const inAudioPopup=Boolean(e.target?.closest?.('#audioViewportPopupPortal'));if(!inAudioPopup&&!panel?.classList.contains('hidden')&&!panel.contains(e.target)&&e.target!==btn&&!btn?.contains(e.target))setOpen(false);if(!inAudioPopup)document.querySelectorAll('.audio-param-menu,.audio-route-group-menu').forEach(m=>m.classList.add('hidden'));});

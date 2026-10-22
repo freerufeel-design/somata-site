@@ -9,7 +9,7 @@ function advancedMix(p){const x=Math.max(0,Math.min(1,(p-.25)/.75));return x*x*(
 async function main(){
   assert(/fillFadePixelization:\s*25/.test(defaults),'7.9 sharp Fade default pixelization is not 25%');
   assert(/function getLayerFillFadePixelization\(layer\)/.test(defaults),'Fade pixelization normalizer missing');
-  assert(/Somata 7\.9 Fade field H 1\/2-res/.test(gpu)&&/Somata 7\.9 Fade field V 1\/2-res/.test(gpu),'Continuous half-resolution Fade field textures missing');
+  assert(/Fade field H 1\/2-res/.test(gpu)&&/Fade field V 1\/2-res/.test(gpu),'Continuous half-resolution Fade field textures missing');
   assert(/fadeBlurPipelineH/.test(gpu)&&/fadeBlurPipelineV/.test(gpu)&&/fadeSmoothCompositePipeline/.test(gpu),'Separable continuous Fade pipelines missing');
   assert(/Math\.ceil\(width\*\.5\)/.test(gpu)&&/Math\.ceil\(height\*\.5\)/.test(gpu),'Continuous Fade field is not isolated at half resolution');
   assert(/smoothMode===1\|\|pixelization>0\.2501/.test(gpu),'Continuous Fade path is not lazy above the 25% sharp baseline');

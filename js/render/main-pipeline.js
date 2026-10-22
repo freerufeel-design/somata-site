@@ -133,6 +133,8 @@ function prepareMainLayerMorphState(frameCtx, renderFrame) {
     const effectLayerSource=liveEffectOwnerForFrameLayer(renderLayerSource);
     frameCtx.effectLayerSource=effectLayerSource;
     frameCtx.effectLayer=effectLayerSource===renderLayerSource?frameCtx.layer:(SomataRenderLayerSnapshot?.create?.(effectLayerSource)||effectLayerSource);
+    try{window.SomataMorphParameterRouting?.applyFrame?.(frameCtx);}catch(error){console.warn('[Somata Parameter Routing] frame overlay skipped',error);}
+    try{window.applySharedAudioParameterFrameRouting?.(frameCtx);}catch(error){console.warn('[Somata Audio Parameter Routing] frame overlay skipped',error);}
     frameCtx.morphFrameActive=blue.active;
     frameCtx.lightMorphEnabled=blue.lightMorphEnabled;
     frameCtx.forcedLampMorph=blue.forcedLampMorph;
@@ -164,7 +166,17 @@ function prepareMainLayerTransformAndStyle(frameCtx, renderFrame) {
     }
     const blue=frameCtx.blueMorphProvider;
     const audioActive=renderFrame.audioActive;
-    const audioScale=audioActive?audioApplyNumeric('layer.scale',1,layerIndex):1;
+    const legacyAudioScale=audioActive?audioApplyNumeric('layer.scale',1,layerIndex):1;
+    // 7.11.0: canonical Audio `Размер` must remain visible while Blue Morph owns an
+    // already-resolved carrier. Compose the audio-driven radius as a post-Morph scale
+    // instead of changing only the snapshot radius after the carrier was built.
+    let routedRadiusScale=1;
+    if(audioActive&&blue?.active===true&&hasActiveAudioRoute('layer.radius')){
+        const baseRadius=Math.max(.0001,Math.abs(Number(layer?.radius)||1));
+        const routedRadius=Math.max(0,Number(audioApplyNumeric('layer.radius',baseRadius,layerIndex))||0);
+        routedRadiusScale=Math.max(.0001,routedRadius/baseRadius);
+    }
+    const audioScale=legacyAudioScale*routedRadiusScale;
     const audioRotationOffset=audioActive?audioApplyNumeric('layer.rotation',0,layerIndex):0;
     const lightMorphScale=blue?.lightScale ?? 1;
     const lightMorphRotation=blue?.lightRotation ?? 0;
@@ -180,7 +192,15 @@ function prepareMainLayerTransformAndStyle(frameCtx, renderFrame) {
     ) && (!blue?.active || blue.mode!=='lightning');
 
     frameCtx.lineProfileApplication=lineProfileApplication;
-    frameCtx.lineProfileStrokeOnly=lineProfileStrokeOnly;
+    // Graffiti replaces the ordinary Base only when the replacement GPU renderer
+    // is ready. Otherwise a non-strict layer must keep its authoritative Line
+    // visible while the GPU warms up; this matters most when it is soloed.
+    // Strict Spiral remains retained-GPU-only and never falls back to a CPU contour.
+    const graffitiWaiting= lineProfileApplication==='graffiti' && lineProfileStrokeOnly &&
+        !SomataGeometryPolicy.isStrict(frameCtx) &&
+        !(typeof WebGPUGraffitiRibbonRenderer!=='undefined' && WebGPUGraffitiRibbonRenderer.isReady?.());
+    frameCtx.lineProfileStrokeOnly=graffitiWaiting?false:lineProfileStrokeOnly;
+    frameCtx._graffitiBaseWhileGpuWarming=graffitiWaiting;
     frameCtx.lineDisplayEnabled=getLayerLineVisible(effectLayer) || frameCtx.lightningFlashAlpha>.001;
     frameCtx.audioScale=audioScale;
     frameCtx.audioRotationOffset=audioRotationOffset;
@@ -204,7 +224,8 @@ function prepareMainLayerTransformAndStyle(frameCtx, renderFrame) {
     frameCtx.lightningStroke=blue?.mode==='lightning' && frameCtx.lightningFlashAlpha>.001 ? (blue.lightningColor||'#ffffff') : null;
     frameCtx.tunnelBaseStrokeColor=frameCtx.lightningStroke || layer.strokeColor || '#ffffff';
     frameCtx.tunnelBaseFillColor=layer.fillColor || 'transparent';
-    frameCtx.tunnelPaletteProfile=tunnelColorShiftIsActive() ? resolveTunnelPaletteProfile(frameCtx.tunnelBaseStrokeColor,layer) : null;
+    frameCtx.tunnelPaletteProfile=tunnelColorShiftIsActive() ? resolveTunnelPaletteProfile(frameCtx.tunnelBaseStrokeColor,layer,layerIndex,'stroke') : null;
+    frameCtx.tunnelFillPaletteProfile=tunnelColorShiftIsActive() ? resolveTunnelPaletteProfile(frameCtx.tunnelBaseFillColor,layer,layerIndex,'fill') : null;
 }
 
 function prepareMainLayerInstances(frameCtx, renderFrame) {
@@ -265,6 +286,12 @@ function prepareMainLayerVectorMaster(frameCtx) {
     frameCtx.drawLayerInstances = (targetCtx, ignoreMaster = false, instanceWeight = null, allowHiddenGraffitiCarrier = false) => {
         const copies = frameCtx.visibleInstances.copies;
         const alphas = frameCtx.visibleInstances.alphas;
+        // Resolve the *same* per-frame Corridor attributes once for this Canvas pass,
+        // instead of walking the FeatureHost owner chain three times per copy.
+        // The cache remains owned and invalidated by SomataCorridorCopyFrame.
+        const corridorActive=state.tunnel.active===true;
+        const copyAttributes=corridorActive?SomataCorridorCopyFrame.batch(frameCtx):null;
+        const closedSpiralCorridor=corridorActive&&isSpiralLayer(frameCtx.layer)&&frameCtx.layer.spiralClosed!==false;
         const previousSuppressStroke = targetCtx.__suppressStroke;
         const hiddenGraffitiCarrier=allowHiddenGraffitiCarrier===true&&frameCtx.lineProfileStrokeOnly===true&&frameCtx.lineProfileApplication==='graffiti';
         if (frameCtx.lineProfileStrokeOnly&&!hiddenGraffitiCarrier) targetCtx.__suppressStroke = true;
@@ -276,7 +303,7 @@ function prepareMainLayerVectorMaster(frameCtx) {
             const alpha = rawAlpha*weight;
             if(alpha<=0.0001)continue;
             const previousSpiralAlphaEndRatio = targetCtx.__spiralCorridorAlphaEndRatio;
-            if (state.tunnel.active && isSpiralLayer(frameCtx.layer) && frameCtx.layer.spiralClosed !== false) {
+            if (closedSpiralCorridor) {
                 let nextAlpha = alpha;
                 if (i + 1 < copies.length) {
                     const nextCopy = copies[i + 1];
@@ -289,18 +316,20 @@ function prepareMainLayerVectorMaster(frameCtx) {
             } else {
                 delete targetCtx.__spiralCorridorAlphaEndRatio;
             }
-            if (state.tunnel.active) {
-                const copyStroke=getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,copy,frameCtx.tunnelPaletteProfile);
-                const copyFill=frameCtx.tunnelBaseFillColor==='transparent'?'transparent':getTunnelCopyColor(frameCtx.tunnelBaseFillColor,copy,frameCtx.tunnelPaletteProfile);
+            if (corridorActive) {
+                const copyStroke=SomataCorridorCopyFrame.strokeAt(copyAttributes,copy,i);
+                const copyFill=SomataCorridorCopyFrame.fillAt(copyAttributes,copy,i);
                 if (frameCtx.frameVectorMaster && frameCtx.tunnelCanUseMaster && !ignoreMaster) {
                     targetCtx.save();
-                    applyMotionTunnelLag(targetCtx,copy,frameCtx.layer);
+                    const copyAngle=SomataCorridorCopyFrame.rotationAt(copyAttributes,copy,i);
+                    if(Math.abs(copyAngle)>1e-12)targetCtx.rotate(copyAngle);
                     replayVectorRecording(targetCtx, frameCtx.frameVectorMaster, alpha, copy.scale / frameCtx.frameVectorMasterScale, {strokeStyle:copyStroke,fillStyle:copyFill});
                     targetCtx.restore();
                 } else {
                     targetCtx.save();
                     targetCtx.strokeStyle=copyStroke;targetCtx.fillStyle=copyFill;
-                    applyMotionTunnelLag(targetCtx,copy,frameCtx.layer);
+                    const copyAngle=SomataCorridorCopyFrame.rotationAt(copyAttributes,copy,i);
+                    if(Math.abs(copyAngle)>1e-12)targetCtx.rotate(copyAngle);
                     targetCtx.scale(copy.scale, copy.scale);
                     frameCtx.drawLayerGeometry(targetCtx, alpha);
                     targetCtx.restore();
@@ -320,12 +349,14 @@ function prepareMainLayerVectorMaster(frameCtx) {
     frameCtx.drawLayerFillInstances = (targetCtx) => {
         const copies=frameCtx.visibleInstances.copies;
         const alphas=frameCtx.visibleInstances.fillAlphas||frameCtx.visibleInstances.alphas;
+        const corridorActive=state.tunnel.active===true;
+        const copyAttributes=corridorActive?SomataCorridorCopyFrame.batch(frameCtx):null;
         const prevSuppressStroke=targetCtx.__suppressStroke;
         targetCtx.__suppressStroke=true;
         for(let i=0;i<copies.length;i++){
             const copy=copies[i],alpha=Math.max(0,Math.min(1,Number(alphas[i])||0));
             if(alpha<=.0001)continue;
-            if(state.tunnel.active){targetCtx.save();const copyFill=frameCtx.tunnelBaseFillColor==='transparent'?'transparent':getTunnelCopyColor(frameCtx.tunnelBaseFillColor,copy,frameCtx.tunnelPaletteProfile);targetCtx.fillStyle=copyFill;applyMotionTunnelLag(targetCtx,copy,frameCtx.layer);targetCtx.scale(copy.scale,copy.scale);frameCtx.drawLayerGeometry(targetCtx,alpha);targetCtx.restore();}
+            if(corridorActive){targetCtx.save();const copyFill=SomataCorridorCopyFrame.fillAt(copyAttributes,copy,i);targetCtx.fillStyle=copyFill;const copyAngle=SomataCorridorCopyFrame.rotationAt(copyAttributes,copy,i);if(Math.abs(copyAngle)>1e-12)targetCtx.rotate(copyAngle);targetCtx.scale(copy.scale,copy.scale);frameCtx.drawLayerGeometry(targetCtx,alpha);targetCtx.restore();}
             else frameCtx.drawLayerGeometry(targetCtx,alpha);
         }
         if(prevSuppressStroke===undefined)delete targetCtx.__suppressStroke;else targetCtx.__suppressStroke=prevSuppressStroke;
@@ -498,8 +529,20 @@ function renderPreparedMainLayer(frameCtx) {
             if(typeof SomataFeatureHost!=='undefined'&&SomataFeatureHost.has?.(name))return SomataFeatureHost.run(name,frameCtx,execute);
             return execute(frameCtx);
         }finally{renderPassProfiler.end(name,pt);}};
-        const runRegisteredStage=(stage)=>SomataRenderPassRegistry.runStage(stage,frameCtx,(row)=>runPass(row.name,ctx=>row.run(ctx),row.fallback?()=>row.fallback(frameCtx):null));
-        const runRegisteredHooks=(stage)=>SomataRenderPassRegistry.runHooks(stage,frameCtx,(row)=>row.run(frameCtx));
+        // 7.11.8: per-layer wall-clock diagnostics for the very frame that stalls.
+        // The legacy pass profiler samples every ten frames and can therefore
+        // report unrelated passes during a 500-1300 ms driver/Canvas stall.
+        const layerTiming=frameCtx._slowFrameLayerTiming||null;
+        const recordStep=(label,work)=>{
+            if(!layerTiming)return work();
+            const started=performance.now();
+            try{return work();}finally{
+                const ms=performance.now()-started;
+                layerTiming.steps[label]=(layerTiming.steps[label]||0)+ms;
+            }
+        };
+        const runRegisteredStage=(stage)=>recordStep('stage:'+String(stage),()=>SomataRenderPassRegistry.runStage(stage,frameCtx,(row)=>runPass(row.name,ctx=>row.run(ctx),row.fallback?()=>row.fallback(frameCtx):null)));
+        const runRegisteredHooks=(stage)=>recordStep('hooks:'+String(stage),()=>SomataRenderPassRegistry.runHooks(stage,frameCtx,(row)=>row.run(frameCtx)));
         runRegisteredHooks('beforeLayer');
         // Fast path: do not open an offscreen Layer Scene merely because configurable
         // ordering exists. Fill/Web and later effects seed one when they actually need it.
@@ -517,7 +560,7 @@ function renderPreparedMainLayer(frameCtx) {
         runRegisteredStage(SomataRenderPassRegistry.STAGES.FILL);
         runRegisteredStage(SomataRenderPassRegistry.STAGES.OVER_FILL);
 
-        try{SomataStrokeBatchService.prepare(frameCtx);}catch(err){frameCtx._webgpuStrokeBatch=null;try{spiroPassIsolationNoteFailure?.('strokeBatch',err,frameCtx);}catch(_){} }
+        try{recordStep('strokeBatch.prepare',()=>SomataStrokeBatchService.prepare(frameCtx));}catch(err){frameCtx._webgpuStrokeBatch=null;try{spiroPassIsolationNoteFailure?.('strokeBatch',err,frameCtx);}catch(_){} }
         runRegisteredHooks('afterStrokeBatch');
 
         if(Number(frameCtx.frame?.renderLayerCount||0)>1&&WebGPUStrokeRenderer.getFrameSceneTexture?.(frameCtx.frameId)){
@@ -529,7 +572,7 @@ function renderPreparedMainLayer(frameCtx) {
             if(!canJoin){
                 if(SomataGeometryPolicy.isStrict(frameCtx)){renderBackendTelemetry.mark('geometry','gpu','strict Spiral waits to join frame GPU scene; materialization forbidden');try{requestMainCanvasRender?.();}catch(_){}return;}
 
-                const presented=WebGPUStrokeRenderer.presentFrameSceneToMain?.(frameCtx.frameId,mainCtx,true);
+                const presented=recordStep('frameScene.presentToMain',()=>WebGPUStrokeRenderer.presentFrameSceneToMain?.(frameCtx.frameId,mainCtx,true));
                 if(presented){frameCtx.frame.gpuMainCanvasHasContent=true;try{notifyFrameSceneEffectCommandsSubmitted?.(frameCtx.frame);}catch(_){}}
                 else somataGpuDiagnosticError('geometry','frame-scene-present','GPU frame scene could not be presented',frameCtx,{fallback:'gpu-current-frame-repaint',recovered:true});
                 noteFrameGraphMaterialization(frameCtx.frameId);frameCtx.frame.gpuMainSceneEmpty=false;
@@ -564,7 +607,7 @@ function renderPreparedMainLayer(frameCtx) {
             const extra=collectLayerSceneCommandBuffers(frameCtx.frame);
 
             WebGPUStrokeRenderer.appendFrameUnderlayCommands?.(frameCtx.frameId,extra);
-            if(WebGPUStrokeRenderer.sealDeferredLayerSceneToFrame?.(frameCtx.frameId,extra)){
+            if(recordStep('frameScene.sealDeferred',()=>WebGPUStrokeRenderer.sealDeferredLayerSceneToFrame?.(frameCtx.frameId,extra))){
                 try{transferLayerSceneEffectCallbacksToFrameScene?.(frameCtx.frame);}catch(_){}
                 frameCtx.frame.gpuLayerSceneDeferred=false;clearLayerSceneEffectCommands(frameCtx.frame);
                 frameCtx.frame.gpuFrameSceneLayers=(Number(frameCtx.frame.gpuFrameSceneLayers)||0)+1;
@@ -581,7 +624,7 @@ function renderPreparedMainLayer(frameCtx) {
                     try{WebGPUStrokeRenderer.discardFrameScene?.(frameCtx.frameId);}catch(_){}try{WebGPUStrokeRenderer.clearDeferredLayerScene?.();}catch(_){}try{WebGPUStrokeRenderer.discardFrameUnderlay?.(frameCtx.frameId);}catch(_){}clearLayerSceneEffectCommands(frameCtx.frame);frameCtx.frame.gpuLayerSceneDeferred=false;try{requestMainCanvasRender?.();}catch(_){}return;
                 }
 
-                if(WebGPUStrokeRenderer.getFrameSceneTexture?.(frameCtx.frameId)){const presented=WebGPUStrokeRenderer.presentFrameSceneToMain?.(frameCtx.frameId,mainCtx,true);if(presented)try{notifyFrameSceneEffectCommandsSubmitted?.(frameCtx.frame);}catch(_){} }
+                if(WebGPUStrokeRenderer.getFrameSceneTexture?.(frameCtx.frameId)){const presented=recordStep('frameScene.sealFallback',()=>WebGPUStrokeRenderer.presentFrameSceneToMain?.(frameCtx.frameId,mainCtx,true));if(presented)try{notifyFrameSceneEffectCommandsSubmitted?.(frameCtx.frame);}catch(_){} }
                 materializeDeferredLayerScene(frameCtx);frameCtx.frame.gpuMainSceneEmpty=false;
             }
         }
@@ -599,14 +642,20 @@ function renderPreparedMainLayer(frameCtx) {
 }
 
 function renderMainLayer(renderFrame, layerIndex) {
+    const started=performance.now();
+    const details=renderPerf.currentFramePhases?.layerDetails;
+    const diagnostic=Array.isArray(details)?{index:layerIndex,prepareMs:0,drawMs:0,totalMs:0,steps:Object.create(null)}:null;
     let __pt=renderPassProfiler.begin();let frameCtx=null;
     try{frameCtx=typeof runSpiroIsolatedLayerPreparation==='function'?runSpiroIsolatedLayerPreparation(renderFrame,layerIndex,()=>prepareMainLayerFrame(renderFrame,layerIndex)):prepareMainLayerFrame(renderFrame,layerIndex);}
-    finally{renderPassProfiler.end('layerPrepare',__pt);}
+    finally{renderPassProfiler.end('layerPrepare',__pt);if(diagnostic)diagnostic.prepareMs=performance.now()-started;}
     if(frameCtx){
-
+        if(diagnostic){diagnostic.kind=String(frameCtx.geometryPlan?.kind||'unknown');frameCtx._slowFrameLayerTiming=diagnostic;}
         if(SomataGeometryPolicy.isStrict(frameCtx)&&renderFrame)renderFrame.strictSpiralGpuPresentRequired=true;
+        const drawStarted=performance.now();
         try{renderPreparedMainLayer(frameCtx);}catch(err){try{spiroPassIsolationNoteFailure?.('layerRender',err,frameCtx);}catch(_){console.error('SpiroStar isolated layer render failure:',err);}}
+        finally{if(diagnostic){diagnostic.drawMs=performance.now()-drawStarted;frameCtx._slowFrameLayerTiming=null;}}
     }
+    if(diagnostic){diagnostic.totalMs=performance.now()-started;details.push(diagnostic);}
 }
 
 function renderMainLayers(renderFrame) {
@@ -692,11 +741,15 @@ function recoverGpuPresentationToMainCanvas(renderFrame){
 }
 
 function finishMainRenderFrame(renderStartedAt,renderFrame){
+    const framePhases=renderPerf.currentFramePhases;
+    let phaseAt=performance.now();
     if(renderFrame?.canvasTransformSaved){try{mainCtx.restore();}catch(_){}renderFrame.canvasTransformSaved=false;}
     let presented=false;
     if(somataGpuBackendAllowed()){
         try{presented=WebGPUFinalCompositeRenderer.render(renderFrame)===true;}catch(err){somataGpuContractError('FINAL_GPU_RENDER_EXCEPTION',renderFrame,{error:String(err?.stack||err)});}
     }else somataGpuDiagnosticError('final','capability','WebGPU is unavailable; Somata 7.5 has no CPU renderer',renderFrame);
+    if(framePhases)framePhases.finalGpuMs=performance.now()-phaseAt;
+    phaseAt=performance.now();
     if(!presented){
         const rescue=recoverGpuPresentationToMainCanvas(renderFrame);
         if(rescue.ok){
@@ -716,11 +769,33 @@ function finishMainRenderFrame(renderStartedAt,renderFrame){
             try{requestMainCanvasRender?.();}catch(_){}
         }
     }else if(renderFrame){renderBackendTelemetry.mark('final','gpu','final WebGPU composite');renderFrame.gpuLayerSceneDeferred=false;renderFrame.gpuLampsDeferred=false;renderFrame.gpuFinalVignetteDeferred=false;renderFrame.gpuMainSceneEmpty=false;}
+    if(framePhases)framePhases.presentationRescueMs=performance.now()-phaseAt;
+    phaseAt=performance.now();
     try{SomataFeatureLifecycle?.end?.(renderFrame,somataGpuBackendAllowed());}catch(err){spiroPassIsolationNoteFailure?.('featureLifecycleEnd',err,{frameId:renderFrame?.id,layerIndex:-1});}
     finishLampAdaptiveFrame();endFrameGeometryRuntime();renderRuntime.end();
+    if(framePhases)framePhases.frameCleanupMs=performance.now()-phaseAt;
     const paintNow=performance.now();renderPerf.lastRenderMs=Math.max(0,paintNow-renderStartedAt);renderPerf.lastPaintAt=paintNow;performanceGovernor.noteFrame(paintNow,renderPerf.lastRenderMs);renderBackendTelemetry.commit();
     if(showFpsCounter){if(!renderPerf.fpsLastFrameAt||paintNow-renderPerf.fpsLastFrameAt>500){renderPerf.fpsWindowStart=paintNow;renderPerf.fpsFrames=0;}renderPerf.fpsLastFrameAt=paintNow;renderPerf.fpsFrames+=1;const elapsed=paintNow-renderPerf.fpsWindowStart;if(elapsed>=750){const fps=Math.max(0,Math.round(renderPerf.fpsFrames*1000/Math.max(1,elapsed))),text=`${fps} FPS`;if(fpsCounterEl&&text!==renderPerf.lastFpsText){fpsCounterEl.textContent=text;renderPerf.lastFpsText=text;}renderPerf.fpsWindowStart=paintNow;renderPerf.fpsFrames=0;}}
-    renderPassProfiler.finish();try{somataFxBenchmark?.noteFrame?.(paintNow,renderPerf.lastRenderMs);}catch(_){}renderPerf.rendering=false;
+    renderPassProfiler.finish();try{somataFxBenchmark?.noteFrame?.(paintNow,renderPerf.lastRenderMs);}catch(_){}
+    if(framePhases){
+        const round=ms=>Number((Math.max(0,Number(ms)||0)).toFixed(2));
+        framePhases.totalMs=round(performance.now()-renderStartedAt);
+        const keys=['framePrepareMs','layersMs','lampGpuMs','viewportMs','finalGpuMs','presentationRescueMs','frameCleanupMs'];
+        for(const key of keys)framePhases[key]=round(framePhases[key]);
+        framePhases.unattributedMs=round(framePhases.totalMs-keys.reduce((sum,key)=>sum+framePhases[key],0));
+        // Retain only finite numeric timings and a small (up to 8) layer list;
+        // never retain geometry, render contexts or GPU handles in diagnostics.
+        const layerDetails=framePhases.layerDetails.slice(0,8).map(entry=>({
+            index:entry.index,kind:entry.kind||'unknown',
+            prepareMs:round(entry.prepareMs),drawMs:round(entry.drawMs),totalMs:round(entry.totalMs),
+            steps:Object.fromEntries(Object.entries(entry.steps).map(([key,ms])=>[key,round(ms)]))
+        }));
+        const snapshot={...framePhases,layerDetails:layerDetails};
+        renderPerf.lastFramePhases=snapshot;
+        if(snapshot.totalMs>=100){const history=renderPerf.recentSlowFramePhases;history.push(snapshot);if(history.length>12)history.shift();}
+        renderPerf.currentFramePhases=null;
+    }
+    renderPerf.rendering=false;
 }
 
 window.__spiroReportFillStatus=()=>{
@@ -809,19 +884,22 @@ function renderMainCanvas() {
     renderPerf.rendering = true;
     const renderStartedAt = performance.now();
     const renderFrame = renderRuntime.begin(renderStartedAt);
+    const framePhases={frameId:Number(renderFrame?.id)||0,framePrepareMs:0,layersMs:0,layerDetails:[],lampGpuMs:0,viewportMs:0,finalGpuMs:0,presentationRescueMs:0,frameCleanupMs:0,gpuMainUploadMs:0,gpuQueueSubmitMs:0};
+    renderPerf.currentFramePhases=framePhases;
     try{if(typeof beginSpiroPassIsolationFrame==='function')beginSpiroPassIsolationFrame(renderFrame?.id||renderRuntime?.frameId||0);}catch(_){}
     renderBackendTelemetry.begin(renderFrame?.id||renderRuntime?.frameId||0);
     renderPassProfiler.beginFrame();
     try {
-        let __pt=renderPassProfiler.begin();prepareMainRenderFrame(renderFrame);renderPassProfiler.end('framePrepare',__pt);
-        __pt=renderPassProfiler.begin();renderMainLayers(renderFrame);renderPassProfiler.end('layersTotal',__pt);
+        let phaseAt=performance.now();
+        let __pt=renderPassProfiler.begin();prepareMainRenderFrame(renderFrame);renderPassProfiler.end('framePrepare',__pt);framePhases.framePrepareMs=performance.now()-phaseAt;
+        phaseAt=performance.now();__pt=renderPassProfiler.begin();renderMainLayers(renderFrame);renderPassProfiler.end('layersTotal',__pt);framePhases.layersMs=performance.now()-phaseAt;
 
-        __pt=renderPassProfiler.begin();
+        phaseAt=performance.now();__pt=renderPassProfiler.begin();
         if(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed()){
             const deferGpuLamps=WebGPUFinalCompositeRenderer.canDeferLamps(renderFrame);SomataLampPassService.flush(renderFrame,deferGpuLamps);
         }else renderFrame.gpuLampsDeferred=false;
-        renderPassProfiler.end('lampGPU',__pt);
-        __pt=renderPassProfiler.begin();renderMainViewportEffects(renderFrame);renderPassProfiler.end('viewport',__pt);
+        renderPassProfiler.end('lampGPU',__pt);framePhases.lampGpuMs=performance.now()-phaseAt;
+        phaseAt=performance.now();__pt=renderPassProfiler.begin();renderMainViewportEffects(renderFrame);renderPassProfiler.end('viewport',__pt);framePhases.viewportMs=performance.now()-phaseAt;
     } catch (err) {
         recoverMainRenderError(err, renderFrame);
     } finally {

@@ -157,7 +157,12 @@ const SpiroMorphController = (() => {
         const i = Math.max(0, Math.floor(Number(index) || 0));
         const blue = blueRuntime();
         const green = greenRuntime();
-        if (greenOwnsFrame()) return green.frameRenderLayers?.[i] || state?.layers?.[i] || null;
+        if (greenOwnsFrame()) {
+            const frame=green.frameRenderLayers?.[i] || state?.layers?.[i] || null;
+            const authored=state?.layers?.[i];
+            if(frame&&authored)frame.visible=authored.visible!==false;
+            return frame;
+        }
         if (orangeRuntime().transitioning === true) return null;
         if (blue.active !== true || blue.exactStartPending === true) return null;
         const canonical=state?.layers?.[i]||null;
@@ -174,8 +179,12 @@ const SpiroMorphController = (() => {
     function getDisplayLayers() {
         const canonical = Array.isArray(state?.layers) ? state.layers : [];
         const green = greenRuntime();
-        if (greenOwnsFrame() && Array.isArray(green.frameRenderLayers) && green.frameRenderLayers.length)
+        if (greenOwnsFrame() && Array.isArray(green.frameRenderLayers) && green.frameRenderLayers.length){
+            for(let i=0;i<green.frameRenderLayers.length;i++){
+                if(green.frameRenderLayers[i]&&canonical[i])green.frameRenderLayers[i].visible=canonical[i].visible!==false;
+            }
             return green.frameRenderLayers;
+        }
         const blue = blueRuntime();
         if (orangeRuntime().transitioning !== true && blue.active === true && blue.exactStartPending !== true) {
             const lightMode=state?.morph?.mode==='light' && state?.morph?.monoOrbitTransforms!==true;

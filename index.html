@@ -8,12 +8,12 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Somata">
     <meta name="theme-color" content="#090d16">
-    <link rel="manifest" href="manifest.webmanifest?v=20261015-v78302">
+    <link rel="manifest" href="manifest.webmanifest?v=8.19.1">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Somata 7.9</title>
-    <link rel="stylesheet" href="styles/app.css?v=20261016-v78307">
+    <title>Somata 8.19.1</title>
+    <link rel="stylesheet" href="styles/app.css?v=20261022-v800">
     <script defer src="js/bootstrap/boot-guard.js?v=20261015-v78302"></script>
     <script defer src="js/bootstrap/error-overlay.js?v=20261015-v78302"></script>
     <script defer src="js/bootstrap/module-registry.js?v=20261015-v78302"></script>
@@ -21,19 +21,22 @@
     <script defer src="js/render/effect-owner-service.js?v=20261015-v78302"></script>
     <script defer src="js/render/compositor-contract.js?v=20261015-v78302"></script>
     <script defer src="js/core/palette.js?v=20261015-v78302"></script>
-    <script defer src="js/core/state.js?v=20261015-v78302"></script>
+    <script defer src="js/core/state.js?v=8.19.0"></script>
+    <script defer src="js/core/parameter-routing.js?v=20261022-v800"></script>
+    <script defer src="js/core/parameter-matrix.js?v=20261021-v71116"></script>
     <script defer src="js/core/layer-versions.js?v=20261015-v78302"></script>
     <script defer src="js/ui/profile-presets.js?v=20261015-v78302"></script>
     <script defer src="js/geometry/kernel.js?v=20261015-v78302"></script>
     <script defer src="js/core/render-runtime.js?v=20261015-v78302"></script>
     <script defer src="js/core/backend-policy.js?v=20261015-v78302"></script>
-    <script defer src="js/core/scheduler.js?v=20261015-v78302"></script>
-    <script defer src="js/core/morph-controller.js?v=20261015-v78302"></script>
-    <script defer src="js/effects/motion.js?v=20261015-v78302"></script>
-    <script defer src="js/core/defaults-layers.js?v=20261016-v79001"></script>
+    <script defer src="js/core/scheduler.js?v=20261022-v810"></script>
+    <script defer src="js/core/morph-controller.js?v=8.19.0"></script>
+    <script defer src="js/effects/motion.js?v=20261022-v890"></script>
+    <script defer src="js/render/corridor-copy-frame.js?v=20261022-v860"></script>
+    <script defer src="js/core/defaults-layers.js?v=8.19.0"></script>
     <script defer src="js/geometry/spline.js?v=20261015-v78302"></script>
-    <script defer src="js/app/geometry-gpu-core.js?v=20261016-v79001"></script>
-    <script defer src="js/geometry/frame-contour.js?v=20261016-v79001"></script>
+    <script defer src="js/app/geometry-gpu-core.js?v=8.19.1"></script>
+    <script defer src="js/geometry/frame-contour.js?v=20261017-v71100"></script>
     <script defer src="js/gpu/lamp-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/web-thread-scene-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/graffiti-ribbon-renderer.js?v=20261015-v78302"></script>
@@ -42,10 +45,10 @@
     <script defer src="js/gpu/bezier-sweep-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/path-fx-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/particle-renderer.js?v=20261016-v78309"></script>
-    <script defer src="js/geometry/frame-paths.js?v=20261016-v78310"></script>
+    <script defer src="js/geometry/frame-paths.js?v=20261022-v8170"></script>
     <script defer src="js/geometry/canonical.js?v=20261015-v78302"></script>
-    <script defer src="js/app/lamp-audio-core.js?v=20261016-v78310"></script>
-    <script defer src="js/render/fill-plan.js?v=20261015-v78302"></script>
+    <script defer src="js/app/lamp-audio-core.js?v=8.19.0"></script>
+    <script defer src="js/render/fill-plan.js?v=20261022-v840"></script>
     <script defer src="js/geometry/morph.js?v=20261015-v78302"></script>
     <script defer src="js/geometry/morph-frame.js?v=20261015-v78302"></script>
     <script defer src="js/geometry/morph-budget.js?v=20261015-v78302"></script>
@@ -53,7 +56,7 @@
     <script defer src="js/gpu/morph-arc-resource.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/profile-arc-marker-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/topology-morph-base-renderer.js?v=20261015-v78302"></script>
-    <script defer src="js/gpu/spiral-bezier-morph-renderer.js?v=20261015-v78302"></script>
+    <script defer src="js/gpu/spiral-bezier-morph-renderer.js?v=20261022-v8170"></script>
     <script defer src="js/gpu/green-project-morph-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/web-corner-resource.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/web-morph-renderer.js?v=20261015-v78302"></script>
@@ -62,11 +65,11 @@
     <script defer src="js/gpu/graffiti-morph-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/render/graffiti-pass.js?v=20261015-v78302"></script>
     <script defer src="js/render/web-morph-bridge.js?v=20261015-v78302"></script>
-    <script defer src="js/render/feature-host.js?v=20261015-v78302"></script>
-    <script defer src="js/render/pass-registry.js?v=20261016-v78307"></script>
-    <script defer src="js/render/render-diagnostics.js?v=20261016-v79001"></script>
+    <script defer src="js/render/feature-host.js?v=20261022-v8170"></script>
+    <script defer src="js/render/pass-registry.js?v=20261022-v810"></script>
+    <script defer src="js/render/render-diagnostics.js?v=20261021-v71116"></script>
     <script defer src="js/render/render-layer-snapshot.js?v=20261015-v78302"></script>
-    <script defer src="js/render/morph-provider-service.js?v=20261015-v78302"></script>
+    <script defer src="js/render/morph-provider-service.js?v=8.19.0"></script>
     <script defer src="js/render/geometry-circles-pass.js?v=20261015-v78302"></script>
     <script defer src="js/render/base-plan.js?v=20261015-v78302"></script>
     <script defer src="js/render/glow-plan.js?v=20261015-v78302"></script>
@@ -78,8 +81,8 @@
     <script defer src="js/render/lamp-plan.js?v=20261016-v78309"></script>
     <script defer src="js/render/pass-isolation.js?v=20261015-v78302"></script>
     <script defer src="js/render/layer-scene-service.js?v=20261016-v78305"></script>
-    <script defer src="js/render/geometry-role-service.js?v=20261015-v78302"></script>
-    <script defer src="js/render/geometry-scene-routing.js?v=20261015-v78302"></script>
+    <script defer src="js/render/geometry-role-service.js?v=20261022-v8170"></script>
+    <script defer src="js/render/geometry-scene-routing.js?v=20261022-v820"></script>
     <script defer src="js/render/spiral-geometry-policy.js?v=20261015-v78302"></script>
     <script defer src="js/render/spiral-role-adapter.js?v=20261015-v78302"></script>
     <script defer src="js/render/green-role-adapter.js?v=20261015-v78302"></script>
@@ -94,9 +97,9 @@
     <script defer src="js/render/effects-plan.js?v=20261015-v78302"></script>
     <script defer src="js/render/fill-geometry-adapter.js?v=20261015-v78302"></script>
     <script defer src="js/render/spiral-fill-adapter.js?v=20261016-v78306"></script>
-    <script defer src="js/render/fill-pass.js?v=20261016-v78306"></script>
+    <script defer src="js/render/fill-pass.js?v=20261021-v71104"></script>
     <script defer src="js/render/stroke-batch-service.js?v=20261015-v78303"></script>
-    <script defer src="js/render/base-pass.js?v=20261015-v78302"></script>
+    <script defer src="js/render/base-pass.js?v=20261022-v810"></script>
     <script defer src="js/render/outline-pass.js?v=20261015-v78302"></script>
     <script defer src="js/render/profile-pass.js?v=20261015-v78302"></script>
     <script defer src="js/render/lamp-pass.js?v=20261016-v78309"></script>
@@ -109,18 +112,25 @@
     <script defer src="js/render/feature-lifecycle.js?v=20261015-v78302"></script>
     <script defer src="js/render/compositor-policy.js?v=20261015-v78302"></script>
     <script defer src="js/render/geometry-executor.js?v=20261015-v78302"></script>
-    <script defer src="js/render/main-pipeline.js?v=20261016-v78305"></script>
+    <script defer src="js/render/main-pipeline.js?v=8.19.0"></script>
     <script defer src="js/ui/master-broadcast-core.js?v=20261015-v78302"></script>
-    <script defer src="js/app/ui-project-runtime.js?v=20261016-v79001"></script>
+    <script defer src="js/app/ui-project-runtime.js?v=8.19.0"></script>
+    <script defer src="js/ui/ui-mode.js?v=20261021-v71102"></script>
     <script defer src="js/ui/desktop-brand-popout.js?v=20261015-v78302"></script>
 </head>
-<body>
+<body class="ui-pro" data-ui-mode="pro">
     <button id="btnPseudoFullscreenExit" type="button" title="Выйти из полноэкранного режима" aria-label="Выйти из полноэкранного режима">✕</button>
 
     <header>
-        <button id="desktopBrandLogoButton" class="desktop-brand-logo-button" type="button" title="Вывести Somata на холст и открыть отдельное окно вывода" aria-label="Открыть логотип Somata и отдельное окно вывода" aria-pressed="false">
-            <img id="desktopBrandLogo" class="desktop-brand-logo" src="assets/somata-logo.webp?v=20261015-v78302" alt="Somata" draggable="false">
-        </button>
+        <div class="header-brand-zone">
+            <button id="desktopBrandLogoButton" class="desktop-brand-logo-button" type="button" title="Вывести Somata на холст и открыть отдельное окно вывода" aria-label="Открыть логотип Somata и отдельное окно вывода" aria-pressed="false">
+                <img id="desktopBrandLogo" class="desktop-brand-logo" src="assets/somata-logo.webp?v=20261015-v78302" alt="Somata" draggable="false">
+            </button>
+            <div id="uiModeSwitch" class="ui-mode-switch" role="group" aria-label="Режим интерфейса">
+                <button type="button" data-ui-mode="easy" aria-pressed="false" tabindex="-1">Easy</button>
+                <button type="button" data-ui-mode="pro" class="active" aria-pressed="true">Pro</button>
+            </div>
+        </div>
         <div class="header-actions">
             <span class="header-audio-entry" aria-label="Аудио">
                 <button id="btnAudioReactive" class="btn-icon audio-reactive-btn" type="button" title="Микрофон / источник аудио" aria-label="Открыть микрофон и настройки источника" aria-controls="audioReactivePanel" aria-expanded="false">🎙</button>
@@ -210,7 +220,7 @@
                 </div>
             <button id="btnAutoTapListen" class="auto-tap-listen-btn" type="button" title="Слушать музыку и автоматически определять TAP/BPM" aria-label="Слушать музыку и автоматически определять TAP/BPM" aria-pressed="false">👂</button>
             <div class="tap-nav" title="TAP tempo">
-                <button id="btnTapTempo" class="tap-btn" type="button" title="Нажимайте в ритм музыки" aria-label="TAP tempo">TAP</button>
+                <button id="btnTapTempo" class="tap-btn" type="button" title="Нажимайте в ритм музыки. Колесо мыши: вверх +1 BPM, вниз −1 BPM" aria-label="TAP tempo">TAP</button>
                 <button id="btnTapSettings" class="btn-icon tap-settings-btn" type="button" title="Настройки TAP" aria-label="Настройки TAP" aria-expanded="false">⚙</button>
                 <button id="btnTapReset" class="tap-reset-btn" type="button" title="Сбросить TAP и вернуться к интервалам морфинга">Сброс</button>
                 <div id="tapSettingsPanel" class="tap-settings-panel hidden" role="dialog" aria-label="Настройки TAP">
@@ -259,17 +269,10 @@
                         </label>
                     </div>
                     <div class="tunnel-setting">
-                        <div class="tunnel-setting-head"><span>Скорость</span><span id="tunnelSpeedText" class="text-mono">100% × 1</span></div>
+                        <div class="tunnel-setting-head"><span>Скорость</span><span id="tunnelSpeedText" class="text-mono">+100% × 1</span></div>
                         <div class="tunnel-effect-control">
-                            <input id="tunnelSpeedStrength" type="range" min="0" max="300" step="1" value="100" aria-label="Скорость коридора">
+                            <input id="tunnelSpeedStrength" type="range" min="-100" max="100" step="1" value="100" aria-label="Скорость коридора">
                             <input id="tunnelSpeedMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель скорости коридора" title="Множитель скорости: ползунок умножается на это значение" data-log-multiplier="1">
-                        </div>
-                    </div>
-                    <div class="tunnel-setting">
-                        <div class="tunnel-setting-head"><span>Направление</span><span id="tunnelDirectionText" class="text-mono">На нас</span></div>
-                        <div class="tunnel-direction-toggle" role="group" aria-label="Направление коридора">
-                            <button type="button" class="active" data-tunnel-direction="toward" aria-pressed="true">На нас</button>
-                            <button type="button" data-tunnel-direction="away" aria-pressed="false">От нас</button>
                         </div>
                     </div>
                     <div class="tunnel-setting">
@@ -292,7 +295,7 @@
                             <input id="tunnelColorShiftEnabled" type="checkbox">
                             <span>Смещение цвета в коридоре</span>
                         </label>
-                        <div id="tunnelColorShiftControls" class="tunnel-color-shift-controls hidden">
+                        <div id="tunnelColorShiftControls" class="tunnel-color-shift-controls">
                             <div class="tunnel-setting-head"><span>Сдвиг на фигуру</span><span id="tunnelColorShiftText" class="text-mono">30°</span></div>
                             <div class="tunnel-effect-control tunnel-color-degree-control">
                                 <input id="tunnelColorShiftDegrees" type="range" min="0" max="360" step="1" value="30" aria-label="Смещение цвета между соседними фигурами Коридора в градусах">
@@ -361,7 +364,7 @@
                 <button id="btnNextPreset" class="btn-icon" title="Следующий пресет" aria-label="Следующий пресет">▶</button>
                 </div>
                 <div class="random-nav" title="Случайная композиция">
-                    <button id="btnRandomPreset" class="btn-icon random-preset-btn" title="Случайная композиция" aria-label="Создать случайную композицию">
+                    <button id="btnRandomPreset" class="btn-icon random-preset-btn" title="Создать новую оранжевую композицию" aria-label="Создать новую оранжевую композицию">
                         <svg class="dice-icon" viewBox="0 0 24 24" aria-hidden="true">
                             <rect x="4" y="4" width="16" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.8"/>
                             <circle cx="8" cy="8" r="1.35" fill="currentColor"/>
@@ -371,15 +374,30 @@
                             <circle cx="16" cy="16" r="1.35" fill="currentColor"/>
                         </svg>
                     </button>
-                    <button id="btnMinimalMorph" class="btn-icon minimal-morph-btn" title="Слайдшоу" aria-label="Включить слайдшоу" aria-pressed="false"><span aria-hidden="true">◆</span></button>
-                    <button id="btnRandomSettings" class="btn-icon random-settings-btn" title="Настройки генерации" aria-label="Настройки генерации">⚙</button>
+                    <button id="btnMinimalMorph" class="btn-icon minimal-morph-btn" title="Оранжевый морфинг" aria-label="Включить оранжевый морфинг" aria-pressed="false"><span aria-hidden="true">◆</span></button>
+                    <button id="btnRandomSettings" class="btn-icon random-settings-btn" title="Настройки оранжевого морфинга" aria-label="Настройки оранжевого морфинга">⚙</button>
                     <div id="randomSettingsPanel" class="random-settings-panel hidden" role="dialog" aria-label="Настройки генерации">
-                        <div class="morph-settings-title">
-                            <span>Настройки генерации</span>
-                            <span class="morph-settings-subtitle">🎲 и оранжевый ◆</span>
-                            <button id="btnCloseMinimalMorphPanel" type="button" class="mobile-panel-close" aria-label="Закрыть настройки упрощённого морфинга" title="Закрыть">×</button>
+                        <div class="morph-settings-title orange-morph-title">
+                            <span>◆ Оранжевый морфинг</span>
+                            <span class="morph-settings-subtitle">профиль композиции → генератор</span>
+                            <button id="btnOrangeMorphMasterMode" type="button" class="morph-header-master active orange-master" aria-pressed="true" title="Orange работает на композиции целиком">Master</button>
+                            <button id="btnCloseMinimalMorphPanel" type="button" class="mobile-panel-close" aria-label="Закрыть настройки оранжевого морфинга" title="Закрыть">×</button>
                         </div>
-                        <div class="morph-settings-grid">
+                        <div class="morph-profile-toolbar orange-profile-toolbar" role="group" aria-label="Профили оранжевого морфинга">
+                            <label class="morph-profile-select-wrap"><span>Профиль</span><select id="orangeMorphProfileSelect" aria-label="Профиль оранжевого морфинга"><option value="orange-standard">Standard Orange</option></select></label>
+                            <button id="btnNewOrangeMorphProfile" type="button" class="morph-profile-action morph-profile-icon" title="Новый профиль Orange" aria-label="Новый профиль Orange"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8.2L19 8.3V20.5H6z"/><path d="M14 3.5v5h5M12.5 11v6M9.5 14h6"/></svg></button>
+                            <button id="btnRenameOrangeMorphProfile" type="button" class="morph-profile-action" title="Переименовать профиль Orange" aria-label="Переименовать профиль Orange">✎</button>
+                            <button id="btnDeleteOrangeMorphProfile" type="button" class="morph-profile-action" title="Удалить профиль Orange" aria-label="Удалить профиль Orange">×</button>
+                            <button id="btnSaveOrangeMorphProfile" type="button" class="morph-profile-action morph-profile-save morph-profile-icon" title="Сохранить профиль Orange" aria-label="Сохранить профиль Orange" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h12.5L20.5 6.5V20.5H5z"/><path d="M8 3.5v6h8v-6M8 20.5v-7h9v7"/></svg></button>
+                            <button id="btnResetOrangeMorphProfile" type="button" class="morph-profile-action morph-profile-reset" title="Сбросить несохранённые изменения Orange" aria-label="Сбросить несохранённые изменения Orange" disabled>↶</button>
+                            
+                        </div>
+                        <div class="orange-routing-shell">
+                            <div class="morph-routing-head orange-routing-head"><strong>Параметры Orange</strong><span class="hint-text">ПКМ слева — добавить/убрать · каталог общий с Blue/Audio</span></div>
+                            <div id="orangeMorphRoutingGroups" class="audio-routing-groups morph-routing-groups orange-routing-groups" aria-label="Группы оранжевого морфинга"></div>
+                            <div id="orangeMorphBindings" class="audio-routing-rows orange-routing-rows" aria-label="Параметры генерации оранжевого морфинга"></div>
+                        </div>
+                        <div class="morph-settings-grid orange-fixed-settings">
                             <div class="morph-setting-row interval-row minimal-morph-default-row">
                                 <label title="Если включено, оранжевый морфинг автоматически запускается при открытии этого проекта."><input id="minimalMorphDefaultActive" type="checkbox"><span>Морфить по умолчанию</span></label>
                             </div>
@@ -411,19 +429,19 @@
                             <div id="minimalMorphFadeRow" class="morph-setting-row interval-row">
                                 <label for="minimalMorphFade"><span>Время плавного fade</span><input id="minimalMorphFade" class="morph-interval" type="number" min="0.1" max="30" step="0.1" value="0.1" aria-label="Время fade слайдшоу в секундах"><span class="morph-sec">с</span></label>
                             </div>
-                            <div class="morph-setting-row"><label><input id="randomByShape" type="checkbox" checked><span>Разнообразные профили</span></label></div>
-                            <div class="morph-setting-row"><label><input id="randomOnlyLine" type="checkbox"><span>Только прямые линии</span></label></div>
-                            <div class="morph-setting-row"><label><input id="randomByVertices" type="checkbox" checked><span>Разнообразие вершин (N)</span></label></div>
-                            <div class="morph-setting-row"><label><input id="randomBySteps" type="checkbox" checked><span>Разнообразие шагов (K)</span></label></div>
-                            <div class="morph-setting-row"><label><input id="randomByRounding" type="checkbox" checked><span>Скругление</span></label></div>
-                            <div class="morph-setting-row"><label><input id="randomBySize" type="checkbox" checked><span>Разные размеры</span></label></div>
-                            <div class="morph-setting-row"><label><input id="randomByColor" type="checkbox" checked><span>Разные цвета</span></label></div>
+                            <div class="morph-setting-row orange-legacy-generator-toggle hidden"><label><input id="randomByShape" type="checkbox" checked><span>Разнообразные профили</span></label></div>
+                            <div class="morph-setting-row orange-legacy-generator-toggle hidden"><label><input id="randomOnlyLine" type="checkbox"><span>Только прямые линии</span></label></div>
+                            <div class="morph-setting-row orange-legacy-generator-toggle hidden"><label><input id="randomByVertices" type="checkbox" checked><span>Разнообразие вершин (N)</span></label></div>
+                            <div class="morph-setting-row orange-legacy-generator-toggle hidden"><label><input id="randomBySteps" type="checkbox" checked><span>Разнообразие шагов (K)</span></label></div>
+                            <div class="morph-setting-row orange-legacy-generator-toggle hidden"><label><input id="randomByRounding" type="checkbox" checked><span>Скругление</span></label></div>
+                            <div class="morph-setting-row orange-legacy-generator-toggle hidden"><label><input id="randomBySize" type="checkbox" checked><span>Разные размеры</span></label></div>
+                            <div class="morph-setting-row orange-legacy-generator-toggle hidden"><label><input id="randomByColor" type="checkbox" checked><span>Разные цвета</span></label></div>
                             <div class="morph-setting-row minimal-morph-palette-row palette-morph-compact-row">
                                 <label class="palette-morph-label" title="Активные палитры берутся из общего меню 🎨"><span>Палитра</span></label>
                                 <span id="minimalMorphLinePalette" class="morph-line-palette palette-dropdown-host" role="group" aria-label="Палитра жёлтого/оранжевого морфинга"></span>
                                 <label class="palette-cycle-check" title="На каждую новую фазу случайно выбирать другую активную палитру"><input id="randomCyclePalettes" type="checkbox"><span>Листать</span></label>
                             </div>
-                            <div class="morph-setting-row interval-row compact-morph-row">
+                            <div class="morph-setting-row interval-row compact-morph-row orange-legacy-generator-toggle hidden">
                                 <label title="Сколько слоёв случайной композиции будут преобразованы в спираль"><input id="randomBySpiralLayers" type="checkbox"><span>Слои со спиралями</span></label>
                                 <span class="random-spiral-range"><input id="randomSpiralLayersMin" class="morph-interval" type="number" min="0" max="8" step="1" value="0" aria-label="Минимум спиральных слоёв"><span>—</span><input id="randomSpiralLayersMax" class="morph-interval" type="number" min="0" max="8" step="1" value="1" aria-label="Максимум спиральных слоёв"></span>
                             </div>
@@ -438,14 +456,32 @@
                     <button id="btnMorphSettings" class="btn-icon morph-settings-btn" title="Настройки морфинга" aria-label="Настройки морфинга">⚙</button>
                     <div id="morphSettingsPanel" class="morph-settings-panel hidden" role="dialog" aria-label="Настройки морфинга">
                         <div class="morph-settings-title">
-                            <span>Настройки морфинга</span>
-                            <span class="morph-settings-subtitle">изменения применяются сразу</span>
+                            <span>◇ Морфинг · параметры</span>
+                            <span class="morph-settings-subtitle">профиль → параметры</span>
                             <span class="morph-checkbox-tools" role="group" aria-label="Управление галочками морфинга">
                                 <button id="btnClearMorphChecks" type="button" class="morph-clear-checks" title="Убрать все галочки" aria-label="Убрать все галочки">☐</button>
                                 <button id="btnUndoMorphChecks" type="button" class="morph-undo-checks" title="Вернуть галочки, как было" aria-label="Вернуть галочки, как было" disabled>↶</button>
                                 <button id="btnResetMorphDefaults" type="button" class="morph-reset-defaults" title="Вернуть настройки морфинга по умолчанию" aria-label="Вернуть настройки морфинга по умолчанию">🔄</button>
                             </span>
+                            <button id="btnMorphMasterMode" type="button" class="morph-header-master active" aria-pressed="true" title="Morph Master · профиль применяется ко всем слоям">Master</button>
                             <button id="btnCloseMorphPanel" type="button" class="mobile-panel-close" aria-label="Закрыть настройки морфинга" title="Закрыть">×</button>
+                        </div>
+                        <div class="morph-profile-toolbar" role="group" aria-label="Профили морфинга">
+                            <label class="morph-profile-select-wrap"><span>Профиль</span><select id="morphProfileSelect" aria-label="Профиль морфинга"><option value="standard">Основной</option></select></label>
+                            <button id="btnNewMorphProfile" type="button" class="morph-profile-action morph-profile-icon" title="Новый профиль морфинга" aria-label="Новый профиль морфинга"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8.2L19 8.3V20.5H6z"/><path d="M14 3.5v5h5M12.5 11v6M9.5 14h6"/></svg></button>
+                            <button id="btnRenameMorphProfile" type="button" class="morph-profile-action" title="Переименовать профиль">✎</button>
+                            <button id="btnDeleteMorphProfile" type="button" class="morph-profile-action" title="Удалить профиль">×</button>
+                            <button id="btnSaveMorphProfile" type="button" class="morph-profile-action morph-profile-save morph-profile-icon" title="Сохранить текущий профиль морфа" aria-label="Сохранить текущий профиль морфа" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h12.5L20.5 6.5V20.5H5z"/><path d="M8 3.5v6h8v-6M8 20.5v-7h9v7"/></svg></button>
+                            <button id="btnResetMorphProfile" type="button" class="morph-profile-action morph-profile-reset" title="Сбросить все несохранённые изменения текущего Morph Profile" disabled>Сбросить всё</button>
+                        </div>
+                        <div id="morphSpeedToolbar" class="morph-speed-toolbar" role="group" aria-label="Скорость синего морфинга"></div>
+                        <div id="morphProfileCreateMenu" class="morph-profile-create-menu hidden" role="menu">
+                            <button type="button" data-create-morph-profile="standard">Параметры</button>
+                        </div>
+                        <div id="morphParameterRoutingPanel" class="morph-parameter-routing-panel">
+                            <div class="morph-routing-head"><div id="morphCompactProfileControls" class="morph-compact-profile-controls" aria-label="Основные настройки синего морфинга"></div><span id="morphOrderMode" class="morph-order-mode morph-order-mode-prominent" role="group" aria-label="Порядок строк морфинга"><button id="btnMorphOrderToggle" type="button" class="morph-order-toggle" title="Переключить порядок строк">⇅ По типу</button><button id="btnMorphOrderType" type="button" class="morph-order-mode-btn hidden" data-morph-order="type" tabindex="-1" aria-hidden="true">По типу</button><button id="btnMorphOrderFree" type="button" class="morph-order-mode-btn hidden" data-morph-order="free" tabindex="-1" aria-hidden="true">Свободно</button></span><button id="btnAddMorphParameter" type="button">+ Параметр</button></div>
+                            <div id="morphParameterPicker" class="morph-parameter-picker hidden"><input id="morphParameterSearch" type="search" placeholder="Поиск параметра…" aria-label="Поиск параметра"><div id="morphParameterOptions" class="morph-parameter-options"></div></div>
+                            <div id="morphProfileBindings" class="morph-profile-bindings"></div>
                         </div>
                         <div class="morph-settings-grid">
                             <div class="morph-setting-row interval-row morph-default-diversity-row">
@@ -523,7 +559,7 @@
                                         <span class="morph-range-controls"><input id="morphStrokeWidthMin" class="morph-interval" type="number" min="0.5" max="20" step="0.1" value="0.8" aria-label="Минимальная толщина линии в морфинге"><span>—</span><input id="morphStrokeWidthMax" class="morph-interval" type="number" min="0.5" max="20" step="0.1" value="3.2" aria-label="Максимальная толщина линии в морфинге"><span class="morph-sec">px</span></span>
                                     </div>
                                 </div>
-                                <div class="morph-setting-row compact-morph-row morph-pair-cell morph-size-row">
+                                <div class="morph-setting-row compact-morph-row morph-pair-cell morph-size-row morph-legacy-geometry-compat">
                                     <div class="morph-compact-control-line">
                                         <label title="Изменять размер во время морфинга"><input id="morphBySize" type="checkbox" checked><span class="morph-pair-title">Размер</span></label>
                                         <input id="morphSizeVariation" class="morph-interval morph-size-percent-input" type="number" min="0" max="100" step="1" value="100" inputmode="numeric" aria-label="Вариация размера в морфинге, процентов"><span class="morph-sec">%</span>
@@ -532,7 +568,7 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="morph-compact-pair-row">
+                            <div class="morph-compact-pair-row morph-legacy-geometry-compat">
                                 <div class="morph-setting-row compact-morph-row morph-pair-cell">
                                     <div class="morph-compact-control-line">
                                         <label title="Морфить число вершин"><input id="morphByVertices" type="checkbox" checked><span class="morph-pair-title">N</span></label>
@@ -556,7 +592,7 @@
                                 <div class="morph-setting-row compact-morph-row morph-pair-cell morph-rotation-row">
                                     <div class="morph-compact-control-line" title="100% × 1 = 360° за одну фазу">
                                         <label title="Морфить поворот"><input id="morphByRotation" type="checkbox" checked><span class="morph-pair-title">Поворот</span></label>
-                                        <span class="morph-rotation-number-controls"><input id="morphRotationMin" class="morph-interval" type="number" min="0" max="100" step="1" value="0" inputmode="numeric" aria-label="Минимальный поворот в процентах"><span>—</span><input id="morphRotationMax" class="morph-interval" type="number" min="0" max="100" step="1" value="50" inputmode="numeric" aria-label="Максимальный поворот в процентах"><span class="morph-sec">%</span><span class="morph-multiplier-label">×</span><input id="morphRotationMultiplier" class="morph-interval rotation-multiplier" type="number" min="0" step="any" value="0.1" inputmode="decimal" aria-label="Множитель поворота" data-log-multiplier="1"></span>
+                                        <span class="morph-rotation-number-controls"><input id="morphRotationMin" class="morph-interval" type="number" min="0" max="100" step="1" value="0" inputmode="numeric" aria-label="Минимальный поворот в процентах"><span>—</span><input id="morphRotationMax" class="morph-interval" type="number" min="0" max="100" step="1" value="50" inputmode="numeric" aria-label="Максимальный поворот в процентах"><span class="morph-sec">%</span><span class="morph-multiplier-label">×</span><input id="morphRotationMultiplier" class="morph-interval rotation-multiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель поворота" data-log-multiplier="1"></span>
                                         <label class="morph-rotation-direction-compact" title="Случайно менять направление поворота"><input id="morphRotationRandomDirection" type="checkbox" checked><span>±</span></label>
                                     </div>
                                 </div>
@@ -613,15 +649,6 @@
                                 <label class="morph-spiral-rotation-compensation" title="Компенсирует вращение по самому внешнему видимому спиральному слою: его внешняя точка остаётся неподвижной, а внутренние слои сохраняют фазовое движение"><input id="morphSpiralRotationCompensation" type="checkbox"><span>Компенсация вращения</span></label>
                             </div>
                             <div class="morph-compact-pair-row morph-lamp-chaos-row">
-                                <div class="morph-setting-row morph-pair-cell morph-lamp-morph-row">
-                                    <div class="morph-lamp-morph-inner">
-                                        <label class="display-enable-toggle lamp-compact-toggle" title="Плавно меняет размер и яркость лампочек во время основного Morphing"><input id="lampMorphEnabled" type="checkbox"><span>Морфинг лампочек</span></label>
-                                        <div id="lampMorphSettings" class="lamp-morph-settings hidden">
-                                            <div class="control-row"><div class="row-label"><span>Размер ±</span><span id="lampMorphSizeText" class="text-mono">20%</span></div><input id="lampMorphSize" type="range" min="0" max="100" step="1" value="20"></div>
-                                            <div class="control-row"><div class="row-label"><span>Яркость ±</span><span id="lampMorphBrightnessText" class="text-mono">25%</span></div><input id="lampMorphBrightness" type="range" min="0" max="100" step="1" value="25"></div>
-                                        </div>
-                                    </div>
-                                </div>
                                 <div class="morph-setting-row morph-pair-cell morph-chaos-morph-row">
                                     <div class="morph-chaos-morph-inner">
                                         <label class="display-enable-toggle lamp-compact-toggle" title="Если слой уже в режиме «Звезда хаоса», каждый цикл морфинга строит новую хаотическую цель"><input id="chaosMorphEnabled" type="checkbox"><span>Морфинг хаоса</span></label>
@@ -645,9 +672,9 @@
                                 <div id="morphFillColorRow" class="morph-setting-row morph-fill-color-row interval-row hue-reset">
                                     <label title="Морфинг заливки с ограничением числа одновременно залитых слоёв"><input id="morphByFillColor" type="checkbox" checked><span>Цвет заливки</span></label>
                                     <span class="morph-fill-counts" title="Минимум — максимум одновременно залитых слоёв">
-                                        <input id="morphFillLayersMin" class="morph-interval" type="number" min="0" max="64" step="1" value="0" aria-label="Минимальное число залитых слоёв">
+                                        <input id="morphFillLayersMin" class="morph-interval" type="number" min="0" max="1" step="1" value="0" aria-label="Минимальное число залитых слоёв">
                                         <span>—</span>
-                                        <input id="morphFillLayersMax" class="morph-interval" type="number" min="0" max="64" step="1" value="1" aria-label="Максимальное число залитых слоёв">
+                                        <input id="morphFillLayersMax" class="morph-interval" type="number" min="0" max="1" step="1" value="1" aria-label="Максимальное число залитых слоёв">
                                     </span>
                                     <select id="morphFillHarmonySelect" class="morph-fill-harmony-select" aria-label="Гармония оттенка заливки" title="Оттенок выбирается только из точных гармонических углов, без случайного диапазона">
                                         <option value="native" selected>Родной 0°</option>
@@ -741,21 +768,27 @@
                     <span>Пресет связи</span>
                     <select id="audioRoutingPreset" aria-label="Пресет аудиосвязей">
                         <option value="free">Свободный</option>
-                        <option value="geometry" selected>Геометрия</option>
+                        <option value="geometry">Геометрия</option>
                         <option value="lamps">Только лампочки</option>
-                        <option value="geometryLamps">Геометрия и лампочки</option>
+                        <option value="geometryLamps" selected>Геометрия и лампочки</option>
                     </select>
                     <button id="btnClearAllAudioRoutes" class="audio-clear-all-btn" type="button">Убрать все связи</button>
                 </div>
                 <div class="audio-routing-tools" id="audioRoutingTools">
                     <div class="audio-route-group"><button id="audioGroupGeometry" class="audio-route-group-btn" type="button">Геометрия ▾</button><div id="audioGroupGeometryMenu" class="audio-route-group-menu hidden"></div></div>
-                    <div class="audio-route-group"><button id="audioGroupLine" class="audio-route-group-btn" type="button">Линия / обводка ▾</button><div id="audioGroupLineMenu" class="audio-route-group-menu hidden"></div></div>
+                    <div class="audio-route-group"><button id="audioGroupLine" class="audio-route-group-btn" type="button">Линия ▾</button><div id="audioGroupLineMenu" class="audio-route-group-menu hidden"></div></div>
+                    <div class="audio-route-group"><button id="audioGroupFill" class="audio-route-group-btn" type="button">Заливка ▾</button><div id="audioGroupFillMenu" class="audio-route-group-menu hidden"></div></div>
                     <div class="audio-route-group"><button id="audioGroupGraffiti" class="audio-route-group-btn" type="button">Граффити ▾</button><div id="audioGroupGraffitiMenu" class="audio-route-group-menu hidden"></div></div>
                     <div class="audio-route-group"><button id="audioGroupLamps" class="audio-route-group-btn" type="button">Лампочки ▾</button><div id="audioGroupLampsMenu" class="audio-route-group-menu hidden"></div></div>
                     <div class="audio-route-group"><button id="audioGroupWeb" class="audio-route-group-btn" type="button">Паутина ▾</button><div id="audioGroupWebMenu" class="audio-route-group-menu hidden"></div></div>
                     <div class="audio-route-group"><button id="audioGroupSweep" class="audio-route-group-btn" type="button">Проблеск ▾</button><div id="audioGroupSweepMenu" class="audio-route-group-menu hidden"></div></div>
                     <div class="audio-route-group"><button id="audioGroupLightning" class="audio-route-group-btn" type="button">Молния ▾</button><div id="audioGroupLightningMenu" class="audio-route-group-menu hidden"></div></div>
-                    <div id="audioGroupTunnelWrap" class="audio-route-group"><button id="audioGroupTunnel" class="audio-route-group-btn" type="button">Коридор ▾</button><div id="audioGroupTunnelMenu" class="audio-route-group-menu hidden"></div></div>
+                    <div class="audio-route-group"><button id="audioGroupCorridor" class="audio-route-group-btn" type="button">Коридор ▾</button><div id="audioGroupCorridorMenu" class="audio-route-group-menu hidden"></div></div>
+                    <div class="audio-route-group"><button id="audioGroupPalette" class="audio-route-group-btn" type="button">Палитра ▾</button><div id="audioGroupPaletteMenu" class="audio-route-group-menu hidden"></div></div>
+                    <div class="audio-route-group"><button id="audioGroupLineMotion" class="audio-route-group-btn" type="button">Подвижная линия ▾</button><div id="audioGroupLineMotionMenu" class="audio-route-group-menu hidden"></div></div>
+                    <div class="audio-route-group"><button id="audioGroupSprite" class="audio-route-group-btn" type="button">Спрайт линии ▾</button><div id="audioGroupSpriteMenu" class="audio-route-group-menu hidden"></div></div>
+                    <div class="audio-route-group"><button id="audioGroupParticles" class="audio-route-group-btn" type="button">Частицы ▾</button><div id="audioGroupParticlesMenu" class="audio-route-group-menu hidden"></div></div>
+                    <div class="audio-route-group"><button id="audioGroupSpiral" class="audio-route-group-btn" type="button">Спирали ▾</button><div id="audioGroupSpiralMenu" class="audio-route-group-menu hidden"></div></div>
                 </div>
                 <div class="audio-routing-tools-meta">
                     <span class="audio-routing-tools-hint">Группы: ЛКМ — свойства · ПКМ — вкл./выкл. · Слой слева: ПКМ — отключить/подключить аудиосигнал</span>
@@ -813,7 +846,8 @@
             <button id="btnSidebarLines" class="sidebar-tool-btn feature-enabled" type="button" data-sidebar-mode="lines" title="Настройки линии; ПКМ — переключить Graffiti ↔ Точка (если слои одинаковы — сразу для всех)" aria-label="Настройки линии" aria-pressed="false"><span class="rainbow-line-icon" aria-hidden="true"></span></button>
             <button id="btnSidebarLamps" class="sidebar-tool-btn" type="button" data-sidebar-mode="lamps" title="Настройки лампочек; правый клик — видимость (если слои одинаковы — сразу для всех)" aria-label="Настройки лампочек" aria-pressed="false"><span class="lamp-dot-icon" aria-hidden="true"></span></button>
             <button id="btnSidebarWeb" class="sidebar-tool-btn" type="button" data-sidebar-mode="web" title="Настройки паутины; правый клик — видимость (если слои одинаковы — сразу для всех)" aria-label="Настройки паутины" aria-pressed="false"><svg class="web-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="7.2"/><path d="M12 1.7v20.6M1.7 12h20.6M4.7 4.7l14.6 14.6M19.3 4.7L4.7 19.3"/></svg></button>
-            <button id="btnSidebarSweep" class="sidebar-tool-btn" type="button" data-sidebar-mode="sweep" title="Настройки движущегося свечения" aria-label="Настройки свечения" aria-pressed="false"><span class="sweep-icon" aria-hidden="true"></span></button>
+            <button id="btnSidebarSweep" class="sidebar-tool-btn" type="button" data-sidebar-mode="sweep" title="Проблеск; правый клик — включить/выключить" aria-label="Проблеск" aria-pressed="false"><span class="sweep-icon" aria-hidden="true"></span></button>
+            <button id="btnSidebarLightning" class="sidebar-tool-btn" type="button" data-sidebar-mode="lightning" title="Молния; правый клик — включить/выключить независимо от проблеска" aria-label="Молния" aria-pressed="false"><svg class="lightning-icon" viewBox="0 0 24 24" aria-hidden="true"><path class="lightning-bolt" d="M13.6 1.35 5.35 12.85h5.15l-1.55 9.8L18.9 9.4h-5.35l.05-8.05Z"/><path class="lightning-branch" d="M15.55 6.65 20.5 3.8l-1.72 4.08 3.12.35-5.45 4.35"/></svg></button>
             <button id="btnSidebarParticles" class="sidebar-tool-btn" type="button" data-sidebar-mode="particles" title="Подвижные частицы на контуре" aria-label="Подвижные частицы" aria-pressed="false"><span class="particle-star-icon" aria-hidden="true"></span></button>
             <button id="btnSidebarMotion" class="sidebar-tool-btn" type="button" data-sidebar-mode="motion" title="Линейные преобразования и движение · отдельный класс Morph · ПКМ — быстрый переключатель движений" aria-label="Линейные преобразования и движение" aria-pressed="false"><span class="motion-arrow-icon" aria-hidden="true">➜</span></button>
             <div class="sidebar-tool-separator" aria-hidden="true"></div>
@@ -945,12 +979,12 @@
                     </div>
                     <div class="lamp-control-grid">
                         <div class="control-row">
-                            <div class="row-label"><span>Яркость</span><span id="lampBrightnessText" class="text-mono">100%</span></div>
-                            <input id="lampBrightness" type="range" min="0" max="200" step="1" value="100">
+                            <div class="row-label"><span>Яркость</span><span id="lampBrightnessText" class="text-mono">60%</span></div>
+                            <input id="lampBrightness" type="range" min="0" max="200" step="1" value="60">
                         </div>
                         <div class="control-row">
-                            <div class="row-label"><span>Радиус</span><span id="lampRadiusText" class="text-mono">50 px × 1</span></div>
-                            <div class="lamp-slider-mult"><input id="lampRadius" type="range" min="1" max="50" step="0.5" value="50"><span class="lamp-mult-label">×</span><input id="lampRadiusMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель радиуса лампочек" data-log-multiplier="1"></div>
+                            <div class="row-label"><span>Радиус</span><span id="lampRadiusText" class="text-mono">25 px × 1</span></div>
+                            <div class="lamp-slider-mult"><input id="lampRadius" type="range" min="1" max="50" step="0.5" value="25"><span class="lamp-mult-label">×</span><input id="lampRadiusMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель радиуса лампочек" data-log-multiplier="1"></div>
                         </div>
                         <div class="control-row">
                             <div class="row-label"><span>Мягкость</span><span id="lampSoftnessText" class="text-mono">100% × 1</span></div>
@@ -1010,7 +1044,7 @@
                         <div class="control-row"><div class="row-label"><span>Случайный размер</span><span id="lampSizeVariationText" class="text-mono">0% × 1</span></div><div class="lamp-slider-mult"><input id="lampSizeVariation" type="range" min="0" max="100" step="1" value="0"><span class="lamp-mult-label">×</span><input id="lampSizeVariationMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель случайного размера лампочек" data-log-multiplier="1"></div></div>
                         <div class="control-row"><div class="row-label"><span>Случайная яркость</span><span id="lampBrightnessVariationText" class="text-mono">0% × 1</span></div><div class="lamp-slider-mult"><input id="lampBrightnessVariation" type="range" min="0" max="100" step="1" value="0"><span class="lamp-mult-label">×</span><input id="lampBrightnessVariationMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель случайной яркости лампочек" data-log-multiplier="1"></div></div>
                     </div>
-                    <label class="display-enable-toggle lamp-compact-toggle" title="Включает адаптивный режим. Галочка «Адаптировать яркость» ниже выбирает канал коррекции: радиус или яркость"><input id="lampAdaptiveBrightness" type="checkbox" checked><span>Адаптивная яркость</span></label>
+                    <label class="display-enable-toggle lamp-compact-toggle" title="Включает адаптивный режим. Галочка «Адаптировать яркость» ниже выбирает канал коррекции: радиус или яркость"><input id="lampAdaptiveBrightness" type="checkbox" checked><span>Адаптивный свет</span></label>
                     <div class="control-row lamp-adaptive-strength-row"><div class="row-label"><span>Сила адаптивной яркости</span><span id="lampAdaptiveStrengthText" class="text-mono">100% × 1</span></div><div class="lamp-slider-mult"><input id="lampAdaptiveStrength" type="range" min="0" max="100" step="1" value="100"><span class="lamp-mult-label">×</span><input id="lampAdaptiveStrengthMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель адаптивной яркости" data-log-multiplier="1"></div></div>
                     <label class="display-enable-toggle lamp-compact-toggle" title="Выключено: адаптация работает только через радиус. Включено: радиус не адаптируется, а компенсация выполняется только яркостью"><input id="lampAdaptiveAdjustBrightness" type="checkbox"><span>Адаптировать яркость</span></label>
                     <div class="control-row lamp-adaptive-fade-row" title="На статичной сцене адаптация применяется сразу. Во время Morph и движения это время задаёт скорость экспозиции: 0 — мгновенно, больше 0 — плавное следование за нагрузкой."><div class="row-label"><span>Экспозиция адаптации</span><span id="lampAdaptiveFadeText" class="text-mono">1 с</span></div><div class="row-inputs"><input id="lampAdaptiveFadeSec" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Время экспозиции адаптивной яркости в секундах" data-log-step="time"><span class="hint-text">с</span></div></div>
@@ -1064,8 +1098,8 @@
                     <div class="control-row">
                         <div class="row-label"><span>Режим построения</span></div>
                         <select id="webPlacementMode" aria-label="Режим построения паутины">
-                            <option value="corners" selected>Паутина в углах</option>
-                            <option value="selfIntersection">Паутина на самопересечении</option>
+                            <option value="corners">Паутина в углах</option>
+                            <option value="selfIntersection" selected>Паутина на самопересечении</option>
                             <option value="selfIntersectionCorridor">Самопересечение + коридор</option>
                         </select>
                     </div>
@@ -1093,8 +1127,8 @@
                         <input id="webSpacing" type="range" min="2" max="40" step="1" value="10">
                     </div>
                     <div class="control-row">
-                        <div class="row-label"><span>Глубина в угол</span><span id="webDistanceText" class="text-mono">60%</span></div>
-                        <input id="webDistance" type="range" min="0" max="100" step="1" value="60">
+                        <div class="row-label"><span>Глубина в угол</span><span id="webDistanceText" class="text-mono">30%</span></div>
+                        <input id="webDistance" type="range" min="0" max="100" step="1" value="30">
                     </div>
                     <div class="control-row">
                         <div class="row-label"><span>Множитель глубины</span><span id="webDepthMultiplierText" class="text-mono">×1.00</span></div>
@@ -1130,9 +1164,9 @@
                     <div class="web-settings-note">Внутренняя ветка строится по выпуклым углам. «Внешняя — прямая» соединяет стороны вогнутого угла линейной хордой; «Внешняя — дуговая» — прежний гнутый внешний профиль. Все ветки можно включать одновременно. Нити привязываются к фактическому видимому контуру после скругления/Morph. ×1 частоты — одно полное колебание за цикл морфинга. Обычная основная линия рисуется поверх паутины; в режиме Graffiti паутина и лампочки всегда остаются поверх контура Graffiti.</div>
                 </div>
                 <div class="control-group sweep-settings-group">
-                    <div class="control-group-title"><label class="group-title-toggle"><input id="showSweep" type="checkbox"><span>Свечение</span></label><span class="badge">WebGPU</span></div>
+                    <div class="control-group-title"><label class="group-title-toggle"><input id="showSweep" type="checkbox"><span>Проблеск</span></label><span class="badge">WebGPU</span></div>
                     <div class="sweep-control-grid">
-                        <div class="control-row"><span class="hint-text">Эффект</span><select id="sweepEffectType">
+                        <div class="control-row hidden" aria-hidden="true"><span class="hint-text">Legacy effect</span><select id="sweepEffectType">
                             <option value="lightning" selected>Молния</option>
                             <option value="glint">Проблеск</option>
                         </select></div>
@@ -1142,14 +1176,14 @@
                         </div>
                         <div id="sweepGlintSettings" class="sweep-glint-settings">
                             <div class="sweep-subsection">
-                                <div id="sweepGlintSectionTitle" class="sweep-subsection-title">Проблеск</div>
+                                <div id="sweepGlintSectionTitle" class="sweep-subsection-title">Настройки проблеска</div>
                                 <div class="control-row"><span class="hint-text">Режим проблеска</span><select id="sweepFlashMode"><option value="moving" selected>Бегущий</option><option value="spectral">Спектральный</option></select></div>
                                 <div class="control-row"><span class="hint-text">Форма проблеска</span><select id="sweepProfileShape"><option value="current" selected>Текущий профиль</option><option value="line">Линия</option></select></div>
                                 <div id="sweepMovingSettings">
                                     <div class="control-row" id="sweepGlintPrecisionRow"><span class="hint-text">Точность бегущего</span><select id="sweepGlintPrecision"><option value="high" selected>Высокоточный</option><option value="chaotic">Хаотичный</option></select></div>
                                     <div id="sweepStandaloneMotionSettings">
                                         <div class="control-row" id="sweepModeRow"><span class="hint-text">Расположение</span><select id="sweepMode">
-                                            <option value="perSegment">В каждом сегменте</option><option value="everyNth">В каждом N-м сегменте</option><option value="across">Поперёк фигуры</option><option value="perPath">По каждому контуру</option><option value="whole" selected>По всей фигуре</option>
+                                            <option value="perSegment">В каждом сегменте</option><option value="everyNth">В каждом N-м сегменте</option><option value="across">Поперёк фигуры</option><option value="perPath" selected>По каждому контуру</option><option value="whole">По всей фигуре</option>
                                         </select></div>
                                         <div class="control-row hidden" id="sweepEveryNRow"><div class="row-label"><span>Каждый N-й сегмент</span><span id="sweepEveryNText" class="text-mono">2</span></div><input id="sweepEveryN" type="range" min="2" max="24" step="1" value="2"></div>
                                         <div class="control-row" id="sweepDirectionRow"><span class="hint-text">Направление</span><select id="sweepDirection"><option value="forward" selected>Вперёд</option><option value="backward">Назад</option></select></div>
@@ -1173,7 +1207,16 @@
                                 <div class="control-row"><div class="row-label"><span>Мягкость</span><span id="sweepSoftnessText" class="text-mono">100% × 1</span></div><div class="row-inputs"><input id="sweepSoftness" type="range" min="0" max="150" step="1" value="100"><span>×</span><input id="sweepSoftnessMultiplier" type="number" min="0" step="any" value="1" style="width:58px" data-log-multiplier="1"></div></div>
                             </div>
                         </div>
-                        <div id="sweepLightningSettings" class="sweep-lightning-settings hidden">
+                        
+                    </div>
+                </div>
+                <div class="control-group lightning-settings-group">
+                    <div class="control-group-title"><label class="group-title-toggle"><input id="showLightning" type="checkbox"><span>Молния</span></label><span class="badge">WebGPU ⚡</span></div>
+                    <div class="lightning-type-precision-row sweep-blend-mode-row" aria-label="Режимы смешения молнии">
+                        <label class="lightning-type-precision-field"><span class="hint-text">Смешение Core</span><select id="sweepLightningCoreBlendMode"><option value="normal" selected>Normal</option><option value="screen">Screen</option><option value="multiply">Multiply</option><option value="add">Linear Dodge (Add)</option><option value="darken">Darken</option><option value="lighten">Lighten</option></select></label>
+                        <label class="lightning-type-precision-field"><span class="hint-text">Смешение Glow</span><select id="sweepLightningGlowBlendMode"><option value="normal" selected>Normal</option><option value="screen">Screen</option><option value="multiply">Multiply</option><option value="add">Linear Dodge (Add)</option><option value="darken">Darken</option><option value="lighten">Lighten</option></select></label>
+                    </div>
+                    <div id="sweepLightningSettings" class="sweep-lightning-settings">
 <div class="sweep-subsection">
                                 <div class="sweep-subsection-title">Молния</div>
                                 <div class="control-row"><span class="hint-text">Форма молнии</span><select id="sweepLightningProfileShape"><option value="current" selected>Текущий профиль</option><option value="line">Линия</option></select></div>
@@ -1202,7 +1245,7 @@
                             <div class="control-row"><label class="row-label sweep-check-row"><input id="sweepLightningAfterglow" type="checkbox" checked><span>Послесвечение</span></label><div class="row-inputs"><input id="sweepLightningAfterglowMs" type="range" min="0" max="900" step="10" value="280"><span id="sweepLightningAfterglowText" class="text-mono">280 ms</span></div></div>
                             <div class="control-row"><div class="row-label"><span>Микроудары</span><span id="sweepLightningMicroText" class="text-mono">2</span></div><input id="sweepLightningMicroStrikes" type="number" min="0" step="1" value="2" inputmode="numeric" aria-label="Количество микроударов без верхнего ограничения"></div>
                         </div>
-                    </div>
+                    <div class="hint-text">Молния и проблеск — независимые режимы одного Strobe/Sweep семейства. Их можно включать по отдельности или одновременно.</div>
                 </div>
                 <div class="control-group particle-settings-group">
                     <div class="control-group-title"><label class="group-title-toggle"><input id="showParticles" type="checkbox"><span>Частицы</span></label><span class="badge">GPU ★</span></div>
@@ -1540,9 +1583,9 @@
                             <label class="hidden"><span>Форма штриха</span><select id="graffitiNibShape" aria-label="Форма штриха Graffiti"><option value="pointed" selected>Заострённый</option><option value="blunt">Без заострения</option><option value="pinched" title="Единый штрих: широкие концы соединены линией, плавно сужающейся к центру">Сужение по центру</option><option value="round">Овальный</option></select></label>
 
                             <div class="graffiti-wide-slider" data-reset-scope="graffitiNibLength">
-                                <div class="row-label"><span>Длина штриха</span><span id="graffitiNibLengthText" class="text-mono">10</span></div>
+                                <div class="row-label"><span>Длина штриха</span><span id="graffitiNibLengthText" class="text-mono">3</span></div>
                                 <div class="graffiti-range-with-multiplier">
-                                    <input id="graffitiNibLength" type="range" min="1" max="20" step="0.25" value="10" aria-label="Длина штриха Graffiti">
+                                    <input id="graffitiNibLength" type="range" min="1" max="20" step="0.25" value="3" aria-label="Длина штриха Graffiti">
                                     <span>×</span>
                                     <input id="graffitiNibLengthMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель длины штриха" data-log-multiplier="1">
                                 </div>
@@ -1891,7 +1934,7 @@
                 </div>
                 <div class="audio-source-row">
                     <select id="audioSourceSelect" aria-label="Источник звука">
-                        <option value="system" selected>Системный звук / экран</option>
+                        <option value="system" selected>Слушать ПК (системный звук / экран)</option>
                         <option value="microphone">Микрофон</option>
                     </select>
                     <button id="btnAudioStart" class="btn-accent">Старт</button>

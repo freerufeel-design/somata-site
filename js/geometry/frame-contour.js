@@ -151,7 +151,7 @@ const SomataFrameContourService=(()=>{
         return{anchorPaths:anchors,visualPaths:visual,record:rec};
     }
     function reset(frameCtx){const owner=frameOwner(frameCtx);if(!owner)return;owner._frameContourRecord=null;owner._sharedFrameContourRequired=false;}
-    function status(){return{...stats,contract:'Somata 7.9 ordinary geometry: one FrameContour record owns Line/Fill/Web, including ordinary Corridor master geometry. Web uses semantic anchorPaths only to detect corners, then projects every corner and every thread endpoint onto visualLinePaths = the actual Line/Corridor-master carrier. No separately rebuilt ordinary Web rail is allowed. Strict Spiral keeps its specialized retained carrier.'};}
+    function status(){return{...stats,contract:'Somata 7.11.0 ordinary geometry: one FrameContour record owns Line/Fill/Web, including ordinary Corridor master geometry. Web uses semantic anchorPaths only to detect corners, then projects every corner and every thread endpoint onto visualLinePaths = the actual Line/Corridor-master carrier. No separately rebuilt ordinary Web rail is allowed. Strict Spiral keeps its specialized retained carrier.'};}
     return{get,current,has,paths,screenPaths,pathTable,webView,reset,eligibility,status};
 })();
 window.SomataFrameContourService=SomataFrameContourService;

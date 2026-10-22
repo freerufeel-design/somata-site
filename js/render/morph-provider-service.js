@@ -257,7 +257,11 @@ function resolveMainLayerFrameSource(frameCtx, renderFrame) {
     if(!sourceLayer)return false;
     const minimalSourceLayer=minimalTransition?orange.sourceLayers[layerIndex]:null;
     const minimalTargetLayer=minimalTransition?orange.targetLayers[layerIndex]:null;
-    if(!minimalTransition && !sourceLayer.visible)return false;
+    if(!minimalTransition){
+        const authored=state.layers?.[layerIndex];
+        if(authored&&sourceLayer!==authored)sourceLayer.visible=authored.visible!==false;
+        if(sourceLayer.visible===false)return false;
+    }
     if(minimalTransition && minimalSourceLayer?.visible===false && minimalTargetLayer?.visible===false)return false;
     frameCtx.sourceLayer=sourceLayer;
     frameCtx.minimalSourceLayer=minimalSourceLayer;

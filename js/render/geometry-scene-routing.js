@@ -183,7 +183,7 @@ function getGpuOnlyCorridorMaster(frameCtx,allowHiddenGraffitiCarrier=false){
 function encodeGpuOnlyCorridorLayerRole(frameCtx,role,extra={},clearScene=false,allowHiddenGraffitiCarrier=false){
     if(!canUseGpuOnlyCorridorLayerScene(frameCtx,allowHiddenGraffitiCarrier))return null;const master=getGpuOnlyCorridorMaster(frameCtx,allowHiddenGraffitiCarrier);if(!master?.length)return null;
     const copies=frameCtx.visibleInstances?.copies||[];if(!copies.length)return{handled:true,commandBuffer:null};
-    const opt=buildCorridorGPUOptions(frameCtx,{...extra,copyCacheVariant:`layer-scene-${role}-${frameCtx.geometryPlan?.dynamic===true?'morph':'static'}`,weightForCopy:null,deferComposite:true,dynamicSegments:frameCtx.geometryPlan?.dynamic===true,layerSceneRole:role,layerSceneClear:clearScene,forceResidentCopyPayload:true});
+    const opt=buildCorridorGPUOptions(frameCtx,{...extra,copyCacheVariant:`layer-scene-shared-${frameCtx.geometryPlan?.dynamic===true?'morph':'static'}`,weightForCopy:null,deferComposite:true,dynamicSegments:frameCtx.geometryPlan?.dynamic===true,layerSceneRole:role,layerSceneClear:clearScene,forceResidentCopyPayload:true});
     return WebGPUStrokeRenderer.renderCorridor(master,copies,null,opt);
 }
 
@@ -196,6 +196,9 @@ function describeBaseGpuFallback(frameCtx,batch,forceCanvasBase=false){
     if(hub?.lastError)return`WebGPU device hub error: ${hub.lastError}`;
     if(st?.lastError)return`WebGPU stroke error: ${st.lastError}`;
     if(st?.available!==true)return st?.initializing===true?'WebGPU stroke renderer warming':'WebGPU stroke renderer not ready';
+    // A Corridor intentionally bypasses SomataStrokeBatchService. Report the
+    // failing per-copy GPU route, not a fictitious missing normal stroke batch.
+    if(!batch&&state.tunnel?.active===true)return'GPU Corridor Base unavailable: resident/instanced and per-copy paths did not commit';
     if(!batch)return'WebGPU stroke batch was not created';
     if(!batch?.roles?.has?.('base'))return'WebGPU batch has no Base role';
     const glErr=geom?.webgl2?.lastError||'';

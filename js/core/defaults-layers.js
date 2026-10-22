@@ -1,8 +1,8 @@
 
 
 window.__spiroRegisterModule?.('js/core/defaults-layers');
-        const DEFAULT_WEB_CONFIG = Object.freeze({ type:'bevel', style:'web', region:'inside', inside:true, outsideStraight:false, outsideArc:false, placementMode:'corners', oscillating:false, oscillationStrength:10, oscillationStrengthMultiplier:1, oscillationMultiplier:1, angleThreshold:60, width:0.6, widthRelative:false, widthPercent:40, matchLineColor:false, color:'#ffffff', secondaryColor:'#00ffff', sunDegrees:20, distance:60, depthMultiplier:1, spacing:10, angleVariation:6 });
-        const DEFAULT_SWEEP_CONFIG = Object.freeze({ enabled:false, effectType:'lightning', profileShape:'current', coreBlendMode:'normal', glowBlendMode:'normal', flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode:'whole', direction:'forward', speed:0.25, speedMultiplier:1, syncMusic:true, lengthPercent:18, widthPercent:75, everyN:2, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningProfileShape:'current', lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:true, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', lightningSegmentPercent:100, lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningWidthPercent:64, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningPreGlowIntensity:50, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase:0, currentVelocity:0, lastUpdate:0, cycleCount:0 });
+        const DEFAULT_WEB_CONFIG = Object.freeze({ type:'bevel', style:'web', region:'inside', inside:true, outsideStraight:false, outsideArc:false, placementMode:'selfIntersection', oscillating:false, oscillationStrength:10, oscillationStrengthMultiplier:1, oscillationMultiplier:1, angleThreshold:60, width:0.6, widthRelative:false, widthPercent:40, matchLineColor:false, color:'#ffffff', secondaryColor:'#00ffff', sunDegrees:20, distance:30, depthMultiplier:1, spacing:10, angleVariation:6 });
+        const DEFAULT_SWEEP_CONFIG = Object.freeze({ enabled:false, glintEnabled:false, lightningEnabled:false, effectType:'lightning', profileShape:'current', coreBlendMode:'normal', glowBlendMode:'normal', flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode:'perPath', direction:'forward', speed:0.25, speedMultiplier:1, syncMusic:true, lengthPercent:18, widthPercent:75, everyN:2, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningProfileShape:'current', lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:true, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', lightningSegmentPercent:100, lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningWidthPercent:64, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningPreGlowIntensity:50, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase:0, currentVelocity:0, lastUpdate:0, cycleCount:0 });
 
         function normalizeSweepFlashMode(value){return value==='spectral'?'spectral':'moving';}
         function compactSweepPixelValue(value,multiplier=1,maxBase=50){
@@ -12,6 +12,15 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
         }
         function normalizeSweepConfig(cfg){
             if(!cfg||typeof cfg!=='object')return cfg;
+            const hasGlint=Object.prototype.hasOwnProperty.call(cfg,'glintEnabled'),hasLightning=Object.prototype.hasOwnProperty.call(cfg,'lightningEnabled');
+            let glint=hasGlint?cfg.glintEnabled===true:false,lightning=hasLightning?cfg.lightningEnabled===true:false;
+            // Legacy projects exposed one `enabled + effectType` switch. Preserve that exact meaning
+            // when the independent flags are absent, and also accept old code/tests that still set
+            // enabled=true directly on a freshly-created config.
+            if(!hasGlint&&!hasLightning){const legacyOn=cfg.enabled===true;if(legacyOn){if(cfg.effectType==='lightning')lightning=true;else glint=true;}}
+            else if(cfg.enabled===true&&!glint&&!lightning){if(cfg.effectType==='lightning')lightning=true;else glint=true;}
+            cfg.glintEnabled=glint;cfg.lightningEnabled=lightning;cfg.enabled=glint||lightning;
+            cfg.effectType=cfg.effectType==='lightning'?'lightning':'glint';
             cfg.profileShape=cfg.profileShape==='line'?'line':'current';
             cfg.lightningProfileShape=cfg.lightningProfileShape==='line'?'line':'current';
             cfg.flashMode=normalizeSweepFlashMode(cfg.flashMode);
@@ -175,9 +184,21 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             if(owner&&typeof invalidateLayerEffect==='function')invalidateLayerEffect(owner,reason);
             return owner;
         }
+        function setLayerSweepModeEnabled(layer, mode, enabled) {
+            const owner=getLayerEffectOwner(layer);if(!owner)return false;const cfg=getLayerSweepConfig(owner);normalizeSweepConfig(cfg);const on=enabled===true;
+            if(mode==='lightning')cfg.lightningEnabled=on;else cfg.glintEnabled=on;
+            cfg.enabled=cfg.glintEnabled===true||cfg.lightningEnabled===true;cfg.effectType=mode==='lightning'?'lightning':'glint';
+            markLayerEffectChanged(owner,mode==='lightning'?'lightning-enabled':'glint-enabled');return on;
+        }
+        function setLayerGlintEnabled(layer,enabled){return setLayerSweepModeEnabled(layer,'glint',enabled);}
+        function setLayerLightningEnabled(layer,enabled){return setLayerSweepModeEnabled(layer,'lightning',enabled);}
+        function getLayerGlintEnabled(layer){const cfg=getLayerSweepConfig(layer);normalizeSweepConfig(cfg);return cfg.glintEnabled===true;}
+        function getLayerLightningEnabled(layer){const cfg=getLayerSweepConfig(layer);normalizeSweepConfig(cfg);return cfg.lightningEnabled===true;}
         function setLayerSweepEnabled(layer, enabled) {
-            const owner=getLayerEffectOwner(layer);if(!owner)return false;
-            getLayerSweepConfig(owner).enabled=enabled===true;markLayerEffectChanged(owner,'sweep-enabled');return getLayerSweepConfig(owner).enabled===true;
+            const owner=getLayerEffectOwner(layer);if(!owner)return false;const cfg=getLayerSweepConfig(owner);normalizeSweepConfig(cfg);const on=enabled===true;
+            // Compatibility API: one legacy switch controls whichever legacy effectType is selected.
+            if(!on){cfg.glintEnabled=false;cfg.lightningEnabled=false;}else if(cfg.effectType==='lightning')cfg.lightningEnabled=true;else cfg.glintEnabled=true;
+            cfg.enabled=cfg.glintEnabled===true||cfg.lightningEnabled===true;markLayerEffectChanged(owner,'sweep-enabled');return cfg.enabled===true;
         }
         function setLayerParticlesConfig(layer, value, reason='particles-change') {
             const owner=getLayerEffectOwner(layer);if(!owner)return null;owner.particles=normalizeParticleConfig(value);markLayerEffectChanged(owner,reason);return owner.particles;
@@ -258,6 +279,8 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             if(mode==='graffiti')return owner.lineProfileApplication==='graffiti';
             if(mode==='web')return getLayerWebEnabled(owner);
             if(mode==='sweep')return getLayerSweepConfig(owner).enabled===true;
+            if(mode==='glint')return getLayerGlintEnabled(owner);
+            if(mode==='lightning')return getLayerLightningEnabled(owner);
             if(mode==='particles')return normalizeParticleConfig(owner.particles).enabled===true;
             return false;
         }
@@ -276,15 +299,21 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 applyWebSwitchPatch({showWeb:on},false,owner);
             }
             else if(mode==='sweep')setLayerSweepEnabled(owner,on);
+            else if(mode==='glint')setLayerGlintEnabled(owner,on);
+            else if(mode==='lightning')setLayerLightningEnabled(owner,on);
             else if(mode==='particles')setLayerParticlesEnabled(owner,on);
         }
         function syncSidebarGlobalFeatureTemplate(mode, enabled){
             const on=enabled===true;
             if(mode==='lamps') state.showLamps=on;
             else if(mode==='web') state.showWeb=on;
-            else if(mode==='sweep') {
+            else if(mode==='sweep'||mode==='glint'||mode==='lightning') {
                 if(!state.sweep||typeof state.sweep!=='object')state.sweep=createDefaultSweepConfig();
-                state.sweep.enabled=on;
+                normalizeSweepConfig(state.sweep);
+                if(mode==='sweep'){if(!on){state.sweep.glintEnabled=false;state.sweep.lightningEnabled=false;}else if(state.sweep.effectType==='lightning')state.sweep.lightningEnabled=true;else state.sweep.glintEnabled=true;}
+                else if(mode==='glint')state.sweep.glintEnabled=on;
+                else state.sweep.lightningEnabled=on;
+                state.sweep.enabled=state.sweep.glintEnabled===true||state.sweep.lightningEnabled===true;
             } else if(mode==='graffiti') state.graffitiDefaultActive=on;
         }
         function sidebarFeatureStatesAreUniform(mode,layers=state.layers){
@@ -328,10 +357,14 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 }
             }
             if(mode==='web')syncWebOutlineUI();
-            if(mode==='sweep'){syncSweepUI();ensureSweepAnimation();}
+            if(mode==='sweep'||mode==='glint'||mode==='lightning'){syncSweepUI();ensureSweepAnimation();}
             if(mode==='particles'){syncParticleUI?.();ensureParticleAnimation?.();}
             if(mode==='lamps')syncLampSettingsUI();
             if(mode==='graffiti')syncSidebarInputs();
+            try{
+                const current=getActiveEffectLayer();
+                if(current) window.__somataRecordMorphFeatureOverride?.(mode,sidebarFeatureEnabled(mode,current));
+            }catch(_e){}
             syncSidebarToolStates();requestMainCanvasRender();
         }
 
@@ -376,6 +409,8 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             owner.lamps.adaptiveFadeSec=Math.max(0,Number(owner.lamps.adaptiveFadeSec)||0);
             if(owner.lamps.positionMode==='circumference')owner.lamps.positionMode='key';
             if(!['key','corners','arbitrary'].includes(owner.lamps.positionMode))owner.lamps.positionMode='key';
+            // 7.10.5: the old relative lamp-size/brightness Morph is retired. True lamp parameters are morphed through Parameter Routing.
+            owner.lamps.morphEnabled=false;
             if(owner.lamps.morphMotionMode==='current')owner.lamps.morphMotionMode='dynamic';
             if(!['linear','ghost','dynamic','smooth'].includes(owner.lamps.morphMotionMode))owner.lamps.morphMotionMode='linear';
             owner.lamps.morphInertia=Math.max(0,Math.min(100,Number.isFinite(Number(owner.lamps.morphInertia))?Number(owner.lamps.morphInertia):50));
@@ -598,7 +633,7 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 graffitiAngle: 45,
                 graffitiAngleMode: 'absolute',
                 graffitiNibShape: 'pointed',
-                graffitiNibLength: 10,
+                graffitiNibLength: 3,
                 graffitiNibLengthMultiplier: 1,
                 graffitiVariationMode: 'perSegment',
                 graffitiVariationEveryN: 2,

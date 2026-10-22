@@ -14,6 +14,8 @@ async function main(){
       Object.assign(fresh,{visible:true,lineVisible:true,N:7,K:2,radius:190,rounding:0,closedLoop:true,fill:true,fillColor:'#334455aa',strokeWidth:3,strokeColor:'#33aaff'});
       fresh.showWeb=false;state.showWeb=false;state.tunnel.active=false;state.layers.splice(0,state.layers.length,fresh);state.activeLayerId=fresh.id;refreshLayerLookup(true);setSingleLayerSelection?.(fresh);syncSidebarInputs();
       const webToggle=document.getElementById('showWeb');webToggle.checked=true;webToggle.dispatchEvent(new Event('change',{bubbles:true}));
+      // Regression: corner-mode remains usable when explicitly chosen, although the new default is self-intersection.
+      const placementControl=document.getElementById('webPlacementMode');placementControl.value='corners';placementControl.dispatchEvent(new Event('change',{bubbles:true}));
       function probe(now){beginFrameGeometryRuntime();const f=renderRuntime.frame||{};f.now=now;f.id=(Number(f.id)||0)+1;f.dpr=1;const c=prepareMainLayerFrame(f,0);const d=c.effectsPlan?.web?.frameData||prepareLayerFrameWebData(c);const cmds=getFrameWebGPUCommands(c,{frameData:d,paths:d?.paths,tunnelActive:false},'inside');return{enabled:d?.enabled===true,corners:d?.corners?.length||0,commands:cmds?.length||0,subpaths:(cmds||[]).reduce((n,x)=>n+(x?.subpaths?.length||0),0),depth:d?.depthPercent,placement:d?.placementMode,animating:d?.animating===true};}
       const first=probe(1000),second=probe(1016);const uiEnabled=getLayerWebEnabled(fresh)===true;
       // Also probe a rounded shape: corner semantics must remain usable in corner mode.
@@ -27,19 +29,19 @@ async function main(){
     })()`);
     assert(r.uiEnabled,'real showWeb UI change did not enable static Web');
     assert(r.defaults.style==='web','default Web style is not web');
-    assert(r.defaults.placementMode==='corners','new layer default is not corners');
-    assert(r.defaults.distance===60,'new layer Web depth is not 60%');
-    assert(r.defaults.uiPlacement==='corners'&&r.defaults.uiDistance===60,'HTML defaults do not match Web defaults');
+    assert(r.defaults.placementMode==='selfIntersection','new layer default is not self-intersection');
+    assert(r.defaults.distance===30,'new layer Web depth is not 30%');
+    assert(r.defaults.uiPlacement==='selfIntersection'&&r.defaults.uiDistance===30,'HTML defaults do not match Web defaults');
     for(const [name,q] of Object.entries({first:r.first,second:r.second,rounded:r.rounded})){
       assert(q.enabled,`${name}: Web disabled`);
-      assert(q.placement==='corners'&&q.depth===60,`${name}: wrong runtime defaults ${JSON.stringify(q)}`);
+      assert(q.placement==='corners'&&q.depth===30,`${name}: wrong runtime defaults ${JSON.stringify(q)}`);
       assert(q.corners>0,`${name}: corner mode found no corners`);
       assert(q.commands>0&&q.subpaths>0,`${name}: Web produced no thread geometry on the real first-frame path`);
     }
     assert(Array.isArray(r.morph)&&r.morph.length===8,'Morph probe did not run');
-    for(let i=0;i<r.morph.length;i++){const q=r.morph[i];assert(q.enabled!==false,`morph ${i}: Web disabled`);assert(q.corners>0&&q.commands>0&&q.subpaths>0,`morph ${i}: Web disappeared ${JSON.stringify(q)}`);assert(q.placement==='corners'&&q.depth===60,`morph ${i}: defaults drifted`);}
+    for(let i=0;i<r.morph.length;i++){const q=r.morph[i];assert(q.enabled!==false,`morph ${i}: Web disabled`);assert(q.corners>0&&q.commands>0&&q.subpaths>0,`morph ${i}: Web disappeared ${JSON.stringify(q)}`);assert(q.placement==='corners'&&q.depth===30,`morph ${i}: defaults drifted`);}
     const exc=uncaughtExceptions(h.events).slice(baseline);assert(exc.length===0,'uncaught browser exceptions: '+exc.join(' | '));
-    console.log('PASS 7.8.3 Web defaults + immediate corner visibility',r);
+    console.log('PASS 7.11.11 Web self-intersection defaults + explicit corner visibility',r);
   } finally {await h.close();}
 }
 main().catch(e=>{console.error('FAIL 7.8.3 Web defaults regression:',e.stack||e.message);process.exit(1)});

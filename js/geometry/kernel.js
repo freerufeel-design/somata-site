@@ -292,7 +292,7 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             const fillRequested=fillConfigured&&fillHasRenderableTopology;
             const corridor=state.tunnel?.active===true;
 
-            const dynamicCorridorNative=fillRequested&&dynamic&&corridor&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerGeometry);
+            const dynamicCorridorNative=fillRequested&&dynamic&&corridor&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&Boolean(frameCtx.drawLayerGeometry);
             // Dynamic Fill must use the same current-frame geometry carrier as the Line.
             // Ordinary Morph records its frame-resident stroke commands once and the Fill adapter
             // turns those exact closed subpaths into the native stencil mesh. Retained Spiral keeps
@@ -300,7 +300,7 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             const dynamicFrameNative=fillRequested&&dynamic&&!corridor&&!spiralEndpoint&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&Boolean(frameCtx.drawLayerInstances);
             const dynamicSpiralNative=fillRequested&&dynamic&&!corridor&&spiralEndpoint&&dynamicSpiralBandTopology&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides;
             const staticNativeFillTopology=!dynamic&&(hasStaticFillTopology&&!spiralEndpoint||spiralBandFillTopology);
-            const nativeGpuFillEligible=fillRequested&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(!corridor||!tunnelColorShiftIsActive())&&(staticNativeFillTopology||dynamicFrameNative||dynamicSpiralNative||dynamicCorridorNative);
+            const nativeGpuFillEligible=fillRequested&&!unsupportedFillKind&&!state.fourierMode&&!state.showRoundingGuides&&(staticNativeFillTopology||dynamicFrameNative||dynamicSpiralNative||dynamicCorridorNative);
             const gpuMaskEligible=fillRequested&&hasStaticFillTopology&&!dynamic&&!spiralEndpoint&&!corridor&&!unsupportedFillKind&&!tunnelColorShiftIsActive()&&Boolean(frameCtx.drawLayerFillInstances);
             const contract={
                 kind:String(plan.kind||'static'),

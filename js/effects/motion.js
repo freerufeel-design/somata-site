@@ -275,19 +275,25 @@ window.__spiroRegisterModule?.('js/effects/motion');
             return rec;
         }
 
+        // Corridor can replay the same authored contour dozens of times in one frame.
+        // Keep copy-scale outside the individual stroke/fill commands and avoid a
+        // Canvas transform/state stack for identity-matrix commands. The outer
+        // save/restore keeps every caller's state identical to the legacy path.
         function replayVectorRecording(ctx, recording, alphaMultiplier = 1, scaleRatio = 1, overrides = null) {
             if (!recording?.commands?.length) return;
             const aMul = Math.max(0, Number(alphaMultiplier) || 0);
             const ratio = Math.max(1e-9, Number(scaleRatio) || 1);
             const ov = overrides || null;
-            for (const cmd of recording.commands) {
+            const commands = recording.commands;
+            ctx.save();
+            ctx.scale(ratio, ratio);
+            for (const cmd of commands) {
                 if (!cmd?.path || cmd.alpha * aMul <= 0.0001) continue;
                 if (ov?.strokeOnly === true && cmd.type !== 'stroke') continue;
                 if (ov?.suppressFill === true && cmd.type === 'fill') continue;
-                const m = cmd.matrix || [1, 0, 0, 1, 0, 0];
-                ctx.save();
-                ctx.scale(ratio, ratio);
-                ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+                const m = cmd.matrix;
+                const transformed = m && (m[0] !== 1 || m[1] !== 0 || m[2] !== 0 || m[3] !== 1 || m[4] !== 0 || m[5] !== 0);
+                if (transformed) { ctx.save(); ctx.transform(m[0],m[1],m[2],m[3],m[4],m[5]); }
                 ctx.globalAlpha = cmd.alpha * aMul;
                 if (cmd.type === 'fill') {
                     ctx.fillStyle = ov?.fillStyle || cmd.fillStyle || 'transparent';
@@ -301,8 +307,9 @@ window.__spiroRegisterModule?.('js/effects/motion');
                     ctx.miterLimit = Number(ov?.miterLimit) || cmd.miterLimit || 10;
                     ctx.stroke(cmd.path);
                 }
-                ctx.restore();
+                if (transformed) ctx.restore();
             }
+            ctx.restore();
         }
 
         function getLayerRadiusMultiplier(layer) {

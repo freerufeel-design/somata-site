@@ -4,10 +4,14 @@ window.__spiroRegisterModule?.('js/render/base-pass');
 // unrelated effects cannot mutate Base warmup/repaint bookkeeping.
 const somataBaseBatchMisses=new Map();
 function deferTransientBaseBatchMiss(frameCtx,reason){
-    if(String(reason||'')!=='WebGPU stroke batch was not created')return false;
+    const transientReason=String(reason||'');
+    if(transientReason!=='WebGPU stroke batch was not created'&&
+       !transientReason.startsWith('GPU Corridor Base unavailable:'))return false;
     const key=String(frameCtx?.layer?.id||frameCtx?.layerIndex||'layer'),fid=Math.max(0,Number(frameCtx?.frameId||frameCtx?.frame?.id)||0);
     let rec=somataBaseBatchMisses.get(key);if(!rec||fid>rec.frameId+2)rec={count:0,frameId:fid};rec.count++;rec.frameId=fid;somataBaseBatchMisses.set(key,rec);
-    try{WebGPUStrokeRenderer?.warmup?.();}catch(_){}try{requestMainCanvasRender?.();}catch(_){}
+    try{WebGPUStrokeRenderer?.warmup?.();}catch(_){}
+    if(state.tunnel?.active===true)try{GeometryGPURenderer?.warmup?.();}catch(_){}
+    try{requestMainCanvasRender?.();}catch(_){}
     if(rec.count<=2){renderBackendTelemetry.mark('geometry','gpu',`Base batch deferred ${rec.count}/2`);return true;}
     return false;
 }

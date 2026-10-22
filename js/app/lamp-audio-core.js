@@ -285,8 +285,21 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             let bestScore=Infinity,bestDistance=0,bestPoint={x:pts[0].x,y:pts[0].y};
 
             const continuityScale=Math.max(8,table.total*.18);
+            const prune=table.segs.length>=48;
             for(const seg of table.segs){
-                const a=seg.a,b=seg.b,vx=b.x-a.x,vy=b.y-a.y,den=vx*vx+vy*vy;
+                const a=seg.a,b=seg.b;
+                // 8.14: the final score contains a non-negative arc penalty.
+                // Squared distance to this segment's AABB is a conservative lower
+                // bound; if it already exceeds the best score, projection cannot win.
+                // Preserve ties and small-path behavior. No approximation to the rail.
+                if(prune&&bestScore<Infinity){
+                    const minX=Math.min(a.x,b.x),maxX=Math.max(a.x,b.x);
+                    const minY=Math.min(a.y,b.y),maxY=Math.max(a.y,b.y);
+                    const dx0=ax<minX?minX-ax:(ax>maxX?ax-maxX:0);
+                    const dy0=ay<minY?minY-ay:(ay>maxY?ay-maxY:0);
+                    if(dx0*dx0+dy0*dy0>bestScore)continue;
+                }
+                const vx=b.x-a.x,vy=b.y-a.y,den=vx*vx+vy*vy;
                 const u=den>1e-12?Math.max(0,Math.min(1,((ax-a.x)*vx+(ay-a.y)*vy)/den)):0;
                 const x=a.x+vx*u,y=a.y+vy*u,dx=x-ax,dy=y-ay;
                 const distance=seg.start+seg.len*u;
@@ -311,8 +324,21 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const win=Math.max(.012,Math.min(.24,Number(windowFraction)||.1));
             let bestScore=Infinity,bestDistance=NaN,bestPoint=null;
             const continuityScale=Math.max(2,table.total*.025);
+            const prune=table.segs.length>=48;
             for(const seg of table.segs){
-                const a=seg.a,b=seg.b,vx=b.x-a.x,vy=b.y-a.y,den=vx*vx+vy*vy;
+                const a=seg.a,b=seg.b;
+                // 8.14: the final score contains a non-negative arc penalty.
+                // Squared distance to this segment's AABB is a conservative lower
+                // bound; if it already exceeds the best score, projection cannot win.
+                // Preserve ties and small-path behavior. No approximation to the rail.
+                if(prune&&bestScore<Infinity){
+                    const minX=Math.min(a.x,b.x),maxX=Math.max(a.x,b.x);
+                    const minY=Math.min(a.y,b.y),maxY=Math.max(a.y,b.y);
+                    const dx0=ax<minX?minX-ax:(ax>maxX?ax-maxX:0);
+                    const dy0=ay<minY?minY-ay:(ay>maxY?ay-maxY:0);
+                    if(dx0*dx0+dy0*dy0>bestScore)continue;
+                }
+                const vx=b.x-a.x,vy=b.y-a.y,den=vx*vx+vy*vy;
                 const su=den>1e-12?Math.max(0,Math.min(1,((ax-a.x)*vx+(ay-a.y)*vy)/den)):0;
                 const distance=seg.start+seg.len*su;
                 const f=Math.max(0,Math.min(1,distance/table.total));
@@ -1410,7 +1436,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             return (x>>>0)/4294967296;
         }
         function lampMorphWave(seed,salt=0){
-            if(getLampEvaluationConfig()?.morphEnabled!==true || !runtimeState.morph?.active) return 0;
+            return 0; // 7.10.5: retired legacy relative lamp Morph; Parameter Routing owns lamp morphing.
             const cycleSec=Math.max(.05,getTapMorphIntervalSec(state.morph.intervalSec,'full'));
             const time=lampVisualNow()/1000/cycleSec;
             const phase=lampSeedUnit(seed,salt)*Math.PI*2;
@@ -1517,7 +1543,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             style.scatter=Math.max(0,audioApplyNumeric('lamps.scatter',bokeh.scatter,audioLayerIndex));
             style.sizeVar=Math.max(0,audioApplyNumeric('lamps.sizeVariation',bokeh.sizeVar,audioLayerIndex));
             style.brightVar=Math.max(0,audioApplyNumeric('lamps.brightnessVariation',bokeh.brightVar,audioLayerIndex));
-            style.morphSize=Math.max(0,Math.min(1,(Number(cfg.morphSize)||0)/100));style.morphBright=Math.max(0,Math.min(1,(Number(cfg.morphBrightness)||0)/100));
+            style.morphSize=0;style.morphBright=0; // 7.10.5: no second lamp Morph layer on top of routed parameters.
             style.adaptive=lampAdaptiveExposureFactors(cfg,pointsLength,adaptiveInstanceCount,style.baseR,style.baseBrightnessPercent/100,viewZoom);
             style.blendMode=cfg.blendMode||'lighter';style.colorMode=cfg.colorMode||(cfg.rainbow?'rainbow':cfg.matchLineColor?'line':'selected');style.type=cfg.type||'whiteCore';return style;
         }
@@ -2470,9 +2496,13 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const snap=captureLightningSyncRateConfig(cfg);snap.lightningRatePercent=pct;snap.lightningRateMultiplier=mult;
             return snap;
         }
+        // 7.11.14: slow the *strike clock*, not the authored percent/multiplier.
+        // Both synchronized and independent clocks call this function; the moving
+        // Glint/Sweep clock is intentionally unchanged.
+        const LIGHTNING_STRIKE_CLOCK_FACTOR=0.25;
         function getLightningCycleRateHz(cfg=currentSweepConfig(),layerIndex=-1){
             const baseHz=Math.abs(getSweepTargetVelocity(cfg));
-            return Math.max(0,baseHz*getLightningRateFactor(cfg,layerIndex));
+            return Math.max(0,baseHz*getLightningRateFactor(cfg,layerIndex)*LIGHTNING_STRIKE_CLOCK_FACTOR);
         }
         function getSynchronizedLightningCycleRateHz(fallbackCfg=currentSweepConfig()){
             const cfg=lightningSharedClockRuntime.rateConfig||captureLightningSyncRateConfig(fallbackCfg);
@@ -3273,14 +3303,67 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             return hasClosed?clip:null;
         }
 
+        // Web attachment only: reject whole groups of far-away segments before the
+        // exact projection. Geometry tables are immutable within an active frame;
+        // the cache is rebuilt on every new frame to support pooled/mutable tables.
+        const webProjectionBlockCache=new WeakMap();
+        function webProjectionBlocks(table){
+            const segs=table?.segs||[];
+            if(segs.length<192)return null;
+            const frameId=frameGeometryRuntime.active?frameGeometryRuntime.frameId:NaN;
+            const old=webProjectionBlockCache.get(table);
+            if(old&&old.frameId===frameId&&old.segs===segs&&old.count===segs.length&&old.revision===table._webProjectionRevision)return old.blocks;
+            const blocks=[];
+            for(let start=0;start<segs.length;start+=32){
+                const end=Math.min(segs.length,start+32);
+                let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+                for(let i=start;i<end;i++){
+                    const q=segs[i],ax=q.a.x,ay=q.a.y,bx=q.b.x,by=q.b.y;
+                    // A non-finite coordinate must never cause an incorrect prune.
+                    if(!Number.isFinite(ax)||!Number.isFinite(ay)||!Number.isFinite(bx)||!Number.isFinite(by)){
+                        minX=-Infinity;minY=-Infinity;maxX=Infinity;maxY=Infinity;break;
+                    }
+                    if(ax<minX)minX=ax;if(bx<minX)minX=bx;
+                    if(ax>maxX)maxX=ax;if(bx>maxX)maxX=bx;
+                    if(ay<minY)minY=ay;if(by<minY)minY=by;
+                    if(ay>maxY)maxY=ay;if(by>maxY)maxY=by;
+                }
+                blocks.push({start,end,minX,minY,maxX,maxY});
+            }
+            if(Number.isFinite(frameId))webProjectionBlockCache.set(table,{frameId,segs,count:segs.length,revision:table._webProjectionRevision,blocks});
+            return blocks;
+        }
         function nearestWebDistanceOnTable(table,x,y,out=webDrawScratch.nearest){
-            const px=Number(x)||0,py=Number(y)||0;
+            const px=Number(x)||0,py=Number(y)||0,segs=table?.segs||[];
             let bestSq=Infinity,bestDistance=0,bestX=px,bestY=py;
-            for(const seg of table?.segs||[]){
-                const vx=seg.b.x-seg.a.x,vy=seg.b.y-seg.a.y,den=vx*vx+vy*vy;
-                const u=den>1e-12?Math.max(0,Math.min(1,((px-seg.a.x)*vx+(py-seg.a.y)*vy)/den)):0;
-                const qx=seg.a.x+vx*u,qy=seg.a.y+vy*u,dx=qx-px,dy=qy-py,sq=dx*dx+dy*dy;
-                if(sq<bestSq){bestSq=sq;bestDistance=seg.start+seg.len*u;bestX=qx;bestY=qy;}
+            const prune=segs.length>=48,blocks=webProjectionBlocks(table);
+            const groupCount=blocks?blocks.length:1;
+            // Visit groups and segments in original order: strict '<' tie precedence
+            // on crossing lines cannot change even when a whole group is skipped.
+            for(let bi=0;bi<groupCount;bi++){
+                let first=0,last=segs.length;
+                if(blocks){
+                    const group=blocks[bi];first=group.start;last=group.end;
+                    if(bestSq<Infinity){
+                        const gapX=px<group.minX?group.minX-px:(px>group.maxX?px-group.maxX:0);
+                        const gapY=py<group.minY?group.minY-py:(py>group.maxY?py-group.maxY:0);
+                        if(gapX*gapX+gapY*gapY>bestSq)continue;
+                    }
+                }
+                for(let i=first;i<last;i++){
+                    const seg=segs[i],ax=seg.a.x,ay=seg.a.y,bx=seg.b.x,by=seg.b.y;
+                    if(prune&&bestSq<Infinity){
+                        const minX=ax<bx?ax:bx,maxX=ax>bx?ax:bx;
+                        const minY=ay<by?ay:by,maxY=ay>by?ay:by;
+                        const gapX=px<minX?minX-px:(px>maxX?px-maxX:0);
+                        const gapY=py<minY?minY-py:(py>maxY?py-maxY:0);
+                        if(gapX*gapX+gapY*gapY>bestSq)continue;
+                    }
+                    const vx=bx-ax,vy=by-ay,den=vx*vx+vy*vy;
+                    const u=den>1e-12?Math.max(0,Math.min(1,((px-ax)*vx+(py-ay)*vy)/den)):0;
+                    const qx=ax+vx*u,qy=ay+vy*u,dx=qx-px,dy=qy-py,sq=dx*dx+dy*dy;
+                    if(sq<bestSq){bestSq=sq;bestDistance=seg.start+seg.len*u;bestX=qx;bestY=qy;}
+                }
             }
             out.distance=bestDistance;out.x=bestX;out.y=bestY;out.sq=bestSq;return out;
         }
@@ -3717,8 +3800,10 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const desiredWebState=l=>webRuntime.desiredVisibilityByLayer.has(l.id)?webRuntime.desiredVisibilityByLayer.get(l.id)===true:l.showWeb===true;
             const webEnabled=master?everyLayerMatches(desiredWebState):(effectLayer?desiredWebState(effectLayer):false);
             document.getElementById('btnSidebarWeb')?.classList.toggle('feature-enabled',webEnabled);
-            const sweepEnabled=master?everyLayerMatches(l=>getLayerSweepConfig(l).enabled===true):getLayerSweepConfig(effectLayer).enabled===true;
-            document.getElementById('btnSidebarSweep')?.classList.toggle('feature-enabled',sweepEnabled);
+            const glintEnabled=master?everyLayerMatches(l=>getLayerGlintEnabled(l)):getLayerGlintEnabled(effectLayer);
+            const lightningEnabled=master?everyLayerMatches(l=>getLayerLightningEnabled(l)):getLayerLightningEnabled(effectLayer);
+            document.getElementById('btnSidebarSweep')?.classList.toggle('feature-enabled',glintEnabled);
+            document.getElementById('btnSidebarLightning')?.classList.toggle('feature-enabled',lightningEnabled);
             const particlesEnabled=master?everyLayerMatches(l=>normalizeParticleConfig(l?.particles).enabled===true):normalizeParticleConfig(effectLayer?.particles).enabled===true;
             document.getElementById('btnSidebarParticles')?.classList.toggle('feature-enabled',particlesEnabled);
             document.getElementById('btnSidebarFourier')?.classList.toggle('fourier-on',state.fourierMode===true);
@@ -3764,7 +3849,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 layer.lineProfileApplication='graffiti';
                 if(!Number.isFinite(Number(layer.graffitiAngle)))layer.graffitiAngle=45;
                 if(!['absolute','relative'].includes(layer.graffitiAngleMode))layer.graffitiAngleMode='absolute';
-                if(!Number.isFinite(Number(layer.graffitiNibLength)))layer.graffitiNibLength=10;
+                if(!Number.isFinite(Number(layer.graffitiNibLength)))layer.graffitiNibLength=3;
                 layer.graffitiBaseStrokeWidth=null;
             } else if(!on && current){
 
@@ -3776,7 +3861,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             layer.lineProfileStroke=layer.lineProfile;
             if(!['absolute','relative'].includes(layer.graffitiAngleMode))layer.graffitiAngleMode='absolute';
             if(!['pointed','blunt','pinched','round'].includes(layer.graffitiNibShape))layer.graffitiNibShape='pointed';
-            if(!Number.isFinite(Number(layer.graffitiNibLength)))layer.graffitiNibLength=10;
+            if(!Number.isFinite(Number(layer.graffitiNibLength)))layer.graffitiNibLength=3;
             if(!Number.isFinite(Number(layer.graffitiNibLengthMultiplier)))layer.graffitiNibLengthMultiplier=1;
             if(!['perSegment','everyNth','across','perPath','whole'].includes(layer.graffitiVariationMode))layer.graffitiVariationMode='perSegment';
             if(!Number.isFinite(Number(layer.graffitiVariationEveryN)))layer.graffitiVariationEveryN=2;
@@ -3805,9 +3890,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             requestMainCanvasRender();
         }
         function setSidebarMode(mode) {
-            state.sidebarMode = ['shape','lines','lamps','web','sweep','particles','motion','palette','fourier'].includes(mode) ? mode : 'shape';
+            state.sidebarMode = ['shape','lines','lamps','web','sweep','lightning','particles','motion','palette','fourier'].includes(mode) ? mode : 'shape';
             const aside=document.getElementById('settingsSidebar');
-            ['shape','lines','lamps','web','sweep','particles','motion','palette','fourier'].forEach(name=>aside?.classList.toggle(`sidebar-mode-${name}`,state.sidebarMode===name));
+            ['shape','lines','lamps','web','sweep','lightning','particles','motion','palette','fourier'].forEach(name=>aside?.classList.toggle(`sidebar-mode-${name}`,state.sidebarMode===name));
             document.querySelectorAll('[data-sidebar-mode]').forEach(btn=>{const on=btn.dataset.sidebarMode===state.sidebarMode;btn.classList.toggle('active',on);btn.setAttribute('aria-pressed',on?'true':'false');});
             if(state.sidebarMode==='palette'&&typeof renderPlaylistPaletteStudio==='function')renderPlaylistPaletteStudio();
             syncSidebarToolStates();
@@ -3907,13 +3992,14 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             delete c.blurEnabled;delete c.blur;
             const allowed=['perSegment','everyNth','across','perPath','whole'];if(c.mode==='lightning'){c.effectType='lightning';c.mode='whole';}if(!allowed.includes(c.mode))c.mode='whole';
             c.effectType=c.effectType==='lightning'?'lightning':'glint';c.flashMode=normalizeSweepFlashMode(c.flashMode);c.flashType=normalizeGlintPrecisionValue(c.flashType??c.glintPrecision);if(c.flashType==='spectral')c.flashType='high';c.glintPrecision=c.flashType;
-            const lightningMode=c.effectType==='lightning',spectral=c.flashMode==='spectral';
-            const e=document.getElementById('showSweep');if(e)e.checked=state.masterLayerEdit===true?everyLayerMatches(l=>getLayerSweepConfig(l).enabled===true):c.enabled===true;
+            const lightningMode=c.lightningEnabled===true,spectral=c.flashMode==='spectral';
+            const e=document.getElementById('showSweep');if(e)e.checked=state.masterLayerEdit===true?everyLayerMatches(l=>getLayerGlintEnabled(l)):c.glintEnabled===true;
+            const le=document.getElementById('showLightning');if(le)le.checked=state.masterLayerEdit===true?everyLayerMatches(l=>getLayerLightningEnabled(l)):c.lightningEnabled===true;
             const et=document.getElementById('sweepEffectType');if(et)et.value=c.effectType;
-            c.coreBlendMode=normalizeSweepBlendMode(c.coreBlendMode);c.glowBlendMode=normalizeSweepBlendMode(c.glowBlendMode);const cbm=document.getElementById('sweepCoreBlendMode');if(cbm)cbm.value=c.coreBlendMode;const gbm=document.getElementById('sweepGlowBlendMode');if(gbm)gbm.value=c.glowBlendMode;
-            document.getElementById('sweepGlintSettings')?.classList.remove('hidden');document.getElementById('sweepLightningSettings')?.classList.toggle('hidden',!lightningMode);
+            c.coreBlendMode=normalizeSweepBlendMode(c.coreBlendMode);c.glowBlendMode=normalizeSweepBlendMode(c.glowBlendMode);const cbm=document.getElementById('sweepCoreBlendMode');if(cbm)cbm.value=c.coreBlendMode;const gbm=document.getElementById('sweepGlowBlendMode');if(gbm)gbm.value=c.glowBlendMode;const lcbm=document.getElementById('sweepLightningCoreBlendMode');if(lcbm)lcbm.value=c.coreBlendMode;const lgbm=document.getElementById('sweepLightningGlowBlendMode');if(lgbm)lgbm.value=c.glowBlendMode;
+            document.getElementById('sweepGlintSettings')?.classList.remove('hidden');document.getElementById('sweepLightningSettings')?.classList.remove('hidden');
             const title=document.getElementById('sweepGlintSectionTitle');if(title)title.textContent='Проблеск';const fm=document.getElementById('sweepFlashMode');if(fm)fm.value=c.flashMode;c.profileShape=c.profileShape==='line'?'line':'current';const ps=document.getElementById('sweepProfileShape');if(ps)ps.value=c.profileShape;
-            document.getElementById('sweepMovingSettings')?.classList.toggle('hidden',spectral);document.getElementById('sweepSpectralSettings')?.classList.toggle('hidden',!spectral);document.getElementById('sweepGlintPrecisionRow')?.classList.toggle('hidden',lightningMode||spectral);document.getElementById('sweepStandaloneMotionSettings')?.classList.toggle('hidden',lightningMode||spectral);
+            document.getElementById('sweepMovingSettings')?.classList.toggle('hidden',spectral);document.getElementById('sweepSpectralSettings')?.classList.toggle('hidden',!spectral);document.getElementById('sweepGlintPrecisionRow')?.classList.toggle('hidden',spectral);document.getElementById('sweepStandaloneMotionSettings')?.classList.toggle('hidden',spectral);
             const gp=document.getElementById('sweepGlintPrecision');if(gp)gp.value=c.flashType;const m=document.getElementById('sweepMode');if(m)m.value=c.mode;document.getElementById('sweepEveryNRow')?.classList.toggle('hidden',c.mode!=='everyNth');
             const n=document.getElementById('sweepEveryN');if(n)n.value=String(Math.max(2,Math.min(24,Math.round(Number(c.everyN)||2))));const nt=document.getElementById('sweepEveryNText');if(nt)nt.textContent=n?.value||'2';const d=document.getElementById('sweepDirection');if(d)d.value=c.direction||'forward';
             const bpm=Math.max(0,Number(state.tapTempo?.bpm)||0),syncActive=c.syncMusic!==false&&bpm>0;const sm=document.getElementById('sweepSyncMusic');if(sm)sm.checked=c.syncMusic!==false;const sp=document.getElementById('sweepSpeed');if(sp){sp.value=c.speed;sp.disabled=syncActive;sp.style.opacity=syncActive?'.42':'1';}{const v=Number(c.speedMultiplier);c.speedMultiplier=Number.isFinite(v)?Math.max(.015625,Math.min(64,v)):1;}const mul=document.getElementById('sweepSpeedMultiplier');if(mul)mul.value=String(c.speedMultiplier);const st=document.getElementById('sweepSpeedText');if(st){const mm=c.speedMultiplier;st.textContent=syncActive?`${Math.round(bpm)} BPM × ${mm.toFixed(mm%1?2:0)}`:`${Number(c.speed||.25).toFixed(2)} цикл/с × ${mm.toFixed(mm%1?2:0)}`;}
@@ -3923,7 +4009,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const col=document.getElementById('sweepColor');if(col)col.value=/^#[0-9a-f]{6}$/i.test(c.color||'')?c.color:'#ffffff';c.opacity=Math.max(0,Math.min(100,Number.isFinite(Number(c.opacity))?Number(c.opacity):100));const sop=document.getElementById('sweepOpacity');if(sop)sop.value=String(c.opacity);const sopt=document.getElementById('sweepOpacityText');if(sopt)sopt.textContent=`${Math.round(c.opacity)}%`;
             c.brightness=Math.max(0,Math.min(200,Number.isFinite(Number(c.brightness))?Number(c.brightness):100));c.glow=Math.max(0,Number.isFinite(Number(c.glow))?Number(c.glow):18);c.glowMultiplier=Math.max(0,Number.isFinite(Number(c.glowMultiplier))?Number(c.glowMultiplier):1);if(c.glow>50){const q=compactSweepPixelValue(c.glow,c.glowMultiplier,50);c.glow=q.base;c.glowMultiplier=q.multiplier;}c.glowIntensity=Math.max(0,Math.min(200,Number.isFinite(Number(c.glowIntensity))?Number(c.glowIntensity):100));c.glowIntensityMultiplier=Math.max(0,Number.isFinite(Number(c.glowIntensityMultiplier))?Number(c.glowIntensityMultiplier):1);c.softness=Math.max(0,Math.min(150,Number.isFinite(Number(c.softness))?Number(c.softness):100));c.softnessMultiplier=Math.max(0,Number.isFinite(Number(c.softnessMultiplier))?Number(c.softnessMultiplier):1);
             const sb=document.getElementById('sweepBrightness');if(sb)sb.value=String(c.brightness);const sbt=document.getElementById('sweepBrightnessText');if(sbt)sbt.textContent=`${Math.round(c.brightness)}%`;const sgl=document.getElementById('sweepGlow');if(sgl)sgl.value=String(c.glow);const sglm=document.getElementById('sweepGlowMultiplier');if(sglm)sglm.value=String(c.glowMultiplier);const sglt=document.getElementById('sweepGlowText');if(sglt)sglt.textContent=`${Math.round(c.glow*10)/10} px × ${Number(c.glowMultiplier).toFixed(c.glowMultiplier%1?1:0)}`;const sgi=document.getElementById('sweepGlowIntensity');if(sgi)sgi.value=String(c.glowIntensity);const sgim=document.getElementById('sweepGlowIntensityMultiplier');if(sgim)sgim.value=String(c.glowIntensityMultiplier);const sgit=document.getElementById('sweepGlowIntensityText');if(sgit)sgit.textContent=`${Math.round(c.glowIntensity)}% × ${Number(c.glowIntensityMultiplier).toFixed(c.glowIntensityMultiplier%1?1:0)}`;const ss=document.getElementById('sweepSoftness');if(ss)ss.value=String(c.softness);const ssm=document.getElementById('sweepSoftnessMultiplier');if(ssm)ssm.value=String(c.softnessMultiplier);const sst=document.getElementById('sweepSoftnessText');if(sst)sst.textContent=`${Math.round(c.softness)}% × ${Number(c.softnessMultiplier).toFixed(c.softnessMultiplier%1?1:0)}`;
-            if(lightningMode){
+            {
                 c.lightningProfileShape=c.lightningProfileShape==='line'?'line':'current';const lps=document.getElementById('sweepLightningProfileShape');if(lps)lps.value=c.lightningProfileShape;c.lightningBehavior=normalizeLightningBehaviorValue(c.lightningBehavior,'symmetric');c.lightningPrecision=normalizeLightningPrecisionValue(c.lightningPrecision);const lbeh=document.getElementById('sweepLightningBehavior');if(lbeh)lbeh.value=c.lightningBehavior;const lprec=document.getElementById('sweepLightningPrecision');if(lprec)lprec.value=c.lightningPrecision;c.lightningMode=['perSegment','everyNth','across','perPath','whole'].includes(c.lightningMode)?c.lightningMode:'perPath';c.lightningEveryN=Math.max(2,Math.min(24,Math.round(Number(c.lightningEveryN)||2)));c.lightningRandomPosition=c.lightningRandomPosition===true;const lm=document.getElementById('sweepLightningMode');if(lm)lm.value=c.lightningMode;document.getElementById('sweepLightningEveryNRow')?.classList.toggle('hidden',c.lightningMode!=='everyNth');const lne=document.getElementById('sweepLightningEveryN');if(lne)lne.value=String(c.lightningEveryN);const lnet=document.getElementById('sweepLightningEveryNText');if(lnet)lnet.textContent=String(c.lightningEveryN);const lrpos=document.getElementById('sweepLightningRandomPosition');if(lrpos)lrpos.checked=c.lightningRandomPosition;
                 const lcol=document.getElementById('sweepLightningColor');if(lcol)lcol.value=/^#[0-9a-f]{6}$/i.test(c.lightningColor||'')?c.lightningColor:'#ffffff';const lscol=document.getElementById('sweepLightningSecondaryColor');if(lscol)lscol.value=/^#[0-9a-f]{6}$/i.test(c.lightningSecondaryColor||'')?c.lightningSecondaryColor:'#7dd3fc';c.lightningSegmentPercent=Math.max(1,Math.min(100,Number.isFinite(Number(c.lightningSegmentPercent))?Number(c.lightningSegmentPercent):100));const lseg=document.getElementById('sweepLightningSegmentPercent');if(lseg)lseg.value=String(c.lightningSegmentPercent);const lsegt=document.getElementById('sweepLightningSegmentText');if(lsegt)lsegt.textContent=`${Math.round(c.lightningSegmentPercent)}%`;
                 c.lightningRatePercent=Math.max(0,Math.min(100,Number.isFinite(Number(c.lightningRatePercent))?Number(c.lightningRatePercent):100));c.lightningRateMultiplier=Math.max(0,Number.isFinite(Number(c.lightningRateMultiplier))?Number(c.lightningRateMultiplier):1);const lrs=document.getElementById('sweepLightningRateSync');if(lrs)lrs.checked=lightningRateSyncEnabled();const lrpct=document.getElementById('sweepLightningRatePercent');if(lrpct)lrpct.value=String(c.lightningRatePercent);const lrm=document.getElementById('sweepLightningRateMultiplier');if(lrm)lrm.value=String(c.lightningRateMultiplier);const lrt=document.getElementById('sweepLightningRateText');if(lrt){const hz=lightningRateSyncEnabled()?getSynchronizedLightningCycleRateHz(c):getLightningCycleRateHz(c,state.layers.indexOf(effectLayer)),tag=lightningRateSyncEnabled()?' · синхр.':'';lrt.textContent=hz>0?`${Math.round(c.lightningRatePercent)}% × ${c.lightningRateMultiplier.toFixed(c.lightningRateMultiplier%1?1:0)} · ${(1/hz).toFixed((1/hz)<10?2:1)} с${tag}`:`${Math.round(c.lightningRatePercent)}% × ${c.lightningRateMultiplier.toFixed(c.lightningRateMultiplier%1?1:0)} · выкл.${tag}`;}
