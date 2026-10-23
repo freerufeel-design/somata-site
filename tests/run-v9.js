@@ -1,5 +1,5 @@
 'use strict';
-/** Somata 9.0.7 — tests the extracted release, not a development folder.
+/** Somata 9.0.8 — tests the extracted release, not a development folder.
  * Run: node tests/run-all.js                (quick acceptance)
  *      node tests/run-extended.js           (all regressions, no benchmarks)
  *      node tests/run-v9.js --full --bench  (plus opt-in benchmarks)
@@ -18,6 +18,8 @@ const quick=[
  'v901-corridor-lightning-regression.js',
  'v906-lightning-trigger-routing-regression.js',
  'v907-lightning-gpu-encode-regression.js',
+ 'v908-gpu-stall-backpressure-regression.js',
+ 'v908-device-loss-circuit-regression.js',
  'v903-static-edit-animation-regression.js',
  'v903-static-animation-render-impact.js',
  'v904-settings-fill-diagnostics-regression.js',
@@ -43,7 +45,7 @@ const cases=full?fs.readdirSync(testsRoot).filter(f=>f.endsWith('.js')&&!helpers
 // signal, NOT a historical test that should be masked as an expected PASS.
 let passed=0,failed=0,timedOut=0;
 const timeoutMs=Math.max(2000,Number(process.env.SOMATA_TEST_TIMEOUT_MS)||35000);
-console.log(`Somata 9.0.7 tests: ${full?'FULL':'QUICK'} (${cases.length} cases; ${timeoutMs} ms/case)`);
+console.log(`Somata 9.0.8 tests: ${full?'FULL':'QUICK'} (${cases.length} cases; ${timeoutMs} ms/case)`);
 for(let i=0;i<cases.length;i++){
  const name=cases[i];console.log(`[${i+1}/${cases.length}] ${name}`);
  const log=path.join(os.tmpdir(),`somata-v9-test-${process.pid}-${i}.log`);

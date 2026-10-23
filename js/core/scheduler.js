@@ -410,7 +410,7 @@ window.__spiroRegisterModule?.('js/core/scheduler');
             function noteGpuFrame(ms){
                 ms=Number(ms);if(Number.isFinite(ms)&&ms>0&&ms<250){emaGpuMs=emaGpuMs?emaGpuMs*.85+ms*.15:ms;gpuSamples++;}else gpuSampleErrors++;
             }
-            const cacheScale=()=>pressureLevel===3?8:(pressureLevel===2?4:(pressureLevel===1?2:1));
+            const cacheScale=()=>{const scale=pressureLevel===3?8:(pressureLevel===2?4:(pressureLevel===1?2:1));return pressureLevel>=2&&bottleneck()==='gpu'?Math.min(2,scale):scale;};
             const bottleneck=()=>{
                 if(!(emaGpuMs>0))return 'unknown';const budget=1000/targetFps;
                 if(emaGpuMs>=budget*.90)return 'gpu';
@@ -420,12 +420,13 @@ window.__spiroRegisterModule?.('js/core/scheduler');
 
             const ringScale=()=>{const base=cacheScale();if(pressureLevel===0)return 1;return bottleneck()==='cpu-driver'?Math.min(12,Math.ceil(base*(pressureLevel===3?1.5:1.25))):base;};
 
-            const residencyRingScale=()=>((deviceMemoryGb===0||deviceMemoryGb>=8)?2:1);
+            const residencyRingScale=()=>pressureLevel>=2&&bottleneck()==='gpu'?1:((deviceMemoryGb===0||deviceMemoryGb>=8)?2:1);
             const ringCount=(base=3)=>{const n=Math.max(1,Math.round(Math.max(1,Number(base)||1)));return n+(residencyRingScale()>1?1:0);};
 
             const stickyRingCount=(base=3,current=0)=>Math.max(Math.max(1,Math.floor(Number(current)||0)),ringCount(base));
-            const growthFactor=()=>pressureLevel===3?3.0:(pressureLevel===2?2.4:(pressureLevel===1?2.0:1.6));
+            const growthFactor=()=>pressureLevel>=2&&bottleneck()==='gpu'?1.6:(pressureLevel===3?3.0:(pressureLevel===2?2.4:(pressureLevel===1?2.0:1.6)));
             const minDynamicCapacity=(base=256)=>{
+                if(pressureLevel>=2&&bottleneck()==='gpu')return Math.max(1,Number(base)||1);
                 base=Math.max(1,Number(base)||1);if(pressureLevel===0)return base;
                 if(base<=64)return pressureLevel===3?base*8:(pressureLevel===2?base*4:base*2);
                 return pressureLevel===3?Math.max(base*4,2048):(pressureLevel===2?Math.max(base*2,1024):Math.max(Math.ceil(base*1.5),512));

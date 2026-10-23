@@ -102,3 +102,14 @@ Node/Chromium проверяет действия UI, состояние, finite
 - `v907-lightning-gpu-encode-regression.js` сначала исполняет фактическую функцию адаптера GPU с контролируемым готовым backend. Раньше она вызывала `prechargeAsGlow` (удалён после удаления предварительного проблеска) и завершалась `ReferenceError`, несмотря на успешные тесты GPU preparation. Теперь адаптер передаёт только пять допустимых аргументов.
 - Тот же сценарий нажимает checkbox молнии в браузере, выбирает таймер через UI и проверяет непустой план `strike`.
 - Без аппаратного WebGPU проверка не подтверждает физические пиксели на NVIDIA.
+
+
+## 9.0.8 — GPU queue stall protection
+
+- `v908-gpu-stall-backpressure-regression.js`: real recycler implementation in a VM with an unresolved GPU fence, 1 MiB/frame retirement, one outstanding completion promise, no destruction of submitted buffers, 96 MiB frame-backpressure threshold, safe recovery after fence completion and GPU generation rollover.
+- A `renderMainCanvas` call under recycler pressure is skipped **before** geometry/GPU frame preparation; Morph time keeps advancing via scheduler and repaint is requested when the fence resolves.
+- GPU frame governor avoids ×4–×8 retention and ×3 capacity growth if GPU timings identify a GPU bottleneck.
+- WebGPU DeviceHub postpones recovery after device loss and stops automatic retries after repeated failures.
+- These are simulated GPU tests, **not** an NVIDIA VRAM measurement or a physical 2-hour soak. Keep physical GPU validation mandatory.
+
+- `v908-device-loss-circuit-regression.js`: repeated device loss cooldown, circuit breaker and general WebGPU queue watchdog with a deliberately unresolved fence.

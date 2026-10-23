@@ -3360,12 +3360,19 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             let acquireCount=0,lostCount=0,uncapturedErrorCount=0,lastUncapturedError='',adapterInfo=null,timestampQuerySupported=false,timestampQueryEnabled=false;
 
             let resourceLifetimeFaults=0,forcedRecoveries=0,faultBurstStartedAt=0,faultBurstCount=0,forcedRecoveryGeneration=-1;
+            // Avoid fast loss/reacquire loops when a GPU driver repeatedly resets.
+            let consecutiveLosses=0,recoveryAfter=0,recoveryCircuitOpen=false,lastAcquiredAt=0;
+            // Queue progress probe also catches stalled GPU work that does not use the recycler.
+            let queueProbe=null,queueProbeAt=0,nextQueueProbeAt=0,queueProbeFailures=0,queueWatchdogTrips=0,lastQueueWarningAt=-30000;
+            const QUEUE_STALL_MS=10000,QUEUE_PROBE_INTERVAL_MS=2000;
 
             const spiralStorageBuffersNeeded=9;
             let adapterStorageBuffersPerShaderStage=0,requestedStorageBuffersPerShaderStage=0;
             async function acquire(){
                 if(ready&&!lost&&device)return{adapter,device,generation};
                 if(pending)return pending;
+                if(recoveryCircuitOpen)throw new Error('WebGPU recovery disabled after repeated device losses; reload to retry');
+                if(performance.now()<recoveryAfter)throw new Error('WebGPU recovery cooling down');
                 if(attempted&&!ready&&!lost)throw new Error(lastError||'WebGPU device unavailable');
                 attempted=true;lost=false;lastError='';
                 const task=(async()=>{
@@ -3390,7 +3397,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                                 device=await adapter.requestDevice(baseDeviceDescriptor);timestampQueryEnabled=false;
                             }
                         }else device=await adapter.requestDevice(baseDeviceDescriptor);
-                        acquireCount++;generation++;ready=true;lost=false;faultBurstStartedAt=0;faultBurstCount=0;
+                        acquireCount++;generation++;ready=true;lost=false;faultBurstStartedAt=0;faultBurstCount=0;lastAcquiredAt=performance.now();
+                        queueProbe=null;queueProbeAt=0;nextQueueProbeAt=0;
 
                         try{requestMainCanvasRender();}catch(_){}
                         const ownGeneration=generation;
@@ -3405,6 +3413,11 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                         device.lost.then(info=>{
                             if(generation!==ownGeneration)return;
                             ready=false;lost=true;attempted=false;pending=null;generation++;lostCount++;
+                            queueProbe=null;queueProbeAt=0;nextQueueProbeAt=0;
+                            if(performance.now()-lastAcquiredAt>120000)consecutiveLosses=0;
+                            consecutiveLosses++;
+                            recoveryAfter=performance.now()+Math.min(60000,5000*Math.pow(2,Math.min(4,consecutiveLosses-1)));
+                            if(consecutiveLosses>=5)recoveryCircuitOpen=true;
                             lastError=`device lost${info?.message?`: ${info.message}`:''}`;
                             try{console.error('[Somata WebGPU device lost]',{reason:info?.reason||'unknown',message:info?.message||'',generation:ownGeneration});}catch(_){}
                             requestMainCanvasRender();
@@ -3415,38 +3428,65 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 pending=task;task.finally(()=>{if(pending===task)pending=null;}).catch(()=>{});
                 return task;
             }
-            function warmup(){if(!ready&&!pending&&(!attempted||lost))void acquire().catch(()=>{});return ready&&!lost;}
+            function shouldThrottle(){
+                if(!ready||lost||!device)return false;
+                const t=performance.now();
+                if(!queueProbe&&t>=nextQueueProbeAt){
+                    const marker={generation},owner=device;
+                    let done=null;
+                    try{done=owner.queue?.onSubmittedWorkDone?.();}catch(_){queueProbeFailures++;}
+                    nextQueueProbeAt=t+QUEUE_PROBE_INTERVAL_MS;
+                    if(done&&typeof done.then==='function'){
+                        queueProbe=marker;queueProbeAt=t;
+                        Promise.resolve(done).then(()=>{
+                            if(queueProbe!==marker)return;
+                            const wasStalled=performance.now()-queueProbeAt>=QUEUE_STALL_MS;
+                            queueProbe=null;queueProbeAt=0;
+                            if(wasStalled)try{requestMainCanvasRender();}catch(_){}
+                        },()=>{
+                            if(queueProbe!==marker)return;
+                            queueProbeFailures++;queueProbe=null;queueProbeAt=0;
+                        });
+                    }
+                }
+                const stalled=!!queueProbe&&(t-queueProbeAt)>=QUEUE_STALL_MS;
+                if(stalled&&t-lastQueueWarningAt>=QUEUE_STALL_MS){
+                    lastQueueWarningAt=t;queueWatchdogTrips++;
+                    try{console.warn('[Somata GPU queue stalled] Pausing new GPU frames until the driver completes submitted work.',{pendingMs:Math.round(t-queueProbeAt),generation});}catch(_){}
+                }
+                return stalled;
+            }
+            function warmup(){if(!ready&&!pending&&(!attempted||lost)&&!recoveryCircuitOpen&&performance.now()>=recoveryAfter)void acquire().catch(()=>{});return ready&&!lost;}
 
-            function retry(){if(ready&&!lost)return true;if(pending)return false;attempted=false;lost=false;lastError='';void acquire().catch(()=>{});return false;}
-            function status(){warmup();return{supported:!!navigator?.gpu,secure:!!globalThis.isSecureContext,attempted,initializing:!!pending,available:ready&&!lost,lost,lastError,generation,acquireCount,lostCount,uncapturedErrorCount,lastUncapturedError,resourceLifetimeFaults,forcedRecoveries,adapterInfo,timestampQuerySupported,timestampQueryEnabled,spiralStorageBuffersNeeded,adapterStorageBuffersPerShaderStage,requestedStorageBuffersPerShaderStage,deviceStorageBuffersPerShaderStage:Number(device?.limits?.maxStorageBuffersPerShaderStage)||0};}
-            return{acquire,warmup,retry,isReady:()=>ready&&!lost,getGeneration:()=>generation,hasTimestampQuery:()=>ready&&!lost&&timestampQueryEnabled,status};
+            function retry(){if(ready&&!lost)return true;if(pending)return false;attempted=false;lost=false;lastError='';recoveryCircuitOpen=false;recoveryAfter=0;consecutiveLosses=0;void acquire().catch(()=>{});return false;}
+            function status(){warmup();return{supported:!!navigator?.gpu,secure:!!globalThis.isSecureContext,attempted,initializing:!!pending,available:ready&&!lost,lost,lastError,generation,acquireCount,lostCount,consecutiveLosses,recoveryCooldownMs:Math.max(0,Math.round(recoveryAfter-performance.now())),recoveryCircuitOpen,queueProbePending:!!queueProbe,queueProbeMs:queueProbe?Math.max(0,Math.round(performance.now()-queueProbeAt)):0,queueWatchdogTrips,queueProbeFailures,uncapturedErrorCount,lastUncapturedError,resourceLifetimeFaults,forcedRecoveries,adapterInfo,timestampQuerySupported,timestampQueryEnabled,spiralStorageBuffersNeeded,adapterStorageBuffersPerShaderStage,requestedStorageBuffersPerShaderStage,deviceStorageBuffersPerShaderStage:Number(device?.limits?.maxStorageBuffersPerShaderStage)||0};}
+            return{acquire,warmup,retry,shouldThrottle,isReady:()=>ready&&!lost,getGeneration:()=>generation,hasTimestampQuery:()=>ready&&!lost&&timestampQueryEnabled,status};
         })();
 
+        // 9.0.8: GPU backpressure for a device whose submitted work stops completing.
+        // Never destroy or reissue an in-flight buffer merely to satisfy a memory target.
         const WebGPUBufferRecycler = (() => {
             let device=null,generation=0,ready=[],retired=[];
             let readyBytes=0,retiredBytes=0,acquires=0,hits=0,misses=0,recycles=0,promotions=0,destroys=0,prunes=0,resets=0;
             let fenceRequests=0,fencedBuffers=0,largestFenceBatch=0,fenceFailures=0;
+            let pendingFence=null,pendingSince=0,stalledFrames=0,stallWarnings=0,lastWarningAt=-30000,throttleActive=false;
+            const PRESSURE_BYTES=96*1024*1024,PRESSURE_BUFFERS=192,STALL_WARNING_MS=10000;
+            const nowMs=()=>typeof performance!=='undefined'&&typeof performance.now==='function'?performance.now():Date.now();
             const currentFrame=()=>Math.max(0,Number(renderRuntime?.frameId)||0);
             const align256=n=>Math.max(256,Math.ceil(Math.max(1,Number(n)||1)/256)*256);
             function destroyRec(rec){if(!rec||rec.dead)return;rec.dead=true;try{rec.buffer?.destroy?.();}catch(_){}destroys++;}
             function clearArrays(){for(const rec of ready)destroyRec(rec);for(const rec of retired)destroyRec(rec);ready=[];retired=[];readyBytes=0;retiredBytes=0;}
-            function reset(nextDevice=null,nextGeneration=0){clearArrays();device=nextDevice;generation=Number(nextGeneration)||0;resets++;}
+            function reset(nextDevice=null,nextGeneration=0){clearArrays();device=nextDevice;generation=Number(nextGeneration)||0;pendingFence=null;pendingSince=0;throttleActive=false;resets++;}
             function sync(dev,gen){const g=Number(gen)||0;if(device!==dev||generation!==g)reset(dev,g);return !!device;}
             function limits(){const scale=Math.max(1,(performanceGovernor.residencyScale?.()||1));return{count:32*scale,bytes:48*1024*1024*scale};}
             function removeRetired(rec){const i=retired.indexOf(rec);if(i>=0){retired.splice(i,1);retiredBytes=Math.max(0,retiredBytes-rec.size);}}
             function prune(){const lim=limits();while(ready.length>lim.count||readyBytes>lim.bytes){let idx=0;for(let i=1;i<ready.length;i++)if((ready[i].lastUsedFrame||0)<(ready[idx].lastUsedFrame||0))idx=i;const [rec]=ready.splice(idx,1);readyBytes=Math.max(0,readyBytes-rec.size);destroyRec(rec);prunes++;}}
-            // Retired buffers from the same submitted GPU timeline need one completion
-            // fence, not one onSubmittedWorkDone() promise per buffer.  The recycler
-            // still waits two render frames before arming and cannot reuse a buffer
-            // until the shared fence resolves. A device generation change destroys
-            // old resources instead of promoting them into the new device's pool.
+            // Exactly one outstanding GPU completion fence. Earlier versions could create
+            // thousands of unresolved promises when the driver stopped making progress.
             function armRetired(){
-                if(!device)return;
+                if(!device||pendingFence)return;
                 const now=currentFrame(),eligible=[];
-                for(const rec of retired){
-                    if(rec.dead||rec.armed||now-rec.retireFrame<2)continue;
-                    rec.armed=true;eligible.push(rec);
-                }
+                for(const rec of retired){if(!rec.dead&&!rec.armed&&now-rec.retireFrame>=2){rec.armed=true;eligible.push(rec);}}
                 if(!eligible.length)return;
                 const owner=device,ownerGeneration=generation;
                 let done;
@@ -3457,6 +3497,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                     return;
                 }
                 fenceRequests++;fencedBuffers+=eligible.length;largestFenceBatch=Math.max(largestFenceBatch,eligible.length);
+                pendingSince=nowMs();
+                const marker={owner,ownerGeneration};pendingFence=marker;
                 Promise.resolve(done).then(()=>{
                     for(const rec of eligible){
                         if(rec.dead)continue;
@@ -3465,10 +3507,31 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                         rec.lastUsedFrame=currentFrame();ready.push(rec);readyBytes+=rec.size;promotions++;
                     }
                     if(device===owner&&generation===ownerGeneration)prune();
-                }).catch(()=>{
+                },()=>{
                     fenceFailures++;
                     for(const rec of eligible){removeRetired(rec);destroyRec(rec);}
+                }).finally(()=>{
+                    if(pendingFence!==marker)return;
+                    pendingFence=null;pendingSince=0;throttleActive=false;
+                    armRetired(); // A new batch may have accumulated behind the first fence.
+                    try{requestMainCanvasRender();}catch(_){}
                 });
+            }
+            function shouldThrottle(){
+                armRetired();
+                const over=retiredBytes>=PRESSURE_BYTES||retired.length>=PRESSURE_BUFFERS;
+                // A new frame may be needed to age a buffer by two frames. Only block
+                // when a completion fence is already in flight and backlog is excessive.
+                throttleActive=!!(pendingFence&&over);
+                if(throttleActive){
+                    stalledFrames++;
+                    const elapsed=nowMs()-pendingSince;
+                    if(elapsed>=STALL_WARNING_MS&&nowMs()-lastWarningAt>=STALL_WARNING_MS){
+                        lastWarningAt=nowMs();stallWarnings++;
+                        try{console.warn('[Somata GPU backpressure] Rendering paused; GPU completion fence is delayed.',{retiredBytes,retiredBuffers:retired.length,pendingMs:Math.round(elapsed)});}catch(_){}
+                    }
+                }
+                return throttleActive;
             }
             function acquire(dev,gen,size,usage,label='SpiroStar recycled GPU buffer'){
                 acquires++;if(!sync(dev,gen))return null;armRetired();const need=align256(size),use=Number(usage)||0;let best=-1,bestSize=Infinity;
@@ -3481,8 +3544,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 const size=Math.max(0,Number(buffer.size)||0),usage=Number(buffer.usage)||0;if(!size||!usage){try{buffer.destroy?.();}catch(_){}return false;}
                 const rec={buffer,size,usage,device,generation,retireFrame:currentFrame(),lastUsedFrame:currentFrame(),armed:false,dead:false};retired.push(rec);retiredBytes+=size;recycles++;armRetired();return true;
             }
-            function status(){armRetired();const lim=limits();return{generation,readyBuffers:ready.length,retiredBuffers:retired.length,readyBytes,retiredBytes,limitBuffers:lim.count,limitBytes:lim.bytes,acquires,hits,misses,recycles,promotions,destroys,prunes,resets,fenceRequests,fencedBuffers,largestFenceBatch,fenceFailures,policy:'best-fit usage-compatible VRAM recycler; 2-frame retirement + queue.onSubmittedWorkDone safety; pressure-aware sticky pool; no shader/bind-layout changes'};}
-            return{acquire,recycle,reset,status};
+            function status(){armRetired();const lim=limits();return{generation,readyBuffers:ready.length,retiredBuffers:retired.length,readyBytes,retiredBytes,limitBuffers:lim.count,limitBytes:lim.bytes,pressureBytes:PRESSURE_BYTES,pressureBuffers:PRESSURE_BUFFERS,throttleActive,pendingFence:!!pendingFence,pendingFenceMs:pendingFence?Math.round(nowMs()-pendingSince):0,stalledFrames,stallWarnings,acquires,hits,misses,recycles,promotions,destroys,prunes,resets,fenceRequests,fencedBuffers,largestFenceBatch,fenceFailures,policy:'single in-flight GPU fence; bounded new frame submissions under retired-buffer pressure; never destroy pending buffers'};}
+            return{acquire,recycle,reset,status,shouldThrottle};
         })();
         window.__spiroGPUBufferRecyclerStatus=()=>WebGPUBufferRecycler.status();
 

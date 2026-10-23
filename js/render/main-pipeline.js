@@ -887,6 +887,10 @@ window.__somataSpiralTrace=()=>{
 };
 
 function renderMainCanvas() {
+    // Do not queue another expensive frame when the GPU is not retiring buffers.
+    // The animation scheduler may continue to advance time; presentation resumes on fence completion.
+    if (typeof WebGPUDeviceHub!=='undefined' && WebGPUDeviceHub.shouldThrottle()) return;
+    if (typeof WebGPUBufferRecycler!=='undefined' && WebGPUBufferRecycler.shouldThrottle()) return;
     if (renderPerf.rendering) return;
     renderPerf.rendering = true;
     const renderStartedAt = performance.now();
