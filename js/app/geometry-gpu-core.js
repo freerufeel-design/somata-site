@@ -8827,6 +8827,8 @@ fn markerSd(p:vec2<f32>)->f32{
             {button:'audioGroupSweep',menu:'audioGroupSweepMenu',label:'Проблеск',group:'Проблеск',match:d=>d.group==='Проблеск'},
             {button:'audioGroupLightning',menu:'audioGroupLightningMenu',label:'Молния',group:'Молния',match:d=>d.group==='Молния'},
             {button:'audioGroupCorridor',menu:'audioGroupCorridorMenu',label:'Коридор',group:'Коридор',match:d=>d.group==='Коридор'},
+            {button:'audioGroupAmbient',menu:'audioGroupAmbientMenu',label:'Амбиенты',group:'Амбиенты',match:d=>d.group==='Амбиенты'},
+            {button:'audioGroupPrism',menu:'audioGroupPrismMenu',label:'Преломление',group:'Преломление',match:d=>d.group==='Преломление'},
             {button:'audioGroupPalette',menu:'audioGroupPaletteMenu',label:'Палитра',group:'Палитра',match:d=>d.group==='Палитра'},
             {button:'audioGroupLineMotion',menu:'audioGroupLineMotionMenu',label:'Подвижная линия',group:'Подвижная линия',match:d=>d.group==='Подвижная линия'},
             {button:'audioGroupSprite',menu:'audioGroupSpriteMenu',label:'Спрайт линии',group:'Спрайт линии',match:d=>d.group==='Спрайт линии'},

@@ -294,7 +294,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
         }
 
         function shouldDrawTunnelEffectCopy(kind,copy,frameCtx,localFootprint=1){
-            if(!state.tunnel.active)return true;
+            if(!state.tunnel.active||kind==='sweep')return true; // Preserve moving glint on every visible Corridor copy, even tiny ones.
             const screenScale=getTunnelEffectScreenScale(copy,frameCtx);
             const footprintPx=Math.max(0,Number(localFootprint)||0)*screenScale;
             const radiusPx=Math.max(0,Number(frameCtx?.layerExtent)||0)*Math.max(.001,Number(frameCtx?.audioScale)||1)*Math.max(.001,Number(state.zoom)||1)*Math.abs(Number(copy?.scale)||0);
@@ -307,7 +307,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
         }
 
         function shouldDrawTunnelEffectIndex(kind,index,frameCtx,localFootprint=1){
-            if(!state.tunnel.active)return true;
+            if(!state.tunnel.active||kind==='sweep')return true; // Copy visibility/alpha is handled by the draw and GPU-pack stages.
             const m=frameCtx?.instanceMetrics?.[index];if(!m)return shouldDrawTunnelEffectCopy(kind,frameCtx?.visibleInstances?.copies?.[index],frameCtx,localFootprint);
             const footprintPx=Math.max(0,Number(localFootprint)||0)*m.screenScale;let keep=true;
             if(kind==='web')keep=m.radiusPx>=1.35&&footprintPx>=.16;else if(kind==='sweep')keep=m.radiusPx>=1.15&&footprintPx>=.16;else keep=m.radiusPx>=1.05&&footprintPx>=.18;

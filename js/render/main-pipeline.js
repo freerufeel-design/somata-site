@@ -370,6 +370,7 @@ function prepareMainLayerFrame(renderFrame, layerIndex) {
     frameCtx.now = renderFrame.now;
     if (!SomataMorphProviderService.resolveFrameSource(frameCtx, renderFrame)) return null;
     prepareMainLayerMorphState(frameCtx, renderFrame);
+    try{window.SomataTestMorph?.applyFrame?.(frameCtx,renderFrame.now);}catch(error){console.warn('[Somata Test Morph] skipped',error);}
     prepareMainLayerTransformAndStyle(frameCtx, renderFrame);
     prepareMainLayerGeometry(frameCtx);
     prepareMainLayerInstances(frameCtx, renderFrame);
@@ -796,6 +797,12 @@ function finishMainRenderFrame(renderStartedAt,renderFrame){
         renderPerf.currentFramePhases=null;
     }
     renderPerf.rendering=false;
+    // Notify the independent optical overlay only AFTER WebGPU composition for
+    // this frame has been submitted. The foreground must sample this frame,
+    // not the previous one prepared by the pre-paint animation task.
+    try{window.SomataAmbientPrism?.afterScenePaint?.(paintNow,renderFrame?.id);}catch(err){
+        console.error('[Somata 3D optical post-scene render]',err);
+    }
 }
 
 window.__spiroReportFillStatus=()=>{

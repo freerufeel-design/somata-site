@@ -1,3 +1,51 @@
+## 8.20.11 — Crystal / spherical refraction / controls
+
+Run `node tests/v8211-crystal-controls-sphere-skull-regression.js` then `node tests/v8211-real-crystal-ui-regression.js`; follow with `v8207-optical-webgpu-glass-regression.js`, `v8204-ambient-multipliers-blue-corridor-pkm-regression.js`, `v7122-shared-parameter-matrix-parity-regression.js` and `static-modules.js`. New regression checks smooth spherical geometry, removal of per-component square refraction cutoff, independent crystal light and fill parameters, WebGPU uniform impact, log multiplier UI and shape navigation via actual click. Hardware optical-pixel certification remains manual.
+
+## 8.20.10 — актуальный WebGPU-захват **после** каждого основного кадра
+
+1. `node tests/v8210-dynamic-optical-live-scene-regression.js` — обязательная регрессия: независимая неподвижная стеклянная сфера обновляет изображение при Morph/Corridor без мыши; кадр захватывается после `finishMainRenderFrame`, не перед `renderMainCanvas`; подавляются старые pre-paint WebGPU-захваты.
+2. `python tests/v8210-dynamic-optical-canvas-browser.py` — Chromium проверка реальных пикселей последовательных Canvas2D-кадров без мыши. Не является сертификацией shader output на NVIDIA.
+3. Затем `v8209-optical-screen-parity-multicanvas-regression.js`, `v8208-webgpu-scene-copydst-renderattachment-regression.js`, `v8207-optical-webgpu-glass-regression.js`, `v8204-ambient-multipliers-blue-corridor-pkm-regression.js`, `v7122-shared-parameter-matrix-parity-regression.js`, `static-modules.js`.
+
+Подробности: `RELEASE_8.20.10.md`.
+
+## 8.20.9 — экранно привязанная 3D-рефракция и захват композитной сцены
+
+`node tests/v8209-optical-screen-parity-multicanvas-regression.js` — обязательная регрессия: нулевое преломление выбирает исходный экранный пиксель, двухповерхностный Snell меняет относительную UV (не абсолютную позицию мировой плоскости), видимые Canvas2D/WebGPU-поверхности собираются в правильном z-order, скрытые не копируются, CSS-расположение и alpha/blend учитываются. Дополнительная проверка в Chromium через реальный Canvas2D подтвердила пиксели двухслойной композиции. Аппаратная проверка WGSL-пикселей и FPS NVIDIA остаётся отдельным обязательным шагом. Подробнее: `RELEASE_8.20.9.md`.
+
+## 8.20.8 — исправление WebGPU загрузки фона в стекло
+
+- `node tests/v8208-webgpu-scene-copydst-renderattachment-regression.js` — воспроизводит Dawn `Destination texture needs to have CopyDst and RenderAttachment usage`, требует `COPY_DST | RENDER_ATTACHMENT | TEXTURE_BINDING`, проверяет два последовательных реальных scene uploads вместо чёрного fallback.
+- `node tests/v8207-optical-webgpu-glass-regression.js` — Snell/RGB, оптический pipeline и обновление uniforms; `node tests/v8206-basic-glass-when-optics-fails-regression.js` — аварийный резервный материал.
+- Проверка NVIDIA WebGPU на окончательные пиксели рефракции и отсутствия uncaptured errors остаётся обязательной.
+
+## 8.20.7 — реальный optical WGSL вместо резервного синего материала
+
+- `node tests/v8207-optical-webgpu-glass-regression.js` — обязательная регрессия дублирования `@builtin(position)` в fragment input; дополнительно Snell/RGB, загрузка фоновой текстуры, GPU-bindings, динамические параметры.
+- Сохраняются `v8206-basic-glass-when-optics-fails-regression.js` и `v8205-webgpu-optics-modes-regression.js`.
+- Hardware pixel validation на NVIDIA обязательно; mock WebGPU не подтверждает итоговую картинку.
+
+# 8.20.6 — WebGPU sphere visibility / compositor bridge / sidebar icon state
+
+Run `node tests/v8205-webgpu-optics-modes-regression.js`, `node tests/v8206-basic-glass-when-optics-fails-regression.js`, `node tests/v8206-glass-sphere-visibility-and-icons-regression.js`, `node tests/v8205-ui-mode-browser-regression.js`, `node tests/v8204-real-ui-multipliers-contextmenu-regression.js`, `node tests/v8203-independent-3d-and-corridor-glint-regression.js`, and `node tests/static-modules.js`.
+
+The device mock tests validate GPU submission and error recovery; Chromium harness tests validate real UI behavior without hardware WebGPU. A physical WebGPU screenshot and actual 3D refraction on the user's GPU remain essential before visual PASS.
+
+# 8.20.4 — Ambients/Prism multipliers, Blue defaults, Corridor Glint, ПКМ
+
+`node tests/v8204-ambient-multipliers-blue-corridor-pkm-regression.js` checks all 25 multiplier controls, parent-child Parameter Matrix routing, Blue normalizeSizes default, shader pixel-floor safeguards and single contextmenu handler.
+
+`node tests/v8204-real-ui-multipliers-contextmenu-regression.js` runs Chromium real contextmenu actions (exactly one toggle), verifies select→live numeric state, main matrix and Blue default. Run with `node tests/v7122-shared-parameter-matrix-parity-regression.js`, `node tests/v8200-ambient-prism-test-morph-corridor-regression.js`, `node tests/v8203-independent-3d-and-corridor-glint-regression.js`, `node tests/static-modules.js`. Hardware NVIDIA WebGPU visual check remains required.
+
+# 8.20.1 — foreground glass silhouettes / sphere / 3D mesh adapter
+
+`node tests/v8201-prism-render-commands-regression.js` checks all six shapes and that they create surface/mesh, refraction/clipping and edge commands using the actual production module, in a stub Canvas context. It also validates the bounded 3D mesh adapter. This does not verify physical WebGPU output or actual screen pixels. Full Chromium legibility test `tests/v8201-prism-legibility-regression.js` requires a working browser harness and is not certified in this environment.
+
+# 8.20.0 — Corridor depth curve / ambients / refraction / geometry test-morph
+
+`node tests/v8200-ambient-prism-test-morph-corridor-regression.js` tests real UI interactions, shared Matrix membership, monotonic centered Corridor scale, Canvas pixels for rain and all five refractive foreground shapes, and authored-vs-frame isolation for test-morph. Software Chromium PASS is not hardware WebGPU certification.
+
 ## 8.9.0 — ordinary Corridor / Glow-Base Canvas vector replay
 
 - `node tests/v890-vector-replay-pixel-performance-regression.js` — five full Canvas pixel comparisons against the legacy replay, including rotated copies, override styles, fill suppression and local non-identity transforms. Timings are supplemental and do not certify hardware FPS.
@@ -165,3 +213,31 @@ node tests/v819-palette-lookup-benchmark.js
 
 - V8.19.3: `node tests/v8193-orange-explicit-routes-regression.js` — Orange changes only explicitly routed layer parameters and persists an empty binding list.
 - V8.19.3: `node tests/v8193-orange-special-row-style-regression.js` — real CSS parity for Forma/Orbits in Blue and Orange.
+
+## Somata 8.20.0 — Corridor depth curve, Ambient, Prism, Test-Morph
+
+`node tests/v8200-ambient-prism-test-morph-corridor-regression.js` — headless Chromium: real controls, shared registry and subcontrols, base Corridor parity at 0%, widening/narrowing and stable midpoint; rain render pixels, transparent foreground and frame-only Test-Morph geometry change without authored mutation. Supplement with physical GPU verification, repeated Morph/Spiral and FPS. See `RELEASE_8.20.0.md` for explicitly experimental limitations.
+
+
+### 8.20.5: WebGPU optical layer and 2D/3D split
+
+- `node tests/v8205-webgpu-optics-modes-regression.js` — shader interfaces, WebGPU-only resource/command path and 6 mesh draws (mock device).
+- `node tests/v8205-ui-mode-browser-regression.js` — real Chromium UI mode switch and OFF startup.
+- The historic v8203 WebGL2 mock test is **superseded** by v8205 WebGPU tests. v8200 2D tests now explicitly select `legacy` overlay.
+- A real-device pixel capture with WebGPU on NVIDIA remains mandatory for visual refraction/dispersive acceptance.
+
+
+### 8.20.12 — компактная фигура, честные множители, длина проблеска 3%
+`node tests/v8212-prism-controls-and-glint-regression.js`
+`node tests/v8212-prism-browser-controls-regression.js`
+Проверяется DOM → state → GPU uniform, отсутствие saturation на ×9, отбрасывание множителей параметров с физическим пределом 0–100, отдельное значение пресета проблеска. Сохранённые проекты с собственными значениями не обнуляются.
+
+
+### 8.20.13 — rain actual speed/density; immediate optical repaint
+
+`node tests/v8213-ambient-rain-prism-activation-regression.js` checks real Chromium contextmenu on skull → main scheduler invalidate, real Canvas rain commands at ×1/×8 density, motion at ×1/×8 speed and static zero speed; removed rain angle/opacity multipliers from UI/registry/matrix and retained old project effective values. Ambient sliders match the compact prism/Lamp layout.
+
+### 8.20.14 — ambient compositor ordering + continuous rain + real color split + moving clouds + spiritual pressure
+
+Mandatory new regression: `node tests/v8214-ambients-compositor-and-effects-regression.js`.
+It checks actual Chromium Canvas pixels for both 2/3-color dichotomy and rainbow dichotomy, rain coverage across five viewport bands, cloud geometry scaling x1/x8 and x0 velocity freeze, independent Reiatsu energy strokes versus original Earthquake rings, context-menu-independent "Поверх линзы" live stacking (z7/z10) and optical capture exclusion, vignette multiplier opacity at a real screen pixel even with Corridor active, and reset of earthquake translations. `node tests/v8213-ambient-rain-prism-activation-regression.js` also remains mandatory for baseline rain velocity/density and 3D on-click repaint. `node tests/v7122-shared-parameter-matrix-parity-regression.js` checks Blue/Orange/Audio matrix parity. Browser screenshots under hardware WebGPU are still required for final visual certification; the Chromium tests prove the 2D compositor pixels, not GPU pixels on NVIDIA.

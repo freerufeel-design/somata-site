@@ -2308,7 +2308,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(spectral){for(const item of rails){let first=true;for(const seg of item.rail.segments||[]){const c=glintSegmentToCubic(seg,first||seg.breakBefore===true);if(c){cubics.push(c);first=false;}}}}
             else{
                 const mode=['perSegment','everyNth','across','perPath','whole'].includes(cfg?.mode)?cfg.mode:'whole';if(mode==='across')return null;
-                const lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg?.lengthPercent)||18,layerIndex)/100));
+                const lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg?.lengthPercent)||3,layerIndex)/100));
                 if(mode==='perSegment'||mode==='everyNth'){
                     const nth=Math.max(2,Math.min(24,Math.round(Number(cfg?.everyN)||2))),localPhase=1-Math.abs(2*phase-1);let global=0;
                     for(const item of rails){for(const seg of item.rail.segments||[]){const use=mode==='perSegment'||global%nth===0;global++;if(!use||!(seg._length>0))continue;const len=Math.max(1e-6,seg._length*lenFrac),center=localPhase*seg._length,a=Math.max(0,center-len*.5),b=Math.min(seg._length,center+len*.5);if(b<=a+1e-8)continue;const t0=exactLightningParamAtDistance(seg,a),t1=exactLightningParamAtDistance(seg,b),cut=exactLightningSliceSegment(seg,t0,t1),c=glintSegmentToCubic(cut,true);if(c)cubics.push(c);}}
@@ -2328,7 +2328,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
 
         function getLightningFlashLengthPercent(cfg,layerIndex=-1){
             normalizeSweepConfig(cfg);
-            const base=Number.isFinite(Number(cfg?.lengthPercent))?Number(cfg.lengthPercent):18;
+            const base=Number.isFinite(Number(cfg?.lengthPercent))?Number(cfg.lengthPercent):3;
             return Math.max(1,Math.min(100,audioApplyNumeric('lightning.flashLength',base,layerIndex)));
         }
         function lightningSmooth01(value){
@@ -2679,7 +2679,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             for(const path of visible||[])for(const p of path?.points||[]){if(!Number.isFinite(p.x)||!Number.isFinite(p.y))continue;minX=Math.min(minX,p.x);maxX=Math.max(maxX,p.x);minY=Math.min(minY,p.y);maxY=Math.max(maxY,p.y);}
             const out=targetPieces||[];
             if(!Number.isFinite(minX)||maxX<=minX||!Number.isFinite(minY))return out;
-            const span=Math.max(1,maxX-minX),band=Math.max(8,span*Math.max(.015,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg.lengthPercent)||18,layerIndex)/100))),half=band*.5;
+            const span=Math.max(1,maxX-minX),band=Math.max(8,span*Math.max(.015,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg.lengthPercent)||3,layerIndex)/100))),half=band*.5;
             const travel=1-Math.abs(2*phase-1),cx=minX+(maxX-minX)*travel;
             for(const path of visible||[]){const pts=path?.points||[];if(pts.length<2)continue;const segCount=path.closed?pts.length:pts.length-1;
                 for(let si=0;si<segCount;si++){const a=pts[si],b=pts[(si+1)%pts.length];if(!a||!b)continue;const dx=b.x-a.x;
@@ -2696,7 +2696,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
 
         function getPreparedCanonicalSweepFrame(paths,layer,phase,now,cfg=currentSweepConfig(layer),layerIndex=-1){
             const visible=paths?.__somataFrameContour===true?paths:prepareWebVisiblePaths(paths,layer),table=buildPathLengthTable(visible);
-            const lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg?.lengthPercent)||18,layerIndex)/100));return{now,paths,layer,visible,table,canonicalGPU:true,mode:cfg?.mode,phase,layerIndex,lenFrac};
+            const lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg?.lengthPercent)||3,layerIndex)/100));return{now,paths,layer,visible,table,canonicalGPU:true,mode:cfg?.mode,phase,layerIndex,lenFrac};
         }
 
         function getPreparedSweepFrame(paths,layer,phase,now,cfg=currentSweepConfig(layer),layerIndex=-1){
@@ -2705,7 +2705,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(hit&&hit.now===now&&hit.paths===paths&&hit.layer===layer&&hit.signature===signature)return hit;
             const visible=paths?.__somataFrameContour===true?paths:prepareWebVisiblePaths(paths,layer);
             const scratch=resetEffectPieceScratch(sweepGeometryScratch),pieces=scratch.pieces;
-            const lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg.lengthPercent)||18,layerIndex)/100));
+            const lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg.lengthPercent)||3,layerIndex)/100));
             if(visible?.length){
                 if(cfg.mode==='across'){
                     buildAcrossFigureSweepPieces(visible,phase,pieces,scratch,cfg,layerIndex);
@@ -3890,9 +3890,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             requestMainCanvasRender();
         }
         function setSidebarMode(mode) {
-            state.sidebarMode = ['shape','lines','lamps','web','sweep','lightning','particles','motion','palette','fourier'].includes(mode) ? mode : 'shape';
+            state.sidebarMode = ['shape','lines','lamps','web','sweep','lightning','particles','motion','palette','fourier','ambient','prism'].includes(mode) ? mode : 'shape';
             const aside=document.getElementById('settingsSidebar');
-            ['shape','lines','lamps','web','sweep','lightning','particles','motion','palette','fourier'].forEach(name=>aside?.classList.toggle(`sidebar-mode-${name}`,state.sidebarMode===name));
+            ['shape','lines','lamps','web','sweep','lightning','particles','motion','palette','fourier','ambient','prism'].forEach(name=>aside?.classList.toggle(`sidebar-mode-${name}`,state.sidebarMode===name));
             document.querySelectorAll('[data-sidebar-mode]').forEach(btn=>{const on=btn.dataset.sidebarMode===state.sidebarMode;btn.classList.toggle('active',on);btn.setAttribute('aria-pressed',on?'true':'false');});
             if(state.sidebarMode==='palette'&&typeof renderPlaylistPaletteStudio==='function')renderPlaylistPaletteStudio();
             syncSidebarToolStates();
@@ -4003,7 +4003,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const gp=document.getElementById('sweepGlintPrecision');if(gp)gp.value=c.flashType;const m=document.getElementById('sweepMode');if(m)m.value=c.mode;document.getElementById('sweepEveryNRow')?.classList.toggle('hidden',c.mode!=='everyNth');
             const n=document.getElementById('sweepEveryN');if(n)n.value=String(Math.max(2,Math.min(24,Math.round(Number(c.everyN)||2))));const nt=document.getElementById('sweepEveryNText');if(nt)nt.textContent=n?.value||'2';const d=document.getElementById('sweepDirection');if(d)d.value=c.direction||'forward';
             const bpm=Math.max(0,Number(state.tapTempo?.bpm)||0),syncActive=c.syncMusic!==false&&bpm>0;const sm=document.getElementById('sweepSyncMusic');if(sm)sm.checked=c.syncMusic!==false;const sp=document.getElementById('sweepSpeed');if(sp){sp.value=c.speed;sp.disabled=syncActive;sp.style.opacity=syncActive?'.42':'1';}{const v=Number(c.speedMultiplier);c.speedMultiplier=Number.isFinite(v)?Math.max(.015625,Math.min(64,v)):1;}const mul=document.getElementById('sweepSpeedMultiplier');if(mul)mul.value=String(c.speedMultiplier);const st=document.getElementById('sweepSpeedText');if(st){const mm=c.speedMultiplier;st.textContent=syncActive?`${Math.round(bpm)} BPM × ${mm.toFixed(mm%1?2:0)}`:`${Number(c.speed||.25).toFixed(2)} цикл/с × ${mm.toFixed(mm%1?2:0)}`;}
-            c.lengthPercent=Math.max(1,Math.min(100,Number.isFinite(Number(c.lengthPercent))?Number(c.lengthPercent):18));const len=document.getElementById('sweepLength');if(len)len.value=String(c.lengthPercent);const lt=document.getElementById('sweepLengthText');if(lt)lt.textContent=`${Math.round(c.lengthPercent)}%`;
+            c.lengthPercent=Math.max(1,Math.min(100,Number.isFinite(Number(c.lengthPercent))?Number(c.lengthPercent):3));const len=document.getElementById('sweepLength');if(len)len.value=String(c.lengthPercent);const lt=document.getElementById('sweepLengthText');if(lt)lt.textContent=`${Math.round(c.lengthPercent)}%`;
             c.spectralSectorDegrees=Math.max(1,Math.min(360,Number.isFinite(Number(c.spectralSectorDegrees))?Number(c.spectralSectorDegrees):45));c.spectralAngularSpeed=Math.max(-720,Math.min(720,Number.isFinite(Number(c.spectralAngularSpeed))?Number(c.spectralAngularSpeed):90));const ssd=document.getElementById('sweepSpectralSectorDegrees');if(ssd)ssd.value=String(c.spectralSectorDegrees);const ssdt=document.getElementById('sweepSpectralSectorText');if(ssdt)ssdt.textContent=`${Math.round(c.spectralSectorDegrees)}°`;const sas=document.getElementById('sweepSpectralAngularSpeed');if(sas)sas.value=String(c.spectralAngularSpeed);const sast=document.getElementById('sweepSpectralAngularSpeedText');if(sast)sast.textContent=`${Math.round(c.spectralAngularSpeed)}°/с`;
             c.widthPercent=Math.max(0,Math.min(200,Number.isFinite(Number(c.widthPercent))?Number(c.widthPercent):75));const swp=document.getElementById('sweepWidthPercent');if(swp)swp.value=String(c.widthPercent);const swpt=document.getElementById('sweepWidthText');if(swpt)swpt.textContent=`${Math.round(c.widthPercent)}%`;
             const col=document.getElementById('sweepColor');if(col)col.value=/^#[0-9a-f]{6}$/i.test(c.color||'')?c.color:'#ffffff';c.opacity=Math.max(0,Math.min(100,Number.isFinite(Number(c.opacity))?Number(c.opacity):100));const sop=document.getElementById('sweepOpacity');if(sop)sop.value=String(c.opacity);const sopt=document.getElementById('sweepOpacityText');if(sopt)sopt.textContent=`${Math.round(c.opacity)}%`;

@@ -91,7 +91,7 @@ function prepareGpuMorphArcSweepFrame(frameCtx,cfg){
     if(typeof somataGpuBackendAllowed==='function'&&!somataGpuBackendAllowed())return null;
     sweepGpuArcBridgeStats.requests++;
     if(!canUseGpuMorphArcForSweep(frameCtx,cfg)){sweepGpuArcBridgeStats.fallbacks++;sweepGpuArcBridgeStats.lastReason='renderer-or-mode';return null;}
-    const layer=frameCtx.layer,now=frameCtx.now||performance.now(),phase=getSweepMotionPhase(now,cfg),lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg?.lengthPercent)||18,frameCtx.layerIndex)/100));
+    const layer=frameCtx.layer,now=frameCtx.now||performance.now(),phase=getSweepMotionPhase(now,cfg),lenFrac=Math.max(.01,Math.min(1,audioApplyNumeric('sweep.length',Number(cfg?.lengthPercent)||3,frameCtx.layerIndex)/100));
     const baseW=Math.max(.5,Number(frameCtx.strokeWidth)||Math.max(.5,audioApplyNumeric('layer.strokeWidth',Number(layer?.strokeWidth)||1.5,frameCtx.layerIndex)*getLayerStrokeWidthMultiplier(layer))),raw=audioApplyNumeric('sweep.width',Number(cfg.widthPercent),frameCtx.layerIndex),widthPct=Number.isFinite(raw)?Math.max(0,Math.min(200,raw)):100;
     const data=frameCtx.sweepData||(frameCtx.sweepData={});data.cfg=cfg;data.layerIndex=frameCtx.layerIndex;data.paths=null;data.now=now;data.phase=phase;data.lightningPhase=0;data.lightningVector=null;data.vectorPath=null;data.canonicalGPU=false;data.gpuMorphArc=false;data.bezierGlintGPU=false;data.sweepW=baseW*widthPct/100;data.glintVisual=getGlintVisualSettings(cfg,frameCtx.layerIndex);
     const type=effectiveGlintType(cfg);

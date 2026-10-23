@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"><style>html,body{margin:0;background:#080b16;color:#fff;font-family:sans-serif}#mainContainer{position:relative;margin:0;width:1200px;height:730px;overflow:hidden;}#mainCanvas{position:absolute;left:0;top:0;width:1200px;height:730px}</style></head><body><div id="mainContainer"><canvas id="mainCanvas" width="1200" height="730"></canvas></div><script>
+window.__spiroRegisterModule=()=>{};
+window.state={ambient:{},prism:{enabled:true,shape:new URLSearchParams(location.search).get('shape')||'dodecahedron',size:260,refraction:25,dispersion:78,opacity:52,speed:15},showVignette:false};
+window.animationScheduler={has:()=>true,add:()=>{},remove:()=>{}};
+const c=document.getElementById('mainCanvas'),g=c.getContext('2d');g.fillStyle='#080b16';g.fillRect(0,0,1200,730);g.strokeStyle='#00ffd2';g.lineWidth=4;g.strokeRect(350,175,480,380);
+g.strokeStyle='#ff43d0';g.beginPath();g.arc(590,365,240,0,Math.PI*2);g.stroke();g.strokeStyle='#49bfff';g.strokeRect(400,210,350,300);
+g.font='700 52px sans-serif';g.fillStyle='#e6a64c';g.fillText('SOMATA',430,600);
+</script><script src="js/app/ambient-prism.js"></script><script>window.addEventListener('load',()=>SomataAmbientPrism.render(14500))</script></body></html>

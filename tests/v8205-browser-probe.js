@@ -1,0 +1,2 @@
+const {createBrowserHarness}=require('./lib/browser-harness');
+(async()=>{const h=await createBrowserHarness({disableGpu:false,loadDelayMs:250,evalTimeoutMs:10000});try{console.log(JSON.stringify(await h.evaluate(`(()=>{const c=document.createElement('canvas');return {gl:!!c.getContext('webgl2'),prismEnabled:state.prism.enabled,mode:state.prism.mode,ui:!!document.querySelector('[data-prism-mode="3d"]'),status:SomataPrism3D.status()}})()`)));}finally{await h.close();}})().catch(e=>{console.log(e.stack);process.exit(1)});

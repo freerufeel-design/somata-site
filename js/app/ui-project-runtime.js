@@ -76,6 +76,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const routed=audioApplyNumeric('tunnel.colorShift',morphed,-1);
             return Math.max(0,Math.min(360,Number.isFinite(Number(routed))?Number(routed):morphed));
         }
+        function getTunnelDepthCurvePercent() {
+            const authored=Math.max(-100,Math.min(100,Number(state.tunnel?.depthCurve)||0));
+            const morphed=routedGlobalMorphValue('tunnel.depthCurve',authored);
+            const routed=audioApplyNumeric('tunnel.depthCurve',morphed,-1);
+            return Math.max(-100,Math.min(100,Number.isFinite(Number(routed))?Number(routed):morphed));
+        }
         function getTunnelVignetteAmount() {
             const authored=Math.max(0,Math.min(1200,Number(state.tunnel?.vignetteAmount)||0));
             const morphed=routedGlobalMorphValue('tunnel.vignette',authored);
@@ -254,6 +260,10 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const ratio = getTunnelStepRatio(distanceFactor);
             const centerRange = getTunnelCenterRevealRange(tunnel, ratio);
             const centerHiddenCopies = centerRange.hidden;
+            const depthPercent=getTunnelDepthCurvePercent();
+            const depthBase=Math.max(0,Number.isFinite(Number(tunnel.depthCurveMultiplier))?Number(tunnel.depthCurveMultiplier):1);
+            const depthMorphed=routedGlobalMorphValue('tunnel.depthCurveMultiplier',depthBase);
+            const depthMultiplier=Math.max(0,Math.min(10,audioApplyNumeric('tunnel.depthCurveMultiplier',depthMorphed,-1)));
 
             const fadeOffsetExtra = tunnel.fadeOversize
                 ? Math.max(0, Math.min(50, Math.ceil(Number(tunnel.fadeOffsetSteps) || 0)))
@@ -270,7 +280,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             for (let i = -2; i <= count - 1 + outerExtra; i++) {
                 const position = i + phase;
                 const logScale = logMinScale + logRatio * position;
-                const scale = Math.exp(Math.max(-30, Math.min(30, logScale)));
+                const scale = depthPercent===0 ? Math.exp(Math.max(-30, Math.min(30, logScale))) :
+                    SomataCorridorDepthCurve.scale(position,count,logMinScale,logRatio,depthPercent,depthMultiplier);
                 let item = result[write];
                 if (!item) item = result[write] = {};
                 item.scale = scale;
@@ -621,6 +632,10 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const spacingStrength = document.getElementById('tunnelSpacingStrength');
             const spacingMultiplier = document.getElementById('tunnelSpacingMultiplier');
             const spacingText = document.getElementById('tunnelSpacingText');
+            const depthSlider=document.getElementById('tunnelDepthCurve');
+            const depthNumber=document.getElementById('tunnelDepthCurveNumber');
+            const depthMultiplier=document.getElementById('tunnelDepthCurveMultiplier');
+            const depthText=document.getElementById('tunnelDepthCurveText');
             const centerHiddenCopies = document.getElementById('tunnelCenterHiddenCopies');
             const defaultActive = document.getElementById('tunnelDefaultActive');
             const fadeEnabled = document.getElementById('tunnelFadeEnabled');
@@ -650,6 +665,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             if (spacingStrength) spacingStrength.value = String(spacingPct);
             if (spacingMultiplier) spacingMultiplier.value = String(spacingMult);
             if (spacingText) spacingText.textContent = `${Math.round(spacingPct)}% × ${formatDisplayNumber(spacingMult, 2)}`;
+            const depthValue=Math.max(-100,Math.min(100,Number(tunnel.depthCurve)||0));
+            const depthMult=Math.max(0,Number.isFinite(Number(tunnel.depthCurveMultiplier))?Number(tunnel.depthCurveMultiplier):1);
+            if(depthSlider)depthSlider.value=String(depthValue);
+            if(depthNumber)depthNumber.value=String(depthValue);
+            if(depthMultiplier)depthMultiplier.value=String(depthMult);
+            if(depthText)depthText.textContent=`${depthValue>0?'+':''}${depthValue}% × ${formatDisplayNumber(depthMult,2)}`;
             if (centerHiddenCopies) centerHiddenCopies.value = String(centerHiddenCount);
             if (colorShiftEnabled) colorShiftEnabled.checked = tunnel.colorShiftEnabled;
             if (colorShiftDegrees) colorShiftDegrees.value = String(tunnel.colorShiftDegrees);
@@ -672,6 +693,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             if (vignetteToggle) vignetteToggle.checked = state.showVignette === true;
             if (fadeOffset) fadeOffset.value = String(fadeOffsetValue);
             if (vignetteAmount) vignetteAmount.value = formatDisplayNumber(vignetteAmountValue, 1);
+            const vignetteLabel=document.getElementById('tunnelVignetteAmountText');if(vignetteLabel)vignetteLabel.textContent=vignetteAmountValue+' px';
             if (fadeDuration) fadeDuration.value = formatTimeSeconds(fadeDurationValue);
             if (fadeText) fadeText.textContent = `${fadeOffsetValue > 0 ? '+' : ''}${fadeOffsetValue} фиг. · ${formatTimeSeconds(fadeDurationValue)} с`;
 
@@ -687,6 +709,9 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const speedMultiplier = document.getElementById('tunnelSpeedMultiplier');
             const spacingStrength = document.getElementById('tunnelSpacingStrength');
             const spacingMultiplier = document.getElementById('tunnelSpacingMultiplier');
+            const depthSlider=document.getElementById('tunnelDepthCurve');
+            const depthNumber=document.getElementById('tunnelDepthCurveNumber');
+            const depthMultiplier=document.getElementById('tunnelDepthCurveMultiplier');
             const centerHiddenCopies = document.getElementById('tunnelCenterHiddenCopies');
             const defaultActive = document.getElementById('tunnelDefaultActive');
             const fadeEnabled = document.getElementById('tunnelFadeEnabled');
@@ -750,6 +775,18 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             spacingStrength?.addEventListener('input', syncSpacing);
             spacingMultiplier?.addEventListener('input', syncSpacing);
             spacingMultiplier?.addEventListener('change', syncSpacing);
+            const syncDepth=(source)=>{
+                const v=Math.max(-100,Math.min(100,Math.round(Number(source?.value)||0)));
+                const mult=Number(depthMultiplier?.value);
+                state.tunnel.depthCurve=v;
+                state.tunnel.depthCurveMultiplier=Math.max(0,Math.min(10,Number.isFinite(mult)?mult:1));
+                syncTunnelSettingsUI();requestMainCanvasRender();
+            };
+            depthSlider?.addEventListener('input',()=>syncDepth(depthSlider));
+            depthNumber?.addEventListener('input',()=>syncDepth(depthNumber));
+            depthNumber?.addEventListener('change',()=>syncDepth(depthNumber));
+            depthMultiplier?.addEventListener('input',()=>syncDepth(depthNumber));
+            depthMultiplier?.addEventListener('change',()=>syncDepth(depthNumber));
 
             const syncCenterShade = () => {
                 const raw = Number(centerHiddenCopies?.value);
@@ -793,6 +830,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 state.tunnel.fadeDurationSec = duration;
                 if (fadeOffset) fadeOffset.value = String(offset);
                 if (vignetteAmount) vignetteAmount.value = formatDisplayNumber(vignette, 1);
+                const vignetteLabel=document.getElementById('tunnelVignetteAmountText');if(vignetteLabel)vignetteLabel.textContent=vignette+' px';
                 if (fadeDuration) fadeDuration.value = formatTimeSeconds(duration);
                 const text = document.getElementById('tunnelFadeText');
                 if (text) text.textContent = `${offset > 0 ? '+' : ''}${offset} фиг. · ${formatTimeSeconds(duration)} с`;
@@ -1248,6 +1286,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         }
 
         function syncSidebarInputs() {
+            window.SomataTestMorph?.syncUI?.();
             const layer = state.layers.find(l => l.id === state.activeLayerId);
             if (!layer) return;
             document.getElementById('paramBgColor').value = state.bgColor;
@@ -1779,8 +1818,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             if(def.morph?.frameTarget==='global'){
                 if(def.id==='tunnel.speed')return (Number(state.tunnel?.speedStrength)||0)*100;
                 if(def.id==='tunnel.spacing')return (Number(state.tunnel?.spacingStrength)||3)*100;
+                if(def.id==='tunnel.depthCurve')return Number(state.tunnel?.depthCurve)||0;
+                if(def.id==='tunnel.depthCurveMultiplier')return (Number.isFinite(Number(state.tunnel?.depthCurveMultiplier))?Number(state.tunnel.depthCurveMultiplier):1);
+                if(def.id.startsWith('ambient.')||def.id.startsWith('prism.'))return Number(window.SomataParameterRegistry?.valueAt(state,def.morph?.framePath))||0;
                 if(def.id==='tunnel.colorShift')return Number(state.tunnel?.colorShiftDegrees)||0;
                 if(def.id==='tunnel.vignette')return Number(state.tunnel?.vignetteAmount)||0;
+                if(def.id==='tunnel.vignetteMultiplier')return Number(state.tunnel?.vignetteMultiplier)||1;
                 if(def.id==='palette.hueOffset')return Number(state.playlistPaletteHueOffset)||0;
                 return NaN;
             }
@@ -10368,8 +10411,12 @@ syncMorphProfileUI();
                 if(!def)return undefined;
                 if(def.id==='tunnel.speed')return Math.max(-100,Math.min(100,(Number(state.tunnel?.speedStrength)||0)*100));
                 if(def.id==='tunnel.spacing')return Math.max(20,Math.min(2000,(Number(state.tunnel?.spacingStrength)||3)*100));
+                if(def.id==='tunnel.depthCurve')return Math.max(-100,Math.min(100,Number(state.tunnel?.depthCurve)||0));
+                if(def.id==='tunnel.depthCurveMultiplier')return Math.max(0,Math.min(10,(Number.isFinite(Number(state.tunnel?.depthCurveMultiplier))?Number(state.tunnel.depthCurveMultiplier):1)));
+                if(def.id.startsWith('ambient.')||def.id.startsWith('prism.'))return Number(window.SomataParameterRegistry?.valueAt(state,def.morph?.framePath))||0;
                 if(def.id==='tunnel.colorShift')return Math.max(0,Math.min(360,Number(state.tunnel?.colorShiftDegrees)||0));
                 if(def.id==='tunnel.vignette')return Math.max(0,Math.min(1200,Number(state.tunnel?.vignetteAmount)||0));
+                if(def.id==='tunnel.vignetteMultiplier')return Math.max(.125,Number(state.tunnel?.vignetteMultiplier)||1);
                 if(def.id==='palette.hueOffset')return Number(state.playlistPaletteHueOffset)||0;
                 return undefined;
             }
@@ -10379,11 +10426,18 @@ syncMorphProfileUI();
                     const value=Number(raw);if(!Number.isFinite(value))continue;
                     if(id==='tunnel.speed'){state.tunnel.speedStrength=Math.max(-1,Math.min(1,value/100));changed=true;}
                     else if(id==='tunnel.spacing'){state.tunnel.spacingStrength=Math.max(.2,Math.min(20,value/100));changed=true;}
+                    else if(id==='tunnel.depthCurve'){state.tunnel.depthCurve=Math.max(-100,Math.min(100,value));changed=true;}
+                    else if(id==='tunnel.depthCurveMultiplier'){state.tunnel.depthCurveMultiplier=Math.max(0,Math.min(10,value));changed=true;}
                     else if(id==='tunnel.colorShift'){state.tunnel.colorShiftDegrees=Math.max(0,Math.min(360,value));changed=true;}
                     else if(id==='tunnel.vignette'){state.tunnel.vignetteAmount=Math.max(0,Math.min(1200,value));changed=true;}
+                    else if(id==='tunnel.vignetteMultiplier'){state.tunnel.vignetteMultiplier=Math.max(.125,value);changed=true;}
+                    else if(id.startsWith('ambient.')||id.startsWith('prism.')){
+                        const def=window.SomataParameterRegistry?.get(id),path=def?.morph?.framePath;
+                        if(path){window.SomataParameterRegistry.applyPath(state,path,Math.max(Number(def.min),Math.min(Number(def.max),def.type==='integer'?Math.round(value):value)));changed=true;}
+                    }
                     else if(id==='palette.hueOffset'){state.playlistPaletteHueOffset=normalizePlaylistHueOffset(value);changed=true;}
                 }
-                if(changed){syncPlaylistPaletteHueOffsetUI?.();syncTunnelSettingsUI?.();}
+                if(changed){syncPlaylistPaletteHueOffsetUI?.();syncTunnelSettingsUI?.();window.SomataAmbientPrism?.syncUI?.();}
                 return changed;
             }
             window.__somataApplyOrangeGlobalTargets=applyOrangeGlobalTargets;
@@ -10900,6 +10954,8 @@ syncMorphProfileUI();
                     else if(mode==='sweep')toggleSidebarFeatureWithMemory('glint');
                     else if(mode==='lightning')toggleSidebarFeatureWithMemory('lightning');
                     else if(mode==='particles')toggleSidebarFeatureWithMemory('particles');
+                    else if(mode==='ambient')window.SomataAmbientPrism?.toggleAmbient?.();
+                    else if(mode==='prism')window.SomataAmbientPrism?.togglePrism?.();
                     else if(mode==='motion')toggleMotionQuickGroup();
                     else if(mode==='fourier')setFourierMode(state.fourierMode!==true);
                 });
@@ -10939,7 +10995,7 @@ syncMorphProfileUI();
                 {const v=Number(document.getElementById('sweepSpectralSectorDegrees')?.value);sweep.spectralSectorDegrees=Number.isFinite(v)?Math.max(1,Math.min(360,v)):45;}{const v=Number(document.getElementById('sweepSpectralAngularSpeed')?.value);sweep.spectralAngularSpeed=Number.isFinite(v)?Math.max(-720,Math.min(720,v)):90;}
                 if(changedId==='sweepEffectType'&&previousEffect!=='lightning'&&sweep.effectType==='lightning'){sweep.phase=0;sweep.lastUpdate=0;sweep.currentVelocity=0;sweep.cycleCount=0;sweep.lightningPhase=0;sweep.lightningLastUpdate=0;sweep.lightningCycleCount=0;resetLightningClock(state.layers.indexOf(active),sweep,0);}
                 const mode=document.getElementById('sweepMode')?.value;sweep.mode=['perSegment','everyNth','across','perPath','whole'].includes(mode)?mode:'whole';sweep.everyN=Math.max(2,Math.min(24,Math.round(Number(document.getElementById('sweepEveryN')?.value)||2)));sweep.direction=document.getElementById('sweepDirection')?.value==='backward'?'backward':'forward';sweep.syncMusic=document.getElementById('sweepSyncMusic')?.checked!==false;sweep.speed=Math.max(.02,Math.min(2,Number(document.getElementById('sweepSpeed')?.value)||.25));{const v=Number(document.getElementById('sweepSpeedMultiplier')?.value);sweep.speedMultiplier=Number.isFinite(v)?Math.max(.015625,Math.min(64,v)):1;}
-                sweep.lengthPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLength')?.value)||18));{const v=Number(document.getElementById('sweepWidthPercent')?.value);sweep.widthPercent=Number.isFinite(v)?Math.max(0,Math.min(200,v)):75;}sweep.color=document.getElementById('sweepColor')?.value||'#ffffff';{const v=Number(document.getElementById('sweepOpacity')?.value);sweep.opacity=Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}sweep.brightness=Math.max(0,Math.min(200,Number(document.getElementById('sweepBrightness')?.value)||0));sweep.glow=Math.max(0,Number(document.getElementById('sweepGlow')?.value)||0);{const v=Number(document.getElementById('sweepGlowMultiplier')?.value);sweep.glowMultiplier=Number.isFinite(v)?Math.max(0,v):1;}{const v=Number(document.getElementById('sweepGlowIntensity')?.value);sweep.glowIntensity=Number.isFinite(v)?Math.max(0,Math.min(200,v)):100;}{const v=Number(document.getElementById('sweepGlowIntensityMultiplier')?.value);sweep.glowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;}sweep.softness=Math.max(0,Math.min(150,Number(document.getElementById('sweepSoftness')?.value)||0));{const v=Number(document.getElementById('sweepSoftnessMultiplier')?.value);sweep.softnessMultiplier=Number.isFinite(v)?Math.max(0,v):1;}
+                sweep.lengthPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLength')?.value)||3));{const v=Number(document.getElementById('sweepWidthPercent')?.value);sweep.widthPercent=Number.isFinite(v)?Math.max(0,Math.min(200,v)):75;}sweep.color=document.getElementById('sweepColor')?.value||'#ffffff';{const v=Number(document.getElementById('sweepOpacity')?.value);sweep.opacity=Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}sweep.brightness=Math.max(0,Math.min(200,Number(document.getElementById('sweepBrightness')?.value)||0));sweep.glow=Math.max(0,Number(document.getElementById('sweepGlow')?.value)||0);{const v=Number(document.getElementById('sweepGlowMultiplier')?.value);sweep.glowMultiplier=Number.isFinite(v)?Math.max(0,v):1;}{const v=Number(document.getElementById('sweepGlowIntensity')?.value);sweep.glowIntensity=Number.isFinite(v)?Math.max(0,Math.min(200,v)):100;}{const v=Number(document.getElementById('sweepGlowIntensityMultiplier')?.value);sweep.glowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;}sweep.softness=Math.max(0,Math.min(150,Number(document.getElementById('sweepSoftness')?.value)||0));{const v=Number(document.getElementById('sweepSoftnessMultiplier')?.value);sweep.softnessMultiplier=Number.isFinite(v)?Math.max(0,v):1;}
                 sweep.lightningProfileShape=document.getElementById('sweepLightningProfileShape')?.value==='line'?'line':'current';const lbehavior=document.getElementById('sweepLightningBehavior')?.value;sweep.lightningBehavior=normalizeLightningBehaviorValue(lbehavior,'symmetric');const lprecision=document.getElementById('sweepLightningPrecision')?.value;sweep.lightningPrecision=normalizeLightningPrecisionValue(lprecision);const lmode=document.getElementById('sweepLightningMode')?.value;sweep.lightningMode=['perSegment','everyNth','across','perPath','whole'].includes(lmode)?lmode:'perPath';sweep.lightningEveryN=Math.max(2,Math.min(24,Math.round(Number(document.getElementById('sweepLightningEveryN')?.value)||2)));sweep.lightningRandomPosition=document.getElementById('sweepLightningRandomPosition')?.checked===true;sweep.lightningColor=document.getElementById('sweepLightningColor')?.value||'#ffffff';sweep.lightningSecondaryColor=document.getElementById('sweepLightningSecondaryColor')?.value||'#7dd3fc';sweep.lightningSegmentPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLightningSegmentPercent')?.value)||100));
                 {const v=Number(document.getElementById('sweepLightningRatePercent')?.value);sweep.lightningRatePercent=Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}{const v=Number(document.getElementById('sweepLightningRateMultiplier')?.value);sweep.lightningRateMultiplier=Number.isFinite(v)?Math.max(0,v):1;}if(lightningRateSyncEnabled())syncLightningRateValuesFrom(sweep);sweep.lightningDurationMs=Math.max(30,Math.min(700,Number(document.getElementById('sweepLightningDuration')?.value)||480));sweep.lightningWidthPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLightningWidthPercent')?.value)||64));
                 const linked=document.getElementById('sweepLightningUseGlintMultiplier')?.checked!==false;sweep.lightningUseGlintMultiplier=linked;{const v=Number(document.getElementById('sweepLightningGlintMultiplier')?.value);sweep.lightningGlintMultiplier=Number.isFinite(v)?Math.max(0,v):2;}
@@ -11542,6 +11598,8 @@ syncMorphProfileUI();
             state.tunnel.speedMultiplier = 1;
             state.tunnel.spacingStrength = 3;
             state.tunnel.spacingMultiplier = 1;
+            state.tunnel.depthCurve = 0;
+            state.tunnel.depthCurveMultiplier = 1;
             state.tunnel.centerHiddenCopies = TUNNEL_CENTER_HIDDEN_DEFAULT;
             state.tunnel.colorShiftEnabled = false;
             state.tunnel.colorShiftDegrees = 30;
@@ -11551,6 +11609,7 @@ syncMorphProfileUI();
             state.tunnel.fadeOversize = true;
             state.tunnel.fadeOffsetSteps = 3;
             state.tunnel.vignetteAmount = TUNNEL_VIGNETTE_DEFAULT_PX;
+            state.tunnel.vignetteMultiplier=1;
             state.tunnel.vignetteUnit = 'px';
             state.tunnel.fadeDurationSec = 3;
             state.tunnel.optimizedCalculation = true;
@@ -11584,7 +11643,7 @@ syncMorphProfileUI();
             state.audioReactive.effectsAmplitudeStrength = 50;
             state.audioReactive.effectsAmplitudeMultiplier = 1;
             state.lightningRateSync = true;
-            for(const layer of state.layers)Object.assign(getLayerSweepConfig(layer), {  flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, lengthPercent:18, widthPercent:75, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2,
+            for(const layer of state.layers)Object.assign(getLayerSweepConfig(layer), {  flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, lengthPercent:3, widthPercent:75, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2,
                 lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningRandomPosition:true,
                 lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', 
                 lightningSegmentPercent:100,  lightningRatePercent:100, lightningRateMultiplier:1,
@@ -11788,6 +11847,9 @@ syncMorphProfileUI();
                     web: cloneData(getLayerWebConfig(getActiveEffectLayer())),
                     lineOutline: cloneData(state.lineOutline),
                     lamps: cloneData(state.lamps),
+                    ambient: cloneData(state.ambient),
+                    ambientOverPrism:state.ambientOverPrism===true,
+                    prism: cloneData(state.prism),
                     zoom: camera.zoom,
                     panX: camera.panX,
                     panY: camera.panY,
@@ -11801,6 +11863,8 @@ syncMorphProfileUI();
                         speedMultiplier: state.tunnel.speedMultiplier,
                         spacingStrength: state.tunnel.spacingStrength,
                         spacingMultiplier: state.tunnel.spacingMultiplier,
+                        depthCurve: state.tunnel.depthCurve,
+                        depthCurveMultiplier: state.tunnel.depthCurveMultiplier,
                         centerHiddenCopies: normalizeTunnelCenterHiddenCopies(state.tunnel),
                         colorShiftEnabled: state.tunnel.colorShiftEnabled === true,
                         colorShiftDegrees: state.tunnel.colorShiftDegrees,
@@ -11809,6 +11873,7 @@ syncMorphProfileUI();
                         fadeOversize: state.tunnel.fadeOversize,
                         fadeOffsetSteps: state.tunnel.fadeOffsetSteps,
                         vignetteAmount: state.tunnel.vignetteAmount,
+                        vignetteMultiplier:state.tunnel.vignetteMultiplier??1,
                         vignetteUnit: 'px',
                         fadeDurationSec: state.tunnel.fadeDurationSec,
                         optimizedCalculation: state.tunnel.optimizedCalculation !== false
@@ -12792,13 +12857,15 @@ syncMorphProfileUI();
         function applyProjectMorphTunnelFrame(frame) {
             if (!frame || typeof frame !== 'object') return;
             const t=state.tunnel;
-            for (const key of ['speedStrength','speedMultiplier','spacingStrength','spacingMultiplier','centerHiddenCopies','colorShiftEnabled','colorShiftDegrees','paletteLagEnabled','fadeOversize','fadeOffsetSteps','vignetteAmount','vignetteUnit','fadeDurationSec']) {
+            for (const key of ['speedStrength','speedMultiplier','spacingStrength','spacingMultiplier','depthCurve','depthCurveMultiplier','centerHiddenCopies','colorShiftEnabled','colorShiftDegrees','paletteLagEnabled','fadeOversize','fadeOffsetSteps','vignetteAmount','vignetteUnit','fadeDurationSec']) {
                 if (Object.prototype.hasOwnProperty.call(frame,key)) t[key]=cloneData(frame[key]);
             }
             t.speedStrength=Math.max(-1,Math.min(1,Number(t.speedStrength)||0));
             t.speedMultiplier=Math.max(0,Number(t.speedMultiplier)||0);
             t.spacingStrength=Math.max(.01,Number(t.spacingStrength)||.01);
             t.spacingMultiplier=Math.max(0,Number(t.spacingMultiplier)||0);
+            t.depthCurve=Math.max(-100,Math.min(100,Number(t.depthCurve)||0));
+            t.depthCurveMultiplier=Math.max(0,Number.isFinite(Number(t.depthCurveMultiplier))?Number(t.depthCurveMultiplier):1);
             normalizeTunnelCenterHiddenCopies(t);
             normalizeTunnelColorShiftState(t);
             t.vignetteAmount=Math.max(0,Math.min(1200,Number(t.vignetteAmount)||0));t.vignetteUnit='px';
@@ -13812,7 +13879,7 @@ syncMorphProfileUI();
                 state.sweep.speed=Math.max(.02,Math.min(2,Number(state.sweep.speed)||.25));
                 state.sweep.speedMultiplier=Math.max(0,Number.isFinite(Number(state.sweep.speedMultiplier))?Number(state.sweep.speedMultiplier):1);
                 state.sweep.syncMusic=state.sweep.syncMusic!==false;
-                state.sweep.lengthPercent=Math.max(1,Math.min(100,Number(state.sweep.lengthPercent)||18));
+                state.sweep.lengthPercent=Math.max(1,Math.min(100,Number(state.sweep.lengthPercent)||3));
                 state.sweep.widthPercent=Math.max(0,Math.min(200,Number.isFinite(Number(state.sweep.widthPercent))?Number(state.sweep.widthPercent):75));
                 state.sweep.color=/^#[0-9a-f]{6}$/i.test(state.sweep.color||'')?state.sweep.color:'#ffffff';
                 state.sweep.opacity=Math.max(0,Math.min(100,Number.isFinite(Number(state.sweep.opacity))?Number(state.sweep.opacity):100));
@@ -13967,6 +14034,19 @@ syncMorphProfileUI();
             for(const layer of state.layers){if(!layer.lamps||typeof layer.lamps!=='object')layer.lamps=cloneLampConfig(state.lamps);ensureLayerLampState(layer);}
             try{LampGPURenderer?.resetFreezeAll?.();}catch(_){}
             applyProjectCameraSettings(settings);
+            const defaultAmbient={rain:{enabled:false,angle:14,density:70,color:'#a6c8ff',hue:0,opacity:55,speed:170},dichotomy:{enabled:false,count:2,offset:6,opacity:30,hue:0,colorA:'#ff4089',colorB:'#0ce4ff',colorC:'#ffe176'},rainbow:{enabled:false,offset:6,strength:40},reiatsu:{enabled:false,strength:25,speed:100},earthquake:{enabled:false,strength:25,speed:100},clouds:{enabled:false,density:42,color:'#acc5e7',hue:0,opacity:24,speed:12}};
+            state.ambientOverPrism=settings.ambientOverPrism===true;
+            state.ambient=Object.fromEntries(Object.entries(defaultAmbient).map(([key,def])=>[key,{...def,...((settings.ambient||{})[key]||{})}]));
+            // Projects authored before Earthquake had screen jitter under Reiatsu.
+            // Preserve their exact old appearance without changing new Reiatsu semantics.
+            if(!settings.ambient?.earthquake&&settings.ambient?.reiatsu?.enabled===true){
+                state.ambient.earthquake={...state.ambient.reiatsu};
+                state.ambient.reiatsu.enabled=false;
+            }
+            state.prism={enabled:false,mode:'3d',source2d:'sprite',spriteDataUrl:'',shape:'sphere',size:260,refraction:16,dispersion:55,opacity:63,speed:15,positionX:0,positionY:0,tiltX:12,tiltY:0,...(settings.prism||{})};
+            // Pre-8.20.5 saved glass objects are 2D legacy overlays, not optical 3D.
+            if(settings.prism && !Object.prototype.hasOwnProperty.call(settings.prism,'mode')){state.prism.mode='2d';state.prism.source2d='legacy';}
+            window.SomataAmbientPrism?.syncUI?.();
             state.motion = Object.assign({rotationEnabled:false,rotationSpeed:30,rotationMultiplier:1,rotationDirection:'ccw',rotationTunnelLag:0,rotationTunnelLagMultiplier:1,cameraEnabled:false,cameraSpeed:20,cameraMultiplier:1,cameraAmount:20,colorEnabled:false,colorSpeed:20,colorMultiplier:1,paletteKey:'standard',quickToggleCamera:false,quickToggleColor:false},(settings.motion&&typeof settings.motion==='object')?cloneData(settings.motion):{});
             normalizeMotionState();
             const legacyMotion=state.motion;
@@ -13988,6 +14068,8 @@ syncMorphProfileUI();
             if (Number.isFinite(Number(tunnelSettings.speedMultiplier))) state.tunnel.speedMultiplier = Math.max(0, Number(tunnelSettings.speedMultiplier));
             if (Number.isFinite(Number(tunnelSettings.spacingStrength))) state.tunnel.spacingStrength = Math.max(0.2, Number(tunnelSettings.spacingStrength));
             if (Number.isFinite(Number(tunnelSettings.spacingMultiplier))) state.tunnel.spacingMultiplier = Math.max(0, Number(tunnelSettings.spacingMultiplier));
+            if (Number.isFinite(Number(tunnelSettings.depthCurve))) state.tunnel.depthCurve = Math.max(-100,Math.min(100,Number(tunnelSettings.depthCurve)));
+            if (Number.isFinite(Number(tunnelSettings.depthCurveMultiplier))) state.tunnel.depthCurveMultiplier = Math.max(0,Number(tunnelSettings.depthCurveMultiplier));
             state.tunnel.centerHiddenCopies = Number.isFinite(Number(tunnelSettings.centerHiddenCopies))
                 ? Math.max(0, Math.min(TUNNEL_CENTER_HIDDEN_MAX, Math.round(Number(tunnelSettings.centerHiddenCopies))))
                 : TUNNEL_CENTER_HIDDEN_DEFAULT;
@@ -14019,6 +14101,7 @@ syncMorphProfileUI();
                 state.tunnel.fadeDurationSec = 3;
             }
             state.tunnel.vignetteUnit='px';
+            state.tunnel.vignetteMultiplier=Math.max(.125,Number(tunnelSettings.vignetteMultiplier)||1);
 
             state.tunnel.defaultActive = tunnelSettings.defaultActive === true;
 
@@ -16555,6 +16638,7 @@ syncMorphProfileUI();
             state.tunnel.fadeOversize = true;
             state.tunnel.fadeOffsetSteps = 3;
             state.tunnel.vignetteAmount = TUNNEL_VIGNETTE_DEFAULT_PX;
+            state.tunnel.vignetteMultiplier=1;
             state.tunnel.vignetteUnit = 'px';
             state.tunnel.fadeDurationSec = 3;
             state.tunnel.optimizedCalculation = true;
@@ -16794,6 +16878,8 @@ syncMorphProfileUI();
                 else if(mode==='sweep')toggleSidebarFeatureWithMemory('glint');
                     else if(mode==='lightning')toggleSidebarFeatureWithMemory('lightning');
                 else if(mode==='particles')toggleSidebarFeatureWithMemory('particles');
+                else if(mode==='ambient')window.SomataAmbientPrism?.toggleAmbient?.();
+                else if(mode==='prism')window.SomataAmbientPrism?.togglePrism?.();
                 else if(mode==='motion')toggleMotionQuickGroup();
                 else if(mode==='palette'){togglePaletteQuickMenu();}
                 try{navigator.vibrate?.(18);}catch(_){ }

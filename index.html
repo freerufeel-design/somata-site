@@ -8,12 +8,12 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Somata">
     <meta name="theme-color" content="#090d16">
-    <link rel="manifest" href="manifest.webmanifest?v=8.19.3">
+    <link rel="manifest" href="manifest.webmanifest?v=8.20.14">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Somata 8.19.3</title>
-    <link rel="stylesheet" href="styles/app.css?v=8.19.3">
+    <title>Somata 8.20.14</title>
+    <link rel="stylesheet" href="styles/app.css?v=8.20.14">
     <script defer src="js/bootstrap/boot-guard.js?v=20261015-v78302"></script>
     <script defer src="js/bootstrap/error-overlay.js?v=20261015-v78302"></script>
     <script defer src="js/bootstrap/module-registry.js?v=20261015-v78302"></script>
@@ -21,9 +21,9 @@
     <script defer src="js/render/effect-owner-service.js?v=20261015-v78302"></script>
     <script defer src="js/render/compositor-contract.js?v=20261015-v78302"></script>
     <script defer src="js/core/palette.js?v=8.19.2"></script>
-    <script defer src="js/core/state.js?v=8.19.2"></script>
-    <script defer src="js/core/parameter-routing.js?v=8.19.3"></script>
-    <script defer src="js/core/parameter-matrix.js?v=8.19.2"></script>
+    <script defer src="js/core/state.js?v=8.20.14"></script>
+    <script defer src="js/core/parameter-routing.js?v=8.20.14"></script>
+    <script defer src="js/core/parameter-matrix.js?v=8.20.14"></script>
     <script defer src="js/core/layer-versions.js?v=20261015-v78302"></script>
     <script defer src="js/ui/profile-presets.js?v=20261015-v78302"></script>
     <script defer src="js/geometry/kernel.js?v=20261015-v78302"></script>
@@ -32,8 +32,9 @@
     <script defer src="js/core/scheduler.js?v=20261022-v810"></script>
     <script defer src="js/core/morph-controller.js?v=8.19.0"></script>
     <script defer src="js/effects/motion.js?v=20261022-v890"></script>
+    <script defer src="js/render/corridor-depth-curve.js?v=8.20.0"></script>
     <script defer src="js/render/corridor-copy-frame.js?v=20261022-v860"></script>
-    <script defer src="js/core/defaults-layers.js?v=8.19.0"></script>
+    <script defer src="js/core/defaults-layers.js?v=8.20.14"></script>
     <script defer src="js/geometry/spline.js?v=20261015-v78302"></script>
     <script defer src="js/app/geometry-gpu-core.js?v=8.19.1"></script>
     <script defer src="js/geometry/frame-contour.js?v=20261017-v71100"></script>
@@ -41,13 +42,13 @@
     <script defer src="js/gpu/web-thread-scene-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/graffiti-ribbon-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/canonical-path-store.js?v=20261015-v78302"></script>
-    <script defer src="js/gpu/canonical-sweep-renderer.js?v=20261015-v78302"></script>
+    <script defer src="js/gpu/canonical-sweep-renderer.js?v=8.20.14"></script>
     <script defer src="js/gpu/bezier-sweep-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/path-fx-renderer.js?v=20261015-v78302"></script>
     <script defer src="js/gpu/particle-renderer.js?v=20261016-v78309"></script>
-    <script defer src="js/geometry/frame-paths.js?v=20261022-v8170"></script>
+    <script defer src="js/geometry/frame-paths.js?v=8.20.14"></script>
     <script defer src="js/geometry/canonical.js?v=20261015-v78302"></script>
-    <script defer src="js/app/lamp-audio-core.js?v=8.19.0"></script>
+    <script defer src="js/app/lamp-audio-core.js?v=8.20.14"></script>
     <script defer src="js/render/fill-plan.js?v=20261022-v840"></script>
     <script defer src="js/geometry/morph.js?v=20261015-v78302"></script>
     <script defer src="js/geometry/morph-frame.js?v=20261015-v78302"></script>
@@ -105,16 +106,19 @@
     <script defer src="js/render/lamp-pass.js?v=20261016-v78309"></script>
     <script defer src="js/render/path-fx-pass.js?v=20261015-v78302"></script>
     <script defer src="js/render/profile-sweep-adapter.js?v=20261015-v78302"></script>
-    <script defer src="js/render/sweep-pass.js?v=20261015-v78302"></script>
+    <script defer src="js/render/sweep-pass.js?v=8.20.14"></script>
     <script defer src="js/render/particle-pass.js?v=20261015-v78302"></script>
     <script defer src="js/render/web-pass.js?v=20261015-v78303"></script>
     <script defer src="js/render/glow-pass.js?v=20261015-v78302"></script>
     <script defer src="js/render/feature-lifecycle.js?v=20261015-v78302"></script>
     <script defer src="js/render/compositor-policy.js?v=20261015-v78302"></script>
     <script defer src="js/render/geometry-executor.js?v=20261015-v78302"></script>
-    <script defer src="js/render/main-pipeline.js?v=8.19.0"></script>
+    <script defer src="js/render/main-pipeline.js?v=8.20.14"></script>
     <script defer src="js/ui/master-broadcast-core.js?v=20261015-v78302"></script>
-    <script defer src="js/app/ui-project-runtime.js?v=8.19.3"></script>
+    <script defer src="js/app/ui-project-runtime.js?v=8.20.14"></script>
+    <script defer src="js/app/ambient-prism.js?v=8.20.14"></script>
+    <script defer src="js/app/prism-3d-layer.js?v=8.20.14"></script>
+    <script defer src="js/app/test-morph.js?v=8.20.0"></script>
     <script defer src="js/ui/ui-mode.js?v=20261021-v71102"></script>
     <script defer src="js/ui/desktop-brand-popout.js?v=20261015-v78302"></script>
 </head>
@@ -282,6 +286,15 @@
                             <input id="tunnelSpacingMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель дистанции коридора" title="Множитель дистанции: ползунок умножается на это значение" data-log-multiplier="1">
                         </div>
                     </div>
+                    <div class="tunnel-setting" data-reset-scope="tunnel-depth-curve">
+                        <div class="tunnel-setting-head"><span title="Возрастное изменение скорости роста фигур: 0% — старый коридор, −100% — узкий, +100% — широкий; в середине глубины масштабы совпадают">Ширина коридора по глубине</span><span id="tunnelDepthCurveText" class="text-mono">0% × 1</span></div>
+                        <div class="tunnel-effect-control">
+                            <input id="tunnelDepthCurve" type="range" min="-100" max="100" step="5" value="0" aria-label="Узкий, стандартный или широкий коридор">
+                            <input id="tunnelDepthCurveNumber" type="number" min="-100" max="100" step="1" value="0" inputmode="numeric" aria-label="Точная ширина коридора в процентах">
+                            <span class="lamp-mult-label">×</span><input id="tunnelDepthCurveMultiplier" type="number" min="0" max="10" step="any" value="1" inputmode="decimal" aria-label="Множитель ширины коридора" data-log-multiplier="1">
+                        </div>
+                        <div class="hint-text">−100% — узкий · 0% — стандартный · +100% — широкий. В середине глубины положение копий совпадает со стандартом.</div>
+                    </div>
                     <div class="tunnel-setting" data-reset-scope="tunnel-center-shade">
                         <label class="tunnel-fade-numeric-row" for="tunnelCenterHiddenCopies" title="Сколько самых глубоких фигур Коридора скрывать в центре. Следующая фигура уже создаётся внутри центра и плавно проявляется на расстоянии до соседней фигуры.">
                             <span>Затенение центра</span>
@@ -320,15 +333,6 @@
                             <span id="tunnelFadeText" class="text-mono">+2 фиг. · 3 с</span>
                         </div>
                         <div id="tunnelFadePerformanceBlock" class="tunnel-fade-control">
-                            <label class="tunnel-fade-toggle tunnel-vignette-toggle" title="Мягкая экранная маска только у физического края viewport. Не управляет временем жизни фигур.">
-                                <input id="showVignetteSetting" type="checkbox">
-                                <span>Виньетирование</span>
-                            </label>
-                            <label class="tunnel-fade-numeric-row" for="tunnelVignetteAmount">
-                                <span>Величина виньетирования</span>
-                                <input id="tunnelVignetteAmount" type="number" min="0" max="1200" step="1" value="54" inputmode="decimal" aria-label="Ширина виньетирования у края viewport в пикселях">
-                                <span class="tunnel-fade-unit">px</span>
-                            </label>
                             <label class="tunnel-fade-numeric-row" for="tunnelFadeOffsetSteps">
                                 <span>Смещение после viewport</span>
                                 <input id="tunnelFadeOffsetSteps" type="number" min="-50" max="50" step="1" value="3" inputmode="numeric" aria-label="Количество соседних фигур после границы viewport до начала угасания">
@@ -788,6 +792,8 @@
                     <div class="audio-route-group"><button id="audioGroupSweep" class="audio-route-group-btn" type="button">Проблеск ▾</button><div id="audioGroupSweepMenu" class="audio-route-group-menu hidden"></div></div>
                     <div class="audio-route-group"><button id="audioGroupLightning" class="audio-route-group-btn" type="button">Молния ▾</button><div id="audioGroupLightningMenu" class="audio-route-group-menu hidden"></div></div>
                     <div class="audio-route-group"><button id="audioGroupCorridor" class="audio-route-group-btn" type="button">Коридор ▾</button><div id="audioGroupCorridorMenu" class="audio-route-group-menu hidden"></div></div>
+                    <div class="audio-route-group"><button id="audioGroupAmbient" class="audio-route-group-btn" type="button">Амбиенты ▾</button><div id="audioGroupAmbientMenu" class="audio-route-group-menu hidden"></div></div>
+                    <div class="audio-route-group"><button id="audioGroupPrism" class="audio-route-group-btn" type="button">Преломление ▾</button><div id="audioGroupPrismMenu" class="audio-route-group-menu hidden"></div></div>
                     <div class="audio-route-group"><button id="audioGroupPalette" class="audio-route-group-btn" type="button">Палитра ▾</button><div id="audioGroupPaletteMenu" class="audio-route-group-menu hidden"></div></div>
                     <div class="audio-route-group"><button id="audioGroupLineMotion" class="audio-route-group-btn" type="button">Подвижная линия ▾</button><div id="audioGroupLineMotionMenu" class="audio-route-group-menu hidden"></div></div>
                     <div class="audio-route-group"><button id="audioGroupSprite" class="audio-route-group-btn" type="button">Спрайт линии ▾</button><div id="audioGroupSpriteMenu" class="audio-route-group-menu hidden"></div></div>
@@ -855,6 +861,8 @@
             <button id="btnSidebarParticles" class="sidebar-tool-btn" type="button" data-sidebar-mode="particles" title="Подвижные частицы на контуре" aria-label="Подвижные частицы" aria-pressed="false"><span class="particle-star-icon" aria-hidden="true"></span></button>
             <button id="btnSidebarMotion" class="sidebar-tool-btn" type="button" data-sidebar-mode="motion" title="Линейные преобразования и движение · отдельный класс Morph · ПКМ — быстрый переключатель движений" aria-label="Линейные преобразования и движение" aria-pressed="false"><span class="motion-arrow-icon" aria-hidden="true">➜</span></button>
             <div class="sidebar-tool-separator" aria-hidden="true"></div>
+            <button id="btnSidebarAmbient" class="sidebar-tool-btn ambient-tool-btn" type="button" data-sidebar-mode="ambient" title="Амбиенты · ПКМ — включить/выключить набор" aria-label="Амбиенты" aria-pressed="false"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24" aria-hidden="true"><path fill="#f472b6" stroke="#fecdd3" stroke-width="1.1" d="M15 3C20 0 23 4 23 8C29 7 31 12 28 16C32 20 27 25 23 24C21 30 15 31 11 27C6 30 2 25 5 20C0 17 2 12 7 11C4 7 9 3 15 3Z"/><ellipse cx="12.4" cy="12.3" rx="3.1" ry="2.4" fill="#a21caf" opacity=".65"/><circle cx="21.3" cy="17.2" r="3.4" fill="#fce7f3" opacity=".84"/><circle cx="16" cy="23" r="1.6" fill="#be185d"/></svg></button>
+            <button id="btnSidebarPrism" class="sidebar-tool-btn prism-tool-btn" type="button" data-sidebar-mode="prism" title="Независимая фигура: 2D Sprite или 3D оптика · ПКМ — вкл/выкл" aria-label="2D и 3D фигуры" aria-pressed="false"><span class="prism-skull-icon" aria-hidden="true">💀</span></button>
             <button id="btnSidebarPalette" class="sidebar-tool-btn palette-tool-btn" type="button" data-sidebar-mode="palette" title="Палитры · ПКМ — заливка вкл/выкл · Shift+ПКМ — быстрое меню" aria-label="Палитры плейлиста" aria-pressed="false">🎨</button>
             <div id="paletteQuickMenu" class="palette-quick-menu hidden" role="menu" aria-label="Активные палитры"></div>
             <button id="btnSidebarFourier" class="sidebar-tool-btn fourier-tool-btn" type="button" data-sidebar-mode="fourier" title="f(x) · режим Фурье · ПКМ — вкл/выкл" aria-label="Режим Фурье" aria-pressed="false">f(x)</button>
@@ -1194,7 +1202,7 @@
                                         <div class="control-row" id="sweepSyncMusicRow"><label class="row-label sweep-check-row"><input id="sweepSyncMusic" type="checkbox" checked><span>Синхронизация с музыкой</span></label></div>
                                         <div class="control-row" id="sweepSpeedRow"><div class="row-label"><span>Скорость</span><span id="sweepSpeedText" class="text-mono">0.25 цикл/с</span></div><div class="row-inputs"><input id="sweepSpeed" type="range" min="0.02" max="2" step="0.01" value="0.25"><span>×</span><input id="sweepSpeedMultiplier" type="number" min="0.015625" step="any" value="1" inputmode="decimal" aria-label="Множитель скорости проблеска" style="width:58px" data-log-multiplier="1" data-binary-multiplier="1"></div></div>
                                     </div>
-                                    <div class="control-row" id="sweepLengthRow"><div class="row-label"><span>Длина проблеска</span><span id="sweepLengthText" class="text-mono">18%</span></div><input id="sweepLength" type="range" min="1" max="100" step="1" value="18"></div>
+                                    <div class="control-row" id="sweepLengthRow"><div class="row-label"><span>Длина проблеска</span><span id="sweepLengthText" class="text-mono">3%</span></div><input id="sweepLength" type="range" min="1" max="100" step="1" value="3"></div>
                                 </div>
                                 <div id="sweepSpectralSettings" class="sweep-subsection hidden">
                                     <div class="sweep-subsection-title">Спектральная маска</div>
@@ -1271,8 +1279,89 @@
                 <div class="control-group line-display-group line-settings-group">
                     <div class="control-group-title"><label class="group-title-toggle"><input id="showLines" type="checkbox" checked><span>Линии</span></label><span class="badge">контур</span></div>
                 </div>
+                <div id="ambientSettingsGroup" class="control-group ambient-settings-group">
+                    <div class="control-group-title ambient-heading"><span>Амбиенты</span><label class="ambient-over-lens" title="Показывать амбиенты поверх независимой 3D-фигуры"><input id="ambientOverPrism" type="checkbox"><span>Поверх линзы</span></label></div>
+                    <div class="control-row ambient-effect-row"><label class="ambient-rain-toggle"><input id="ambientRainEnabled" type="checkbox" role="switch"><span>Дождь</span></label>
+                        <div class="somata-effect-control ambient-numeric-control control-row"><div class="row-label"><span>Угол</span></div><div class="lamp-slider-mult"><input id="ambientRainAngle" type="number" min="-180" max="180" step="1" value="14"></div></div>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Плотность</span><span id="ambientRainDensityText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientRainDensity" type="range" aria-label="Плотность" min="0" max="250" step="1" value="70"><span class="lamp-mult-label">×</span><input id="ambientRainDensityMultiplier" type="number" min="0.125" max="64" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Плотность" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                        <div class="somata-effect-control ambient-numeric-control control-row"><div class="row-label"><span>Оттенок</span></div><div class="lamp-slider-mult"><input id="ambientRainHue" type="number" min="-180" max="180" step="1" value="0"><span class="lamp-mult-label">×</span><input id="ambientRainHueMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель Оттенок"></div></div>
+                        <label>Цвет <input id="ambientRainColor" type="color" value="#a6c8ff"></label>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Прозрачность</span><span id="ambientRainOpacityText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientRainOpacity" type="range" aria-label="Прозрачность" min="0" max="100" step="1" value="55"></div></div>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Скорость</span><span id="ambientRainSpeedText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientRainSpeed" type="range" aria-label="Скорость" min="0" max="500" step="1" value="170"><span class="lamp-mult-label">×</span><input id="ambientRainSpeedMultiplier" type="number" min="0.125" max="64" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Скорость" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    </div>
+                    <div class="control-row ambient-effect-row"><label class="ambient-rain-toggle"><input id="ambientDichotomyEnabled" type="checkbox" role="switch"> Дихотомия</label>
+                        <label>Цветов <select id="ambientDichotomyCount"><option value="2">2</option><option value="3">3</option></select></label>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Смещение</span><span id="ambientDichotomyOffsetText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientDichotomyOffset" type="range" aria-label="Смещение" min="0" max="40" step="1" value="6"><span class="lamp-mult-label">×</span><input id="ambientDichotomyOffsetMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Смещение" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                        <div class="somata-effect-control ambient-numeric-control control-row"><div class="row-label"><span>Оттенок</span></div><div class="lamp-slider-mult"><input id="ambientDichotomyHue" type="number" min="-180" max="180" step="1" value="0"><span class="lamp-mult-label">×</span><input id="ambientDichotomyHueMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель Оттенок"></div></div>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Сила</span><span id="ambientDichotomyOpacityText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientDichotomyOpacity" type="range" aria-label="Сила" min="0" max="100" step="1" value="30"><span class="lamp-mult-label">×</span><input id="ambientDichotomyOpacityMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Сила" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                        <div class="ambient-colors"><input id="ambientDichotomyColorA" type="color" value="#ff4089"><input id="ambientDichotomyColorB" type="color" value="#0ce4ff"><input id="ambientDichotomyColorC" type="color" value="#ffe176"></div>
+                    </div>
+                    <div class="control-row ambient-effect-row"><label class="ambient-rain-toggle"><input id="ambientRainbowEnabled" type="checkbox" role="switch"> Радужная дихотомия</label>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Смещение</span><span id="ambientRainbowOffsetText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientRainbowOffset" type="range" aria-label="Смещение" min="0" max="35" step="1" value="6"><span class="lamp-mult-label">×</span><input id="ambientRainbowOffsetMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Смещение" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Сила</span><span id="ambientRainbowStrengthText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientRainbowStrength" type="range" aria-label="Сила" min="0" max="100" step="1" value="40"><span class="lamp-mult-label">×</span><input id="ambientRainbowStrengthMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Сила" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    </div>
+                    <div class="control-row ambient-effect-row"><label class="ambient-rain-toggle"><input id="ambientEarthquakeEnabled" type="checkbox" role="switch"> Землетрясение · дрожание</label>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Сила</span><span id="ambientEarthquakeStrengthText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientEarthquakeStrength" type="range" aria-label="Сила" min="0" max="100" step="1" value="25"><span class="lamp-mult-label">×</span><input id="ambientEarthquakeStrengthMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Сила" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Скорость</span><span id="ambientEarthquakeSpeedText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientEarthquakeSpeed" type="range" aria-label="Скорость" min="10" max="300" step="1" value="100"><span class="lamp-mult-label">×</span><input id="ambientEarthquakeSpeedMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Скорость" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    </div>
+                    <div class="control-row ambient-effect-row"><label class="ambient-rain-toggle"><input id="ambientReiatsuEnabled" type="checkbox" role="switch"> Рэйацу · духовное давление</label>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Сила</span><span id="ambientReiatsuStrengthText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientReiatsuStrength" type="range" aria-label="Сила" min="0" max="100" step="1" value="25"><span class="lamp-mult-label">×</span><input id="ambientReiatsuStrengthMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Сила" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Скорость</span><span id="ambientReiatsuSpeedText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientReiatsuSpeed" type="range" aria-label="Скорость" min="10" max="300" step="1" value="100"><span class="lamp-mult-label">×</span><input id="ambientReiatsuSpeedMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Скорость" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    </div>
+                    <div class="control-row ambient-effect-row"><label class="ambient-rain-toggle"><input id="ambientCloudsEnabled" type="checkbox" role="switch"> Облака</label>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Плотность</span><span id="ambientCloudsDensityText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientCloudsDensity" type="range" aria-label="Плотность" min="0" max="100" step="1" value="42"><span class="lamp-mult-label">×</span><input id="ambientCloudsDensityMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Плотность" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                        <div class="somata-effect-control ambient-numeric-control control-row"><div class="row-label"><span>Оттенок</span></div><div class="lamp-slider-mult"><input id="ambientCloudsHue" type="number" min="-180" max="180" step="1" value="0"><span class="lamp-mult-label">×</span><input id="ambientCloudsHueMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель Оттенок"></div></div>
+                        <label>Цвет <input id="ambientCloudsColor" type="color" value="#acc5e7"></label>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Прозрачность</span><span id="ambientCloudsOpacityText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientCloudsOpacity" type="range" aria-label="Прозрачность" min="0" max="100" step="1" value="24"><span class="lamp-mult-label">×</span><input id="ambientCloudsOpacityMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Прозрачность" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Скорость</span><span id="ambientCloudsSpeedText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="ambientCloudsSpeed" type="range" aria-label="Скорость" min="0" max="100" step="1" value="12"><span class="lamp-mult-label">×</span><input id="ambientCloudsSpeedMultiplier" type="number" min="0.125" max="8" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Скорость" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    </div>
+                    <div class="control-row ambient-effect-row ambient-vignette-row">
+                        <label class="ambient-rain-toggle"><input id="showVignetteSetting" type="checkbox" role="switch"><span>Виньетирование</span></label>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Мягкость краёв</span><span id="tunnelVignetteAmountText" class="text-mono">54 px</span></div>
+                            <div class="lamp-slider-mult"><input id="tunnelVignetteAmount" type="range" min="0" max="1200" step="1" value="54" aria-label="Ширина виньетирования"><span class="lamp-mult-label">×</span><input id="tunnelVignetteMultiplier" type="number" min="0.125" max="64" step="any" value="1" data-log-multiplier="1" inputmode="decimal" aria-label="Множитель виньетирования"></div>
+                        </div>
+                    </div>
+                </div>
+                <div id="prismSettingsGroup" class="control-group prism-settings-group">
+                    <div class="control-group-title">💀 Отдельный слой перед сценой</div>
+                    <div class="control-row" id="prismShapeRow"><div class="row-label"><span>Форма</span></div><div class="prism-shape-picker"><button type="button" id="prismPrevShape" aria-label="Предыдущая фигура" title="Предыдущая фигура">◀</button><select id="prismShape"><option value="sphere" selected>Сфера</option><option value="lens">Линза</option><option value="cube">Куб</option><option value="skull">Череп</option><option value="dodecahedron">Додекаэдр</option><option value="cross">3D-крест</option></select><button type="button" id="prismNextShape" aria-label="Следующая фигура" title="Следующая фигура">▶</button></div></div>
+                    <div class="prism-mode-switch" role="group" aria-label="Переключение режима фигуры">
+                        <button type="button" data-prism-mode="2d" aria-pressed="false">2D · Sprite</button>
+                        <button type="button" data-prism-mode="3d" class="active" aria-pressed="true">3D · Оптика</button>
+                    </div>
+                    <div class="hint-text" id="prismModeExplanation">2D: изображение или прежняя экранная накладка. Без преломления лучей.</div>
+                    <div id="prism2dControls" class="prism-2d-controls">
+                        <div class="control-row"><label>Источник 2D <select id="prismSource2d"><option value="sprite" selected>Загрузить Sprite</option><option value="legacy">Старая 2D-накладка</option></select></label></div>
+                        <div class="control-row"><label>PNG / JPEG / WebP / GIF <input type="file" id="prismSpriteFile" accept="image/png,image/jpeg,image/webp,image/gif"/></label></div>
+                        <div class="control-row"><button type="button" id="prismSpriteClear">Удалить Sprite</button><span id="prismSpriteStatus" class="hint-text">Sprite не загружен</span></div>
+                    </div>
+                    <div class="control-row"><label><input id="prismEnabled" type="checkbox"> Включить фигуру</label></div>
+                    <div id="prism3dLiveStatus" hidden class="prism-live-status" data-status="off" aria-live="polite">3D: выключено. Включите фигуру.</div>
+                    <div class="somata-effect-control control-row"><div class="row-label"><span>Размер</span><span id="prismSizeText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismSize" type="range" aria-label="Размер" min="50" max="500" step="5" value="260"><span class="lamp-mult-label">×</span><input id="prismSizeMultiplier" type="number" min="0.000001" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Размер" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    <div class="somata-effect-control control-row"><div class="row-label"><span>Преломление</span><span id="prismRefractionText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismRefraction" type="range" aria-label="Преломление" min="0" max="16" step="1" value="16"><span class="lamp-mult-label">×</span><input id="prismRefractionMultiplier" type="number" min="0.000001" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Преломление" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    <div class="somata-effect-control control-row"><div class="row-label"><span>Радужная дисперсия</span><span id="prismDispersionText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismDispersion" type="range" aria-label="Радужная дисперсия" min="0" max="100" step="1" value="55"><span class="lamp-mult-label">×</span><input id="prismDispersionMultiplier" type="number" min="0.000001" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Радужная дисперсия" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    <div class="somata-effect-control control-row"><div class="row-label"><span>Прозрачность</span><span id="prismOpacityText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismOpacity" type="range" aria-label="Прозрачность" min="0" max="100" step="1" value="63"></div></div>
+                    <div class="prism-color-grid">
+                        <div class="control-row somata-effect-control"><div class="row-label"><span>Оттенок света кристалла</span><span id="prismLightHueText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismLightHue" type="range" min="0" max="360" step="1" value="192" aria-label="Оттенок освещения кристалла" class="prism-hue-slider"></div></div>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Сила света</span><span id="prismLightIntensityText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismLightIntensity" type="range" min="0" max="100" step="1" value="55"></div></div>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Оттенок заливки</span><span id="prismFillHueText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismFillHue" type="range" min="0" max="360" step="1" value="194" aria-label="Оттенок заливки кристалла" class="prism-hue-slider"></div></div>
+                        <div class="somata-effect-control control-row"><div class="row-label"><span>Заливка кристалла</span><span id="prismFillText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismFill" type="range" min="0" max="100" step="1" value="9"></div></div>
+                    </div>
+                    <div class="somata-effect-control control-row"><div class="row-label"><span>Вращение</span><span id="prismSpeedText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismSpeed" type="range" aria-label="Вращение" min="0" max="120" step="1" value="15"><span class="lamp-mult-label">×</span><input id="prismSpeedMultiplier" type="number" min="0.000001" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Вращение" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    <div class="somata-effect-control control-row"><div class="row-label"><span>Положение X</span><span id="prismPositionXText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismPositionX" type="range" aria-label="Положение X" min="-100" max="100" step="1" value="0"><span class="lamp-mult-label">×</span><input id="prismPositionXMultiplier" type="number" min="0.000001" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Положение X" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    <div class="somata-effect-control control-row"><div class="row-label"><span>Положение Y</span><span id="prismPositionYText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismPositionY" type="range" aria-label="Положение Y" min="-100" max="100" step="1" value="0"><span class="lamp-mult-label">×</span><input id="prismPositionYMultiplier" type="number" min="0.000001" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Положение Y" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    <div class="somata-effect-control control-row"><div class="row-label"><span>Наклон X</span><span id="prismTiltXText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismTiltX" type="range" aria-label="Наклон X" min="-180" max="180" step="1" value="12"><span class="lamp-mult-label">×</span><input id="prismTiltXMultiplier" type="number" min="0.000001" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Наклон X" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    <div class="somata-effect-control control-row"><div class="row-label"><span>Наклон Y</span><span id="prismTiltYText" class="text-mono"></span></div><div class="lamp-slider-mult"><input id="prismTiltY" type="range" aria-label="Наклон Y" min="-180" max="180" step="1" value="0"><span class="lamp-mult-label">×</span><input id="prismTiltYMultiplier" type="number" min="0.000001" step="any" value="1" inputmode="decimal" data-log-multiplier="1" aria-label="Множитель: Наклон Y" title="Множитель: введите число или используйте логарифмическое управление"></div></div>
+                    <div id="prism3dBackendInfo" hidden class="hint-text" aria-live="polite">Режим 3D: WebGPU, полигональная сетка, преломление по Снеллиусу и RGB-дисперсия. Экранная выборка фоновой сцены; без трассировки лучей.</div>
+                </div>
                 <div id="geometrySettingsGroup" class="control-group shape-settings-group">
-                    <div class="control-group-title">Геометрия звезды</div>
+                    <div class="control-group-title">Геометрия звезды <label class="test-morph-heading"><input id="testMorphEnabled" type="checkbox"> Анимировать</label></div>
+                    <div id="testMorphControls" class="test-morph-controls hidden">
+                        <div class="control-row"><label>Тест-морф: тип морфинга <select id="testMorphMode"><option value="topology">Топологический</option><option value="calm">Спокойный</option><option value="circleSlide" selected>По окружности</option><option value="fade">Fade</option><option value="light">Слайдшоу</option></select></label></div>
+                        <div class="control-row"><label>Тип сдвига <select id="testMorphSlide"><option value="minimal">Минимальный поворот</option><option value="sector" selected>Секторный</option><option value="phase">По фазе</option></select></label></div>
+                        <div class="control-row test-morph-spiral-row hidden"><label>Спиральный тип <select id="testMorphSpiralType"><option value="torn">Рваный</option><option value="continuous">Неразрывный</option><option value="phase">Фазовый</option><option value="phaseCircle" selected>Фазово-окружностный</option><option value="minimalTurn">Постоянный шаг</option><option value="topology">Топологический</option></select></label></div>
+                        <div class="control-row"><label>Длительность перехода <input id="testMorphDuration" type="number" min="0.1" max="60" step="0.1" value="1"> с</label></div>
+                    </div>
 
                     <div class="control-row">
                         <div class="row-label">
