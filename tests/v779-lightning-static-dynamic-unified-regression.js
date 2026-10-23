@@ -15,9 +15,10 @@ const read=f=>fs.readFileSync(path.join(ROOT,f),'utf8');
   assert(!pathSrc.includes("!strictSpiral&&typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()"),'Lightning patch must not coerce later 7.7.9 topology carrier through 7.5 circle rebuild');
   assert((projectSrc.match(/ensureSweepAnimation\(\);\s*requestMainCanvasRender\(\);/g)||[]).length>=1,'project load does not re-arm static Sweep/Lightning animation');
 
-  const plist=JSON.parse(fs.readFileSync(path.join(ROOT,'default.plist'),'utf8'));
+  // The 7.7.9 reference belongs to the preserved original presets, not the curated 9.0.2 default playlist.
+  const plist=JSON.parse(fs.readFileSync(path.join(ROOT,'STANDARD_ORIGINAL_23_PROJECTS.plist'),'utf8'));
   const entry=plist.projects.find(p=>p&&p.name==='Fucking freak 3');
-  assert(entry?.project,'reference project "Fucking freak 3" not found in default.plist');
+  assert(entry?.project,'reference project not found in STANDARD_ORIGINAL_23_PROJECTS.plist');
   const projectJson=JSON.stringify(entry.project);
 
   const h=await createBrowserHarness({disableGpu:true,loadDelayMs:220,evalTimeoutMs:15000});

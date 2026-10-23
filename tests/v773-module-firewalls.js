@@ -48,7 +48,9 @@ ok=test('feature capability registry isolates admission knowledge inside each pa
 })&&ok;
 
 ok=test('main pipeline remains unaware of concrete feature and geometry renderers',()=>{
-  for(const token of ['WebGPUWebMorphRenderer','WebGPUWebThreadSceneRenderer','WebGPULightningArcRenderer','SweepGPURenderer','WebGPUParticleRenderer','WebGPUPathFxRenderer','WebGPUGraffitiRibbonRenderer','WebGPUGraffitiMorphRenderer','WebGPUProfileMarkerRenderer','LampGPURenderer','WebGPUSpiralBezierMorphRenderer','WebGPUTopologyMorphBaseRenderer','WebGPUGreenProjectMorphRenderer'])assert(!main.includes(token),`main pipeline depends on concrete renderer ${token}`);
+  for(const token of ['WebGPUWebMorphRenderer','WebGPUWebThreadSceneRenderer','WebGPULightningArcRenderer','SweepGPURenderer','WebGPUParticleRenderer','WebGPUPathFxRenderer','WebGPUGraffitiMorphRenderer','WebGPUProfileMarkerRenderer','LampGPURenderer','WebGPUSpiralBezierMorphRenderer','WebGPUTopologyMorphBaseRenderer','WebGPUGreenProjectMorphRenderer'])assert(!main.includes(token),`main pipeline depends on concrete renderer ${token}`);
+  assert(!/WebGPUGraffitiRibbonRenderer\.(?:encode|render|draw)\s*\(/.test(main),'orchestration invokes a concrete Graffiti renderer');
+  assert((main.match(/WebGPUGraffitiRibbonRenderer/g)||[]).length===2 && main.includes('WebGPUGraffitiRibbonRenderer.isReady?.()'),'unexpected renderer dependence beyond temporary readiness guard');
   assert(main.includes('SomataFeatureLifecycle?.begin')&&main.includes('SomataFeatureLifecycle?.end'),'main pipeline does not delegate feature frame lifecycle');
   assert(lifecycle.includes("queryAll?.('frameBegin'")&&lifecycle.includes("queryAll?.('frameEnd'"),'feature lifecycle does not use capabilities');
 })&&ok;

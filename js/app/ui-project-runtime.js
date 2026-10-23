@@ -553,6 +553,9 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.filter='none';ctx.shadowBlur=0;ctx.globalCompositeOperation='destination-in';ctx.drawImage(tunnelVignetteMaskCanvas,0,0);ctx.restore();
         }
 
+        // Lightweight counters for diagnosing Corridor-only invalidation load.
+        let corridorIdleSkips=0,corridorMotionInvalidations=0;
+        window.__somataCorridorTickStatus=()=>({idleSkips:corridorIdleSkips,motionInvalidations:corridorMotionInvalidations});
         function tunnelAnimationFrame(now) {
             const tunnel = state.tunnel;
             if (!tunnel?.active) {
@@ -577,10 +580,16 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const phaseSpeed = visualSpeed / distanceFactor;
             const directionSign = speedPercent < 0 ? -1 : 1;
             if (!Number.isFinite(Number(tunnel.travelPhase))) tunnel.travelPhase = Number(tunnel.phase) || 0;
+            const previousPhase=tunnel.phase;
             tunnel.travelPhase += dt * phaseSpeed * directionSign;
             tunnel.phase = ((tunnel.travelPhase % 1) + 1) % 1;
 
-            requestMainCanvasRender();
+            // Keep the scheduler alive but avoid a full multi-copy Corridor
+            // redraw if the travel phase did not move (speed=0, paused audio,
+            // or a clamped dt). Other effects still invalidate independently.
+            if(Math.abs(tunnel.phase-(Number(previousPhase)||0))>1e-10){
+                corridorMotionInvalidations++;requestMainCanvasRender();
+            }else corridorIdleSkips++;
             return true;
         }
 
@@ -780,7 +789,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 const mult=Number(depthMultiplier?.value);
                 state.tunnel.depthCurve=v;
                 state.tunnel.depthCurveMultiplier=Math.max(0,Math.min(10,Number.isFinite(mult)?mult:1));
-                syncTunnelSettingsUI();requestMainCanvasRender();
+                if(source===depthMultiplier){
+                    // Keep the typed decimal intact during input ("2." must not be rewritten to "2").
+                    const caption=document.getElementById('tunnelDepthCurveText');
+                    if(caption)caption.textContent=`${v>0?'+':''}${v}% × ${formatDisplayNumber(state.tunnel.depthCurveMultiplier,2)}`;
+                }else syncTunnelSettingsUI();
+                requestMainCanvasRender();
             };
             depthSlider?.addEventListener('input',()=>syncDepth(depthSlider));
             depthNumber?.addEventListener('input',()=>syncDepth(depthNumber));
@@ -2773,7 +2787,7 @@ syncMorphProfileUI();
             if (autoStatus) {
                 const conf = Math.max(0, Math.min(1, Number(tap.autoConfidence) || 0));
                 autoStatus.textContent = tap.autoTap
-                    ? (state.audioReactive.active ? `все диапазоны${chosenBandName ? ` · ${chosenBandName}` : ''}${conf > 0 ? ` · ${Math.round(conf * 100)}%` : ''}` : 'ждёт аудио')
+                    ? (state.audioReactive.active ? `${({ACQUIRE:'ПОИСК',LOCKED:'LOCK',HOLD:'HOLD',CHANGE_PENDING:'ПРОВЕРКА'})[tap.autoTempoLock?.mode]||'ПОИСК'}${chosenBandName ? ` · ${chosenBandName}` : ''}${conf > 0 ? ` · ${Math.round(conf * 100)}%` : ''}` : 'ждёт аудио')
                     : 'выкл.';
             }
             if (listenBtn) {
@@ -2785,7 +2799,7 @@ syncMorphProfileUI();
             }
             if (status) {
                 status.textContent = bpm > 0
-                    ? `${Math.round(bpm)} BPM · смена каждые ${tap.beatsPerMorph} тактов (${formatDisplayNumber(getTapTempoIntervalSec(5), 2)} с). Auto-TAP: все диапазоны, приоритет ${autoBandName}${chosenBandName ? `, выбран ${chosenBandName}` : ''}, окно ${formatDisplayNumber(autoWindowSec, 1)} с.`
+                    ? `${Math.round(bpm)} BPM · смена каждые ${tap.beatsPerMorph} долей (${formatDisplayNumber(getTapTempoIntervalSec(5), 2)} с). Auto-TAP: все диапазоны, приоритет ${autoBandName}${chosenBandName ? `, выбран ${chosenBandName}` : ''}, окно ${formatDisplayNumber(autoWindowSec, 1)} с.`
                     : `Нажмите TAP несколько раз в ритм. Auto-TAP одновременно анализирует все диапазоны; приоритет ${autoBandName}, окно ${formatDisplayNumber(autoWindowSec, 1)} с.`;
             }
             syncTapTimingIndicators();
@@ -3155,45 +3169,81 @@ syncMorphProfileUI();
             const stability=Math.max(0,Math.min(1,support*(.55+.45*Math.min(1,span/Math.max(1500,windowMs*.6)))));
             return{bpm,confidence:Math.max(0,Math.min(1,meanConf*.55+stability*.45)),support,span};
         }
-        function applyStableAutoTapEstimate(target,confidence,bandKey,anchorTime=performance.now()){
-            const tap=state.tapTempo;if(!(target>0))return;
-            const hadBpm=Number(tap.bpm)>0;
-            const now=performance.now();
-            const consensus=stableTempoConsensus(target,confidence,now);
-            tap.autoConfidence=Math.max(0,Math.min(1,consensus.confidence||confidence||0));
-            tap.autoChosenBand=bandKey||tap.autoChosenBand||'';
-            if(!tap.anchorTime)tap.anchorTime=anchorTime;
-            const desired=consensus.bpm||target;
-            if(!(tap.bpm>0)){
-
-                if(consensus.span>=900||tap.autoTempoEvidence.length>=5)tap.bpm=desired;
-                else return;
-            }else{
-                const rel=Math.abs(desired-tap.bpm)/Math.max(1,tap.bpm);
-                const windowMs=Math.max(2000,(Number(tap.autoWindowSec)||10)*1000);
-
-                if(rel>.08&&(consensus.support<.58||consensus.span<windowMs*.48))return;
-                const last=Number(tap.autoTempoLastApplyAt)||now-100;
-                const dt=Math.max(.02,Math.min(1.5,(now-last)/1000));tap.autoTempoLastApplyAt=now;
-
-                const windowSec=Math.max(2,Number(tap.autoWindowSec)||10);
-                const maxFracPerSec=rel>.08?Math.max(.045,Math.min(.11,.85/windowSec)):.11;
-                const maxLogStep=maxFracPerSec*dt;
-                const logDelta=Math.log(Math.max(.01,desired)/Math.max(.01,tap.bpm));
-                const step=Math.max(-maxLogStep,Math.min(maxLogStep,logDelta));
-                const confidenceGain=.45+.55*Math.max(.2,tap.autoConfidence);
-                tap.bpm*=Math.exp(step*confidenceGain);
+        function ensureTempoLock() {
+            const tap=state.tapTempo;
+            if(!tap.autoTempoLock || typeof tap.autoTempoLock!=='object'){
+                tap.autoTempoLock=SomataTempoLock.create();
+                if(tap.bpm>0){
+                    tap.autoTempoLock.bpm=tap.bpm;
+                    tap.autoTempoLock.anchorTime=tap.anchorTime||performance.now();
+                    tap.autoTempoLock.mode='LOCKED';
+                }
             }
-            tap.autoTempoCandidate=desired;tap.autoTempoCandidateCount=Math.round((consensus.support||0)*10);
-            if(!hadBpm&&tap.bpm>0){normalizeProjectMorphSettings().syncTap=true;syncProjectMorphUI();}
-
-            if(tap.bpm>0&&Math.abs((tap.lastAppliedBpm||0)-tap.bpm)>.04){tap.lastAppliedBpm=tap.bpm;resyncMorphsToTapTempo();}
+            return tap.autoTempoLock;
+        }
+        function resetTempoLock(keepBpm=false){
+            const tap=state.tapTempo;
+            tap.autoTempoLock=SomataTempoLock.create();
+            tap.autoLastDecisionPeakAt=0;
+            if(keepBpm&&tap.bpm>0){
+                tap.autoTempoLock.bpm=tap.bpm;
+                tap.autoTempoLock.anchorTime=tap.anchorTime||performance.now();
+                tap.autoTempoLock.mode='LOCKED';
+            }
+        }
+        function syncTapPulsePhase(now=performance.now()){
+            const tap=state.tapTempo,btn=document.getElementById('btnTapTempo');
+            if(!btn||!(tap.bpm>0)||!(tap.anchorTime>0))return;
+            const period=60000/tap.bpm;
+            const phase=((now-tap.anchorTime)%period+period)%period;
+            btn.style.animationDelay=`${-phase.toFixed(2)}ms`;
+        }
+        function applyStableAutoTapEstimate(target,confidence,bandKey,anchorTime=performance.now(),now=performance.now(),bandCount=1,bassSupport=false){
+            const tap=state.tapTempo;
+            if(!(target>0))return false;
+            const consensus=stableTempoConsensus(target,confidence,now);
+            const lock=ensureTempoLock(),oldBpm=tap.bpm,oldMode=lock.mode;
+            SomataTempoLock.step(lock,{
+                now,bpm:consensus.bpm||target,
+                confidence:Math.max(0,Math.min(1,consensus.confidence||confidence||0)),
+                bands:bandCount,bassSupport,peakTime:anchorTime,fresh:true
+            });
+            tap.autoConfidence=lock.confidence;
+            tap.autoChosenBand=bandKey||tap.autoChosenBand||'';
+            tap.autoTempoCandidate=lock.pendingBpm||0;
+            tap.autoTempoCandidateCount=lock.pending.length;
+            if(!(lock.bpm>0))return oldMode!==lock.mode;
+            tap.bpm=lock.bpm;
+            tap.anchorTime=lock.anchorTime;
+            if(!(oldBpm>0))normalizeProjectMorphSettings().syncTap=true;
+            if(Math.abs((tap.lastAppliedBpm||0)-tap.bpm)>.35){
+                tap.lastAppliedBpm=tap.bpm;
+                resyncMorphsToTapTempo();
+            }
+            if(oldMode!==lock.mode||!(oldBpm>0)||Math.abs(oldBpm-tap.bpm)>.75){
+                syncTapPulsePhase(now); // never restart the CSS animation on each audio tick
+            }
+            return true;
         }
         function chooseStableAutoTapBand(now=performance.now()){
-            const tap=state.tapTempo,trackers=ensureAutoTapBandTrackers();
-            const candidates=AUTO_TAP_TRACKED_BANDS.map(key=>({key,tr:trackers[key]})).filter(x=>x.tr.bpm>0&&x.tr.confidence>.08&&x.tr.beatTimes.length>=4);
-            if(!candidates.length)return false;
-
+            const tap=state.tapTempo,trackers=ensureAutoTapBandTrackers(),lock=ensureTempoLock();
+            const candidates=AUTO_TAP_TRACKED_BANDS.map(key=>({key,tr:trackers[key]})).filter(x=>{
+                if(!(x.tr.bpm>0&&x.tr.confidence>.08&&x.tr.beatTimes.length>=4))return false;
+                const beatMs=60000/(lock.bpm||x.tr.bpm);
+                return x.tr.lastPeakAt>0&&now-x.tr.lastPeakAt<Math.max(1050,Math.min(2200,beatMs*1.7));
+            });
+            const latest=candidates.reduce((v,x)=>Math.max(v,x.tr.lastPeakAt),0);
+            // Neither outdated detector estimates nor repeated analysis frames are new evidence.
+            if(!candidates.length||latest<=(tap.autoLastDecisionPeakAt||0)){
+                tap.autoBandLastDecisionAt=now;
+                const before=lock.mode;
+                SomataTempoLock.step(lock,{now,fresh:false});
+                if(lock.mode!==before||lock.confidence!==tap.autoConfidence){
+                    tap.autoConfidence=lock.confidence;return true;
+                }
+                return false;
+            }
+            tap.autoLastDecisionPeakAt=latest;
             for(const c of candidates){
                 let support=0,weight=0;
                 for(const o of candidates){if(o===c)continue;const aligned=alignTempoOctave(o.tr.bpm,c.tr.bpm);const d=Math.abs(aligned-c.tr.bpm)/Math.max(1,c.tr.bpm);const w=Math.max(.05,o.tr.confidence*o.tr.stability);weight+=w;if(d<.035)support+=w*(1-d/.035);}
@@ -3201,22 +3251,23 @@ syncMorphProfileUI();
                 c.total=c.tr.score+c.consensus*.22;
             }
             candidates.sort((a,b)=>b.total-a.total);
-            const best=candidates[0];
-            const near=[];
+            const best=candidates[0],near=[];
             for(const c of candidates){
                 const aligned=alignTempoOctave(c.tr.bpm,best.tr.bpm);
-                if(Math.abs(aligned-best.tr.bpm)/Math.max(1,best.tr.bpm)<=.04)near.push({bpm:aligned,w:Math.max(.02,c.tr.confidence*c.tr.stability)});
+                if(Math.abs(aligned-best.tr.bpm)/Math.max(1,best.tr.bpm)<=.04)near.push({bpm:aligned,w:Math.max(.02,c.tr.confidence*c.tr.stability),key:c.key});
             }
             const sumW=near.reduce((a,x)=>a+x.w,0);
             const target=sumW>0?near.reduce((a,x)=>a+x.bpm*x.w,0)/sumW:best.tr.bpm;
             const confidence=Math.max(0,Math.min(1,best.tr.confidence*.62+best.tr.stability*.20+(best.consensus||0)*.18));
-            const anchor=best.tr.beatTimes[best.tr.beatTimes.length-1]||now;
-            applyStableAutoTapEstimate(target,confidence,best.key,anchor);
+            const anchor=best.tr.lastPeakAt||latest;
+            const meaningfulBands=near.filter(x=>x.key!=='combined').length;
+            const changed=applyStableAutoTapEstimate(target,confidence,best.key,anchor,now,Math.max(1,meaningfulBands),near.some(x=>x.key==='low'));
             tap.autoBandLastDecisionAt=now;
-            return true;
+            return changed;
         }
 
         function registerTapTempo(now = performance.now(), source = 'manual') {
+            if(source==='manual'&&state.tapTempo.autoTap)setAutoTapEnabled(false,false);
             const tap = state.tapTempo;
             const hadBpm=Number(tap.bpm)>0;
             if (source === 'manual') {
@@ -3290,6 +3341,7 @@ syncMorphProfileUI();
             }
             syncTapUI();
             restartTapPulseAnimation();
+            syncTapPulsePhase(now);
         }
 
         function resetTapTempo() {
@@ -3308,6 +3360,7 @@ syncMorphProfileUI();
             tap.autoTempoCandidate = 0;
             tap.autoTempoCandidateCount = 0;
             tap.autoTempoEvidence = []; tap.autoTempoLastApplyAt = 0;
+            resetTempoLock(false);
             tap.autoFluxPrevSample = null;
             tap.autoFluxPrevPrevSample = null;
             resetAutoTapBandTrackers();
@@ -3394,7 +3447,7 @@ syncMorphProfileUI();
 
             for(let i=0;i<data.length;i++)prev[i]=Math.round(data[i]*appliedGain);
             if(detectedAny||now-(tap.autoBandLastDecisionAt||0)>450){
-                if(chooseStableAutoTapBand(now)){syncTapUI();restartTapPulseAnimation();}
+                if(chooseStableAutoTapBand(now))syncTapUI();
             }
         }
 
@@ -3409,6 +3462,7 @@ syncMorphProfileUI();
             tap.autoTempoCandidate = 0;
             tap.autoTempoCandidateCount = 0;
             tap.autoTempoEvidence = []; tap.autoTempoLastApplyAt = 0;
+            resetTempoLock(!resetTempo);
             tap.autoFluxPrevSample = null;
             tap.autoFluxPrevPrevSample = null;
             resetAutoTapBandTrackers();
@@ -3470,6 +3524,7 @@ syncMorphProfileUI();
             resyncMorphsToTapTempo();
             syncTapUI();
             restartTapPulseAnimation();
+            syncTapPulsePhase(performance.now());
             capturePlaylistOverridesFromCurrent();
         }
 
@@ -3525,6 +3580,8 @@ syncMorphProfileUI();
                 state.tapTempo.autoTempoCandidate = 0;
                 state.tapTempo.autoTempoCandidateCount = 0;
                 state.tapTempo.autoConfidence = 0;
+                state.tapTempo.autoTempoEvidence = [];
+                resetTempoLock(true);
                 syncTapUI();
                 capturePlaylistOverridesFromCurrent();
             });
@@ -3533,6 +3590,7 @@ syncMorphProfileUI();
                 state.tapTempo.autoBand = value;
 
                 state.tapTempo.autoBandLastDecisionAt = 0;
+                state.tapTempo.autoLastDecisionPeakAt = performance.now();
                 chooseStableAutoTapBand(performance.now());
                 syncTapUI();
                 capturePlaylistOverridesFromCurrent();
@@ -7307,6 +7365,19 @@ syncMorphProfileUI();
             });
         }
 
+        function noteMorphGpuPrepareWait(owner,morphKind,now){
+            if(!owner)return false;
+            if(owner.gpuPhasePreparing!==true){owner._freezeGpuWaitStart=0;owner._freezeGpuWaitSerial=-1;owner._freezeGpuWaitReportedAt=0;return false;}
+            const serial=Number(owner.gpuPhasePrepareSerial)||0;
+            if(owner._freezeGpuWaitSerial!==serial){owner._freezeGpuWaitSerial=serial;owner._freezeGpuWaitStart=Number(now)||performance.now();owner._freezeGpuWaitReportedAt=0;}
+            const waitMs=Math.max(0,(Number(now)||performance.now())-(Number(owner._freezeGpuWaitStart)||0));
+            if(waitMs>=120&&((Number(now)||performance.now())-(Number(owner._freezeGpuWaitReportedAt)||0)>=1500)){
+                owner._freezeGpuWaitReportedAt=Number(now)||performance.now();
+                try{animationScheduler.reportMorphFreeze?.('MORPH_GPU_PREPARE_WAIT',{durationMs:waitMs,morphKind:String(morphKind||'Morph'),task:'gpu-phase-prewarm',prepareSerial:serial});}catch(_){ }
+            }
+            return true;
+    }
+
         function createMorphPlaybackModule(deps) {
             const { createOrangeComposition, MorphInterpolation, MorphTargets, MorphGeometry } = deps;
             const { MORPH_SAMPLE_COUNT, MORPH_PROFILE_MAX_POINTS, getMorphSplinePointCount, cloneProfileNodes,
@@ -8458,18 +8529,7 @@ syncMorphProfileUI();
                 });
             };
 
-            const noteMorphGpuPrepareWait=(owner,morphKind,now)=>{
-                if(!owner)return false;
-                if(owner.gpuPhasePreparing!==true){owner._freezeGpuWaitStart=0;owner._freezeGpuWaitSerial=-1;owner._freezeGpuWaitReportedAt=0;return false;}
-                const serial=Number(owner.gpuPhasePrepareSerial)||0;
-                if(owner._freezeGpuWaitSerial!==serial){owner._freezeGpuWaitSerial=serial;owner._freezeGpuWaitStart=Number(now)||performance.now();owner._freezeGpuWaitReportedAt=0;}
-                const waitMs=Math.max(0,(Number(now)||performance.now())-(Number(owner._freezeGpuWaitStart)||0));
-                if(waitMs>=120&&((Number(now)||performance.now())-(Number(owner._freezeGpuWaitReportedAt)||0)>=1500)){
-                    owner._freezeGpuWaitReportedAt=Number(now)||performance.now();
-                    try{animationScheduler.reportMorphFreeze?.('MORPH_GPU_PREPARE_WAIT',{durationMs:waitMs,morphKind:String(morphKind||'Morph'),task:'gpu-phase-prewarm',prepareSerial:serial});}catch(_){ }
-                }
-                return true;
-            };
+
 
             // Morph and all time-based effects must share the same wall-clock timeline.
             // Do not shift cycleStart after a long frame: doing so makes the Base/Line
@@ -10996,14 +11056,13 @@ syncMorphProfileUI();
                 if(changedId==='sweepEffectType'&&previousEffect!=='lightning'&&sweep.effectType==='lightning'){sweep.phase=0;sweep.lastUpdate=0;sweep.currentVelocity=0;sweep.cycleCount=0;sweep.lightningPhase=0;sweep.lightningLastUpdate=0;sweep.lightningCycleCount=0;resetLightningClock(state.layers.indexOf(active),sweep,0);}
                 const mode=document.getElementById('sweepMode')?.value;sweep.mode=['perSegment','everyNth','across','perPath','whole'].includes(mode)?mode:'whole';sweep.everyN=Math.max(2,Math.min(24,Math.round(Number(document.getElementById('sweepEveryN')?.value)||2)));sweep.direction=document.getElementById('sweepDirection')?.value==='backward'?'backward':'forward';sweep.syncMusic=document.getElementById('sweepSyncMusic')?.checked!==false;sweep.speed=Math.max(.02,Math.min(2,Number(document.getElementById('sweepSpeed')?.value)||.25));{const v=Number(document.getElementById('sweepSpeedMultiplier')?.value);sweep.speedMultiplier=Number.isFinite(v)?Math.max(.015625,Math.min(64,v)):1;}
                 sweep.lengthPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLength')?.value)||3));{const v=Number(document.getElementById('sweepWidthPercent')?.value);sweep.widthPercent=Number.isFinite(v)?Math.max(0,Math.min(200,v)):75;}sweep.color=document.getElementById('sweepColor')?.value||'#ffffff';{const v=Number(document.getElementById('sweepOpacity')?.value);sweep.opacity=Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}sweep.brightness=Math.max(0,Math.min(200,Number(document.getElementById('sweepBrightness')?.value)||0));sweep.glow=Math.max(0,Number(document.getElementById('sweepGlow')?.value)||0);{const v=Number(document.getElementById('sweepGlowMultiplier')?.value);sweep.glowMultiplier=Number.isFinite(v)?Math.max(0,v):1;}{const v=Number(document.getElementById('sweepGlowIntensity')?.value);sweep.glowIntensity=Number.isFinite(v)?Math.max(0,Math.min(200,v)):100;}{const v=Number(document.getElementById('sweepGlowIntensityMultiplier')?.value);sweep.glowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;}sweep.softness=Math.max(0,Math.min(150,Number(document.getElementById('sweepSoftness')?.value)||0));{const v=Number(document.getElementById('sweepSoftnessMultiplier')?.value);sweep.softnessMultiplier=Number.isFinite(v)?Math.max(0,v):1;}
-                sweep.lightningProfileShape=document.getElementById('sweepLightningProfileShape')?.value==='line'?'line':'current';const lbehavior=document.getElementById('sweepLightningBehavior')?.value;sweep.lightningBehavior=normalizeLightningBehaviorValue(lbehavior,'symmetric');const lprecision=document.getElementById('sweepLightningPrecision')?.value;sweep.lightningPrecision=normalizeLightningPrecisionValue(lprecision);const lmode=document.getElementById('sweepLightningMode')?.value;sweep.lightningMode=['perSegment','everyNth','across','perPath','whole'].includes(lmode)?lmode:'perPath';sweep.lightningEveryN=Math.max(2,Math.min(24,Math.round(Number(document.getElementById('sweepLightningEveryN')?.value)||2)));sweep.lightningRandomPosition=document.getElementById('sweepLightningRandomPosition')?.checked===true;sweep.lightningColor=document.getElementById('sweepLightningColor')?.value||'#ffffff';sweep.lightningSecondaryColor=document.getElementById('sweepLightningSecondaryColor')?.value||'#7dd3fc';sweep.lightningSegmentPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLightningSegmentPercent')?.value)||100));
+                sweep.lightningTriggerMode=document.getElementById('sweepLightningTriggerMode')?.value||'morph';sweep.lightningProfileShape=document.getElementById('sweepLightningProfileShape')?.value==='line'?'line':'current';const lbehavior=document.getElementById('sweepLightningBehavior')?.value;sweep.lightningBehavior=normalizeLightningBehaviorValue(lbehavior,'symmetric');const lprecision=document.getElementById('sweepLightningPrecision')?.value;sweep.lightningPrecision=normalizeLightningPrecisionValue(lprecision);const lmode=document.getElementById('sweepLightningMode')?.value;sweep.lightningMode=['perSegment','everyNth','across','perPath','whole'].includes(lmode)?lmode:'perPath';sweep.lightningEveryN=Math.max(2,Math.min(24,Math.round(Number(document.getElementById('sweepLightningEveryN')?.value)||2)));sweep.lightningRandomPosition=document.getElementById('sweepLightningRandomPosition')?.checked===true;sweep.lightningColor=document.getElementById('sweepLightningColor')?.value||'#ffffff';sweep.lightningSecondaryColor=document.getElementById('sweepLightningSecondaryColor')?.value||'#7dd3fc';sweep.lightningSegmentPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLightningSegmentPercent')?.value)||100));
                 {const v=Number(document.getElementById('sweepLightningRatePercent')?.value);sweep.lightningRatePercent=Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}{const v=Number(document.getElementById('sweepLightningRateMultiplier')?.value);sweep.lightningRateMultiplier=Number.isFinite(v)?Math.max(0,v):1;}if(lightningRateSyncEnabled())syncLightningRateValuesFrom(sweep);sweep.lightningDurationMs=Math.max(30,Math.min(700,Number(document.getElementById('sweepLightningDuration')?.value)||480));sweep.lightningWidthPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLightningWidthPercent')?.value)||64));
-                const linked=document.getElementById('sweepLightningUseGlintMultiplier')?.checked!==false;sweep.lightningUseGlintMultiplier=linked;{const v=Number(document.getElementById('sweepLightningGlintMultiplier')?.value);sweep.lightningGlintMultiplier=Number.isFinite(v)?Math.max(0,v):2;}
-                if(!linked){sweep.lightningBrightness=Math.max(0,Math.min(400,Number(document.getElementById('sweepLightningBrightness')?.value)||0));sweep.lightningGlow=Math.max(0,Number(document.getElementById('sweepLightningGlow')?.value)||0);{const v=Number(document.getElementById('sweepLightningGlowMultiplier')?.value);sweep.lightningGlowMultiplier=Number.isFinite(v)?Math.max(0,v):1;}{const v=Number(document.getElementById('sweepLightningGlowIntensity')?.value);sweep.lightningGlowIntensity=Number.isFinite(v)?Math.max(0,Math.min(400,v)):100;}{const v=Number(document.getElementById('sweepLightningGlowIntensityMultiplier')?.value);sweep.lightningGlowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;}sweep.lightningSoftness=Math.max(0,Math.min(150,Number(document.getElementById('sweepLightningSoftness')?.value)||0));{const v=Number(document.getElementById('sweepLightningSoftnessMultiplier')?.value);sweep.lightningSoftnessMultiplier=Number.isFinite(v)?Math.max(0,v):1;}}
+                {sweep.lightningBrightness=Math.max(0,Math.min(400,Number(document.getElementById('sweepLightningBrightness')?.value)||0));sweep.lightningGlow=Math.max(0,Number(document.getElementById('sweepLightningGlow')?.value)||0);{const v=Number(document.getElementById('sweepLightningGlowMultiplier')?.value);sweep.lightningGlowMultiplier=Number.isFinite(v)?Math.max(0,v):1;}{const v=Number(document.getElementById('sweepLightningGlowIntensity')?.value);sweep.lightningGlowIntensity=Number.isFinite(v)?Math.max(0,Math.min(400,v)):100;}{const v=Number(document.getElementById('sweepLightningGlowIntensityMultiplier')?.value);sweep.lightningGlowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;}sweep.lightningSoftness=Math.max(0,Math.min(150,Number(document.getElementById('sweepLightningSoftness')?.value)||0));{const v=Number(document.getElementById('sweepLightningSoftnessMultiplier')?.value);sweep.lightningSoftnessMultiplier=Number.isFinite(v)?Math.max(0,v):1;}}
                 sweep.lightningSmoothLighting=true;sweep.lightningShowLines=document.getElementById('sweepLightningShowLines')?.checked!==false;sweep.lightningLineOpacity=Math.max(0,Math.min(100,Number(document.getElementById('sweepLightningLineOpacity')?.value)||100));sweep.lightningAfterglow=document.getElementById('sweepLightningAfterglow')?.checked!==false;sweep.lightningAfterglowMs=Math.max(0,Math.min(900,Number(document.getElementById('sweepLightningAfterglowMs')?.value)||280));{const v=Number(document.getElementById('sweepLightningMicroStrikes')?.value);sweep.lightningMicroStrikes=Number.isFinite(v)?Math.max(0,Math.round(v)):0;}
                 normalizeSweepConfig(sweep);if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(active,'sweep-ui');if(state.masterLayerEdit===true||hasMultiLayerSelection()){for(const layer of getLayerEditTargets()){if(layer===active)continue;ensureLayerEffectState(layer);layer.sweep=cloneEffectConfig(sweep);if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'sweep-ui');}}if(lightningRateSyncEnabled())syncLightningRateValuesFrom(sweep);syncSweepUI();ensureSweepAnimation();requestMainCanvasRender();
             };
-            ['sweepEffectType','sweepProfileShape','sweepCoreBlendMode','sweepGlowBlendMode','sweepLightningCoreBlendMode','sweepLightningGlowBlendMode','sweepFlashMode','sweepGlintPrecision','sweepSpectralSectorDegrees','sweepSpectralAngularSpeed','sweepMode','sweepEveryN','sweepLightningProfileShape','sweepLightningBehavior','sweepLightningPrecision','sweepLightningMode','sweepLightningEveryN','sweepLightningRandomPosition','sweepDirection','sweepSyncMusic','sweepSpeed','sweepSpeedMultiplier','sweepLength','sweepWidthPercent','sweepColor','sweepOpacity','sweepBrightness','sweepGlow','sweepGlowMultiplier','sweepGlowIntensity','sweepGlowIntensityMultiplier','sweepSoftness','sweepSoftnessMultiplier','sweepLightningColor','sweepLightningSecondaryColor','sweepLightningSegmentPercent','sweepLightningRatePercent','sweepLightningRateMultiplier','sweepLightningDuration','sweepLightningWidthPercent','sweepLightningUseGlintMultiplier','sweepLightningGlintMultiplier','sweepLightningBrightness','sweepLightningGlow','sweepLightningGlowMultiplier','sweepLightningGlowIntensity','sweepLightningGlowIntensityMultiplier','sweepLightningSoftness','sweepLightningSoftnessMultiplier','sweepLightningShowLines','sweepLightningLineOpacity','sweepLightningAfterglow','sweepLightningAfterglowMs','sweepLightningMicroStrikes'].forEach(id=>{document.getElementById(id)?.addEventListener('input',updateSweepFromUI);document.getElementById(id)?.addEventListener('change',updateSweepFromUI);});
+            ['sweepEffectType','sweepProfileShape','sweepCoreBlendMode','sweepGlowBlendMode','sweepLightningCoreBlendMode','sweepLightningGlowBlendMode','sweepFlashMode','sweepGlintPrecision','sweepSpectralSectorDegrees','sweepSpectralAngularSpeed','sweepMode','sweepEveryN','sweepLightningTriggerMode','sweepLightningProfileShape','sweepLightningBehavior','sweepLightningPrecision','sweepLightningMode','sweepLightningEveryN','sweepLightningRandomPosition','sweepDirection','sweepSyncMusic','sweepSpeed','sweepSpeedMultiplier','sweepLength','sweepWidthPercent','sweepColor','sweepOpacity','sweepBrightness','sweepGlow','sweepGlowMultiplier','sweepGlowIntensity','sweepGlowIntensityMultiplier','sweepSoftness','sweepSoftnessMultiplier','sweepLightningColor','sweepLightningSecondaryColor','sweepLightningSegmentPercent','sweepLightningRatePercent','sweepLightningRateMultiplier','sweepLightningDuration','sweepLightningWidthPercent','sweepLightningBrightness','sweepLightningGlow','sweepLightningGlowMultiplier','sweepLightningGlowIntensity','sweepLightningGlowIntensityMultiplier','sweepLightningSoftness','sweepLightningSoftnessMultiplier','sweepLightningShowLines','sweepLightningLineOpacity','sweepLightningAfterglow','sweepLightningAfterglowMs','sweepLightningMicroStrikes'].forEach(id=>{document.getElementById(id)?.addEventListener('input',updateSweepFromUI);document.getElementById(id)?.addEventListener('change',updateSweepFromUI);});
             document.getElementById('sweepLightningRateSync')?.addEventListener('change',e=>{const active=getActiveEffectLayer();if(!active)return;const cfg=getLayerSweepConfig(active);setLightningRateSynchronization(e.target.checked===true,cfg,state.layers.indexOf(active));syncSweepUI();ensureSweepAnimation();requestMainCanvasRender();});
             document.querySelectorAll('[data-line-main-mode]').forEach(btn=>btn.addEventListener('click',()=>{
                 const active=getActiveLayer();if(!active)return;const mode=btn.dataset.lineMainMode;const targets=getLayerEditTargets();
@@ -11643,12 +11702,12 @@ syncMorphProfileUI();
             state.audioReactive.effectsAmplitudeStrength = 50;
             state.audioReactive.effectsAmplitudeMultiplier = 1;
             state.lightningRateSync = true;
-            for(const layer of state.layers)Object.assign(getLayerSweepConfig(layer), {  flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, lengthPercent:3, widthPercent:75, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2,
+            for(const layer of state.layers)Object.assign(getLayerSweepConfig(layer), {  flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, lengthPercent:3, widthPercent:75, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, 
                 lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningRandomPosition:true,
                 lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', 
-                lightningSegmentPercent:100,  lightningRatePercent:100, lightningRateMultiplier:1,
+                lightningSegmentPercent:100, lightningTriggerMode:'morph', lightningRatePercent:100, lightningRateMultiplier:1,
                 lightningDurationMs:480, lightningWidthPercent:64, lightningBrightness:100, lightningGlow:16,
-                lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningPreGlowIntensity:50, lightningSmoothLighting:true,
+                lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1,  lightningSmoothLighting:true,
                 lightningShowLines:true, lightningLineOpacity:100,
                 lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2
             });
@@ -12158,6 +12217,7 @@ syncMorphProfileUI();
                 }
                 if(typeof resetAutoTapBandTrackers==='function')resetAutoTapBandTrackers();
             }
+            resetTempoLock(true); // playlist BPM is authoritative on a project boundary
             if (typeof syncTapUI === 'function') syncTapUI();
             if (typeof syncMorphSettingsUI === 'function') syncMorphSettingsUI();
         }
@@ -13912,8 +13972,7 @@ syncMorphProfileUI();
                 state.sweep.lightningGlowIntensityMultiplier=Math.max(0,Number.isFinite(Number(state.sweep.lightningGlowIntensityMultiplier))?Number(state.sweep.lightningGlowIntensityMultiplier):1);
                 state.sweep.lightningSoftness=Math.max(0,Math.min(150,Number.isFinite(Number(state.sweep.lightningSoftness))?Number(state.sweep.lightningSoftness):100));
                 state.sweep.lightningSoftnessMultiplier=Math.max(0,Number.isFinite(Number(state.sweep.lightningSoftnessMultiplier))?Number(state.sweep.lightningSoftnessMultiplier):1);
-                state.sweep.lightningPreGlowIntensity=Math.max(0,Math.min(100,Number.isFinite(Number(state.sweep.lightningPreGlowIntensity))?Number(state.sweep.lightningPreGlowIntensity):50));
-                state.sweep.lightningUseGlintMultiplier=state.sweep.lightningUseGlintMultiplier!==false;state.sweep.lightningGlintMultiplier=Math.max(0,Number.isFinite(Number(state.sweep.lightningGlintMultiplier))?Number(state.sweep.lightningGlintMultiplier):2);normalizeSweepConfig(state.sweep);
+                normalizeSweepConfig(state.sweep);
                 state.sweep.lightningSmoothLighting=state.sweep.lightningSmoothLighting===true;
                 state.sweep.lightningShowLines=state.sweep.lightningShowLines!==false;
                 state.sweep.lightningLineOpacity=Math.max(0,Math.min(100,Number(state.sweep.lightningLineOpacity)||100));
@@ -14245,6 +14304,7 @@ syncMorphProfileUI();
                 state.tapTempo.syncMinimalMorph = typeof t.syncMinimalMorph === 'boolean' ? t.syncMinimalMorph : state.tapTempo.bpm > 0;
                 state.tapTempo.anchorTime = performance.now();
                 state.tapTempo.tapTimes = []; state.tapTempo.autoBeatTimes = [];
+                resetTempoLock(true); // imported project's BPM supersedes the old live lock
             }
             if (settings.audioReactive && typeof settings.audioReactive === 'object') {
                 const a = settings.audioReactive;
@@ -15124,9 +15184,9 @@ syncMorphProfileUI();
             reflowOpenViewportPopups();
         }, { passive:true });
 
-        const HEADER_VISIBILITY_KEY='SpiroStar.headerVisibility.v6';
+        const HEADER_VISIBILITY_KEY='SpiroStar.headerVisibility.v7';
         function applyHeaderVisibility(){
-            const h=state.uiVisibility||{showPresets:false,showProjects:true,hideMorphChooser:true,hideProfiles:false};
+            const h=state.uiVisibility||{showPresets:false,showProjects:true,hideMorphChooser:true,hideProfiles:true};
             document.getElementById('presetChooserPanel')?.classList.toggle('header-choice-hidden',h.showPresets!==true);
             document.getElementById('projectChooserPanel')?.classList.toggle('header-choice-hidden',h.showProjects!==true);
             document.getElementById('morphTypeTopNav')?.classList.toggle('header-choice-hidden',h.hideMorphChooser===true);
@@ -15471,7 +15531,7 @@ syncMorphProfileUI();
             const count=document.getElementById('audioBandCount');if(count)count.value=String(ar.bandCount);const custom=document.getElementById('audioCustomBandsEnabled');if(custom)custom.checked=ar.customBandsEnabled===true;
             paintAudioFrequencyTrack(hp,lp);
             if(ar.customBandsEnabled!==true) renderAudioCustomBandRows();
-            if(changed){ar.levelHistory=[];ar.normalizationPeak=0;ar.normalizationFloor=0;state.tapTempo.autoPrevSpectrum=null;state.tapTempo.autoFluxHistory=[];state.tapTempo.autoBeatTimes=[];state.tapTempo.autoFluxPrevSample=null;state.tapTempo.autoFluxPrevPrevSample=null;state.tapTempo.autoTempoCandidate=0;state.tapTempo.autoTempoCandidateCount=0;state.tapTempo.autoConfidence=0;state.tapTempo.autoTempoEvidence=[];state.tapTempo.autoTempoLastApplyAt=0;}
+            if(changed){ar.levelHistory=[];ar.normalizationPeak=0;ar.normalizationFloor=0;state.tapTempo.autoPrevSpectrum=null;state.tapTempo.autoFluxHistory=[];state.tapTempo.autoBeatTimes=[];state.tapTempo.autoFluxPrevSample=null;state.tapTempo.autoFluxPrevPrevSample=null;state.tapTempo.autoTempoCandidate=0;state.tapTempo.autoTempoCandidateCount=0;state.tapTempo.autoConfidence=0;state.tapTempo.autoTempoEvidence=[];state.tapTempo.autoTempoLastApplyAt=0;resetAutoTapBandTrackers();resetTempoLock(true);}
         }
 
         function stopAudioReactive(reason = '') {
@@ -15714,7 +15774,7 @@ syncMorphProfileUI();
                 ar.gateGain = computeNoiseGateGain(ar.inputDb, ar);
                 ar.gateOpen = !ar.noiseGateEnabled || ar.gateGain > 0.001;
                 if (ar.gateGain > 0.001) analyzeAutoTap(ar.data, now, ar.context.sampleRate, ar.analyser.fftSize, ar.gateGain);
-                else state.tapTempo.autoPrevSpectrum = null;
+                else { state.tapTempo.autoPrevSpectrum = null; if(state.tapTempo.autoTap && chooseStableAutoTapBand(now))syncTapUI(); }
                 const sr = ar.context.sampleRate;
                 const ranges=getAudioBandRangesForAnalysis();
                 const activeKeys=new Set(getActiveAudioBandKeys());
@@ -16671,6 +16731,7 @@ syncMorphProfileUI();
             state.tapTempo.autoFluxPrevSample = null; state.tapTempo.autoFluxPrevPrevSample = null;
             state.tapTempo.autoTempoCandidate = 0; state.tapTempo.autoTempoCandidateCount = 0; state.tapTempo.autoConfidence = 0;
             resetAutoTapBandTrackers();
+            resetTempoLock(false);
             state.tapTempo.anchorTime = 0; state.tapTempo.lastTapAt = 0; state.tapTempo.lastAppliedBpm = 0;
             state.tapTempo.syncFullMorph = false; state.tapTempo.syncMinimalMorph = false;
             replaceRuntimeBoundSection('projectMorph',{...state.projectMorph,active:false,intervalSec:16,syncTap:true,beatsPerProject:32,transitionBeats:8,cameraWander:false,transitionType:'smooth',advancedLinear:false,transitionSec:4,imageTransitionType:'fade',imageCenterSoftness:24,imageSectorSoftness:18,fadeProgress:0,progress:0,renderProgress:0,parameterProgress:0,transitionProgress:0,renderMode:'morph',frameGeometryProgress:-1,frameGeometryLayerProgress:[],frameRenderLayers:[],frameMorphSettings:null,frameTunnelSettings:null,frameLampConfig:null,crossfadeConfigSide:null,sourceProject:null,targetProject:null,restoreProject:null,sourceIndex:-1,targetIndex:-1,startAt:0,durationMs:16000,geometryPlans:[],frameGeometry:[],frameExtents:[],sourceGeometry:[],targetGeometry:[],sourceRenderLayers:[],targetRenderLayers:[],lampPlans:[],frameLampPoints:[],endpointPending:false,transitionActive:false,sourceCaptured:false});

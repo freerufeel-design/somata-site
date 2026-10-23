@@ -2198,15 +2198,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const strikePath=new Path2D(),pieces=[];for(const r of ranges)exactLightningAppendRange(r.rail,r.start,r.length,strikePath,pieces);
             return{ranges,pieces,strikePath};
         }
-        function buildExactLightningPrecharge(prepared,t,cfg,layerIndex=-1){
-            if(!prepared?.exactRanges?.length)return null;
-            const flash=getLightningFlashLengthPercent(cfg,layerIndex)/100;
 
-            if(flash>=.999999)return{path:prepared.strikePath,pieces:prepared.pieces,reused:true};
-            const travel=lightningSmooth01(t),path=new Path2D(),pieces=[];
-            for(const r of prepared.exactRanges){const len=r.length*flash,start=r.start+(r.length-len)*travel;exactLightningAppendRange(r.rail,start,len,path,pieces);}
-            return{path,pieces,reused:false};
-        }
 
         function buildExactLightningPaths(frameCtx,forcePreview=false) {
             const source=getLayerFrameAuxiliaryPaths(frameCtx),layer=frameCtx?.layer,cfg=frameCtx?.layerSweep||getLayerSweepConfig(layer);
@@ -2320,36 +2312,19 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             }
             if(!cubics.length)return null;const data=new Float32Array(cubics.length*8),cubicBreaks=new Uint8Array(cubics.length);let o=0,ci=0;const path2d=typeof Path2D!=='undefined'?new Path2D():null;let prev=null;
             for(const c of cubics){cubicBreaks[ci++]=c.breakBefore===true?1:0;data[o++]=c.p0.x;data[o++]=c.p0.y;data[o++]=c.c1.x;data[o++]=c.c1.y;data[o++]=c.c2.x;data[o++]=c.c2.y;data[o++]=c.p3.x;data[o++]=c.p3.y;if(path2d){if(c.breakBefore||!prev||Math.hypot(c.p0.x-prev.x,c.p0.y-prev.y)>1e-7)path2d.moveTo(c.p0.x,c.p0.y);path2d.bezierCurveTo(c.c1.x,c.c1.y,c.c2.x,c.c2.y,c.p3.x,c.p3.y);}prev=c.p3;}
-            const spectralAudioPrefix=cfg?._lightningSpectralAudio===true?'lightning':'sweep',sectorDeg=Math.max(1,Math.min(360,audioApplyNumeric(`${spectralAudioPrefix}.spectralSector`,Number.isFinite(Number(cfg?.spectralSectorDegrees))?Number(cfg.spectralSectorDegrees):45,layerIndex))),speedDeg=Math.max(-720,Math.min(720,audioApplyNumeric(`${spectralAudioPrefix}.spectralSpeed`,Number.isFinite(Number(cfg?.spectralAngularSpeed))?Number(cfg.spectralAngularSpeed):90,layerIndex)));
+            const spectralAudioPrefix='sweep',sectorDeg=Math.max(1,Math.min(360,audioApplyNumeric(`${spectralAudioPrefix}.spectralSector`,Number.isFinite(Number(cfg?.spectralSectorDegrees))?Number(cfg.spectralSectorDegrees):45,layerIndex))),speedDeg=Math.max(-720,Math.min(720,audioApplyNumeric(`${spectralAudioPrefix}.spectralSpeed`,Number.isFinite(Number(cfg?.spectralAngularSpeed))?Number(cfg.spectralAngularSpeed):90,layerIndex)));
             const cx=(minX+maxX)*.5,cy=(minY+maxY)*.5,progress=Math.max(0,Math.min(1,Number(phase)||0)),baseDir=cfg?.direction==='backward'?-1:1,speedDir=speedDeg<0?-1:1,direction=baseDir*speedDir,first=cubics[0]?.p0,startAngle=first?Math.atan2(first.y-cy,first.x-cx):0;
 
             return{bezierGlint:true,glintType:type,spectral,spectralCycleLocked:spectral===true,spectralProgress:progress,spectralDirection:direction,spectralStartAngle:startAngle,cubicData:data,cubicBreaks,cubicCount:cubics.length,path2d,centerX:cx,centerY:cy,sectorSpanAngle:sectorDeg*Math.PI/180,sectorDegrees:sectorDeg,angularSpeed:speedDeg,maskRadius:Math.max(10000,Math.hypot(maxX-minX,maxY-minY)*8+1000)};
         }
 
-        function getLightningFlashLengthPercent(cfg,layerIndex=-1){
-            normalizeSweepConfig(cfg);
-            const base=Number.isFinite(Number(cfg?.lengthPercent))?Number(cfg.lengthPercent):3;
-            return Math.max(1,Math.min(100,audioApplyNumeric('lightning.flashLength',base,layerIndex)));
-        }
+
         function lightningSmooth01(value){
             const t=Math.max(0,Math.min(1,Number(value)||0));
             return t*t*t*(t*(t*6-15)+10);
         }
-        function sliceLightningPieceWindow(piece,startFrac,endFrac){
-            const n=piece?.length||0;if(n<2)return null;
-            const last=n-1,a=Math.max(0,Math.min(1,Number(startFrac)||0))*last,b=Math.max(0,Math.min(1,Number(endFrac)||0))*last;
-            if(!(b>a+1e-7))return null;
-            const at=(pos)=>{const i=Math.max(0,Math.min(last-1,Math.floor(pos))),u=Math.max(0,Math.min(1,pos-i)),p=piece[i],q=piece[Math.min(last,i+1)],px=Number(p?.x)||0,py=Number(p?.y)||0;return{x:px+((Number(q?.x)||0)-px)*u,y:py+((Number(q?.y)||0)-py)*u};};
-            const out=[at(a)],from=Math.max(1,Math.ceil(a+1e-7)),to=Math.min(last-1,Math.floor(b-1e-7));
-            for(let i=from;i<=to;i++)out.push(piece[i]);
-            out.push(at(b));
-            return out;
-        }
-        function buildLightningPrechargePieces(pieces,t,cfg,layerIndex=-1){
-            const frac=getLightningFlashLengthPercent(cfg,layerIndex)/100,travel=lightningSmooth01(t),start=frac>=.999999?0:(1-frac)*travel,end=Math.min(1,start+frac),out=[];
-            for(const piece of pieces||[]){const cut=sliceLightningPieceWindow(piece,start,end);if(cut?.length>1)out.push(cut);}
-            return out;
-        }
+
+
         function lightningSamplingProfile(cfg,maxSamples=90){
             const precision=normalizeLightningPrecisionValue(cfg?.lightningPrecision);
 
@@ -2431,13 +2406,8 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const softness=Math.max(0,Math.min(1.5,(softnessBase*softnessMultiplier)/100));
             return {glowSize:Math.max(0,glowBase*glowMultiplier),strength:Math.max(0,(intensityBase/100)*intensityMultiplier),brightness,softness,opacity};
         }
-        function lightningUsesGlintVisual(cfg){return cfg?.lightningUseGlintMultiplier!==false;}
         function getLightningVisualSettings(cfg=currentSweepConfig(),layerIndex=-1){
             normalizeSweepConfig(cfg);
-            if(lightningUsesGlintVisual(cfg)){
-                const base=getGlintVisualSettings(cfg,layerIndex),mult=Math.max(0,Number.isFinite(Number(cfg.lightningGlintMultiplier))?Number(cfg.lightningGlintMultiplier):2);
-                return{glowSize:base.glowSize*mult,strength:base.strength*mult,brightness:base.brightness*mult,softness:base.softness,linked:true,multiplier:mult};
-            }
             const glowBase=Math.max(0,audioApplyNumeric('lightning.glow',Number.isFinite(Number(cfg.lightningGlow))?Number(cfg.lightningGlow):16,layerIndex));
             const glowMult=Math.max(0,Number.isFinite(Number(cfg.lightningGlowMultiplier))?Number(cfg.lightningGlowMultiplier):1);
             const intensityBase=Math.max(0,audioApplyNumeric('lightning.intensity',Number.isFinite(Number(cfg.lightningGlowIntensity))?Number(cfg.lightningGlowIntensity):100,layerIndex)/100);
@@ -2446,11 +2416,6 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const softnessBase=Math.max(0,Math.min(150,audioApplyNumeric('lightning.softness',Number.isFinite(Number(cfg.lightningSoftness))?Number(cfg.lightningSoftness):100,layerIndex)));
             const softnessMult=Math.max(0,Number.isFinite(Number(cfg.lightningSoftnessMultiplier))?Number(cfg.lightningSoftnessMultiplier):1);
             return{glowSize:glowBase*glowMult,strength:Math.min(32,intensityBase*intensityMult),brightness,softness:Math.max(0,Math.min(1.5,(softnessBase*softnessMult)/100)),linked:false,multiplier:1};
-        }
-        function getLightningPreflashSettings(cfg=currentSweepConfig(),layerIndex=-1){
-            normalizeSweepConfig(cfg);const visual=getGlintVisualSettings(cfg,layerIndex);
-            const widthRaw=audioApplyNumeric('sweep.width',Number.isFinite(Number(cfg.widthPercent))?Number(cfg.widthPercent):75,layerIndex),widthPercent=Number.isFinite(widthRaw)?Math.max(0,Math.min(200,widthRaw)):75;
-            return{...visual,widthPercent,color:cfg.color||'#ffffff'};
         }
 
         function getSweepMotionPhase(now=performance.now(),cfg=currentSweepConfig()){
@@ -2565,7 +2530,74 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             rt.phase=raw-wraps;
             return rt.phase;
         }
+        // v9.0.6: Lightning follows the authoritative musical/effect cycle.
+        // "morph" = priority Glint > Blue/Orange Morph > timer. The two explicit
+        // alternatives are strict: no silent fallback when their source stops.
+        function getLightningTriggerSource(cfg=currentSweepConfig()){
+            const mode=['timer','morph','glint'].includes(cfg?.lightningTriggerMode)?cfg.lightningTriggerMode:'morph';
+            if(mode==='timer')return 'timer';
+            if(mode==='glint')return cfg?.glintEnabled===true?'glint':'off';
+            if(cfg?.glintEnabled===true)return 'glint';
+            // Orange owns the visible composition while Blue is paused for its transition.
+            if(runtimeState?.minimalMorph?.active===true&&(runtimeState.minimalMorph.transitioning===true||runtimeState.morph?.pausedByOrangeProject===true))return 'orange';
+            if(runtimeState?.morph?.active===true)return 'morph';
+            if(runtimeState?.minimalMorph?.active===true)return 'orange';
+            return 'timer';
+        }
+        function getLightningEffectiveCycleRateHz(cfg=currentSweepConfig(),layerIndex=-1){
+            const source=getLightningTriggerSource(cfg);
+            if(source==='glint')return Math.abs(getSweepTargetVelocity(cfg));
+            if(source==='morph')return 1/Math.max(.1,getTapMorphIntervalSec(state.morph.intervalSec,'full'));
+            if(source==='orange')return 1/Math.max(.1,getTapMorphIntervalSec(state.minimalMorph.intervalSec,'minimal'));
+            if(source==='off')return 0;
+            return lightningRateSyncEnabled()?getSynchronizedLightningCycleRateHz(cfg):getLightningCycleRateHz(cfg,layerIndex);
+        }
+        const lightningSourceCycleTracker=new WeakMap();
+        function gateLightningGlintCycle(cfg,layerIndex,phase,cycle){
+            const authored=state.layers?.[layerIndex],owner=authored?getLayerSweepConfig(authored):cfg;
+            let rt=lightningSourceCycleTracker.get(owner);
+            if(!rt||rt.source!=='glint'||cycle<rt.firstCycle){
+                rt={source:'glint',firstCycle:cycle};lightningSourceCycleTracker.set(owner,rt);
+            }
+            // A Glint strike is caused by the *completed* revolution, not
+            // by merely enabling Glint at phase zero or halfway round.
+            return cycle>rt.firstCycle?phase:1;
+        }
+        function getLightningTriggerPhase(now,cfg,layerIndex,source){
+            if(source==='off')return{phase:1,cycle:0};
+            if(source==='glint'){
+                // Glint owns its continuous phase; advancing it here also fixes the
+                // previous scheduler early-continue with Glint + Lightning together.
+                const phase=getSweepMotionPhase(now,cfg);
+                const cycle=Math.max(0,Number(cfg.cycleCount)||0);
+                return{phase:gateLightningGlintCycle(cfg,layerIndex,phase,cycle),cycle};
+            }
+            if(source==='morph'){
+                const rt=runtimeState.morph;
+                if(rt?.paused===true||rt?.pausedByOrangeProject===true||rt?.pausedByGreenProject===true||!(rt?.cycleStart>0))return{phase:1,cycle:0};
+                const cycleMs=Math.max(100,getTapMorphIntervalSec(state.morph.intervalSec,'full')*1000);
+                return{phase:Math.max(0,Math.min(1,(now-rt.cycleStart)/cycleMs)),cycle:Math.max(0,Number(rt.lampCycleSerial)||0)};
+            }
+            if(source==='orange'){
+                const rt=runtimeState.minimalMorph;
+                if(rt?.paused===true)return{phase:1,cycle:0};
+                const cycleMs=Math.max(100,getTapMorphIntervalSec(state.minimalMorph.intervalSec,'minimal')*1000);
+                const remaining=Number(rt?.nextSwitchAt)-now;
+                if(!Number.isFinite(remaining)||!Number.isFinite(Number(rt?.nextSwitchAt)))return{phase:1,cycle:0};
+                return{phase:Math.max(0,Math.min(1,1-remaining/cycleMs)),cycle:Math.max(0,Number(rt?.cycleCount)||0)};
+            }
+            return{phase:1,cycle:0};
+        }
         function getLightningMotionPhase(now=performance.now(),cfg=currentSweepConfig(),layerIndex=-1){
+            const source=getLightningTriggerSource(cfg);
+            if(source!=='timer'){
+                const authored=state.layers?.[layerIndex],owner=authored?getLayerSweepConfig(authored):cfg;
+                if(source!=='glint')lightningSourceCycleTracker.delete(owner);
+                const p=getLightningTriggerPhase(now,cfg,layerIndex,source);
+                if(cfg){cfg.lightningPhase=p.phase;cfg.lightningLastUpdate=now;cfg.lightningCycleCount=p.cycle;}
+                return p.phase;
+            }
+            {const authored=state.layers?.[layerIndex],owner=authored?getLayerSweepConfig(authored):cfg;lightningSourceCycleTracker.delete(owner);}
             if(lightningRateSyncEnabled()){
                 const rt=lightningSharedClockRuntime,phase=advanceLightningClock(rt,now,getSynchronizedLightningCycleRateHz(cfg));
                 if(cfg){cfg.lightningPhase=phase;cfg.lightningLastUpdate=now;cfg.lightningCycleCount=rt.cycleCount;}
@@ -2601,17 +2633,17 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 const pieces=exact?.pieces||getLightningModePieces(visible,layer,scratch,cfg,layerIndex);
                 const data=scratch.data;
                 data.now=now;data.paths=paths;data.layer=layer;data.signature=signature;data.visible=visible;data.pieces=pieces;data.exactRanges=exact?.ranges||null;
-                data.strikePath=exact?.strikePath||lightningPiecesPath(pieces);data.prechargeT=NaN;data.prechargePath=null;data._insideClipPath=undefined;data._outsideClipPath=undefined;
+                data.strikePath=exact?.strikePath||lightningPiecesPath(pieces);data._insideClipPath=undefined;data._outsideClipPath=undefined;
                 lightningPreparedFrame=data;
                 return data;
             }
 
             let cached=lightningPreparedCache.get(paths);
-            if(cached&&cached.layer===layer&&cached.signature===signature){cached.now=now;cached.prechargeT=NaN;cached.prechargePath=null;lightningPreparedFrame=cached;return cached;}
+            if(cached&&cached.layer===layer&&cached.signature===signature){cached.now=now;lightningPreparedFrame=cached;return cached;}
             const visible=(paths?.__somataFrameContour===true||paths?._lightningRenderedRail===true)?paths:prepareWebVisiblePaths(paths,layer);
             const exact=paths?._exactLightningSplineRail===true?exactLightningSelection(visible,layer,cfg,layerIndex):null;
             const pieces=exact?.pieces||getLightningModePieces(visible,layer,null,cfg,layerIndex);
-            const data={now,paths,layer,signature,visible,pieces,exactRanges:exact?.ranges||null,strikePath:exact?.strikePath||lightningPiecesPath(pieces),prechargeT:NaN,prechargePath:null};
+            const data={now,paths,layer,signature,visible,pieces,exactRanges:exact?.ranges||null,strikePath:exact?.strikePath||lightningPiecesPath(pieces)};
             lightningPreparedCache.set(paths,data);lightningPreparedFrame=data;return data;
         }
 
@@ -2623,6 +2655,15 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             for(let i=Math.max(0,Math.floor(k)-5);i<=Math.min(n-1,Math.ceil(k)+5);i++){const p=evalPulse(i);if(!p)continue;const parity=i&1;if(!best[parity]||p.intensity>best[parity].intensity)best[parity]=p;}
             if(best[0])target.push(best[0]);if(best[1])target.push(best[1]);return target;
         }
+        function lightningActiveCycleFraction(cfg,layerIndex=-1){
+            const hz=Math.max(.000001,getLightningEffectiveCycleRateHz(cfg,layerIndex));
+            const cycleMs=1000/hz,strikeMs=Math.max(30,Math.min(700,audioApplyNumeric('lightning.duration',Number(cfg.lightningDurationMs)||120,layerIndex)));
+            const afterMs=cfg.lightningAfterglow!==false?Math.max(0,Math.min(900,audioApplyNumeric('lightning.afterglowMs',Number(cfg.lightningAfterglowMs)||280,layerIndex))):0;
+            let strikeFrac=Math.max(.025,Math.min(.34,strikeMs/cycleMs));
+            let afterFrac=Math.max(0,Math.min(.34,afterMs/cycleMs));
+            if(strikeFrac+afterFrac>.68){const k=.68/(strikeFrac+afterFrac);strikeFrac*=k;afterFrac*=k;}
+            return strikeFrac+afterFrac;
+        }
         function prepareLightningVectorFrame(layer,phase,prepared,layerIndex=-1,cfg=currentSweepConfig(layer)){
             const gpuArcResident=prepared?.gpuArcResident===true;
             if(!gpuArcResident&&!prepared?.pieces?.length)return null;
@@ -2630,10 +2671,10 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const idx=Number.isInteger(layerIndex)?layerIndex:-1;
             const baseW=Math.max(.5,audioApplyNumeric('layer.strokeWidth',Number(layer?.strokeWidth)||1.5,idx)*getLayerStrokeWidthMultiplier(layer));
             const widthPct=Math.max(1,Math.min(100,audioApplyNumeric('lightning.width',Number(cfg.lightningWidthPercent)||64,idx)));
-            const boltW=Math.max(.2,baseW*widthPct/100),strikeVis=getLightningVisualSettings(cfg,idx),preVis=getLightningPreflashSettings(cfg,idx);
+            const boltW=Math.max(.2,baseW*widthPct/100),strikeVis=getLightningVisualSettings(cfg,idx);
             const glow=strikeVis.glowSize,glowIntensity=Math.min(32,strikeVis.strength),brightness=Math.max(0,strikeVis.brightness),softness=strikeVis.softness;
             const lineOpacity=Math.max(0,Math.min(1,audioApplyNumeric('lightning.lineOpacity',Number.isFinite(Number(cfg.lightningLineOpacity))?Number(cfg.lightningLineOpacity):100,idx)/100));
-            const velocity=Math.max(.000001,lightningRateSyncEnabled()?getSynchronizedLightningCycleRateHz(cfg):getLightningCycleRateHz(cfg,idx));
+            const velocity=Math.max(.000001,getLightningEffectiveCycleRateHz(cfg,idx));
             const cycleMs=1000/velocity;
             const strikeMs=Math.max(30,Math.min(700,audioApplyNumeric('lightning.duration',Number(cfg.lightningDurationMs)||120,idx)));
             const afterEnabled=cfg.lightningAfterglow!==false;
@@ -2641,32 +2682,21 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             let strikeFrac=Math.max(.025,Math.min(.34,strikeMs/cycleMs));
             let afterFrac=Math.max(0,Math.min(.34,afterMs/cycleMs));
             if(strikeFrac+afterFrac>.68){const k=.68/(strikeFrac+afterFrac);strikeFrac*=k;afterFrac*=k;}
-            const preEnd=Math.max(.18,1-strikeFrac-afterFrac),strikeEnd=preEnd+strikeFrac;
+            // No precharge: the flash is the actual Lightning strike. Remaining time is idle.
+            const strikeEnd=strikeFrac,afterEnd=strikeEnd+afterFrac;
             const out={
                 prepared,phase,cfg,baseW,boltW,glow,glowIntensity,brightness,softness,lineOpacity,smoothLighting:cfg.lightningSmoothLighting===true,precisionHigh:isHighPrecisionLightning(cfg),
-                primary:cfg.lightningColor||'#ffffff',secondary:cfg.lightningSecondaryColor||'#7dd3fc',flash:preVis.color,flashOpacity:preVis.opacity,flashLength:getLightningFlashLengthPercent(cfg,idx)/100,
+                primary:cfg.lightningColor||'#ffffff',secondary:cfg.lightningSecondaryColor||'#7dd3fc',
                 strikePath:prepared.strikePath||(gpuArcResident?null:lightningPiecesPath(prepared.pieces)),
                 showBase:cfg.lightningShowLines!==false&&getLayerLineVisible(layer)===false,
-                stage:'idle',intensity:0,prechargePath:null,prechargeT:0,prechargeAlpha:0,prechargeWidth:0,microPulses:[]
+                stage:'idle',intensity:0,microPulses:[]
             };
-            if(phase<preEnd){
-                const t=Math.max(0,Math.min(1,phase/preEnd));
-                const exactPre=!gpuArcResident&&prepared.exactRanges?.length?buildExactLightningPrecharge(prepared,t,cfg,idx):null;
-                const prechargePieces=gpuArcResident?null:(exactPre?.pieces||buildLightningPrechargePieces(prepared.pieces,t,cfg,idx));
-                const path=gpuArcResident?null:(exactPre?.path||lightningPiecesPath(prechargePieces));
-                out.stage='precharge';out.prechargePieces=prechargePieces;out.prechargePath=path;out.prechargeT=lightningSmooth01(t);
-
-                out.prechargeWidth=Math.max(.15,baseW*preVis.widthPercent/100);
-                out.prechargeAlpha=Math.pow(Math.max(0,Math.sin(Math.PI*t)),.72);
-                out.prechargeBrightness=preVis.brightness;out.prechargeGlow=preVis.glowSize;out.prechargeGlowIntensity=preVis.strength;out.prechargeSoftness=preVis.softness;
-                return out;
-            }
             if(phase<strikeEnd){
-                const t=Math.max(0,Math.min(1,(phase-preEnd)/Math.max(1e-6,strikeFrac)));
+                const t=Math.max(0,Math.min(1,phase/Math.max(1e-6,strikeFrac)));
                 const attack=lightningSmooth01(Math.min(1,t/.16)),release=lightningSmooth01(Math.min(1,(1-t)/.24));
                 out.stage='strike';out.intensity=Math.max(0,Math.min(1,attack*(.26+.84*release)));return out;
             }
-            if(afterFrac<=.0001)return out;
+            if(afterFrac<=.0001||phase>=afterEnd)return out;
             const t=Math.max(0,Math.min(1,(phase-strikeEnd)/afterFrac));
             out.stage='after';out.intensity=.26*(1-lightningSmooth01(t));
             const count=Math.max(0,Math.round(audioApplyNumeric('lightning.microStrikes',Number(cfg.lightningMicroStrikes)||0,idx)));
@@ -2730,7 +2760,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(frameCtx.sweepPreparedReady)return frameCtx.sweepPrepared;
             const layer=frameCtx.layer,cfg=frameCtx.layerSweep||getLayerSweepConfig(layer),paths=getLayerFrameAuthoritativePaths(frameCtx),sharedContour=paths?.__somataFrameContour===true,now=frameCtx.now||performance.now();
             let data=frameCtx.sweepData;if(!data)data=frameCtx.sweepData={};
-            data.cfg=cfg;data.layerIndex=frameCtx.layerIndex;data.paths=paths;data.now=now;data.prepared=null;data.phase=0;data.lightningPhase=0;data.lightningVector=null;data.lightningSpectralPrepared=null;data.lightningSpectralCfg=null;data.lightningSpectralVisual=null;data.lightningSpectralW=0;data.sweepW=0;data.glintVisual=null;data.vectorPath=null;data.bezierGlintGPU=false;data.canonicalGPU=false;data.gpuMorphArc=false;
+            data.cfg=cfg;data.layerIndex=frameCtx.layerIndex;data.paths=paths;data.now=now;data.prepared=null;data.phase=0;data.lightningPhase=0;data.lightningVector=null;data.sweepW=0;data.glintVisual=null;data.vectorPath=null;data.bezierGlintGPU=false;data.canonicalGPU=false;data.gpuMorphArc=false;
             if(cfg?.enabled===true&&paths?.length){
                 const phase=getSweepMotionPhase(now,cfg);data.phase=phase;
                 if(cfg.effectType==='lightning'){
@@ -2742,13 +2772,13 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     const lightningPaths=sharedContour?paths:(exactLightning?buildExactLightningPaths(frameCtx):paths);
                     data.paths=lightningPaths;
                     data.lightningPhase=getLightningMotionPhase(now,cfg,frameCtx.layerIndex);
-                    data.prepared=getPreparedLightningFrame(lightningPaths,layer,now,cfg,frameCtx.layerIndex);
-                    data.lightningVector=prepareLightningVectorFrame(layer,data.lightningPhase,data.prepared,frameCtx.layerIndex,cfg);
-                    if(data.lightningVector?.stage==='precharge'&&normalizeSweepFlashMode(cfg.flashMode)==='spectral'){
-                        const spectralCfg={...cfg,flashType:'spectral',glintPrecision:'spectral',_lightningPreflashBlend:false,_lightningPreflashCoreOnTop:true,_lightningSpectralAudio:true,spectralSectorDegrees:Math.max(1,Math.min(360,Number.isFinite(Number(cfg.spectralSectorDegrees))?Number(cfg.spectralSectorDegrees):45)),spectralAngularSpeed:Math.max(-720,Math.min(720,Number.isFinite(Number(cfg.spectralAngularSpeed))?Number(cfg.spectralAngularSpeed):90)),color:cfg.color||'#ffffff'};
-                        const spectralPrepared=buildBezierGlintPrepared(frameCtx,lightningPaths,spectralCfg,data.lightningVector.prechargeT,now,frameCtx.layerIndex);
-                        if(spectralPrepared){const f=data.lightningVector;data.lightningSpectralPrepared=spectralPrepared;data.lightningSpectralCfg=spectralCfg;data.lightningSpectralW=f.prechargeWidth;data.lightningSpectralVisual={glowSize:f.prechargeGlow,strength:f.prechargeGlowIntensity,brightness:f.prechargeBrightness,softness:f.prechargeSoftness,opacity:f.flashOpacity};}
+                    if(data.lightningPhase>=lightningActiveCycleFraction(cfg,frameCtx.layerIndex)){
+                        data.lightningVector={stage:'idle',intensity:0,microPulses:[]};
+                    }else{
+                        data.prepared=getPreparedLightningFrame(lightningPaths,layer,now,cfg,frameCtx.layerIndex);
+                        data.lightningVector=prepareLightningVectorFrame(layer,data.lightningPhase,data.prepared,frameCtx.layerIndex,cfg);
                     }
+
                 }else{
                     const glintType=effectiveGlintType(cfg);
                     if(glintType==='high'||glintType==='chaotic'||glintType==='spectral'){
@@ -2778,9 +2808,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
 
             return Math.max(0,Number(glow)||0);
         }
-        function lightningPrechargePiecesForGL(pieces,t,cfg,layerIndex=-1){
-            return buildLightningPrechargePieces(pieces,t,cfg,layerIndex);
-        }
+
         function queueLightningStrikeWebGL(ctx,pieces,layer,alpha,frame,intensity,microIndex=-1,suppressBase=false){
             const a=Math.max(0,Math.min(1,(Number(alpha)||0)*Math.max(0,Number(intensity)||0)));if(a<=.001)return true;
             if(!suppressBase&&frame.showBase)SweepGPURenderer.queueStroke(ctx,pieces,Math.max(.15,frame.baseW),layer?.strokeColor||'#ffffff',a*frame.lineOpacity,0,0,0);
@@ -2801,14 +2829,6 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 if(!prepared?.visible?.length||!prepared?.pieces?.length)return true;
                 const lightningPhase=frameData?frameData.lightningPhase:getLightningMotionPhase(now,cfg,layerIndex),frame=frameData?.lightningVector||prepareLightningVectorFrame(layer,lightningPhase,prepared,layerIndex,cfg);
                 if(!frame||frame.stage==='idle')return true;
-                if(frame.stage==='precharge'){
-                    const paGlow=Math.max(0,Math.min(1,alpha*frame.prechargeAlpha)),paCore=paGlow*Math.max(0,Math.min(1,Number.isFinite(Number(frame.flashOpacity))?Number(frame.flashOpacity):1));if(paGlow<=.001&&paCore<=.001)return true;
-                    const pp=frame.prechargePieces?.length?frame.prechargePieces:lightningPrechargePiecesForGL(prepared.pieces,frame.prechargeT,cfg,layerIndex),glowR=lightningVisualGlowRadius(frame.prechargeGlow),flashColor=frame.flash||'#ffffff',w=Math.max(.15,frame.prechargeWidth),bright=Math.max(0,frame.prechargeBrightness||0);
-                    SweepGPURenderer.queueStroke(ctx,pp,w,flashColor,0,glowR,paGlow*frame.prechargeGlowIntensity*bright*(frame.smoothLighting?.32:.24),frame.prechargeSoftness);
-                    SweepGPURenderer.queueStroke(ctx,pp,w*1.12,flashColor,paCore*.32,0,0,0);
-                    SweepGPURenderer.queueStroke(ctx,pp,w,flashColor,paCore,0,0,0);
-                    return true;
-                }
                 queueLightningStrikeWebGL(ctx,prepared.pieces,layer,alpha,frame,frame.intensity,-1,false);
                 if(frame.stage==='after')for(const pulse of frame.microPulses)queueLightningStrikeWebGL(ctx,prepared.pieces,layer,alpha,frame,pulse.intensity,pulse.index,false);
                 return true;
@@ -2824,9 +2844,26 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             return true;
         }
 
-        function sweepAnimationTick(){
-            if(!state.layers.some(l=>getLayerSweepConfig(l).enabled===true)) return false;
-            requestMainCanvasRender();
+        const lightningScheduledVisibility=new WeakMap();
+        function sweepAnimationTick(now=performance.now()){
+            let enabled=false,needsPaint=false;
+            for(let i=0;i<state.layers.length;i++){
+                const layer=state.layers[i],cfg=getLayerSweepConfig(layer);
+                if(cfg.enabled!==true||layer.visible===false)continue;
+                enabled=true;
+                if(cfg.glintEnabled===true){getSweepMotionPhase(now,cfg);needsPaint=true;}
+                if(cfg.lightningEnabled!==true)continue;
+                // The strike and afterglow require GPU repaint. Long idle portions do not.
+                // Keep the music clock ticking even without rendering, and repaint once when
+                // an active strike ends to clear its last visible image.
+                const phase=getLightningMotionPhase(now,cfg,i);
+                const active=phase<lightningActiveCycleFraction(cfg,i);
+                const wasActive=lightningScheduledVisibility.get(cfg)===true;
+                if(active||wasActive)needsPaint=true;
+                lightningScheduledVisibility.set(cfg,active);
+            }
+            if(!enabled)return false;
+            if(needsPaint)requestMainCanvasRender();
             return true;
         }
         function gpuPathFxAnimationTick(){
@@ -3996,6 +4033,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const e=document.getElementById('showSweep');if(e)e.checked=state.masterLayerEdit===true?everyLayerMatches(l=>getLayerGlintEnabled(l)):c.glintEnabled===true;
             const le=document.getElementById('showLightning');if(le)le.checked=state.masterLayerEdit===true?everyLayerMatches(l=>getLayerLightningEnabled(l)):c.lightningEnabled===true;
             const et=document.getElementById('sweepEffectType');if(et)et.value=c.effectType;
+            const trigger=document.getElementById('sweepLightningTriggerMode');if(trigger)trigger.value=c.lightningTriggerMode||'morph';
             c.coreBlendMode=normalizeSweepBlendMode(c.coreBlendMode);c.glowBlendMode=normalizeSweepBlendMode(c.glowBlendMode);const cbm=document.getElementById('sweepCoreBlendMode');if(cbm)cbm.value=c.coreBlendMode;const gbm=document.getElementById('sweepGlowBlendMode');if(gbm)gbm.value=c.glowBlendMode;const lcbm=document.getElementById('sweepLightningCoreBlendMode');if(lcbm)lcbm.value=c.coreBlendMode;const lgbm=document.getElementById('sweepLightningGlowBlendMode');if(lgbm)lgbm.value=c.glowBlendMode;
             document.getElementById('sweepGlintSettings')?.classList.remove('hidden');document.getElementById('sweepLightningSettings')?.classList.remove('hidden');
             const title=document.getElementById('sweepGlintSectionTitle');if(title)title.textContent='Проблеск';const fm=document.getElementById('sweepFlashMode');if(fm)fm.value=c.flashMode;c.profileShape=c.profileShape==='line'?'line':'current';const ps=document.getElementById('sweepProfileShape');if(ps)ps.value=c.profileShape;
@@ -4012,12 +4050,11 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             {
                 c.lightningProfileShape=c.lightningProfileShape==='line'?'line':'current';const lps=document.getElementById('sweepLightningProfileShape');if(lps)lps.value=c.lightningProfileShape;c.lightningBehavior=normalizeLightningBehaviorValue(c.lightningBehavior,'symmetric');c.lightningPrecision=normalizeLightningPrecisionValue(c.lightningPrecision);const lbeh=document.getElementById('sweepLightningBehavior');if(lbeh)lbeh.value=c.lightningBehavior;const lprec=document.getElementById('sweepLightningPrecision');if(lprec)lprec.value=c.lightningPrecision;c.lightningMode=['perSegment','everyNth','across','perPath','whole'].includes(c.lightningMode)?c.lightningMode:'perPath';c.lightningEveryN=Math.max(2,Math.min(24,Math.round(Number(c.lightningEveryN)||2)));c.lightningRandomPosition=c.lightningRandomPosition===true;const lm=document.getElementById('sweepLightningMode');if(lm)lm.value=c.lightningMode;document.getElementById('sweepLightningEveryNRow')?.classList.toggle('hidden',c.lightningMode!=='everyNth');const lne=document.getElementById('sweepLightningEveryN');if(lne)lne.value=String(c.lightningEveryN);const lnet=document.getElementById('sweepLightningEveryNText');if(lnet)lnet.textContent=String(c.lightningEveryN);const lrpos=document.getElementById('sweepLightningRandomPosition');if(lrpos)lrpos.checked=c.lightningRandomPosition;
                 const lcol=document.getElementById('sweepLightningColor');if(lcol)lcol.value=/^#[0-9a-f]{6}$/i.test(c.lightningColor||'')?c.lightningColor:'#ffffff';const lscol=document.getElementById('sweepLightningSecondaryColor');if(lscol)lscol.value=/^#[0-9a-f]{6}$/i.test(c.lightningSecondaryColor||'')?c.lightningSecondaryColor:'#7dd3fc';c.lightningSegmentPercent=Math.max(1,Math.min(100,Number.isFinite(Number(c.lightningSegmentPercent))?Number(c.lightningSegmentPercent):100));const lseg=document.getElementById('sweepLightningSegmentPercent');if(lseg)lseg.value=String(c.lightningSegmentPercent);const lsegt=document.getElementById('sweepLightningSegmentText');if(lsegt)lsegt.textContent=`${Math.round(c.lightningSegmentPercent)}%`;
-                c.lightningRatePercent=Math.max(0,Math.min(100,Number.isFinite(Number(c.lightningRatePercent))?Number(c.lightningRatePercent):100));c.lightningRateMultiplier=Math.max(0,Number.isFinite(Number(c.lightningRateMultiplier))?Number(c.lightningRateMultiplier):1);const lrs=document.getElementById('sweepLightningRateSync');if(lrs)lrs.checked=lightningRateSyncEnabled();const lrpct=document.getElementById('sweepLightningRatePercent');if(lrpct)lrpct.value=String(c.lightningRatePercent);const lrm=document.getElementById('sweepLightningRateMultiplier');if(lrm)lrm.value=String(c.lightningRateMultiplier);const lrt=document.getElementById('sweepLightningRateText');if(lrt){const hz=lightningRateSyncEnabled()?getSynchronizedLightningCycleRateHz(c):getLightningCycleRateHz(c,state.layers.indexOf(effectLayer)),tag=lightningRateSyncEnabled()?' · синхр.':'';lrt.textContent=hz>0?`${Math.round(c.lightningRatePercent)}% × ${c.lightningRateMultiplier.toFixed(c.lightningRateMultiplier%1?1:0)} · ${(1/hz).toFixed((1/hz)<10?2:1)} с${tag}`:`${Math.round(c.lightningRatePercent)}% × ${c.lightningRateMultiplier.toFixed(c.lightningRateMultiplier%1?1:0)} · выкл.${tag}`;}
+                c.lightningRatePercent=Math.max(0,Math.min(100,Number.isFinite(Number(c.lightningRatePercent))?Number(c.lightningRatePercent):100));c.lightningRateMultiplier=Math.max(0,Number.isFinite(Number(c.lightningRateMultiplier))?Number(c.lightningRateMultiplier):1);const lrs=document.getElementById('sweepLightningRateSync');if(lrs)lrs.checked=lightningRateSyncEnabled();const lrpct=document.getElementById('sweepLightningRatePercent');if(lrpct)lrpct.value=String(c.lightningRatePercent);const lrm=document.getElementById('sweepLightningRateMultiplier');if(lrm)lrm.value=String(c.lightningRateMultiplier);const lrt=document.getElementById('sweepLightningRateText');if(lrt){const source=getLightningTriggerSource(c),hz=getLightningEffectiveCycleRateHz(c,state.layers.indexOf(effectLayer)),tag=source==='glint'?' · оборот проблеска':source==='morph'?' · цикл Blue':source==='orange'?' · цикл Orange':source==='off'?' · проблеск выключен':(lightningRateSyncEnabled()?' · синхр.':'');lrt.textContent=source==='timer'?(hz>0?`${Math.round(c.lightningRatePercent)}% × ${c.lightningRateMultiplier.toFixed(c.lightningRateMultiplier%1?1:0)} · ${(1/hz).toFixed((1/hz)<10?2:1)} с${tag}`:`Таймер выключен`):(hz>0?`${(1/hz).toFixed((1/hz)<10?2:1)} с${tag}`:tag.trim());}
                 c.lightningDurationMs=Math.max(30,Math.min(700,Number(c.lightningDurationMs)||480));const ldur=document.getElementById('sweepLightningDuration');if(ldur)ldur.value=String(c.lightningDurationMs);const ldurt=document.getElementById('sweepLightningDurationText');if(ldurt)ldurt.textContent=`${Math.round(c.lightningDurationMs)} ms`;c.lightningWidthPercent=Math.max(1,Math.min(100,Number(c.lightningWidthPercent)||64));const lw=document.getElementById('sweepLightningWidthPercent');if(lw)lw.value=String(c.lightningWidthPercent);const lwt=document.getElementById('sweepLightningWidthText');if(lwt)lwt.textContent=`${Math.round(c.lightningWidthPercent)}%`;
-                c.lightningUseGlintMultiplier=c.lightningUseGlintMultiplier!==false;c.lightningGlintMultiplier=Math.max(0,Number.isFinite(Number(c.lightningGlintMultiplier))?Number(c.lightningGlintMultiplier):2);const use=document.getElementById('sweepLightningUseGlintMultiplier');if(use)use.checked=c.lightningUseGlintMultiplier;const link=document.getElementById('sweepLightningGlintMultiplier');if(link)link.value=String(c.lightningGlintMultiplier);
                 c.lightningBrightness=Math.max(0,Math.min(400,Number.isFinite(Number(c.lightningBrightness))?Number(c.lightningBrightness):100));c.lightningGlow=Math.max(0,Number.isFinite(Number(c.lightningGlow))?Number(c.lightningGlow):16);c.lightningGlowMultiplier=Math.max(0,Number.isFinite(Number(c.lightningGlowMultiplier))?Number(c.lightningGlowMultiplier):1);if(c.lightningGlow>50){const q=compactSweepPixelValue(c.lightningGlow,c.lightningGlowMultiplier,50);c.lightningGlow=q.base;c.lightningGlowMultiplier=q.multiplier;}c.lightningGlowIntensity=Math.max(0,Math.min(400,Number.isFinite(Number(c.lightningGlowIntensity))?Number(c.lightningGlowIntensity):100));c.lightningGlowIntensityMultiplier=Math.max(0,Number.isFinite(Number(c.lightningGlowIntensityMultiplier))?Number(c.lightningGlowIntensityMultiplier):1);c.lightningSoftness=Math.max(0,Math.min(150,Number.isFinite(Number(c.lightningSoftness))?Number(c.lightningSoftness):100));c.lightningSoftnessMultiplier=Math.max(0,Number.isFinite(Number(c.lightningSoftnessMultiplier))?Number(c.lightningSoftnessMultiplier):1);
-                let db=c.lightningBrightness,di=c.lightningGlowIntensity*c.lightningGlowIntensityMultiplier,dg=c.lightningGlow*c.lightningGlowMultiplier,ds=c.lightningSoftness*c.lightningSoftnessMultiplier;if(c.lightningUseGlintMultiplier){db=c.brightness*c.lightningGlintMultiplier;di=c.glowIntensity*c.glowIntensityMultiplier*c.lightningGlintMultiplier;dg=c.glow*c.glowMultiplier*c.lightningGlintMultiplier;ds=c.softness*c.softnessMultiplier;}
-                const dgCompact=compactSweepPixelValue(dg,1,50),diBase=Math.min(400,di),diMult=diBase>0?di/diBase:1,dsBase=Math.min(150,ds),dsMult=dsBase>0?ds/dsBase:1,lbright=document.getElementById('sweepLightningBrightness'),lgi=document.getElementById('sweepLightningGlowIntensity'),lgim=document.getElementById('sweepLightningGlowIntensityMultiplier'),lg=document.getElementById('sweepLightningGlow'),lgm=document.getElementById('sweepLightningGlowMultiplier'),lsoft=document.getElementById('sweepLightningSoftness'),lsoftm=document.getElementById('sweepLightningSoftnessMultiplier');if(lbright)lbright.value=String(Math.min(400,db));if(lgi)lgi.value=String(diBase);if(lgim)lgim.value=String(diMult);if(lg)lg.value=String(dgCompact.base);if(lgm)lgm.value=String(dgCompact.multiplier);if(lsoft)lsoft.value=String(dsBase);if(lsoftm)lsoftm.value=String(dsMult);for(const el of [lbright,lgi,lgim,lg,lgm,lsoft,lsoftm])if(el)el.disabled=c.lightningUseGlintMultiplier;
+                let db=c.lightningBrightness,di=c.lightningGlowIntensity*c.lightningGlowIntensityMultiplier,dg=c.lightningGlow*c.lightningGlowMultiplier,ds=c.lightningSoftness*c.lightningSoftnessMultiplier;
+                const dgCompact=compactSweepPixelValue(dg,1,50),diBase=Math.min(400,di),diMult=diBase>0?di/diBase:1,dsBase=Math.min(150,ds),dsMult=dsBase>0?ds/dsBase:1,lbright=document.getElementById('sweepLightningBrightness'),lgi=document.getElementById('sweepLightningGlowIntensity'),lgim=document.getElementById('sweepLightningGlowIntensityMultiplier'),lg=document.getElementById('sweepLightningGlow'),lgm=document.getElementById('sweepLightningGlowMultiplier'),lsoft=document.getElementById('sweepLightningSoftness'),lsoftm=document.getElementById('sweepLightningSoftnessMultiplier');if(lbright)lbright.value=String(Math.min(400,db));if(lgi)lgi.value=String(diBase);if(lgim)lgim.value=String(diMult);if(lg)lg.value=String(dgCompact.base);if(lgm)lgm.value=String(dgCompact.multiplier);if(lsoft)lsoft.value=String(dsBase);if(lsoftm)lsoftm.value=String(dsMult);
                 const lbt=document.getElementById('sweepLightningBrightnessText');if(lbt)lbt.textContent=`${Math.round(db)}%`;const lgit=document.getElementById('sweepLightningGlowIntensityText');if(lgit)lgit.textContent=`${Math.round(di)}%`;const lgt=document.getElementById('sweepLightningGlowText');if(lgt)lgt.textContent=`${Math.round(dg*10)/10} px`;const lst=document.getElementById('sweepLightningSoftnessText');if(lst)lst.textContent=`${Math.round(ds)}%`;
                 c.lightningSmoothLighting=true;const lsl=document.getElementById('sweepLightningShowLines');if(lsl)lsl.checked=c.lightningShowLines!==false;const llo=document.getElementById('sweepLightningLineOpacity');if(llo){c.lightningLineOpacity=Math.max(0,Math.min(100,Number.isFinite(Number(c.lightningLineOpacity))?Number(c.lightningLineOpacity):100));llo.value=String(c.lightningLineOpacity);const lineOn=getLayerLineVisible(effectLayer);llo.style.opacity=lineOn?'.45':'1';llo.title=lineOn?'Обычная линия уже видима — дополнительная основа не рисуется':'Прозрачность локальной основы под ударом';}const llot=document.getElementById('sweepLightningLineOpacityText');if(llot)llot.textContent=`${Math.round(c.lightningLineOpacity)}%`;
                 const lag=document.getElementById('sweepLightningAfterglow');if(lag)lag.checked=c.lightningAfterglow!==false;const lam=document.getElementById('sweepLightningAfterglowMs');if(lam){c.lightningAfterglowMs=Math.max(0,Math.min(900,Number(c.lightningAfterglowMs)||280));lam.value=String(c.lightningAfterglowMs);lam.disabled=c.lightningAfterglow===false;}const lamt=document.getElementById('sweepLightningAfterglowText');if(lamt)lamt.textContent=`${Math.round(c.lightningAfterglowMs)} ms`;const lmicro=document.getElementById('sweepLightningMicroStrikes');if(lmicro){c.lightningMicroStrikes=Math.max(0,Math.round(Number(c.lightningMicroStrikes)||0));lmicro.value=String(c.lightningMicroStrikes);lmicro.disabled=c.lightningAfterglow===false;}const lmicrot=document.getElementById('sweepLightningMicroText');if(lmicrot)lmicrot.textContent=String(c.lightningMicroStrikes);

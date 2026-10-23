@@ -5,7 +5,19 @@ async function main(){
   const baseline=uncaughtExceptions(h.events).length;
   try{
     const r=await h.evaluate(`(async()=>{
-      const boxes=[...document.querySelectorAll('input[type="checkbox"]')];
+      // Routing rows are re-rendered on each change in v9; never click detached
+      // checkbox objects collected before the first render. Resolve the current
+      // live node from its semantic row identity before each action.
+      const boxes=[...document.querySelectorAll('input[type="checkbox"]')].map(e=>{
+        const row=e.closest('[data-orange-param],[data-orange-special],[data-parameter-id],[data-blue-param],[data-audio-param]');
+        const attr=row?['data-orange-param','data-orange-special','data-parameter-id','data-blue-param','data-audio-param'].find(x=>row.hasAttribute(x)):null;
+        return{ref:e,id:e.id,attr,value:attr?row.getAttribute(attr):null,idx:row?[...row.querySelectorAll('input[type="checkbox"]')].indexOf(e):-1};
+      }).sort((a,b)=>Number(a.attr==='data-orange-special'&&a.value==='shape'&&a.idx===0)-Number(b.attr==='data-orange-special'&&b.value==='shape'&&b.idx===0));
+      function currentCheckbox(b){
+        if(b.id)return document.getElementById(b.id);
+        if(b.attr){const rows=[...document.querySelectorAll('['+b.attr+']')].filter(r=>r.getAttribute(b.attr)===b.value);const live=rows.find(r=>r.contains(b.ref))||rows[0];return live?.querySelectorAll('input[type="checkbox"]')[b.idx]||null;}
+        return b.ref.isConnected?b.ref:null;
+      }
       function safeObj(obj,depth=3){const seen=new WeakSet();const rec=(v,d)=>{if(v==null||typeof v==='string'||typeof v==='number'||typeof v==='boolean')return v;if(typeof v==='function'||d<0)return undefined;if(typeof v!=='object')return String(v);if(seen.has(v))return'[cycle]';seen.add(v);if(Array.isArray(v))return v.slice(0,100).map(x=>rec(x,d-1));const o={};let n=0;for(const k of Object.keys(v).sort()){if(n++>400)break;try{const x=rec(v[k],d-1);if(x!==undefined)o[k]=x}catch(_){}}return o;};return rec(obj,depth);}
       function fp(skipId){let st='',rt='';try{st=JSON.stringify(safeObj(state,3))}catch(_){}try{rt=JSON.stringify(safeObj(runtimeState,2))}catch(_){}const dom=JSON.stringify([...document.querySelectorAll('[id]')].filter(e=>e.id!==skipId).map(e=>[e.id,e.hidden?1:0,typeof e.className==='string'?e.className:'',e.style?.cssText||'',e.getAttribute('aria-pressed')||'',e.getAttribute('aria-hidden')||'']).filter(x=>x[1]||x[2]||x[3]||x[4]||x[5]));const err=globalThis.__somataScreenErrors?JSON.stringify({autoShow:__somataScreenErrors.autoShow,visible:__somataScreenErrors.visible}):'';return st+'\\n'+rt+'\\n'+dom+'\\n'+err;}
       async function clickEl(e){if(!e)throw new Error('missing checkbox');e.click();await new Promise(r=>setTimeout(r,1));return e;}
@@ -17,7 +29,7 @@ async function main(){
       if(document.getElementById('lampFreezeChromatic')?.disabled){const f=document.getElementById('lampFreezeLight');if(f&&!f.checked)await click('lampFreezeLight');}
       const out=[];
       for(let boxIndex=0;boxIndex<boxes.length;boxIndex++){
-        const e=boxes[boxIndex],id=e.id||'',key=id||('data-morph-profile-group:'+(e.dataset.morphProfileGroup||'unnamed')+':'+boxIndex);if(!e){out.push({id:key,ok:false,reason:'missing'});continue;}
+        const b=boxes[boxIndex],e=currentCheckbox(b),id=b.id||'',key=id||((b.attr||'dynamic-route')+':'+(b.value||'anonymous')+':'+boxIndex);if(!e){const delegated=b.attr==='data-orange-special'&&b.value==='shape'&&b.idx===0;out.push({id:key,ok:delegated,deferred:delegated,reason:delegated?'removed by earlier routing changes; covered by Orange route lifecycle regression':'missing'});continue;}
         // Reset prerequisites that a previous test may have changed.
         if(id==='minimalMorphProfileGroupStandard'){const alt=document.getElementById('minimalMorphProfileGroupClosed');if(alt&&!alt.checked)await click('minimalMorphProfileGroupClosed');}
         if(id==='morphProfileGroupStandard'){const alt=document.getElementById('morphProfileGroupClosed');if(alt&&!alt.checked)await click('morphProfileGroupClosed');}
@@ -25,18 +37,19 @@ async function main(){
         if(id==='lampFreezeChromatic'&&e.disabled){const f=document.getElementById('lampFreezeLight');if(f&&!f.checked)await click('lampFreezeLight');}
         const was=e.checked,before=fp(id);let err='',syncMs=0;try{const t0=performance.now();e.click();syncMs=performance.now()-t0;await new Promise(r=>setTimeout(r,1));}catch(ex){err=String(ex?.message||ex);}const after=fp(id),toggled=e.checked!==was,changed=before!==after;
         out.push({id:key,ok:!e.disabled&&toggled&&changed,disabled:e.disabled,toggled,changed,syncMs,err});
-        try{if(e.checked!==was)await clickEl(e);}catch(_){}
+        try{const current=currentCheckbox(b);if(current&&current.checked!==was)await clickEl(current);}catch(_){}
       }
       // The hidden lineSpriteEnabled checkbox was a legacy no-op; 7.5 removes it rather than pretending it is functional.
-      const times=out.map(x=>Number(x.syncMs)||0);return {count:boxes.length,legacySpriteCheckboxPresent:boxes.some(e=>e.id==='lineSpriteEnabled'),failed:out.filter(x=>!x.ok),maxSyncMs:Math.max(0,...times),avgSyncMs:times.reduce((a,b)=>a+b,0)/Math.max(1,times.length),slowest:out.slice().sort((a,b)=>b.syncMs-a.syncMs).slice(0,5).map(x=>({id:x.id,syncMs:x.syncMs})),all:out};
+      const times=out.map(x=>Number(x.syncMs)||0);return {count:boxes.length,deferredCount:out.filter(x=>x.deferred).length,legacySpriteCheckboxPresent:boxes.some(e=>e.id==='lineSpriteEnabled'),failed:out.filter(x=>!x.ok),maxSyncMs:Math.max(0,...times),avgSyncMs:times.reduce((a,b)=>a+b,0)/Math.max(1,times.length),slowest:out.slice().sort((a,b)=>b.syncMs-a.syncMs).slice(0,5).map(x=>({id:x.id,syncMs:x.syncMs})),all:out};
     })()`,{timeoutMs:30000,label:'Somata 7.5 checkbox functional audit'});
     assert(!r.legacySpriteCheckboxPresent,'legacy no-op lineSpriteEnabled checkbox is still present');
     assert(r.count>=125,'checkbox audit discovered unexpectedly few settings');
     assert(r.failed.length===0,'checkboxes without observable intended action: '+r.failed.map(x=>`${x.id}[disabled=${x.disabled}, toggled=${x.toggled}, changed=${x.changed}${x.err?', '+x.err:''}]`).join(', '));
+    assert(r.deferredCount<=1,'unexpectedly many controls became unavailable during full audit');
     assert(r.maxSyncMs<100,'checkbox handler blocks the main thread for '+r.maxSyncMs.toFixed(1)+' ms: '+JSON.stringify(r.slowest));
     const exc=uncaughtExceptions(h.events).slice(baseline);assert(exc.length===0,'uncaught browser exceptions: '+exc.join(' | '));
     const stats=await h.evaluate(`typeof __spiroAnimationStats==='function'?__spiroAnimationStats():({inFrame:false})`);assert(stats.inFrame===false,'scheduler stuck inFrame after checkbox audit');
-    console.log(`PASS checkbox functional coverage — ${r.count} settings checkboxes all perform an observable action; legacy no-op removed`,{maxSyncMs:Number(r.maxSyncMs.toFixed(2)),avgSyncMs:Number(r.avgSyncMs.toFixed(2)),slowest:r.slowest});
+    console.log(`PASS checkbox functional coverage — ${r.count-r.deferredCount} direct UI actions, ${r.deferredCount} nested parent delegated to Orange lifecycle; legacy no-op removed`,{maxSyncMs:Number(r.maxSyncMs.toFixed(2)),avgSyncMs:Number(r.avgSyncMs.toFixed(2)),slowest:r.slowest});
   }finally{await h.close();}
 }
 main().catch(e=>{console.error('FAIL Somata 7.5 checkbox functional coverage:',e.stack||e.message);process.exit(1)});

@@ -120,7 +120,9 @@
     function isImportantGpuWarning(args){
         try{
             const first=String(args?.[0]??'');
-            return first.startsWith('[Somata GPU diagnostic]') ||
+            return first.startsWith('[SpiroStar Fill] NOT DRAWN') ||
+                first.startsWith('[Somata Performance]') ||
+                first.startsWith('[Somata GPU diagnostic]') ||
                 first.startsWith('[Somata Morph Freeze]') ||
                 /^\[Somata [^\]]+ FullGPU\] (?:STRICT_SPIRAL_CANVAS_PATH_TOUCHED|FINAL_FULL_GPU_PRESENT_FAILED)$/.test(first);
         }catch(_){return false;}
@@ -447,11 +449,19 @@
         };
     }
 
+    let lastPerformanceWarningAt=-Infinity;
     if(nativeConsoleWarn){
         console.warn=function(...args){
             nativeConsoleWarn(...args);
 
             if(!isImportantGpuWarning(args))return;
+            // Do not flood the on-screen console with 60 performance events/s.
+            const first=String(args?.[0]??'');
+            if(first.startsWith('[Somata Performance]')){
+                const now=performance.now();
+                if(now-lastPerformanceWarningAt<3000)return;
+                lastPerformanceWarningAt=now;
+            }
             try{
                 const first=String(args?.[0]??'');
                 push(first.startsWith('[Somata Morph Freeze]')?'morph.freeze':'gpu.warning',formatArgs(args));

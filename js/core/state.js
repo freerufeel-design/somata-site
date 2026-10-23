@@ -23,7 +23,7 @@ window.__spiroRegisterModule?.('js/core/state');
             boundingCircleColor: '#94a3b8',
             showVignette: false,
             ambientOverPrism: false,
-            uiVisibility: { showPresets: false, showProjects: true, hideMorphChooser: true, hideProfiles: false },
+            uiVisibility: { showPresets: false, showProjects: true, hideMorphChooser: true, hideProfiles: true },
             sidebarMode: 'shape',
             ambient: {
                 rain:{enabled:false,angle:14,density:70,color:'#a6c8ff',hue:0,opacity:55,speed:170},
@@ -50,7 +50,7 @@ window.__spiroRegisterModule?.('js/core/state');
             showLamps: false,
             showWeb: false,
             lightningRateSync: true,
-            sweep: { enabled: false, glintEnabled:false, lightningEnabled:false, effectType: 'lightning', profileShape:'current', coreBlendMode:'normal', glowBlendMode:'normal',  flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode: 'perPath', direction: 'forward', speed: 0.25, speedMultiplier: 1, syncMusic: true, lengthPercent: 3, widthPercent: 75, everyN: 2, color: '#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningProfileShape:'current', lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:true, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc',  lightningSegmentPercent:100,  lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningWidthPercent:64, lightningUseGlintMultiplier:true, lightningGlintMultiplier:2, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningPreGlowIntensity:50, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase: 0, currentVelocity: 0, lastUpdate: 0, cycleCount:0, raf: 0 },
+            sweep: { enabled: false, glintEnabled:false, lightningEnabled:false, effectType: 'lightning', profileShape:'current', coreBlendMode:'normal', glowBlendMode:'normal',  flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode: 'perPath', direction: 'forward', speed: 0.25, speedMultiplier: 1, syncMusic: true, lengthPercent: 3, widthPercent: 75, everyN: 2, color: '#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningProfileShape:'current', lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:true, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc',  lightningSegmentPercent:100, lightningTriggerMode:'morph', lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningWidthPercent:64, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:true, lightningAfterglowMs:280, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase: 0, currentVelocity: 0, lastUpdate: 0, cycleCount:0, raf: 0 },
             web: { type:'bevel', style:'web', region:'inside', inside:true, outsideStraight:false, outsideArc:false, placementMode:'selfIntersection', oscillating:false, oscillationStrength:10, oscillationStrengthMultiplier:1, oscillationMultiplier:1, angleThreshold:60, width:0.6, widthRelative:false, widthPercent:40, color:'#ffffff', secondaryColor:'#00ffff', sunDegrees:20, distance:30, depthMultiplier:1, spacing:10, angleVariation:6 },
             lineOutline: { enabled: false, color: '#ffffff', width: 1.5, mode:'outer' },
             lamps: {
@@ -202,6 +202,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 autoBandTrackers: {},
                 autoChosenBand: '',
                 autoBandLastDecisionAt: 0,
+                autoTempoLock: null, autoLastDecisionPeakAt: 0,
                 syncFullMorph: false,
                 syncMinimalMorph: false
             },
@@ -489,7 +490,8 @@ window.__spiroRegisterModule?.('js/core/state');
                 'tapTimes','anchorTime','lastTapAt','lastAppliedBpm','autoPrevSpectrum','autoFluxHistory',
                 'autoBeatTimes','autoLastPeakAt','autoConfidence','autoTempoCandidate',
                 'autoTempoCandidateCount','autoFluxPrevSample','autoFluxPrevPrevSample',
-                'autoBandTrackers','autoChosenBand','autoBandLastDecisionAt'
+                'autoBandTrackers','autoChosenBand','autoBandLastDecisionAt',
+                'autoTempoLock','autoLastDecisionPeakAt'
             ],
             audioReactive: [
                 'active','context','analyser','stream','data','timeData','raf','inputDb','gateOpen','gateGain',
@@ -529,7 +531,8 @@ window.__spiroRegisterModule?.('js/core/state');
                 tapTimes:[], anchorTime:0, lastTapAt:0, lastAppliedBpm:0, autoPrevSpectrum:null,
                 autoFluxHistory:[], autoBeatTimes:[], autoLastPeakAt:0, autoConfidence:0, autoTempoCandidate:0,
                 autoTempoCandidateCount:0, autoTempoEvidence:[], autoTempoLastApplyAt:0, autoFluxPrevSample:null, autoFluxPrevPrevSample:null,
-                autoBandTrackers:{}, autoChosenBand:'', autoBandLastDecisionAt:0
+                autoBandTrackers:{}, autoChosenBand:'', autoBandLastDecisionAt:0,
+                autoTempoLock:null, autoLastDecisionPeakAt:0
             },
             audioReactive: {
                 active:false, context:null, analyser:null, stream:null, data:null, timeData:null, raf:0, inputDb:-100,

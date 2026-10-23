@@ -45,8 +45,8 @@ const read=f=>fs.readFileSync(path.join(ROOT,f),'utf8');
       return{corridor,palette,audioCorridor:!!audioCorridor,audioPalette:!!audioPalette,morphGroups,controls,speedMin:speed?.min,speedMax:speed?.max,toward,away,resolved,authoredState:t.speedStrength};
     })()`,{timeoutMs:15000,label:'7.9.12 corridor palette routing signed speed'});
 
-    assert(out.corridor.length===4,'Corridor must expose exactly 4 canonical routes: '+JSON.stringify(out.corridor));
-    assert(JSON.stringify(out.corridor.map(x=>x.label))===JSON.stringify(['Скорость','Дистанция','Смещение цвета','Винетирование']),'Corridor labels/order wrong: '+JSON.stringify(out.corridor));
+    assert(out.corridor.length===5&&new Set(out.corridor.map(x=>x.id)).size===5,'Corridor must expose five distinct current routes: '+JSON.stringify(out.corridor));
+    assert(['tunnel.speed','tunnel.spacing','tunnel.depthCurve','tunnel.colorShift','tunnel.depthCurveMultiplier'].every(id=>out.corridor.some(x=>x.id===id)),'Corridor canonical routes missing: '+JSON.stringify(out.corridor));
     assert(out.palette.length===1&&out.palette[0].label==='Общее смещение цвета','Palette must expose only global hue offset: '+JSON.stringify(out.palette));
     assert(out.audioCorridor&&out.audioPalette&&out.morphGroups.includes('Коридор')&&out.morphGroups.includes('Палитра'),'Corridor/Palette groups missing from Audio or Morph UI');
     assert(out.controls.every(x=>x.capable&&x.param),'Corridor/Palette controls did not get unified right-click routing surfaces: '+JSON.stringify(out.controls));

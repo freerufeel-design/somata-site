@@ -12,8 +12,10 @@ assert.match(part,/renderPerf\.rendering=false;\s*\/\/[\s\S]*?SomataAmbientPrism
  'A finished main GPU frame notifies optics AFTER its present and after releasing render guard');
 assert(!part.includes('animationScheduler.invalidate()'),'do not start a second render loop');
 const html=read('index.html');
-assert(html.includes('js/render/main-pipeline.js?v=8.20.14'),'changed pipeline must be cache busted');
-assert(html.includes('js/app/ambient-prism.js?v=8.20.14'),'changed optical scheduler must be cache busted');
+const releaseVersion=html.match(/<title>Somata (9\.\d+\.\d+)<\/title>/)?.[1];
+assert(releaseVersion,'release version missing from HTML title');
+for(const asset of ['js/render/main-pipeline.js','js/app/ambient-prism.js'])
+ assert(html.includes(asset+'?v='+releaseVersion),'asset cache-busting differs from release: '+asset);
 
 const nodes=new Map(),main={id:'finalGpuCanvas',width:800,height:500,sceneVersion:1,style:{display:'block'}};
 nodes.set(main.id,main);

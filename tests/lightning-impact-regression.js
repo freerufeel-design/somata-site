@@ -12,10 +12,10 @@ async function main(){
   try{
     const result=await h.evaluate(`(()=>{
       const L=state.layers[0];ensureLayerEffectState(L);const s=getLayerSweepConfig(L);s.enabled=true;s.effectType='lightning';s.lightningPrecision='exact';s.lightningAfterglow=true;s.lightningMicroStrikes=2;s.lightningGlow=24;s.lightningGlowIntensity=100;s.lightningBrightness=100;
-      const t0=performance.now();let ok=0;for(let i=0;i<160;i++){beginFrameGeometryRuntime();const c=acquireLayerFrameEffectContext(0);c.layer=L;c.effectLayer=L;c.sourceLayer=L;c.staticDrawData=getCachedLayerDrawData(L);c.canonicalGeometry=getCanonicalLayerGeometry(L);c.now=i*16;c.frame.now=c.now;c.frame.dpr=1;c.frame.id=c.frameId;c.strokeWidth=2;c.layerSweep=s;c.sweepPreparedReady=false;const d=prepareLayerFrameSweepData(c);if(d?.prepared&&Array.isArray(d.paths)&&d.paths.length)ok++;}return{ok,iterations:160,ms:performance.now()-t0};
+      const t0=performance.now();let ok=0,idle=0,invalid=0;for(let i=0;i<160;i++){beginFrameGeometryRuntime();const c=acquireLayerFrameEffectContext(0);c.layer=L;c.effectLayer=L;c.sourceLayer=L;c.staticDrawData=getCachedLayerDrawData(L);c.canonicalGeometry=getCanonicalLayerGeometry(L);c.now=i*16;c.frame.now=c.now;c.frame.dpr=1;c.frame.id=c.frameId;c.strokeWidth=2;c.layerSweep=s;c.sweepPreparedReady=false;const d=prepareLayerFrameSweepData(c);if(d?.lightningVector?.stage==='idle'){idle++;if(d.prepared)invalid++;}else if(d?.prepared&&Array.isArray(d.paths)&&d.paths.length)ok++;else invalid++;}return{ok,idle,invalid,iterations:160,ms:performance.now()-t0};
     })()`);
     const errors=uncaughtExceptions(h.events).slice(baseline);assert(!errors.length,`uncaught browser exceptions: ${errors.join(' | ')}`);
-    assert(result.ok===result.iterations,'Lightning preparation probe did not produce prepared exact data for every iteration');
+    assert(result.idle>0&&result.ok>0&&result.ok+result.idle===result.iterations&&result.invalid===0,'Lightning strike/after needs real prepared geometry, idle must skip expensive preparation: '+JSON.stringify(result));
     assert(result.ms<1500,'Lightning CPU preparation smoke exceeded 1.5 s for 160 frames: '+result.ms.toFixed(1)+' ms');
     console.log('LIGHTNING IMPACT REGRESSION: PASS',{analyticHaloAllStages:true,exactRasterSubdiv:4,prepProbe:result});
   }finally{await h.close();}

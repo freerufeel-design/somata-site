@@ -9,6 +9,7 @@ async function main(){
   const ui=fs.readFileSync(path.join(root,'js/app/ui-project-runtime.js'),'utf8');
   const pipeline=fs.readFileSync(path.join(root,'js/render/main-pipeline.js'),'utf8');
   const scheduler=fs.readFileSync(path.join(root,'js/core/scheduler.js'),'utf8');
+  const profilePass=fs.readFileSync(path.join(root,'js/render/profile-pass.js'),'utf8');
 
   assert(lamp.includes('let src=vec2<f32>(xy)-vec2<f32>(fu.shiftX,fu.shiftY)'), 'Freeze Light feedback still samples from fragment half-pixel coordinates');
   assert(!lamp.includes('let src=vec2<f32>(p.xy)-vec2<f32>(fu.shiftX,fu.shiftY)'), 'legacy half-pixel Freeze Light sampling remains');
@@ -30,7 +31,7 @@ async function main(){
   assert(hueHandler&&!hueHandler.includes('resetFreezeTrail'), 'changing Freeze Light colour mode still despawns/reset its history');
   assert(ui.includes("LampGPURenderer?.resetFreezeTrail?.()")&&ui.includes("LampGPURenderer?.resetFreezeRain?.()"), 'Freeze Light/Rain lifecycle controls are not independently reset');
   assert(pipeline.includes('const glowOwner=frameCtx.effectLayer||layer;'), 'Glow does not follow the live effect owner on every layer');
-  assert(pipeline.includes('noteGraffitiContourGlowOutcome(frameCtx,false)'), 'Graffiti glow warm-up misses are not retried');
+  assert(profilePass.includes('noteGraffitiContourGlowOutcome(frameCtx,false)')&&profilePass.includes('noteGraffitiContourGlowOutcome(frameCtx,true)'), 'Graffiti glow warm-up misses are not tracked in the owner pass');
   assert(scheduler.includes('externalRafGapCount++')&&scheduler.includes('return null;'), 'unattributed browser rAF gaps are still emitted as Morph freezes');
   console.log('PASS static Freeze Light/Rain independence, tail slew, monotonic tail hue, Corridor Rain isolation, Glow owner/retry and rAF-gap contracts');
 

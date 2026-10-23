@@ -7143,3 +7143,9 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
 #ambientSettingsGroup .ambient-effect-row .row-label{font-size:11px!important;}
 #ambientSettingsGroup .ambient-vignette-row .lamp-slider-mult{width:100%;}
 #ambientSettingsGroup .ambient-vignette-row input[type=range]{min-width:0;}
+
+/* v9.0.6: lightning trigger selection lives in the heading, not in the appearance controls. */
+.lightning-trigger-header{display:flex;align-items:center;gap:7px;flex-wrap:wrap;}
+.lightning-trigger-header .lightning-trigger-control{display:inline-flex;align-items:center;gap:5px;margin-left:auto;font-size:11px;white-space:nowrap;min-width:0;}
+.lightning-trigger-header .lightning-trigger-control select{min-width:112px;max-width:154px;font-size:11px;padding:3px 4px;}
+.lightning-trigger-header .badge{margin-left:0;}

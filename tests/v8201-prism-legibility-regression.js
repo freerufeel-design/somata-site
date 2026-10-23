@@ -8,7 +8,8 @@ const check=(v,msg)=>{if(!v)throw Error(msg)};
   const r=await h.evaluate(`(()=>{
    state.ambient.rain.enabled=false;state.showVignette=false;
    Object.values(state.ambient).forEach(c=>c.enabled=false);
-   Object.assign(state.prism,{enabled:true,size:260,refraction:24,dispersion:76,opacity:55,speed:0});
+   // A GPU-disabled harness cannot certify 3D WebGPU pixels; validate the supported 2D optical fallback here.
+   Object.assign(state.prism,{mode:'2d',source2d:'legacy',enabled:true,size:260,refraction:24,dispersion:76,opacity:55,speed:0});
    const shapes={};
    const width=document.getElementById('prismOverlayCanvas').width;
    for(const shape of ['lens','sphere','cube','skull','dodecahedron','cross']){
@@ -26,7 +27,7 @@ const check=(v,msg)=>{if(!v)throw Error(msg)};
    state.prism.shape='dodecahedron';SomataAmbientPrism.render(11000);
    return shapes;
   })()`,{timeoutMs:20000,label:'prism shape opacity, bounds and facets'});
-  console.log('8.20.1 prism visibility:',JSON.stringify(r));
+  console.log('8.20.1 2D prism visibility:',JSON.stringify(r));
   for(const [name,x] of Object.entries(r)){
    check(x.visible>1500,`${name}: only ${x.visible} visible pixels`);
    check(x.lit>450,`${name}: only ${x.lit} strong pixels`);

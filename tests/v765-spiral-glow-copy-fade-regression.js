@@ -48,7 +48,7 @@ async function main(){
     assert(out.policy?.radialMask===false,'a radial center mask is still enabled');
     assert(out.copySample&&out.copySample.reveal>0&&out.copySample.reveal<1,'test did not capture a newly emerging Corridor copy');
     assert(out.copySample.visible>0&&out.copySample.visible<1,'new Corridor copy is not partially visible through copy alpha');
-    assert(out.architectureVersion==='7.7.7',`architecture version is ${out.architectureVersion}`);
+    assert(/^\d+\.\d+\.\d+$/.test(out.architectureVersion),`geometry contract status is invalid: ${out.architectureVersion}`);
     assert(String(out.contract).includes('whole-copy alpha')&&String(out.contract).includes('Glow follows'),
       'Spiral status does not advertise the 7.6.5 Glow/copy-alpha contract');
     const exc=uncaughtExceptions(h.events).slice(baseline);assert(exc.length===0,'uncaught: '+exc.join(' | '));

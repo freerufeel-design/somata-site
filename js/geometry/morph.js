@@ -1271,18 +1271,18 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             }
         }
 
-        function drawCircleSlideMorph(ctx, layer, sourceLayer, targetLayer, t, alpha) {
+        function drawCircleSlideMorph(ctx, layer, sourceLayer, targetLayer, t, alpha, slideTypeOverride = null) {
             drawAngularAnchorMorph(
                 ctx, layer, sourceLayer, targetLayer, t, alpha,
-                (typeof getEffectiveCircleSlideType==='function' ? getEffectiveCircleSlideType() : (state.morph.slideType || 'minimal')),
+                (slideTypeOverride || (typeof getEffectiveCircleSlideType==='function' ? getEffectiveCircleSlideType() : (state.morph.slideType || 'minimal'))),
                 'angular'
             );
         }
 
-        function drawLinearAnchorMorph(ctx, layer, sourceLayer, targetLayer, t, alpha) {
+        function drawLinearAnchorMorph(ctx, layer, sourceLayer, targetLayer, t, alpha, slideTypeOverride = null) {
             drawAngularAnchorMorph(
                 ctx, layer, sourceLayer, targetLayer, t, alpha,
-                (typeof getEffectiveCircleSlideType==='function' ? getEffectiveCircleSlideType() : (state.morph.slideType || 'minimal')),
+                (slideTypeOverride || (typeof getEffectiveCircleSlideType==='function' ? getEffectiveCircleSlideType() : (state.morph.slideType || 'minimal'))),
                 'linear'
             );
         }

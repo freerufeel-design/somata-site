@@ -18,8 +18,8 @@ function main(){
   const core=read('js/app/geometry-gpu-core.js');
   const index=read('index.html');
 
-  assert(/<title>Somata 7\.7\.\d+<\/title>/.test(index),'7.7.x version/title missing');
-  assert(/v=20261015-v77\d{3}/.test(index),'7.7.x cache busting missing');
+  assert(/<title>Somata 9\.\d+\.\d+<\/title>/.test(index),'Somata 9 release title/version missing');
+  assert(/<script[^>]+src="js\/gpu\/morph-arc-resource\.js\?v=[^"]+"/.test(index),'GPU resource not loaded or missing cache-busting');
 
   assert(/generation:sharedGpuMorphPathRuntime\.generation/.test(morphPath),'shared Morph resource is not stamped with GPU generation');
   const getter=block(morphPath,'function getSharedGpuMorphPathResource','function writeSharedGpuMorphFrameUniform');

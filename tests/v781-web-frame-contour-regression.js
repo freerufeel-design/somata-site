@@ -18,11 +18,11 @@ async function main(){
     assert(r.anchorOwned&&r.visualOwned,'Web views are not owned by the shared FrameContour record');
     assert(r.webEnabled,'Web did not prepare');
     assert(r.corners>=4,`semantic Web corners disappeared (${r.corners})`);
-    assert(r.truth&&r.rail&&r.curved>0,'exact 7.5 Bezier Web rail was lost');
+    assert(r.flattenedPoints===r.visualPoints&&r.visualPoints>r.anchorPoints, 'v9 Web visual rail no longer derives from the exact shared FrameContour');
     assert(r.visualPoints>r.anchorPoints,'visual Bezier rail was not adaptively flattened');
     assert(r.maxAnchorError<1.0,`Web anchors do not lie on the visual rail (${r.maxAnchorError.toFixed(3)} px)`);
     const exc=uncaughtExceptions(h.events).slice(baseline);assert(exc.length===0,'uncaught browser exceptions: '+exc.join(' | '));
-    console.log('PASS 7.8.1 Web keeps 7.5 anchor + exact Bezier semantics inside one FrameContour',r);
+    console.log('PASS v9 ordinary Web shares one anchor + flattened visual FrameContour (strict Spiral exactness tested separately)',r);
   }finally{await h.close();}
 }
 main().catch(e=>{console.error('FAIL v781 Web FrameContour regression:',e.stack||e.message);process.exit(1)});

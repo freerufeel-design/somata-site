@@ -8106,14 +8106,14 @@ struct Vin{@location(0) p:vec2<f32>}; struct Vout{@builtin(position) p:vec4<f32>
                 for(const pts of pieces){if(!pts||pts.length<2)continue;let p0=pts[0],px=a*(Number(p0?.x)||0)+c*(Number(p0?.y)||0)+e,py=b*(Number(p0?.x)||0)+d*(Number(p0?.y)||0)+f;for(let i=1;i<pts.length;i++){const qp=pts[i],qx=a*(Number(qp?.x)||0)+c*(Number(qp?.y)||0)+e,qy=b*(Number(qp?.x)||0)+d*(Number(qp?.y)||0)+f,dx=qx-px,dy=qy-py;if(dx*dx+dy*dy>1e-8){const o=count*STRIDE;data[o]=px;data[o+1]=py;data[o+2]=qx;data[o+3]=qy;data[o+4]=hw;data[o+5]=gr;data[o+6]=rgb[0];data[o+7]=rgb[1];data[o+8]=rgb[2];data[o+9]=ca;data[o+10]=ga;data[o+11]=gs;data[o+12]=(ga>.0001&&ca<=.0001)?0:1;count++;}px=qx;py=qy;}}
                 return true;
             }
-            function flush(targetCtx,clipPath=null,cfg=null,prechargeAsGlow=false){
+            function flush(targetCtx,clipPath=null,cfg=null){
                 if(!count)return true;if(!ensureSize())return false;
                 try{const ringBuffer=instanceBuffers[submissions%instanceBuffers.length];device.queue.writeBuffer(ringBuffer,0,data.buffer,data.byteOffset,count*STRIDE*4);ensureViewportUniform();
                     const glowMode=sweepGlowBlendMode(cfg),coreMode=sweepCoreBlendMode(cfg),drawStage=(core)=>{const mode=core?coreMode:glowMode,encoder=device.createCommandEncoder({label:core?'SpiroStar sweep core encoder':'SpiroStar sweep halo encoder'}),pass=encoder.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});pass.setPipeline(core?(batchBlendMode==='max'?pipelineMaxCore:pipelineOverCore):(batchBlendMode==='max'?pipelineMaxHalo:pipelineOverHalo));pass.setBindGroup(0,bindGroup);pass.setVertexBuffer(0,cornerBuffer);pass.setVertexBuffer(1,ringBuffer);pass.draw(6,count);pass.end();device.queue.submit([encoder.finish()]);submissions++;targetCtx.save();if(clipPath){try{targetCtx.clip(clipPath,'evenodd');}catch(_err){targetCtx.clip(clipPath);}}targetCtx.setTransform(1,0,0,1,0,0);targetCtx.globalAlpha=1;targetCtx.globalCompositeOperation=sweepBlendCanvasOperation(mode);targetCtx.filter='none';targetCtx.drawImage(canvas,0,0);targetCtx.restore();};
                     drawStage(false);drawStage(true);count=0;return true;
                 }catch(err){lastError=String(err?.message||err);count=0;return false;}
             }
-            function encodeToLayerScene(targetTexture,clipGeometry=null,clipMode='symmetric',frameId=null,cfg=null,prechargeAsGlow=false){
+            function encodeToLayerScene(targetTexture,clipGeometry=null,clipMode='symmetric',frameId=null,cfg=null){
                 if(!targetTexture)return null;if(!count)return{handled:true,commandBuffer:null};if(!ensureSize()||!sceneScratchView||!sceneAddBindGroup)return null;
                 try{
                     const sceneSlot=acquireSceneSlot(frameId),ringBuffer=acquireSceneInstanceBuffer(sceneSlot);ensureViewportUniform();
@@ -8137,7 +8137,7 @@ struct Vin{@location(0) p:vec2<f32>}; struct Vout{@builtin(position) p:vec4<f32>
             function queueStroke(...args){return active==='webgpu'&&WebGPUSweepRenderer.queueStroke(...args);}
             function flush(...args){return active==='webgpu'&&WebGPUSweepRenderer.flush(...args);}
             function canEncodeToLayerScene(){WebGPUSweepRenderer.warmup();return WebGPUSweepRenderer.isReady();}
-            function encodeToLayerScene(targetTexture,clipGeometry=null,clipMode='symmetric',frameId=null,cfg=null,prechargeAsGlow=false){if(active!=='webgpu')return null;return WebGPUSweepRenderer.encodeToLayerScene(targetTexture,clipGeometry,clipMode,frameId,cfg,prechargeAsGlow);}
+            function encodeToLayerScene(targetTexture,clipGeometry=null,clipMode='symmetric',frameId=null,cfg=null){if(active!=='webgpu')return null;return WebGPUSweepRenderer.encodeToLayerScene(targetTexture,clipGeometry,clipMode,frameId,cfg);}
             function clear(){WebGPUSweepRenderer.clear();active='none';}
             function status(){return{active,webgpu:WebGPUSweepRenderer.status(),contract:'webgpu-only'};}
             return{isAvailable,beginBatch,queueStroke,flush,canEncodeToLayerScene,encodeToLayerScene,clear,status};
@@ -8770,7 +8770,6 @@ fn markerSd(p:vec2<f32>)->f32{
             {key:'lightning.segment',group:'Молния',label:'Активная часть линии',mode:'add',span:65,min:1,max:100},
             {key:'lightning.flashLength',group:'Молния',label:'Проблеск · длина',mode:'add',span:50,min:1,max:100},
             {key:'lightning.flashOpacity',group:'Молния',label:'Проблеск · прозрачность',mode:'add',span:100,min:0,max:100},
-            {key:'lightning.preGlowIntensity',group:'Молния',label:'Проблеск · интенсивность',mode:'add',span:100,min:0,max:100},
             {key:'lightning.spectralSector',group:'Молния',label:'Спектральный проблеск · сектор',mode:'add',span:180,min:1,max:360},
             {key:'lightning.spectralSpeed',group:'Молния',label:'Спектральный проблеск · угловая скорость',mode:'add',span:360,min:-720,max:720},
             {key:'lightning.rate',group:'Молния',label:'Частота ударов',mode:'positiveFactor',span:2,min:0,max:1000},

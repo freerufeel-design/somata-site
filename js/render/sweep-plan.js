@@ -34,7 +34,7 @@ function resolveSweepSubEffect(frameCtx,baseCfg,effectType){
     // the GPU-only Arc authority; every other Lightning frame goes through prepareLayerFrameSweepData.
     const strictLightning=cfg?.effectType==='lightning'&&SomataGeometryPolicy.isStrict(frameCtx);
     const lightningGpuData=gpuBackendAllowed&&strictLightning&&typeof prepareGpuMorphArcLightningFrame==='function'?prepareGpuMorphArcLightningFrame(localCtx,cfg):null;
-    if(lightningGpuData){sub.paths=null;sub.frameData=lightningGpuData;sub.gpuMorphArcLightning=lightningGpuData.gpuMorphArcLightning===true;const lv=lightningGpuData.lightningVector,vis=typeof getLightningVisualSettings==='function'?getLightningVisualSettings(cfg,frameCtx.layerIndex):null;sub.footprint=Math.max(1,Number(vis?.glowSize)||(Number(cfg.lightningGlow)||0)*Math.max(0,Number(cfg.lightningGlowMultiplier)||1),Number(lv?.boltW)||Number(frameCtx.strokeWidth)||1.5);commitLightningClock(baseCfg,lightningGpuData.cfg||cfg);return sub;}
+    if(lightningGpuData){if(lightningGpuData.lightningVector?.stage==='idle'){commitLightningClock(baseCfg,lightningGpuData.cfg||cfg);sub.enabled=false;return sub;}sub.paths=null;sub.frameData=lightningGpuData;sub.gpuMorphArcLightning=lightningGpuData.gpuMorphArcLightning===true;const lv=lightningGpuData.lightningVector,vis=typeof getLightningVisualSettings==='function'?getLightningVisualSettings(cfg,frameCtx.layerIndex):null;sub.footprint=Math.max(1,Number(vis?.glowSize)||(Number(cfg.lightningGlow)||0)*Math.max(0,Number(cfg.lightningGlowMultiplier)||1),Number(lv?.boltW)||Number(frameCtx.strokeWidth)||1.5);commitLightningClock(baseCfg,lightningGpuData.cfg||cfg);return sub;}
 
     // Ordinary Sweep/Glint also consumes the shared FrameContour. Retained GPU Arc is a
     // strict-Spiral specialization only; otherwise it would create a second base contour.
@@ -45,6 +45,7 @@ function resolveSweepSubEffect(frameCtx,baseCfg,effectType){
     sub.paths=getLayerFrameAuthoritativePaths(frameCtx);
     if(!sub.paths?.length){sub.enabled=false;return sub;}
     sub.frameData=prepareLayerFrameSweepData(localCtx);
+    if(cfg?.effectType==='lightning'&&sub.frameData?.lightningVector?.stage==='idle'){commitLightningClock(baseCfg,sub.frameData?.cfg||cfg);sub.enabled=false;return sub;}
     if(cfg?.effectType==='lightning')try{SweepGPURenderer?.canEncodeToLayerScene?.();}catch(_){}
     const sweepCfg=sub.frameData?.cfg||cfg;
     if(cfg.effectType==='lightning')commitLightningClock(baseCfg,sweepCfg);else commitGlintClock(baseCfg,sweepCfg);

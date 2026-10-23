@@ -34,8 +34,11 @@ async function main(){
       const host=round.closest('.blue-morph-range-host');const duals=[...host.querySelectorAll('.blue-morph-dual')];
       round.value='37';round.dispatchEvent(new Event('input',{bubbles:true}));
       const normalBefore={layer:l.rounding,mode:host.dataset.sliderMode,visibility:getComputedStyle(round).visibility,pointer:getComputedStyle(round).pointerEvents,width:round.getBoundingClientRect().width,hostWidth:host.getBoundingClientRect().width,dualDisabled:duals.every(x=>x.disabled)};
-      roundName.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2}));
-      const rightClickEnabled=state.morph.options.byRounding===true&&roundRow.classList.contains('blue-morph-enabled');
+      const rr=round.getBoundingClientRect();roundName.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:rr.left+rr.width/2,clientY:rr.top+rr.height/2}));
+      const popup=document.getElementById('parameterRoutingContextMenu');
+      const viaMenu=popup&&!popup.classList.contains('hidden')&&popup.querySelector('.routing-morph:not(:disabled)');
+      viaMenu?.click();
+      const rightClickEnabled=!!viaMenu&&state.morph.options.byRounding===true&&roundRow.classList.contains('morph-route-enabled');
       document.getElementById('btnMorph')?.click();
       const liveDual=runtimeState.morph.active===true&&host.classList.contains('morph-live')&&host.dataset.sliderMode==='morph-range'&&duals.length===2&&duals.every(x=>!x.disabled)&&getComputedStyle(round).pointerEvents==='none';
       const layerBeforeRange=l.rounding;
@@ -81,7 +84,7 @@ async function main(){
     assert(!r.groupsAfterUncheck.includes('standard'),'left profile checkbox did not control Blue Morph group participation');
     assert(r.dropdownCount===5,'Blue Morph profile group selector is not the five-group dropdown');
     assert(r.normalBefore.layer===37&&r.normalBefore.mode==='value'&&r.normalBefore.visibility==='visible'&&r.normalBefore.pointer==='auto'&&r.normalBefore.width>0&&r.normalBefore.width>=r.normalBefore.hostWidth*.9&&r.normalBefore.dualDisabled,'Morph-off sidebar slider is not a fully interactive current-value control');
-    assert(r.rightClickEnabled,'right-click did not toggle/highlight a morphable parameter');
+    assert(r.rightClickEnabled,'right-click popup did not enable/highlight a morphable parameter');
     assert(r.liveDual&&r.dualState[0]===18&&r.dualState[1]===86&&r.rangeDidNotEditLayer,'active Blue Morph did not exclusively expose/update the dual-thumb range');
     assert(r.normalAfter.layer===42&&r.normalAfter.mode==='value'&&r.normalAfter.visibility==='visible'&&r.normalAfter.pointer==='auto'&&r.normalAfter.dualDisabled,'stopping Blue Morph did not restore the original current-value slider');
     assert(r.resetOk,'reset-to-default Morph button did not restore factory settings');

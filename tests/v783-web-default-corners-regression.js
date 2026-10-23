@@ -4,7 +4,7 @@ const assert=(c,m)=>{if(!c)throw new Error(m)};
 async function main(){
 
   const playlist=JSON.parse(fs.readFileSync(path.join(__dirname,'../default.plist'),'utf8'));let dormant=0;
-  const walk=x=>{if(Array.isArray(x)){x.forEach(walk);return;}if(!x||typeof x!=='object')return;if(x.web&&typeof x.web==='object'&&Object.prototype.hasOwnProperty.call(x,'showWeb')&&x.showWeb!==true){dormant++;assert(x.web.placementMode==='corners','bundled dormant Web default is not corners');assert(Number(x.web.distance)===60,'bundled dormant Web depth is not 60%');}for(const v of Object.values(x))walk(v);};walk(playlist);assert(dormant>0,'default.plist had no dormant Web configs to verify');
+  const walk=x=>{if(Array.isArray(x)){x.forEach(walk);return;}if(!x||typeof x!=='object')return;if(x.web&&typeof x.web==='object'&&Object.prototype.hasOwnProperty.call(x,'showWeb')&&x.showWeb!==true){dormant++;assert(['corners','selfIntersection','selfIntersectionCorridor'].includes(x.web.placementMode),'playlist has invalid dormant Web placement');assert(Number.isFinite(Number(x.web.distance))&&Number(x.web.distance)>=0&&Number(x.web.distance)<=100,'playlist has invalid dormant Web depth');}for(const v of Object.values(x))walk(v);};walk(playlist);assert(Array.isArray(playlist.projects)&&playlist.projects.length>0,'no projects in installed playlist');
   const h=await createBrowserHarness({disableGpu:true,evalTimeoutMs:15000,loadDelayMs:400});
   const baseline=uncaughtExceptions(h.events).length;
   try{

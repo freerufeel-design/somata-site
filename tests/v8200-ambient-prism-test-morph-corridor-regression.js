@@ -52,15 +52,22 @@ const check=(x,msg)=>{if(!x)throw Error(msg)};
     const snapshot=SomataRenderLayerSnapshot.create(source),ctx={layer:snapshot,sourceLayer:source,blueMorphProvider:{active:false},minimalFadeEnabled:false,greenMorphEnabled:false};
     const at=performance.now();SomataTestMorph.applyFrame(ctx,at+500);
     const captured0=SomataTestMorph.status().last;
-    const frameA={...snapshot},frameB={...snapshot};
-    const secondCtx={...ctx,layer:frameB};
-    SomataTestMorph.applyFrame(secondCtx,at+900);
+    const idle=!SomataTestMorph.status().active;
+    // New contract: an enabled checkbox is idle until an authored parameter is changed.
+    const radiusBefore=source.radius;
+    source.radius=radiusBefore+30;
+    const startCtx={...ctx,layer:SomataRenderLayerSnapshot.create(source)};
+    SomataTestMorph.applyFrame(startCtx,at+600);
+    const secondCtx={...ctx,layer:SomataRenderLayerSnapshot.create(source)};
+    SomataTestMorph.applyFrame(secondCtx,at+1100);
     const captured=SomataTestMorph.status().last;
-    const frameChanged=frameB.rotation!==frameA.rotation||frameB.K!==frameA.K||frameB.N!==frameA.N;
+    const frameChanged=secondCtx.layer.radius>radiusBefore && secondCtx.layer.radius<source.radius;
+    source.radius=radiusBefore;
+    // The authored object is intentionally restored before checking immutability.
     const authoredUnchanged=JSON.stringify(source)===initialLayer;
     const snapshotSeparate=snapshot!==source;
     testToggle.click();document.getElementById('prismEnabled').click();
-    return {zero,midpoint,narrow,wide,strict,matrix,audio,curveChanged,ambientPanel,rainOn,rainOutput,prismPanel,prismOn,prismOutputs,testOn,authoredUnchanged,snapshotSeparate,frameChanged,captured,overlayStatus:SomataAmbientPrism.status()};
+    return {zero,midpoint,narrow,wide,strict,matrix,audio,curveChanged,ambientPanel,rainOn,rainOutput,prismPanel,prismOn,prismOutputs,testOn,idle,authoredUnchanged,snapshotSeparate,frameChanged,captured,overlayStatus:SomataAmbientPrism.status()};
   })()`,{timeoutMs:20000,label:'8.20 corridor ambient prism and test morph'});
   for(const [k,v] of Object.entries({...r,...r.prismOutputs})){if(typeof v==='boolean')check(v,k+': '+JSON.stringify(r));}
   const errors=uncaughtExceptions(h.events);check(!errors.length,'uncaught browser exception: '+errors.join(' | '));

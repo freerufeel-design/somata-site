@@ -184,15 +184,7 @@ struct V{@builtin(position) p:vec4<f32>};
     }
     function strokeStyles(frame,baseAlpha,cfg){
         const out=[];if(!frame||frame.stage==='idle')return out;const aBase=Math.max(0,Math.min(1,Number(baseAlpha)||0));
-        if(frame.stage==='precharge'){
-            const paGlow=Math.max(0,Math.min(1,aBase*Math.max(0,Number(frame.prechargeAlpha)||0))),paCore=paGlow*Math.max(0,Math.min(1,Number.isFinite(Number(frame.flashOpacity))?Number(frame.flashOpacity):1));
-            if(paGlow>.001||paCore>.001){
-                const gr=lightningVisualGlowRadius(frame.prechargeGlow),flashFrac=Math.max(.01,Math.min(1,Number.isFinite(Number(frame.flashLength))?Number(frame.flashLength):getLightningFlashLengthPercent(cfg)/100)),flashColor=frame.flash||'#ffffff',w=Math.max(.15,Number(frame.prechargeWidth)||.15),bright=Math.max(0,Number(frame.prechargeBrightness)||0);
-                out.push({width:w,color:flashColor,coreAlpha:0,glowRadius:gr,glowAlpha:paGlow*frame.prechargeGlowIntensity*bright*(frame.smoothLighting?.32:.24),softness:frame.prechargeSoftness,flashFrac,travel:frame.prechargeT});
-                out.push({width:w*1.12,color:flashColor,coreAlpha:paCore*.32,glowRadius:0,glowAlpha:0,softness:0,flashFrac,travel:frame.prechargeT});
-                out.push({width:w,color:flashColor,coreAlpha:paCore,glowRadius:0,glowAlpha:0,softness:0,flashFrac,travel:frame.prechargeT});
-            }return out;
-        }
+
         const pushStrike=(intensity,microIndex=-1)=>{const a=Math.max(0,Math.min(1,aBase*Math.max(0,Number(intensity)||0)));if(a<=.001)return;const micro=microIndex>=0,outerColor=micro&&microIndex%2===0?frame.primary:frame.secondary,innerColor=micro&&microIndex%2===0?frame.secondary:frame.primary,outerW=frame.precisionHigh?Math.max(frame.boltW+.22,frame.boltW*1.18):Math.max(frame.boltW+.7,frame.boltW*1.9),gr=lightningVisualGlowRadius(frame.glow),bright=Math.max(0,frame.brightness||0),haloA=a*.82*frame.glowIntensity*bright;
             out.push({width:outerW,color:outerColor,coreAlpha:0,glowRadius:gr,glowAlpha:haloA*(frame.smoothLighting?.34:.27),softness:frame.softness,flashFrac:1,travel:0});
             out.push({width:outerW,color:outerColor,coreAlpha:a*.34,glowRadius:0,glowAlpha:0,softness:0,flashFrac:1,travel:0});
@@ -215,7 +207,7 @@ struct V{@builtin(position) p:vec4<f32>};
             if(clipped){const maskUniform=fillUniform(ctx,prepared,{width:1,color:'#ffffff',coreAlpha:0,glowRadius:0,glowAlpha:0,flashFrac:1,travel:0},false);pass=encoder.beginRenderPass({colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}],depthStencilAttachment:{view:stencilView,depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'discard',stencilClearValue:0,stencilLoadOp:'clear',stencilStoreOp:'store'}});pass.setPipeline(maskPipeline);pass.setBindGroup(0,maskUniform.bind);pass.setBindGroup(1,pbg);pass.draw(3,arcRec.segmentCount);pass.end();stats.clippedFrames++;stats.stencilEdges+=arcRec.segmentCount;}
             const drawAnalyticGroup=(group,core)=>{if(!group.length)return;pass=encoder.beginRenderPass({colorAttachments:[{view:scratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});for(const style of group){const ub=fillUniform(ctx,prepared,style,Boolean(copyBg));if(!ub)continue;const bundled=strokeBundle(arcRec,pbg,copyBg,ub,instances);if(bundled){pass.executeBundles(bundled.list);stats.bundleExecutes++;}else{pass.setPipeline(copyBg?strokeCorridorPipeline:strokePipeline);pass.setBindGroup(0,ub.bind);pass.setBindGroup(1,pbg);if(copyBg)pass.setBindGroup(2,copyBg);pass.draw(4,instances);}stats.strokeDraws++;}pass.end();const desc={colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}]};if(clipped)desc.depthStencilAttachment={view:stencilView,depthLoadOp:'load',depthStoreOp:'discard',stencilLoadOp:'load',stencilStoreOp:'discard'};pass=encoder.beginRenderPass(desc);if(clipped)pass.setStencilReference(behavior==='inside'?1:0);const blendMode=core?sweepCoreBlendMode(prepared.cfg):sweepGlowBlendMode(prepared.cfg),pipelines=clipped?compositeStencilPipelines:compositePipelines;pass.setPipeline(pipelines[blendMode]||pipelines.normal);pass.setBindGroup(0,compositeBind);pass.draw(3);pass.end();};
 
-            // 7.5: one analytic halo path for precharge, strike and afterglow. The former
+            // 7.5: one analytic halo path for strike and afterglow. The former
             // separable-blur branch duplicated the whole contour into an extra mask + blur chain
             // and was the dominant flash-time stall on real GPUs. Analytic softness keeps the
             // same controls while avoiding that cross-renderer dependency and extra passes.

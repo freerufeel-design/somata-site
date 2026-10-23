@@ -21,9 +21,16 @@ function isFillGpuWarming(frameCtx){
     let status=null;
     try{status=FillGPURenderer.status?.()||null;}catch(_){return false;}
     const mesh=status?.nativeMesh||{},mask=status?.webgpuMask||{};
-    const warming=Boolean((mesh.initializing===true||mask.initializing===true)&&
-        mesh.available!==true&&mask.available!==true&&!mesh.lost&&!mask.lost&&
-        !mesh.lastError&&!mask.lastError);
+    const nativePending=mesh.initializing===true&&mesh.available!==true&&!mesh.lost&&!mesh.lastError;
+    const maskPending=mask.initializing===true&&mask.available!==true&&!mask.lost&&!mask.lastError;
+    const maskHasSurface=mask.available===true&&Number(mask.width)>0&&Number(mask.height)>0;
+    // A ready mask *device* with a 0×0 surface cannot composite anything yet.
+    // Don't classify this first-frame GPU lifecycle as a permanent Fill error
+    // while the native backend is still initializing. The 2.5s grace still
+    // expires, so a genuine persistent failure remains diagnosable.
+    const warming=Boolean(!mesh.lost&&!mask.lost&&
+        (nativePending||maskPending||(!maskHasSurface&&mask.available===true&&Number(mask.width)===0&&Number(mask.height)===0&&mesh.initializing===true))&&
+        mesh.available!==true&&!mesh.lastError&&!mask.lastError);
     const id=String(frameCtx?.effectLayer?.id||frameCtx?.layer?.id||'unknown');
     if(!warming){fillWarmupStartedAtByLayer.delete(id);return false;}
     const now=performance.now();
@@ -226,17 +233,16 @@ function prepareOrdinaryFillBelowWeb(frameCtx){
     if(!mesh?.nativeComplete||!(Number(mesh.fanTriangleCount)>0)){
         frameCtx._fillBelowWebResolved=true;frameCtx._fillRenderedBelowWeb=false;frameCtx._suppressLateFillForWeb=true;
         noteFillFailureOnce(frameCtx,'web-order-preflight','shared Line-carrier Fill mesh unavailable; Web waits so it cannot render below Fill');
-        try{requestMainCanvasRender?.();}catch(_){}
         return{handled:false,required:true,reason:'shared Line-carrier Fill mesh unavailable'};
     }
     const scene=SomataLayerSceneService.ensure(frameCtx,'fill-ordered');
-    if(!scene?.texture){frameCtx._fillBelowWebResolved=true;frameCtx._fillRenderedBelowWeb=false;frameCtx._suppressLateFillForWeb=true;try{FillGPURenderer.isAvailable?.();requestMainCanvasRender?.();}catch(_){}return{handled:false,required:true,reason:'Layer Scene unavailable for ordered Fill'};}
+    if(!scene?.texture){frameCtx._fillBelowWebResolved=true;frameCtx._fillRenderedBelowWeb=false;frameCtx._suppressLateFillForWeb=true;try{FillGPURenderer.isAvailable?.();}catch(_){}return{handled:false,required:true,reason:'Layer Scene unavailable for ordered Fill'};}
     // ensure() has already queued the transparent root clear, so ordered Fill must load
     // that target instead of clearing away a lower user-ordered effect.
     // Ordered Fill must preserve lower effect groups, but preserving the target must
     // never mean preserving the Fill renderer's multisample scratch across frames.
     const out=FillGPURenderer.encodeMeshIsolatedCommandToTexture?.(scene.texture,frameCtx,mesh,mainCtx,false);
-    if(!out?.handled){frameCtx._fillBelowWebResolved=true;frameCtx._fillRenderedBelowWeb=false;frameCtx._suppressLateFillForWeb=true;try{FillGPURenderer.isAvailable?.();requestMainCanvasRender?.();}catch(_){}return{handled:false,required:true,reason:out?.reason||'Fill Layer Scene encode unavailable'};}
+    if(!out?.handled){frameCtx._fillBelowWebResolved=true;frameCtx._fillRenderedBelowWeb=false;frameCtx._suppressLateFillForWeb=true;try{FillGPURenderer.isAvailable?.();}catch(_){}return{handled:false,required:true,reason:out?.reason||'Fill Layer Scene encode unavailable'};}
     const accepted=!out.commandBuffer||SomataLayerSceneService.queue(frameCtx,somataEffectPhase('fill'),out.commandBuffer,'fill-ordered');
     if(!accepted){frameCtx._fillBelowWebResolved=true;frameCtx._fillRenderedBelowWeb=false;frameCtx._suppressLateFillForWeb=true;return{handled:false,required:true,reason:'Fill Layer Scene queue failed'};}
     frameCtx._nativeFillMeshCandidate=mesh;frameCtx._baseFillCommitted=true;frameCtx._fillBelowWebResolved=true;frameCtx._fillRenderedBelowWeb=true;frameCtx._suppressLateFillForWeb=false;
@@ -327,7 +333,8 @@ const SomataFillPassService=(()=>{
         const standaloneFillRequired=effectOrderPlan?.standaloneFill===true;
         if((frameCtx?._suppressLateFillForWeb===true||standaloneFillRequired)&&contract?.fillRequested===true&&frameCtx?._baseFillCommitted!==true){
             noteFillRuntime(frameCtx,{handled:false,stage:'ordered-fill-retry',backend:'webgpu',reason:'ordered Fill unavailable this frame; late Fill suppressed to preserve the configured effect stack'});
-            try{requestMainCanvasRender?.();}catch(_){}
+            // No self-invalidation on failed ordered Fill: wait for GPU-ready callback
+            // or a genuine state change, otherwise strict Spiral can redraw forever.
             return false;
         }
         const fillUsesCanvasMask=Boolean(frameCtx?._webgpuFillPrepared?.authoritative===true&&frameCtx?._webgpuFillPrepared?.mask&&!batch?.nativeFillInScene);
@@ -361,7 +368,8 @@ const SomataFillPassService=(()=>{
                 renderBackendTelemetry.mark('fill','gpu','Corridor Fill GPU-only wait');
                 noteFillRuntime(frameCtx,{handled:false,stage:'corridor-gpu-wait',backend:'webgpu',reason:corridorFill.reason||'GPU Fill unavailable'});
                 somataGpuDiagnosticError('fill','corridor-native-fill',corridorFill.reason||'GPU Fill unavailable',frameCtx,{fallback:'skip-fill-pass',recovered:true,fill:FillGPURenderer.status?.()||null});
-                try{requestMainCanvasRender?.();}catch(_){}
+                // Do not spin an unbounded frame loop while the backend remains unavailable.
+                // GPU ready/lost callbacks and user changes request their own redraws.
             }
         }
         if(!fillHandled&&contract?.fillRequested){
@@ -377,7 +385,8 @@ const SomataFillPassService=(()=>{
             else{try{const fs=FillGPURenderer.status?.();const e=fs?.nativeMesh?.lastError||fs?.webgpuMask?.lastError||fs?.webgl2?.lastError;if(e)reason=String(e);}catch(_){} }
             noteFillFailureOnce(frameCtx,'gpu-backend-chain',reason);
             somataGpuDiagnosticError('fill','gpu-only',reason,frameCtx,{fallback:'skip-fill-pass',recovered:true,fillStatus:FillGPURenderer.status?.()||null,fillContract:{requested:contract?.fillRequested===true,nativeEligible:contract?.nativeGpuFillEligible===true,maskEligible:contract?.gpuMaskEligible===true,closedContours:Number(g?.closedPathCount)||0,fillContours:Number(g?.fillContourCount)||0},fillRuntime:{...fillRuntimeDiagnostic}});
-            try{requestMainCanvasRender?.();}catch(_){}
+            // A permanent GPU-only Fill failure must NOT self-invalidate the entire
+            // scene every frame. Actual renderer lifecycle callbacks request repaint.
         }
         if(fillHandled){
             frameCtx._baseFillCommitted=true;

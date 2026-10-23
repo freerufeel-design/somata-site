@@ -12,5 +12,5 @@ assert(/getTunnelCopyColor\(fillColor,copy,frameCtx\.tunnelFillPaletteProfile\)/
 assert(/rgba\[3\].*frameCtx\.baseAlpha/.test(gpu),'GPU mesh Fill must retain source opacity');
 assert(/frameCtx\.tunnelFillPaletteProfile=/.test(pipeline),'Pipeline must resolve independent Fill palette');
 assert(/t\.paletteLagEnabled === true \|\|/.test(runtime),'Palette lag must work without cumulative hue rotation enabled');
-assert(/return `\$\{tunnelColorBaseHex\(palette\[idx\]\)\}\$\{tunnelColorAlphaSuffix\(baseColor\)\}`/.test(runtime),'Palette lag must preserve Fill/Line alpha');
+assert(/const alpha=tunnelColorAlphaSuffix\(baseColor\)/.test(runtime)&&/tunnelBlendPaletteHex\(palette\[idx\],palette\[\(idx\+1\)%palette\.length\],fraction,alpha\)/.test(runtime),'Palette lag must preserve Fill/Line alpha during continuous palette interpolation');
 console.log('7.11.16 CORRIDOR NATIVE GPU FILL / COLOR LAG CONTRACT: PASS (source only)');

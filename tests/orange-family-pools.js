@@ -5,8 +5,8 @@ async function main(){
   const baseline=uncaughtExceptions(h.events).length;
   try{
     const r=await h.evaluate(`(async()=>{
-      const firstRow=document.querySelector('#randomSettingsPanel .morph-settings-grid > .morph-setting-row');
-      const defaultFirst=Boolean(firstRow?.querySelector('#minimalMorphDefaultActive'));
+      const fixed=document.querySelector('#randomSettingsPanel .orange-fixed-settings');
+      const defaultFirst=Boolean(document.querySelector('#randomSettingsPanel .morph-profile-toolbar-flags #minimalMorphDefaultActive') && document.querySelectorAll('#minimalMorphDefaultActive').length===1 && fixed?.firstElementChild?.classList.contains('minimal-morph-default-row')); 
       const blueBefore={family:state.morph.shapeOptions.family,groups:[...(state.morph.shapeOptions.profileGroups||[])]};
       state.morph.shapeOptions.family='triangle';state.morph.shapeOptions.profileGroups=['loops'];syncMorphShapeToggleButtons?.();
       const bluePinned={family:state.morph.shapeOptions.family,groups:[...(state.morph.shapeOptions.profileGroups||[])]};
@@ -31,7 +31,7 @@ async function main(){
       if(runtimeState.minimalMorph.active)orange.click();
       return{defaultFirst,blueBefore,bluePinned,blueAfterOrange,orangeState,diceKeys,diceMeta,diceOk,morphKeys,morphOk};
     })()`);
-    assert(r.defaultFirst,'Orange “Морфить по умолчанию” row is not first');
+    assert(r.defaultFirst,'Orange default checkbox is not uniquely wired to the profile toolbar');
     assert(r.orangeState.family==='square','Orange family did not persist independently');
     assert(JSON.stringify(r.orangeState.groups)===JSON.stringify(['standard','closed']),`Orange multi-pool state wrong: ${JSON.stringify(r.orangeState)}`);
     assert(r.blueAfterOrange.family===r.bluePinned.family&&JSON.stringify(r.blueAfterOrange.groups)===JSON.stringify(r.bluePinned.groups),'Orange controls modified Blue Morph family/pools');

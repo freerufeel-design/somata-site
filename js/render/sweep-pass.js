@@ -69,12 +69,8 @@ function prepareGpuMorphArcLightningFrame(frameCtx,cfg){
     const frac=Math.max(.01,Math.min(1,audioApplyNumeric('lightning.segment',Number(cfg.lightningSegmentPercent)||100,idx)/100)),nth=Math.max(2,Math.min(24,Math.round(Number(cfg.lightningEveryN)||2)));
     const prepared={now,paths:null,layer,visible:null,pieces:null,exactRanges:null,strikePath:null,gpuArcResident:true,gpuMorphArcLightning:true,table,cfg,lightningSelection:{mode,modeCode,frac,nth,cycle,random:cfg.lightningRandomPosition===true,constructionSegments}};
     const lightningVector=prepareLightningVectorFrame(layer,lightningPhase,prepared,idx,cfg);if(!lightningVector){lightningGpuArcBridgeStats.fallbacks++;lightningGpuArcBridgeStats.lastReason='vector-style-unavailable';return null;}
-    const data=frameCtx.sweepData||(frameCtx.sweepData={});data.cfg=cfg;data.layerIndex=idx;data.paths=null;data.now=now;data.phase=0;data.lightningPhase=lightningPhase;data.lightningVector=lightningVector;data.vectorPath=null;data.sweepW=0;data.glintVisual=null;data.canonicalGPU=false;data.gpuMorphArc=false;data.gpuMorphArcLightning=true;data.prepared=prepared;data.lightningSpectralPrepared=null;data.lightningSpectralCfg=null;data.lightningSpectralVisual=null;data.lightningSpectralW=0;
-    if(lightningVector.stage==='precharge'&&normalizeSweepFlashMode(cfg.flashMode)==='spectral'){
-        WebGPUBezierSweepRenderer?.warmup?.();if(!WebGPUBezierSweepRenderer?.isReady?.()){lightningGpuArcBridgeStats.fallbacks++;lightningGpuArcBridgeStats.lastReason='spectral-bezier-warming';return null;}
-        const spectralPrepared=prepareSharedTopologySpectralBezier(frameCtx,cfg,now,true,lightningVector.prechargeT);
-        if(spectralPrepared){const spectralCfg={...cfg,effectType:'glint',flashType:'spectral',glintPrecision:'spectral',_lightningPreflashBlend:false,_lightningPreflashCoreOnTop:true,color:cfg.color||'#ffffff'};data.lightningSpectralPrepared=spectralPrepared;data.lightningSpectralCfg=spectralCfg;data.lightningSpectralW=lightningVector.prechargeWidth;data.lightningSpectralVisual={glowSize:lightningVector.prechargeGlow,strength:lightningVector.prechargeGlowIntensity,brightness:lightningVector.prechargeBrightness,softness:lightningVector.prechargeSoftness,opacity:lightningVector.flashOpacity};data.gpuMorphArcLightning=false;}
-    }
+    const data=frameCtx.sweepData||(frameCtx.sweepData={});data.cfg=cfg;data.layerIndex=idx;data.paths=null;data.now=now;data.phase=0;data.lightningPhase=lightningPhase;data.lightningVector=lightningVector;data.vectorPath=null;data.sweepW=0;data.glintVisual=null;data.canonicalGPU=false;data.gpuMorphArc=false;data.gpuMorphArcLightning=true;data.prepared=prepared;
+
     frameCtx.sweepPrepared=data;frameCtx.sweepPreparedReady=true;lightningGpuArcBridgeStats.hits++;lightningGpuArcBridgeStats.cpuPathBuildsAvoided++;lightningGpuArcBridgeStats.cpuExactRailBuildsAvoided++;lightningGpuArcBridgeStats.cpuPieceBuildsAvoided++;lightningGpuArcBridgeStats.lastReason=data.lightningSpectralPrepared?'gpu-retained-cubic-spectral-preflash':`gpu-arc-${mode}`;return data;
 }
 window.__spiroLightningGpuArcBridgeStatus=()=>({...lightningGpuArcBridgeStats,contract:'Topology-Morph Lightning selects arc windows on the authoritative retained cubic/Arc carrier before any CPU Morph path access. Exact precision evaluates six retained Bézier subsegments inside every Arc microsegment; simple precision keeps one lightweight chord. Strict Spiral remains GPU-only; unsupported cases use the prepared GPU path or are skipped with diagnostics.'});
@@ -107,8 +103,6 @@ function prepareGpuMorphArcSweepFrame(frameCtx,cfg){
 
 window.__spiroSweepGpuArcBridgeStatus=()=>({...sweepGpuArcBridgeStats,contract:'Topology-Morph Glint consumes the shared retained cubic rail: Spectral reads cubics directly; whole/perPath/perSegment/everyNth use a small GPU arc micro-rail derived from those same cubics. Across remains geometric fallback.'});
 
-function isLightningSpectralPreflash(effect){const cfg=effect?.frameData?.cfg||effect?.cfg;return cfg?.effectType==='lightning'&&effect.frameData?.lightningVector?.stage==='precharge'&&Boolean(effect.frameData?.lightningSpectralPrepared);}
-function lightningSpectralPreflashAlpha(effect,_baseAlpha){return Math.max(0,Math.min(1,Number(effect?.frameData?.lightningVector?.prechargeAlpha)||0));}
 
 const somataSweepPhase=()=>somataEffectPhase('sweep'),somataSweepCorePhase=()=>somataEffectPhase('sweep',1);
 function sweepProfileMode(cfg){const value=cfg?.effectType==='lightning'?cfg?.lightningProfileShape:cfg?.profileShape;return value==='line'?'line':'current';}
@@ -123,6 +117,7 @@ function renderLayerSweepInstance(frameCtx,effectOverride=null){
     if(!effect?.enabled)return;
     const {layer,baseAlpha,visibleInstances}=frameCtx,cfg=effect.frameData?.cfg;
     if(!cfg)return reportSweepGpuIssue(frameCtx,'missing-config','Sweep is enabled but its live configuration is unavailable');
+    if(cfg.effectType==='lightning'&&effect.frameData?.lightningVector?.stage==='idle')return;
     if(typeof somataGpuBackendAllowed==='function'&&!somataGpuBackendAllowed())return reportSweepGpuIssue(frameCtx,'backend-unavailable','GPU backend is unavailable');
 
     const useCurrentProfile=sweepProfileMode(cfg)==='current';
@@ -145,24 +140,14 @@ function renderLayerSweepInstance(frameCtx,effectOverride=null){
         mainCtx.save();let rec=null;try{
             applyLayerFrameEffectTransform(mainCtx,frameCtx);
             rec=effect.tunnelActive
-                ? WebGPULightningArcRenderer.encodeCorridorToLayerScene(scene.texture,effect.frameData.prepared,effect.frameData.lightningVector,mainCtx,effect.frameData?.lightningVector?.stage==='precharge'?1:baseAlpha,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,behavior)
-                : WebGPULightningArcRenderer.encodeToLayerScene(scene.texture,effect.frameData.prepared,effect.frameData.lightningVector,mainCtx,(effect.frameData?.lightningVector?.stage==='precharge'?1:baseAlpha)*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),behavior,frameCtx);
+                ? WebGPULightningArcRenderer.encodeCorridorToLayerScene(scene.texture,effect.frameData.prepared,effect.frameData.lightningVector,mainCtx,baseAlpha,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,behavior)
+                : WebGPULightningArcRenderer.encodeToLayerScene(scene.texture,effect.frameData.prepared,effect.frameData.lightningVector,mainCtx,(baseAlpha)*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),behavior,frameCtx);
         }finally{mainCtx.restore();}
         if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu','shared GPU-arc exact lightning');if(rec.commandBuffer)SomataLayerSceneService.queue(frameCtx,somataSweepPhase(),rec.commandBuffer,`lightning-arc-${behavior}`,rec.onSubmitted);return;}
         const rendererReason=String(rec?.reason||WebGPULightningArcRenderer?.peekStatus?.()?.lastError||'unknown Lightning renderer failure');
         return reportSweepGpuIssue(frameCtx,'lightning-arc-encode',`Exact GPU Arc Lightning encode failed: ${rendererReason}`,{behavior,rendererReason,lightning:WebGPULightningArcRenderer?.peekStatus?.()||null});
     }
 
-    if(isLightningSpectralPreflash(effect)){
-        const alpha=lightningSpectralPreflashAlpha(effect,baseAlpha);mainCtx.save();let rec=null;try{
-            applyLayerFrameEffectTransform(mainCtx,frameCtx);
-            rec=effect.tunnelActive
-                ? WebGPUBezierSweepRenderer.encodeToLayerScene(scene.texture,effect.frameData.lightningSpectralPrepared,mainCtx,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha,visibleInstances.copies,visibleInstances.alphas,frameCtx,effect.footprint,frameCtx.layer)
-                : WebGPUBezierSweepRenderer.encodeToLayerScene(scene.texture,effect.frameData.lightningSpectralPrepared,mainCtx,effect.frameData.lightningSpectralCfg,effect.frameData.lightningSpectralW,effect.frameData.lightningSpectralVisual,alpha*Math.max(0,Math.min(1,Number(visibleInstances.alphas?.[0]??1))),null,null,frameCtx,effect.footprint,frameCtx.layer);
-        }finally{mainCtx.restore();}
-        if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu','spectral Bézier lightning preflash');if(rec.commandBuffer)SomataLayerSceneService.queue(frameCtx,somataSweepPhase(),rec.commandBuffer,'lightning-spectral-preflash',rec.onSubmitted);else rec.onSubmitted?.();return;}
-        return reportSweepGpuIssue(frameCtx,'lightning-preflash-encode','Spectral Lightning preflash GPU encode failed');
-    }
 
     if(cfg.effectType==='lightning'){
         if(!SweepGPURenderer.canEncodeToLayerScene?.())return reportSweepGpuIssue(frameCtx,'lightning-renderer-not-ready','GPU Lightning renderer is not ready');
@@ -173,10 +158,10 @@ function renderLayerSweepInstance(frameCtx,effectOverride=null){
             let healthy=true;
             for(let si=0;si<visibleInstances.copies.length;si++){
                 const copy=visibleInstances.copies[si],a=visibleInstances.alphas[si];if(!shouldDrawTunnelEffectIndex('sweep',si,frameCtx,effect.footprint))continue;
-                mainCtx.save();try{if(effect.tunnelActive){applyMotionTunnelLag(mainCtx,copy,frameCtx.layer);mainCtx.scale(copy.scale,copy.scale);}applyLayerFrameEffectTransform(mainCtx,frameCtx);if(!queueMovingSweepGlowWebGL(mainCtx,effect.paths,layer,(stage==='precharge'?1:baseAlpha)*a,effect.now,effect.frameData))healthy=false;}finally{mainCtx.restore();}
+                mainCtx.save();try{if(effect.tunnelActive){applyMotionTunnelLag(mainCtx,copy,frameCtx.layer);mainCtx.scale(copy.scale,copy.scale);}applyLayerFrameEffectTransform(mainCtx,frameCtx);if(!queueMovingSweepGlowWebGL(mainCtx,effect.paths,layer,baseAlpha*a,effect.now,effect.frameData))healthy=false;}finally{mainCtx.restore();}
                 if(!healthy)break;
             }
-            if(healthy){const rec=SweepGPURenderer.encodeToLayerScene(scene.texture,null,'symmetric',frameCtx.frameId,cfg,stage==='precharge');if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu','deferred GPU lightning');if(rec.commandBuffer)SomataLayerSceneService.queue(frameCtx,somataSweepPhase(),rec.commandBuffer,'lightning');return;}}
+            if(healthy){const rec=SweepGPURenderer.encodeToLayerScene(scene.texture,null,'symmetric',frameCtx.frameId,cfg);if(rec?.handled){renderBackendTelemetry.mark('sweep','gpu','deferred GPU lightning');if(rec.commandBuffer)SomataLayerSceneService.queue(frameCtx,somataSweepPhase(),rec.commandBuffer,'lightning');return;}}
             SweepGPURenderer.clear();return reportSweepGpuIssue(frameCtx,'lightning-encode','GPU Lightning encode failed',{behavior});
         }
         const pending=[],clipPaths=effect.frameData?.prepared?.visible||effect.frameData?.visible||effect.paths||[];let healthy=true;
@@ -185,8 +170,8 @@ function renderLayerSweepInstance(frameCtx,effectOverride=null){
             mainCtx.save();try{
                 if(effect.tunnelActive){applyMotionTunnelLag(mainCtx,copy,frameCtx.layer);mainCtx.scale(copy.scale,copy.scale);}applyLayerFrameEffectTransform(mainCtx,frameCtx);
                 const dynamic=frameCtx.geometryPlan?.dynamic===true,clipKey=dynamic?null:getLightningSceneStencilCacheKey(frameCtx.layer,copy,effect.tunnelActive);
-                if(!SweepGPURenderer.beginBatch(joinMode,clipKey,dynamic)||!queueMovingSweepGlowWebGL(mainCtx,effect.paths,layer,(stage==='precharge'?1:baseAlpha)*a,effect.now,effect.frameData)){healthy=false;break;}
-                const clip=buildLightningSceneStencilGeometry(clipPaths,mainCtx.getTransform(),clipKey,dynamic),rec=SweepGPURenderer.encodeToLayerScene(scene.texture,clip,behavior,frameCtx.frameId,cfg,stage==='precharge');if(!rec?.handled){healthy=false;break;}if(rec.commandBuffer)pending.push(rec.commandBuffer);
+                if(!SweepGPURenderer.beginBatch(joinMode,clipKey,dynamic)||!queueMovingSweepGlowWebGL(mainCtx,effect.paths,layer,baseAlpha*a,effect.now,effect.frameData)){healthy=false;break;}
+                const clip=buildLightningSceneStencilGeometry(clipPaths,mainCtx.getTransform(),clipKey,dynamic),rec=SweepGPURenderer.encodeToLayerScene(scene.texture,clip,behavior,frameCtx.frameId,cfg);if(!rec?.handled){healthy=false;break;}if(rec.commandBuffer)pending.push(rec.commandBuffer);
             }finally{mainCtx.restore();}
         }
         if(healthy){for(let i=0;i<pending.length;i++)SomataLayerSceneService.queue(frameCtx,somataSweepPhase(),pending[i],`lightning-${behavior}`);renderBackendTelemetry.mark('sweep','gpu','deferred clipped GPU lightning');return;}
@@ -236,7 +221,6 @@ function renderLayerSweepPass(frameCtx){
 function sweepInstanceSceneAdmission(effect){
     if(!effect?.enabled)return{admit:false,reason:'disabled'};const cfg=effect.frameData?.cfg;
     if(cfg?.effectType==='lightning'){
-        if(effect.frameData?.lightningSpectralPrepared)return{admit:Boolean(typeof WebGPUBezierSweepRenderer!=='undefined'&&WebGPUBezierSweepRenderer.isReady?.()),reason:'spectral Lightning renderer unavailable'};
         return{admit:effect.frameData?.gpuMorphArcLightning===true?Boolean(typeof WebGPULightningArcRenderer!=='undefined'&&WebGPULightningArcRenderer.isReady?.()):SweepGPURenderer.canEncodeToLayerScene(),reason:'Lightning Layer Scene renderer unavailable'};
     }
     if(effect.frameData?.bezierGlintGPU===true)return{admit:Boolean(typeof WebGPUBezierSweepRenderer!=='undefined'&&WebGPUBezierSweepRenderer.isReady?.()),reason:'Bezier Glint renderer unavailable'};

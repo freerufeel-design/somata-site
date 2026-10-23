@@ -134,11 +134,6 @@ const SomataParameterRegistry=(()=>{
     audio('sweep.spectralSector','Проблеск','Спектральный · размер сектора','add',180,1,360,{framePath:'sweep.spectralSectorDegrees',uiId:'sweepSpectralSectorDegrees'});
     audio('sweep.spectralSpeed','Проблеск','Спектральный · угловая скорость','add',360,-720,720,{framePath:'sweep.spectralAngularSpeed',uiId:'sweepSpectralAngularSpeed',interpolation:'angle'});
     audio('lightning.segment','Молния','Активная часть линии','add',65,1,100,{framePath:'sweep.lightningSegmentPercent',uiId:'sweepLightningSegmentPercent'});
-    audio('lightning.flashLength','Молния','Проблеск · длина','add',50,1,100,{framePath:'sweep.lengthPercent',uiId:'sweepLength'});
-    audio('lightning.flashOpacity','Молния','Проблеск · прозрачность','add',100,0,100,{framePath:'sweep.opacity',uiId:'sweepOpacity'});
-    audio('lightning.preGlowIntensity','Молния','Проблеск · интенсивность','add',100,0,100,{framePath:'sweep.lightningPreGlowIntensity',morph:false});
-    audio('lightning.spectralSector','Молния','Спектральный проблеск · сектор','add',180,1,360,{framePath:'sweep.spectralSectorDegrees',uiId:'sweepSpectralSectorDegrees'});
-    audio('lightning.spectralSpeed','Молния','Спектральный проблеск · угловая скорость','add',360,-720,720,{framePath:'sweep.spectralAngularSpeed',uiId:'sweepSpectralAngularSpeed',interpolation:'angle'});
     audio('lightning.rate','Молния','Частота ударов','positiveFactor',2,0,1000,{framePath:'sweep.lightningRatePercent',uiId:'sweepLightningRatePercent'});
     audio('lightning.duration','Молния','Продолжительность удара','add',300,30,700,{framePath:'sweep.lightningDurationMs',uiId:'sweepLightningDuration'});
     audio('lightning.width','Молния','Толщина','add',75,1,100,{framePath:'sweep.lightningWidthPercent',uiId:'sweepLightningWidthPercent'});
@@ -267,7 +262,6 @@ const SomataParameterRegistry=(()=>{
     generic('sweep.softnessMultiplier','Проблеск','Множитель мягкости','sweepSoftnessMultiplier','sweep.softnessMultiplier',0,64,.01);
     generic('lightning.everyN','Молния','Каждый N-й','sweepLightningEveryN','sweep.lightningEveryN',2,24,1,{type:'integer'});
     generic('lightning.rateMultiplier','Молния','Множитель частоты ударов','sweepLightningRateMultiplier','sweep.lightningRateMultiplier',.015625,64,.01);
-    generic('lightning.glintMultiplier','Молния','Множитель проблеска','sweepLightningGlintMultiplier','sweep.lightningGlintMultiplier',0,64,.01);
     generic('lightning.glowMultiplier','Молния','Множитель размера свечения','sweepLightningGlowMultiplier','sweep.lightningGlowMultiplier',0,64,.01);
     generic('lightning.intensityMultiplier','Молния','Множитель интенсивности','sweepLightningGlowIntensityMultiplier','sweep.lightningGlowIntensityMultiplier',0,64,.01);
     generic('lightning.softnessMultiplier','Молния','Множитель мягкости','sweepLightningSoftnessMultiplier','sweep.lightningSoftnessMultiplier',0,64,.01);
@@ -553,7 +547,7 @@ const SomataMorphParameterRouting=(()=>{
         const p=activeProfile(morph,mm);if(!p)return null;const d=ensureDraft(morph,mm,p);if(p.type==='orange')d.orangeConfig=captureOrangeConfig(mm);else{d.config=captureStandardConfig(morph);syncActiveLegacyBindings(morph,mm);}return d;
     }
     function isActiveProfileDirty(morph,mm){
-        const p=activeProfile(morph,mm);if(!p)return false;const d=captureActiveDraft(morph,mm);if(p.type==='orange')return comparable(d?.orangeConfig)!==comparable(p.orangeConfig||{});return comparable(d?.bindings||[])!==comparable(p.bindings||[])||comparable(d?.config||{})!==comparable(p.config||{})||String(d?.orderMode||'free')!==String(p.orderMode||'free')||Boolean(d?.freeOrderInitialized)!==Boolean(p.freeOrderInitialized);
+        const p=activeProfile(morph,mm);if(!p)return false;const d=captureActiveDraft(morph,mm);if(p.type==='orange')return comparable(d?.orangeConfig)!==comparable(p.orangeConfig||{});return comparable(normalizeBindingList(d?.bindings||[]))!==comparable(normalizeBindingList(p.bindings||[]))||comparable(d?.config||{})!==comparable(p.config||{})||String(d?.orderMode||'free')!==String(p.orderMode||'free')||Boolean(d?.freeOrderInitialized)!==Boolean(p.freeOrderInitialized);
     }
     function saveActiveProfile(morph,mm,name=null){
         const p=activeProfile(morph,mm);if(!p)return null;const clean=p.transient===true?String(name||'').trim():'';if(p.transient===true&&!clean)return null;const d=captureActiveDraft(morph,mm);if(p.type==='orange')p.orangeConfig=clone(d?.orangeConfig||captureOrangeConfig(mm));else{p.bindings=clone(d?.bindings||[]);p.config=clone(d?.config||captureStandardConfig(morph));p.orderMode=d?.orderMode==='type'?'type':'free';p.freeOrderInitialized=d?.freeOrderInitialized===true;p.routingVersion=3;}

@@ -1,243 +1,104 @@
-## 8.20.11 — Crystal / spherical refraction / controls
+# Somata 9.0.7 — тесты текущей версии
 
-Run `node tests/v8211-crystal-controls-sphere-skull-regression.js` then `node tests/v8211-real-crystal-ui-regression.js`; follow with `v8207-optical-webgpu-glass-regression.js`, `v8204-ambient-multipliers-blue-corridor-pkm-regression.js`, `v7122-shared-parameter-matrix-parity-regression.js` and `static-modules.js`. New regression checks smooth spherical geometry, removal of per-component square refraction cutoff, independent crystal light and fill parameters, WebGPU uniform impact, log multiplier UI and shape navigation via actual click. Hardware optical-pixel certification remains manual.
+Тесты **восстановлены** из полной Somata 9.0.3, а не из пакета 7.x. Приложение и три плейлиста остаются неизменными. Исторические имена файлов сохранены: они указывают, когда появилась регрессия, а не какую версию надо жёстко требовать.
 
-## 8.20.10 — актуальный WebGPU-захват **после** каждого основного кадра
+## Запуск
 
-1. `node tests/v8210-dynamic-optical-live-scene-regression.js` — обязательная регрессия: независимая неподвижная стеклянная сфера обновляет изображение при Morph/Corridor без мыши; кадр захватывается после `finishMainRenderFrame`, не перед `renderMainCanvas`; подавляются старые pre-paint WebGPU-захваты.
-2. `python tests/v8210-dynamic-optical-canvas-browser.py` — Chromium проверка реальных пикселей последовательных Canvas2D-кадров без мыши. Не является сертификацией shader output на NVIDIA.
-3. Затем `v8209-optical-screen-parity-multicanvas-regression.js`, `v8208-webgpu-scene-copydst-renderattachment-regression.js`, `v8207-optical-webgpu-glass-regression.js`, `v8204-ambient-multipliers-blue-corridor-pkm-regression.js`, `v7122-shared-parameter-matrix-parity-regression.js`, `static-modules.js`.
+Из корня программы при установленном Node.js и Chromium:
 
-Подробности: `RELEASE_8.20.10.md`.
-
-## 8.20.9 — экранно привязанная 3D-рефракция и захват композитной сцены
-
-`node tests/v8209-optical-screen-parity-multicanvas-regression.js` — обязательная регрессия: нулевое преломление выбирает исходный экранный пиксель, двухповерхностный Snell меняет относительную UV (не абсолютную позицию мировой плоскости), видимые Canvas2D/WebGPU-поверхности собираются в правильном z-order, скрытые не копируются, CSS-расположение и alpha/blend учитываются. Дополнительная проверка в Chromium через реальный Canvas2D подтвердила пиксели двухслойной композиции. Аппаратная проверка WGSL-пикселей и FPS NVIDIA остаётся отдельным обязательным шагом. Подробнее: `RELEASE_8.20.9.md`.
-
-## 8.20.8 — исправление WebGPU загрузки фона в стекло
-
-- `node tests/v8208-webgpu-scene-copydst-renderattachment-regression.js` — воспроизводит Dawn `Destination texture needs to have CopyDst and RenderAttachment usage`, требует `COPY_DST | RENDER_ATTACHMENT | TEXTURE_BINDING`, проверяет два последовательных реальных scene uploads вместо чёрного fallback.
-- `node tests/v8207-optical-webgpu-glass-regression.js` — Snell/RGB, оптический pipeline и обновление uniforms; `node tests/v8206-basic-glass-when-optics-fails-regression.js` — аварийный резервный материал.
-- Проверка NVIDIA WebGPU на окончательные пиксели рефракции и отсутствия uncaptured errors остаётся обязательной.
-
-## 8.20.7 — реальный optical WGSL вместо резервного синего материала
-
-- `node tests/v8207-optical-webgpu-glass-regression.js` — обязательная регрессия дублирования `@builtin(position)` в fragment input; дополнительно Snell/RGB, загрузка фоновой текстуры, GPU-bindings, динамические параметры.
-- Сохраняются `v8206-basic-glass-when-optics-fails-regression.js` и `v8205-webgpu-optics-modes-regression.js`.
-- Hardware pixel validation на NVIDIA обязательно; mock WebGPU не подтверждает итоговую картинку.
-
-# 8.20.6 — WebGPU sphere visibility / compositor bridge / sidebar icon state
-
-Run `node tests/v8205-webgpu-optics-modes-regression.js`, `node tests/v8206-basic-glass-when-optics-fails-regression.js`, `node tests/v8206-glass-sphere-visibility-and-icons-regression.js`, `node tests/v8205-ui-mode-browser-regression.js`, `node tests/v8204-real-ui-multipliers-contextmenu-regression.js`, `node tests/v8203-independent-3d-and-corridor-glint-regression.js`, and `node tests/static-modules.js`.
-
-The device mock tests validate GPU submission and error recovery; Chromium harness tests validate real UI behavior without hardware WebGPU. A physical WebGPU screenshot and actual 3D refraction on the user's GPU remain essential before visual PASS.
-
-# 8.20.4 — Ambients/Prism multipliers, Blue defaults, Corridor Glint, ПКМ
-
-`node tests/v8204-ambient-multipliers-blue-corridor-pkm-regression.js` checks all 25 multiplier controls, parent-child Parameter Matrix routing, Blue normalizeSizes default, shader pixel-floor safeguards and single contextmenu handler.
-
-`node tests/v8204-real-ui-multipliers-contextmenu-regression.js` runs Chromium real contextmenu actions (exactly one toggle), verifies select→live numeric state, main matrix and Blue default. Run with `node tests/v7122-shared-parameter-matrix-parity-regression.js`, `node tests/v8200-ambient-prism-test-morph-corridor-regression.js`, `node tests/v8203-independent-3d-and-corridor-glint-regression.js`, `node tests/static-modules.js`. Hardware NVIDIA WebGPU visual check remains required.
-
-# 8.20.1 — foreground glass silhouettes / sphere / 3D mesh adapter
-
-`node tests/v8201-prism-render-commands-regression.js` checks all six shapes and that they create surface/mesh, refraction/clipping and edge commands using the actual production module, in a stub Canvas context. It also validates the bounded 3D mesh adapter. This does not verify physical WebGPU output or actual screen pixels. Full Chromium legibility test `tests/v8201-prism-legibility-regression.js` requires a working browser harness and is not certified in this environment.
-
-# 8.20.0 — Corridor depth curve / ambients / refraction / geometry test-morph
-
-`node tests/v8200-ambient-prism-test-morph-corridor-regression.js` tests real UI interactions, shared Matrix membership, monotonic centered Corridor scale, Canvas pixels for rain and all five refractive foreground shapes, and authored-vs-frame isolation for test-morph. Software Chromium PASS is not hardware WebGPU certification.
-
-## 8.9.0 — ordinary Corridor / Glow-Base Canvas vector replay
-
-- `node tests/v890-vector-replay-pixel-performance-regression.js` — five full Canvas pixel comparisons against the legacy replay, including rotated copies, override styles, fill suppression and local non-identity transforms. Timings are supplemental and do not certify hardware FPS.
-- Confirm regular regression suite for shared FrameContour, Fill+Web, Blue/Orange, Lightning and strict Spiral.
-- Hardware NVIDIA GPU profiling of stages 30/40 remains unverified; do not disable the freeze watchdog.
-
-## 8.7.0 — Retained Bézier seam packing, без изменения картинки
-
-- `v870-retained-bezier-seam-reuse-regression.js`: сравнение `Float32Array` побайтово с 8.6.0, включая discontinuities, degenerate width span, NaN/Infinity и несколько цветов; CPU benchmark отдельно от FPS.
-- Не менять FrameContour, GPU shaders, порядок эффекта или качество Glow для локального CPU выигрыша; `ARCHITECTURE_8.7.0.png` и `PERFORMANCE_8.7.0_REPORT.md` показывают пределы измерений.
-- В software Chromium общий FPS **не улучшился устойчиво**; аппаратный NVIDIA профиль `stage:30/40` по-прежнему требуется.
-
-## 8.5.0 — Strict Spiral Bézier packing (performance-only)
-
-- `v850-exact-bezier-pack-regression.js`: byte-for-byte float output against the original v8.4 function (or embedded v8.4 reference), invalid segments, mixed color and variable-width paths. Also benchmarks the packing hot path without claiming an end-to-end GPU FPS improvement.
-- `PERFORMANCE_8.5.0_REPORT.md` and `ARCHITECTURE_8.5.0.png` document measurements, remaining GPU limitations and unchanged consumer contracts.
-
-## 8.4.0 — Spiral/Corridor Interwinding Fill hot-path
-
-- `v840-interwinding-fill-transform-regression.js` checks byte-identical Float32 geometry across the 8.3.0 baseline and 8.4.0, the number of phase calculations, and a populated GPU-ready Fill mesh. On 8.3.0 run with `SOMATA_BASELINE=1`; compare checksums.
-- Changes are confined to `js/render/fill-plan.js`: calculate angle/scale/sine/cosine **once per Corridor copy per frame**, not per spiral point. Leave the exact strict Spiral carrier, stencil mesh, Fill/Line/Glow/Web/Graffiti/Lamps/Sweep/Lightning/Particles and composition order unchanged.
-- FPS benchmarks must distinguish this Fill-intensive scenario from generic scenes; GPU timestamps / NVIDIA visual validation remain unverified.
-
-## 8.3.0 — Corridor frame-derived appearance cache
-
-- `v830-corridor-copy-attributes-regression.js`: проверка строгого совпадения цветов/углов с прежним API, общих данных Glow/Base/Fill и GPU callbacks, а также изоляции кадров и слоёв.
-- `v830-corridor-attributes-benchmark.js`: одинаковый micro-benchmark для исходной 8.2.0 и 8.3.0 (не является FPS).
-- `v830-corridor-fps-benchmark.js`: программный браузерный FPS sanity-сценарий с Corridor/Blue, результат сильно зависит от прогрева; нельзя сравнивать холодные кадры с прогретыми.
-- Перед релизом: `node tests/static-modules.js`, v830/v820/v810, v8 coverage, FrameContour, все слои эффектов, GPU lifecycle, console error tests.
-
-## 8.2.0 — Scoped Corridor CPU/GPU frame cache
-
-- `v820-corridor-shared-frame-regression.js`: FeatureHost Glow/Base views reuse exactly one dynamic Corridor master per frame, one color cache and an identical original frame/copy cache key; the authored owner is stable across frame snapshots; changing frame ID rebuilds geometry; layers remain isolated.
-- The optimized path is the CPU-side master/copy preparation for Corridor. No Geometry/Profile/Spiral shader, visual parameter, effect order or numeric geometry was changed.
-- Run `node tests/static-modules.js`, new v820 test, v810 test, v782/v780 FrameContour, v8 coverage, plus effects tests before publishing. Hardware WebGPU graphics and long-duration NVIDIA soak remain separate release gates.
-
-## 8.0.0 — производительность, Corridor, охват слоёв
-
-- `v8-coverage-corridor-regression.js`: все Blue/Orange строки имеют `Слои %`, запись 0 и 40, 0–100% и плавные значения Corridor между цветами палитры.
-- `v8-blue-runtime-coverage-regression.js`: 0%/50%/100% меняют 0/2/4 слоя, authored state неизменен.
-- `v8-actual-coverage-regression.js`: реальное UI-действие Orange генерирует N для 0/2/4 слоёв при 0%/50%/100%.
-- `v7122-special-values-audio-nested-regression.js`: тест двух исходных полей «Орбиты» теперь исключает независимое третье поле охвата.
-- FPS: `BENCH_RUNS=3 BENCH_SCENARIO=0 node tests/v75-fps-benchmark.js`; это программный браузер, не сертификация аппаратного WebGPU.
-
-## 7.11.13 — Orange popup/row parity, TAP/BPM wheel
-
-`v7123-orange-row-popup-lifecycle-regression.js` verifies that adding/removing several parameters keeps exactly one open Orange catalog menu, does not hide the panel, and that Blue and Orange render the Orbit setting through the same row structure and canonical 0..19 range.
-
-`v7123-tap-wheel-bpm-regression.js` verifies the physical mouse wheel over TAP, exact ±1 BPM, boundaries, automatic-to-manual handoff and normal wheel behaviour elsewhere.
-
-## 7.11.13 — TAP/BPM mouse wheel
-
-`v7123-tap-wheel-bpm-regression.js` verifies +1/−1 BPM wheel increments and clamps, one event independent of pixel delta, auto-to-manual handoff, live sync and exclusion of non-TAP controls.
-
-# Somata 7.11.7 — regression tests
-
-7.11.7 memory retention: `v7117-memory-retention-regression.js` simulates 450 distinct Orange/Morph topology owners and 100 per-layer accumulation Fill histories at desktop resolution. It verifies bounded topology GPU records (<=32), GPU history textures (<=8), layer-scene uniforms (<=32), GPU buffer/texture destruction, and a surviving current topology. Regression covers retention contracts in a mocked GPU, not real-driver memory use.
-
-7.11.2 mobile single-mode UI: `v7112-mobile-single-mode-regression.js` verifies Easy/Pro disappears on 390px and 360px phones, as well as coarse-pointer landscape 844×390, while all Pro controls remain available. It also checks desktop Easy/Pro switching and saved preference restoration after responsive transitions, including a programmatic attempt to enter Easy on mobile.
-
-7.11.1 mobile touch hotfix: `v7111-mobile-dock-real-touch-regression.js` sends actual Chromium DevTools touch events (not just scripted `.click()`) to the bottom dock buttons and native labels. It locks the touch-to-click chain through the real DOM, verifies the Mic/Audio Routing/Reset View actions and label toggle, and confirms canvas gestures still cancel native page scroll. Also run `v75-mobile-audio-panels-spiral-regression.js` to catch overlap of mobile audio panels with the two-row mobile header. Browser headless checks do not certify physical WebGPU driver behaviour.
-
-
-7.11.0 adds two primary regression gates:
-- `v7110-orange-shared-routing-lifecycle-regression.js` — Orange/Blue/Audio group parity, Orange adaptive lamp brightness, RMB routing, manual override persistence, and non-stopping Orange lifecycle.
-- `v7110-easy-pro-ui-regression.js` — Easy/Pro presentation switching over one shared project state, Easy navigation labels, progressive disclosure, and routing discoverability.
-
-
-For 7.10.9, `v7109-blue-timing-shape-row-regression.js` restores the stable Blue timing visibility and compact Shape row contract: `Тип скорости` and the full `Период цикла` controls live in the top Blue block; active full TAP sync shows the `AUTO` badge; Shape/Orbits use the same row styling as normal Geometry bindings; Shape no longer exposes spline-point count in the routed row; and the five profile sets live inside one `Наборы профилей` dropdown.
-
-For 7.10.8, `v7108-audio-blue-multitarget-regression.js` locks the Audio/Blue composition and the RMB routing UX: canonical Audio `Размер` must visibly scale the already-resolved Blue carrier instead of mutating an ineffective snapshot radius; the unified parameter popup exposes at most layer bubbles `1..5` plus `М` for Master; bubbles are independent multi-select controls that keep the popup open; and the left parameter shows matching burgundy target badges along its lower-left edge.
-This directory contains the active regression suite. Historical development notes and iteration logs are intentionally not shipped with the 7.11 package.
-
-Core validation order:
-
-1. production JavaScript syntax / boot integrity;
-2. browser boot and uncaught-error check;
-3. real UI actions and state propagation;
-4. individual effect render preparation;
-5. Static and Morph parity;
-6. Spiral / topology continuity;
-7. multilayer / Master behaviour;
-8. combined effect stress;
-9. GPU lifecycle and fault isolation;
-10. scheduler continuity / soak.
-
-For the 7.10.5 Morph UI, `v710-compound-morph-ui-regression.js` verifies the compact multiplier contract: routed rows do not invent extra Morph multipliers; real source-side multipliers stay in their parent row, are always-on and labelled `X`; every visible `X` is docked immediately before the row close button; the Size row contains only its range plus proportional-size preservation (no extra radius/size-variation multipliers). `v7916-compound-morph-row-regression.js` additionally verifies that pure boolean on/off parameters are not available to Blue Morph, do not survive as active bindings, and do not appear in the Morph picker.
-
-A PASS means the real UI action reaches live state, produces finite frame/render data, does not leave an uncaught exception, and the scheduler remains able to produce the next frame. Physical GPU pixels remain the final visual authority when hardware-specific behaviour differs from headless validation.
-
-For 7.10.5, `v7105-standard-79-default-parity-regression.js` locks the system Standard profile to the stable 7.9 default set: Shape, N, K, Size, Orbits, Rotation, Line Width, Line Color, Fill Color and Fill Opacity are present; Layer Opacity, Rounding, Spiral Layers and Chaos remain absent until explicitly added. The same contract is required after the factory reset. The intentional 7.10 rotation multiplier neutral value remains `1×`.
-
-For 7.10.5, the Blue Morph catalog is consolidated to remove legacy duplicate controls: the old lamp-relative Morph block is retired, Fill Morph parameters are filed under `Линия`, while `Орбиты`, `Морфинг хаоса`, and `Скругление` live under `Геометрия`. `v792-morph-audio-ui-parity-regression.js` verifies that the retired left-sidebar sections are absent, routed/special rows have no duplicate IDs, and stale legacy lamp-Morph state cannot remain active.
-
-For 7.10.6, `v7106-blue-speed-builtins-regression.js` locks the restored dedicated top `Тип скорости` selector to the exact stable-7.9 easing menu and verifies that it is not duplicated in the compact header. It also verifies the five built-in Standard-engine presets (`Дыхание`, `Кристалл`, `Орбитальный`, `Жидкий неон`, `Сингулярность`), unique IDs/bindings, profile switching, special Shape/Orbit/Chaos flags, and that the `Основной` Standard binding set remains unchanged.
-
-For 7.10.7, `v7107-orange-static-generation-presets-regression.js` verifies the five built-in Orange static-generation recipes (`Солнечная розетка`, `Витраж`, `Кружево`, `Кристаллический собор`, `Спиральный гербарий`). Each recipe must generate a complete authored composition, remain static between Orange switches, reject inherited animated effects, preserve its own static Web/Lamps where applicable, keep unique system profile IDs, and leave `Standard Orange` as the default compatibility profile.
-
-## 7.11.12: Shared Parameter Matrix
-
-- `v7122-shared-parameter-matrix-parity-regression.js`: Chromium asserts the same 85 ordered parent parameter IDs in Blue, Orange and Audio Routing, canonical Orbit range `0..19`, and unified Fill subcontrol metadata/range `0..1`.
-- `v7122-special-values-audio-nested-regression.js`: independent Blue/Orange profile values, actual Orange Chaos generation and disabling, working Audio nested multipliers, and safe live-frame Audio Orbit effects.
-- The source of truth is `js/core/parameter-matrix.js`, backed by the existing numeric definitions in `js/core/parameter-routing.js`. Complex topology-changing Audio items are visible but disabled pending independent realtime-safe adapters, rather than silently changing layers.
-
-
-## 7.11.14: Lightning, Orange Orbit Row, PC-Audio Default
-
-- `v7125-lightning-orbit-audio-defaults-regression.js` verifies that the actual lightning strike clock is exactly 1/4 of the authored (unchanged 100% × 1) rate, Orange Orbit removal persists through re-render and can be reversed using the parameter menu, Blue/Orange Orbit labels are plain text, and the default audio source remains "Listen to PC" on desktop and mobile. A manually selected microphone remains respected.
-
-## Somata 8.6.0
-
-- `node tests/v860-corridor-gpu-transform-basis-regression.js` — byte-identical GPU transform basis, plus Morph-owner fallback parity.
-- `node tests/v860-spiral-corridor-shared-attributes-regression.js` — exact retained Spiral GPU copy-payload parity with 8.5, FeatureHost cache reuse, frame invalidation, microbenchmark. With `SOMATA_BASELINE_ROOT` the test reads the unmodified 8.5 packer directly.
-- Run existing 8.3 Corridor attributes tests, 8.4 Spiral Fill, 8.5 exact Bezier packing, Blue/Orange coverage, FrameContour, Fill/Web, Glow/Graffiti/Lamps, Lightning, and diagnostics on the unpacked release.
-- CPU packing measurements do not certify NVIDIA/WebGPU image output.
-
-## 8.8.0 — exact Spiral Morph arc-map lookup
-
-- `node tests/v880-spiral-arc-lookup-regression.js` — проверяет полную численную совместимость и скорость поиска сегмента; опционально `SOMATA_BASELINE_ROOT` указывает на распакованную 8.7.0.
-- `node tests/v880-exact-morph-gpu-data-regression.js` — проверяет CPU-generated GPU buffer hashes для пяти Morph-режимов. Эталон — чистая 8.7.0, код теста одинаков для обеих версий.
-- `node tests/v880-arc-equalized-morph-benchmark.js` — отдельный короткий тест подготовки cross-family Morph в software Chromium.
-- `node tests/v75-fps-benchmark.js` — общая сцена; не приравнивать прирост локального CPU к FPS аппаратного WebGPU.
-
-## 8.10.0 — GPU completion fence batching
-
-`node tests/v8100-gpu-buffer-fence-coalescing-regression.js` exercises the *production* recycler in a deterministic WebGPU queue mock: 2-frame retirement, one fence for 64 buffers, no early reuse, device reset, queue rejection and 90×100-buffer workload. Set `SOMATA_BASELINE_ROOT=/path/to/Somata_8.9.0` to also compare the unmodified 8.9.0 implementation (expected 9,000 vs 90 fences in that workload). This test does not certify hardware FPS. Continue with `node tests/static-modules.js`, FrameContour, Blue/Orange, Corridor, Fill/Web, exact Spiral, Lightning, Lamps/Graffiti, memory and full GPU hardware verification. See `PERFORMANCE_8.10.0_REPORT.md`.
-
-### Somata 8.13.0 — Web nearest-point pruning
-
-`node tests/v8130-web-nearest-pruning-regression.js` verifies **exact** nearest-point coordinates, distance, and tie precedence against the unchanged 8.12.0 projection for empty, short, dense, degenerate and 4096-segment contours. It also prints a comparative dense-Web CPU timing; this is **not** an FPS or hardware-WebGPU certification. Existing tests for static Web, Fill/Web ordering and shared FrameContour remain mandatory.
-
-### Somata 8.15.0 — блочный AABB-отсев Web
-
-`node tests/v8150-web-block-projection-regression.js` сравнивает точные проекции на контурах 0–4096 сегментов, включая один кадр с пересборкой таблицы, и выполняет браузерный сравнительный benchmark на 256/1024/4096 сегментах. Проверять также `v8130-web-nearest-pruning-regression.js`, Static Web, Fill/Web, эффекты Morph. Локальный CPU-бенчмарк не заменяет FPS и визуальную проверку на NVIDIA.
-
-
-### Somata 8.16.0 — Render dispatch performance
-
-`node tests/v8160-render-dispatch-cache-regression.js` проверяет повторное использование общего списка FeatureHost capability providers и приоритетов GeometryRoleService. Для сравнения с исходной 8.15.0: `SOMATA_BASELINE_ROOT=/path/to/Somata_8.15.0 node tests/v8160-render-dispatch-cache-regression.js`. Проверки включают регистрацию/перерегистрацию и замену provider после заполнения кэша; порядок ответов совпадает с базой. Также обязательны изоляция FeatureHost, Fill/Web, Glow+Graffiti+Lamps, Lightning, Blue/Orange и стандартный FPS-тест. GPU визуальную сертификацию на NVIDIA этот тест не заменяет.
-
-## 8.18.0 — Regression gate (Solo / Orange / Glint)
-
-Запускать из корня распакованного релиза:
-
-```bash
-node tests/v818-solo-orange-graffiti-regression.js
-node tests/v818-graffiti-solo-line-warmup-regression.js
-node tests/v818-glint-contour-coverage-regression.js
+```sh
+node tests/run-all.js       # короткий актуальный набор: UI → состояние → геометрия → GPU preparation → scheduler
+node tests/run-extended.js  # все регрессии, кроме микробенчмарков и soak; может выполняться долго
+node tests/run-v9.js --full --bench  # включить микробенчмарки
+node tests/stability-soak.js # долгий stress: запускать отдельно
 ```
 
-Проверяются: Solo третьего слоя с активным Green, перегенерации Orange с индивидуальным Graffiti, длина штриха 3, временно видимая Base при прогреве GPU Graffiti и охват всех контуров Glint. Не считайте `isReady` признаком фактической отрисовки пикселей на NVIDIA.
+Каждый тест выполняется на файлах **этого же каталога Somata 9.0.5**; исключён глобальный timeout 7.x, который останавливал длинный набор раньше завершения. По умолчанию timeout на отдельный тест — 35 секунд; на медленном ПК можно задать `SOMATA_TEST_TIMEOUT_MS=60000`. Ошибка или timeout дают ненулевой код выхода. Тесты нельзя объявлять зелёными из-за исключения из `run-all`.
 
-## 8.19.0 — Blue Morph × Corridor Palette Lag
+## Актуальная последовательность проверки
 
-```bash
-node tests/v819-blue-palette-lag-stability-regression.js
-node tests/v819-palette-lookup-benchmark.js
-```
+1. Статическая целостность production JS и порядок загрузки (`static-modules`, `browser-preflight`).
+2. TAP Tempo Lock, тишина, ложные 64/256 BPM и реальное управление (`v900-*`, `v7123-*`).
+3. Список проектов/Green Morph и автоматическая смена сцен (`v902-*`).
+4. Corridor, множитель глубины, реальный UI и молния без предварительного проблеска (`v901-*`).
+5. Согласованность Parameter Matrix, Blue/Orange, Audio и Master (`v7122-*`, `orange-family-pools`).
+6. Один геометрический контур Static/Morph, точная retained Spiral, carrier для Web/Lightning (`v762-*`, `v763-*`, `v770-*`, `v779-*`).
+7. GPU-pass fault injection **через SomataRenderPassRegistry**, а не замену `globalThis` после регистрации (`v75-spiral-effect-fault-recovery`).
+8. Динамическое optical-scene capture, Ambients и лимиты GPU-кэшей (`v8210-*`, `v8214-*`, `v7117-*`).
+9. Полный `run-extended` и долгий soak на релизном архиве.
 
-Проверяются стабильность выбранной Blue-палитры, плавность дробного индекса в 101 кадре, 3 независимых слоя и прозрачность Fill. Бенчмарк измеряет только CPU-поиск палитры, не FPS.
+## Изменения в тестах относительно 9.0.2 до уборки
 
-## Somata 8.19.1 — Corridor → Blue startup warmup
+- `v768` больше не требует заголовка `7.7.x` и старого cache-busting токена; поколение GPU и восстановление retained ресурсов остаются обязательными.
+- `v770` больше не требует SHA256 исходников 7.5 при функционально изменённом Web GPU; теперь проверяются реальные shader/encoder/bridge contracts и отказ от generic geometry вместо точной Spiral.
+- `v765`, `v7612` больше не требуют фиксированных исторических строк версии во внутренних diagnostics; точность Bézier, copy-alpha и reuse остаются обязательными.
+- `v778`, `v773` не используют количество строк как измерение модульности и отличают readiness guard от прямого вызова GPU renderer в main pipeline.
+- `v783`, `v779-lightning` различают авторский `default.plist` и сохранённый `STANDARD_ORIGINAL_23_PROJECTS.plist`; художественные настройки нового плейлиста не обязаны совпадать с 7.x.
+- `v8210` проверяет cache-busting 9.0.2 вместо `8.20.14`.
+- `v71116` учитывает плавную интерполяцию цветов Corridor и сохраняемую alpha, а не старую форму строкового шаблона.
+- `orange-family-pools`, `runtime-user-actions` используют актуальные Orange profile/pool controls; скрытый `minimalMorphMode` не считается пользовательским UI.
+- `v75-checkbox-functional-coverage` ищет *живые*, а не удалённые после UI rerender DOM-узлы; один родительский Shape-контрол проверяется отдельными сценариями Orange routing.
+- `v75-spiral-effect-fault-recovery` действительно внедряет ошибки в зарегистрированные `web / lamps / sweep / particles / base` passes и проверяет изоляцию, продолжение scheduler, новые кадры и progress Morph.
 
-`node tests/v8191-startup-mode-warmup-regression.js` verifies that GPU copy-ring reservation never runs before the renderer becomes ready, is limited to 256 copies, and does not allocate after GPU device loss. In Chromium without hardware GPU, it also verifies Corridor → Blue Morph → Stop actions, no uncaught errors, and startup diagnostic availability. `RELEASE_8.19.1.md` documents GPU-specific verification limitations.
+## Итог полного тестирования 9.0.3 (23.10.2026)
 
-- V8.19.3: `node tests/v8193-orange-explicit-routes-regression.js` — Orange changes only explicitly routed layer parameters and persists an empty binding list.
-- V8.19.3: `node tests/v8193-orange-special-row-style-regression.js` — real CSS parity for Forma/Orbits in Blue and Orange.
+- `run-all.js`: **19 PASS / 0 FAIL / 0 TIMEOUT**.
+- `run-extended.js`: **215 PASS / 1 FAIL / 0 TIMEOUT** из 216 тестов.
+- Единственное падение в полном прогоне — `v75-rounding-morph-stall-jump-regression.js`: после блокировки главного потока на 240 мс ошибка совпадения progress Morph с wall clock вышла за предел 0.035 (наблюдалось 0.0383). При отдельном повторном запуске тест прошёл (ошибка 0.033). Тест оставлен строгим и обязательным: воспроизводимость зависит от нагрузки; причина не исправлена.
+- `runtime-user-actions.js`: **12/12 PASS**. Тест Orange Mandala обновлён для семантики v8.19.3: каталог/пулы определяют кандидатов, но активными значениями слоёв владеют только явно подключённые Orange routes.
+- `v8201-prism-legibility-regression.js`: использует реальный 2D overlay для отключённого GPU; физические пиксели 3D WebGPU этим тестом не проверяются.
+- User-reported неработающая молния на NVIDIA и задержки Spiral требуют отдельного аппаратного воспроизведения, общий PASS тестов не является их опровержением.
 
-## Somata 8.20.0 — Corridor depth curve, Ambient, Prism, Test-Morph
+## Пределы проверки
 
-`node tests/v8200-ambient-prism-test-morph-corridor-regression.js` — headless Chromium: real controls, shared registry and subcontrols, base Corridor parity at 0%, widening/narrowing and stable midpoint; rain render pixels, transparent foreground and frame-only Test-Morph geometry change without authored mutation. Supplement with physical GPU verification, repeated Morph/Spiral and FPS. See `RELEASE_8.20.0.md` for explicitly experimental limitations.
+Node/Chromium проверяет действия UI, состояние, finite geometry и подготовку GPU-команд, но не доказывает итоговые пиксели на физическом WebGPU/NVIDIA. Синтетический аудиотест не доказывает устойчивость TAP на любых реальных breakdown. Для спорных визуальных случаев аппаратный результат важнее headless PASS.
+
+Новые баги сначала добавляются воспроизводимым тестом. Код приложения и существующие плейлисты нельзя менять только ради прохождения исторического буквального сравнения исходников.
+
+## Версия 9.0.3 — «Анимация» в статике
+
+- Галочка **Анимация** сама по себе не запускает повторяющийся геометрический Morph и не добавляет активную задачу в scheduler.
+- После редактирования поддерживаемого параметра геометрии запускается **один конечный переход** от предыдущего видимого состояния к новому; затем задача удаляется и геометрия остаётся неподвижной.
+- Структурные изменения обычного многоугольника используют существующий Blue fade carrier; Spiral не переводится в приближённую CPU-геометрию. Для топологической перестройки strict Spiral остаётся дискретный переход; непрерывная GPU-интерполяция топологии не добавлялась.
+- `v903-static-edit-animation-regression.js`: настоящий клик/редактирование радиуса/N, проверка 5 секунд покоя, финальной геометрии и отсутствия конкуренции с Morph.
+- `v903-static-animation-render-impact.js`: реальный рендер и проверка планировщика.
+- `v8200-ambient-prism-test-morph-corridor-regression.js`: вместо устаревшей постоянной анимации проверяет изменение после редактирования.
+- `v8201-prism-legibility-regression.js`: проверяет 2D optical fallback в Chromium без аппаратного GPU; реальные WebGPU-пиксели этим тестом **не** сертифицируются.
+- `runtime-user-actions.js`: Mandala проверяется как выбранный генератор кандидатов с соблюдением нового Orange parameter-routing контракта (v8.19.3), без ожидания безусловной замены каждого свойства и имён слоёв.
+
+Режимы Blue/Orange/Green, автоматический TAP и эффектовые анимации существуют отдельно от этой галочки. Полный регрессионный запуск по-прежнему обязателен перед релизом.
 
 
-### 8.20.5: WebGPU optical layer and 2D/3D split
+## Версия 9.0.4 — проверка настроек, GPU Fill и переходов
 
-- `node tests/v8205-webgpu-optics-modes-regression.js` — shader interfaces, WebGPU-only resource/command path and 6 mesh draws (mock device).
-- `node tests/v8205-ui-mode-browser-regression.js` — real Chromium UI mode switch and OFF startup.
-- The historic v8203 WebGL2 mock test is **superseded** by v8205 WebGPU tests. v8200 2D tests now explicitly select `legacy` overlay.
-- A real-device pixel capture with WebGPU on NVIDIA remains mandatory for visual refraction/dispersive acceptance.
+- `v904-settings-fill-diagnostics-regression.js`: дефолты меню как на пользовательском образце, сохранение COSMIC и стандартных плейлистов, попадание отказов GPU Fill во встроенную консоль, отсутствие самоперерисовки при `gpu-only`/`ordered-fill` FAIL.
+- `v904-static-animation-blue-types-regression.js`: пять типов статических переходов, наследование общих Blue геометрических исполнителей для обычных форм и reuse подготовленных endpoint данных на нескольких кадрах.
+- `v904-strict-spiral-static-edit-regression.js`: точная Spiral без прыжка при смене N: fade-out → смена топологии в нулевой непрозрачности → fade-in; по-прежнему не полноценная retained GPU интерполяция топологии Blue.
+
+Физический FPS на NVIDIA и исправление конкретного GPU Fill backend failure **не подтверждены** тестами без аппаратного WebGPU. Не отмечать это как PASS без проверки устройства.
+
+## Версия 9.0.5 — Spiral Animation / Corridor / Fill GPU warming
+
+- `v905-spiral-static-control-corridor-idle.js`: точное совпадение шести вариантов Spiral с меню Blue; выбор только в Spiral; сохранение опции; статический переход без самопроизвольного движения; Corridor при нулевой скорости не инициирует лишние GPU-перерисовки.
+- `v905-fill-gpu-warmup-lifecycle.js`: `GPU Fill` различает асинхронную инициализацию (mask доступен, но 0×0, native ещё инициализируется), успешный запуск и настоящий отказ.
+
+**Ограничение:** статическая анимация Spiral при структурных изменениях пока переключает две точные GPU-формы через Fade; сама визуальная интерполяция всех шести Blue Spiral transport ещё не перенесена. Тест намеренно не объявляет её полной реализацией.
 
 
-### 8.20.12 — компактная фигура, честные множители, длина проблеска 3%
-`node tests/v8212-prism-controls-and-glint-regression.js`
-`node tests/v8212-prism-browser-controls-regression.js`
-Проверяется DOM → state → GPU uniform, отсутствие saturation на ×9, отбрасывание множителей параметров с физическим пределом 0–100, отдельное значение пресета проблеска. Сохранённые проекты с собственными значениями не обнуляются.
+## Версия 9.0.6 — источники ударов молнии
+
+`v906-lightning-trigger-routing-regression.js` проверяет реальное изменение селектора в шапке «Молния», сохранение параметра `lightningTriggerMode` в конфигурации слоя и трёхвариантную маршрутизацию часов:
+
+- `timer` — независимый таймер даже при работающем Morph и проблеске;
+- `morph` (по умолчанию) — Glint при включённом проблеске, иначе Blue/Orange Morph при его активности, иначе таймер;
+- `glint` — строго по завершению оборота проблеска, без удара при выключенном проблеске и без импульса при первом включении;
+- контроль 120 BPM/8 долей/цикл = 4 секунды и отсутствия преждевременного удара.
+
+И `lightningActiveCycleFraction`, и GPU/CPU-обработчик удара используют длительность выбранного источника, чтобы не разрывать длительности свечения и геометрию на разных проходах. Legacy проекты без `lightningTriggerMode` используют режим `morph`.
 
 
-### 8.20.13 — rain actual speed/density; immediate optical repaint
+## Версия 9.0.7 — устранена блокировка WebGPU Lightning
 
-`node tests/v8213-ambient-rain-prism-activation-regression.js` checks real Chromium contextmenu on skull → main scheduler invalidate, real Canvas rain commands at ×1/×8 density, motion at ×1/×8 speed and static zero speed; removed rain angle/opacity multipliers from UI/registry/matrix and retained old project effective values. Ambient sliders match the compact prism/Lamp layout.
-
-### 8.20.14 — ambient compositor ordering + continuous rain + real color split + moving clouds + spiritual pressure
-
-Mandatory new regression: `node tests/v8214-ambients-compositor-and-effects-regression.js`.
-It checks actual Chromium Canvas pixels for both 2/3-color dichotomy and rainbow dichotomy, rain coverage across five viewport bands, cloud geometry scaling x1/x8 and x0 velocity freeze, independent Reiatsu energy strokes versus original Earthquake rings, context-menu-independent "Поверх линзы" live stacking (z7/z10) and optical capture exclusion, vignette multiplier opacity at a real screen pixel even with Corridor active, and reset of earthquake translations. `node tests/v8213-ambient-rain-prism-activation-regression.js` also remains mandatory for baseline rain velocity/density and 3D on-click repaint. `node tests/v7122-shared-parameter-matrix-parity-regression.js` checks Blue/Orange/Audio matrix parity. Browser screenshots under hardware WebGPU are still required for final visual certification; the Chromium tests prove the 2D compositor pixels, not GPU pixels on NVIDIA.
+- `v907-lightning-gpu-encode-regression.js` сначала исполняет фактическую функцию адаптера GPU с контролируемым готовым backend. Раньше она вызывала `prechargeAsGlow` (удалён после удаления предварительного проблеска) и завершалась `ReferenceError`, несмотря на успешные тесты GPU preparation. Теперь адаптер передаёт только пять допустимых аргументов.
+- Тот же сценарий нажимает checkbox молнии в браузере, выбирает таймер через UI и проверяет непустой план `strike`.
+- Без аппаратного WebGPU проверка не подтверждает физические пиксели на NVIDIA.

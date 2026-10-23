@@ -40,7 +40,7 @@ const assert=(ok,msg)=>{if(!ok)throw Error(msg)};
    document.getElementById('btnRandomPreset').click();await wait(40);
    const layerColors=state.layers.map(l=>String(l.strokeColor||'').toLowerCase());
    const all=matrix.all();
-   return {steps,during,instantStop,original,fadeStop,lagActive,shifted,rgb,layerColors,matrixCount:all.length};
+   return {steps,during,instantStop,original,fadeStop,lagActive,shifted,rgb,layerColors,matrixCount:all.length,matrixUnique:new Set(all.map(x=>x.id)).size===all.length,matrixHasCorridor:matrix.descendants('tunnel.depthCurve').some(x=>x.id==='tunnel.depthCurveMultiplier')};
   })()`,{timeoutMs:40000,label:'Orange sampled effect, instant/fade stop, palette lag without cumulative'});
   assert(data.during.added&&data.during.rangeSet&&data.during.chosen,'Cannot enable Orange effect route: '+JSON.stringify(data.during));
   assert(data.during.radius===17,'Orange lamps.radius sample overwritten by source effect: '+JSON.stringify(data.during));
@@ -50,7 +50,7 @@ const assert=(ok,msg)=>{if(!ok)throw Error(msg)};
   assert(data.steps.sweep.step===1&&data.steps.fill.step===1&&data.steps.mult.mode==='logarithmic','Shared step policy incorrect: '+JSON.stringify(data.steps));
   assert(data.lagActive&&data.shifted.join('|')==='#ff000080|#00ff0080|#0000ff80|#ff000080','Noncumulative palette lag or opacity incorrect: '+JSON.stringify(data.shifted));
   assert(data.rgb.length===3&&data.layerColors.length===8&&data.layerColors.every((color,i)=>color===data.rgb[i%3]),'Orange palette did not wrap over three colours: '+JSON.stringify({rgb:data.rgb,colors:data.layerColors}));
-  assert(data.matrixCount===85,'Shared matrix count changed: '+data.matrixCount);
+  assert(data.matrixCount>=85&&data.matrixUnique&&data.matrixHasCorridor,'Shared matrix lost unique parameters or Corridor depth multiplier: '+JSON.stringify(data));
   const errors=uncaughtExceptions(h.events);assert(!errors.length,'Uncaught errors '+errors.slice(0,3).join(' | '));
   console.log('7.11.16 ORANGE ROUTING / STEP / STOP / CORRIDOR LAG: PASS',data);
  }finally{await h.close()}

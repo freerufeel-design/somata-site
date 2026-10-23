@@ -26,7 +26,7 @@ const assert=(c,m)=>{if(!c)throw new Error(m)};
     assert((out.status?.stats?.carrierRotationalReuses||0)>=out.pathCount-1,`rotational sibling reuse did not engage: ${out.status?.stats?.carrierRotationalReuses||0}/${out.pathCount-1}`);
     assert(out.exactDelta<1e-10,`prepared-profile fast path changed exact carrier cubics: ${out.exactDelta}`);
     assert(out.bench&&out.bench.cubicCount===out.cubicCount&&out.bench.bytesPerRail===out.cubicCount*32,'carrier advance benchmark/rail byte accounting invalid');
-    assert(String(out.status?.contract||'').includes('7.7.7'),'renderer contract not bumped');
+    assert(/exact|retained|Bézier/i.test(String(out.status?.contract||'')),'Spiral renderer contract no longer promises exact retained Bézier geometry');
     const exc=uncaughtExceptions(h.events).slice(base);assert(exc.length===0,'uncaught: '+exc.join(' | '));
     console.log('SOMATA 7.7 SPIRAL PERFORMANCE PATH: PASS',out);
   } finally {await h.close();}

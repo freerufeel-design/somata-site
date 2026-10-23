@@ -19,6 +19,7 @@ function resetMainLayerGeometryPlan(plan) {
     plan.sourceGeometry=null;
     plan.targetGeometry=null;
     plan.byTopology=false;
+    plan.slideTypeOverride=null;
     plan.sourceProfileMode=null;
     plan.targetProfileMode=null;
     return plan;
@@ -41,6 +42,7 @@ function prepareMainLayerGeometryPlan(frameCtx) {
     plan.sourceGeometry=provider?.sourceGeometry||null;
     plan.targetGeometry=provider?.targetGeometry||null;
     plan.byTopology=provider?.byTopology===true;
+    plan.slideTypeOverride=provider?.slideTypeOverride||null;
     plan.sourceProfileMode=provider?.sourceProfileMode||null;
     plan.targetProfileMode=provider?.targetProfileMode||null;
     frameCtx._greenMorphGpuLazy=false;
@@ -148,10 +150,10 @@ function executeMainLayerGeometryPlan(targetCtx,frameCtx,alphaMultiplier=1) {
                 drawGeometryPlanSnapshot(targetCtx,frameCtx,plan.targetLayer,plan.targetData,alphaMultiplier,plan.progress);
                 break;
             case 'blue-circle-slide':
-                MorphRendering.drawCircleSlideMorph(targetCtx,layer,plan.sourceLayer,plan.targetLayer,plan.progress,strokeBaseAlpha*alphaMultiplier);
+                MorphRendering.drawCircleSlideMorph(targetCtx,layer,plan.sourceLayer,plan.targetLayer,plan.progress,strokeBaseAlpha*alphaMultiplier,plan.slideTypeOverride);
                 break;
             case 'blue-anchor-linear':
-                MorphRendering.drawLinearAnchorMorph(targetCtx,layer,plan.sourceLayer,plan.targetLayer,plan.progress,strokeBaseAlpha*alphaMultiplier);
+                MorphRendering.drawLinearAnchorMorph(targetCtx,layer,plan.sourceLayer,plan.targetLayer,plan.progress,strokeBaseAlpha*alphaMultiplier,plan.slideTypeOverride);
                 break;
             case 'blue-circle':
                 MorphRendering.drawMorphGeometry(targetCtx,layer,plan.sourceGeometry,plan.targetGeometry,plan.progress,strokeBaseAlpha*alphaMultiplier,plan.byTopology,plan.sourceProfileMode,plan.targetProfileMode);
