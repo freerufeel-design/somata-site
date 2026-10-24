@@ -23,7 +23,7 @@ window.__spiroRegisterModule?.('js/core/state');
             boundingCircleColor: '#94a3b8',
             showVignette: false,
             ambientOverPrism: false,
-            uiVisibility: { showPresets: false, showProjects: true, hideMorphChooser: true, hideProfiles: true },
+            uiVisibility: { showPresets: false, showProjects: true, hideMorphChooser: true, hideProfiles: false },
             sidebarMode: 'shape',
             ambient: {
                 rain:{enabled:false,angle:14,density:70,color:'#a6c8ff',hue:0,opacity:55,speed:170},

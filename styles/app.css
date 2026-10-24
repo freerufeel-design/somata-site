@@ -7149,3 +7149,112 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
 .lightning-trigger-header .lightning-trigger-control{display:inline-flex;align-items:center;gap:5px;margin-left:auto;font-size:11px;white-space:nowrap;min-width:0;}
 .lightning-trigger-header .lightning-trigger-control select{min-width:112px;max-width:154px;font-size:11px;padding:3px 4px;}
 .lightning-trigger-header .badge{margin-left:0;}
+
+/* 9.0.11: the finite Spiral animation selector must remain inside the sidebar. */
+#testMorphControls{box-sizing:border-box;min-width:0;max-width:100%;width:100%;grid-template-columns:minmax(0,1fr);overflow:hidden;}
+#testMorphControls .control-row{min-width:0;max-width:100%;width:100%;}
+#testMorphControls .control-row > label{display:grid;grid-template-columns:minmax(0,1fr);gap:5px;min-width:0;max-width:100%;width:100%;justify-items:stretch;white-space:normal;overflow-wrap:anywhere;}
+#testMorphControls select,#testMorphControls input[type=number]{box-sizing:border-box;display:block;min-width:0;max-width:100%;width:100%;margin:0;font-size:11px;}
+#testMorphSpiralRow select{font-size:10px;}
+
+
+/* Somata 9.1 — clean menus and compact star-geometry layout. */
+#presetChooserPanel,
+#morphTypeTopNav,
+.somata-removed-menu,
+.somata-removed-row,
+#gcdNotice,
+#roundingGuideControls,
+#fileSettingsBlock > input[hidden] {
+    display: none !important;
+}
+#audioRoutingPreset[hidden] { display: none !important; }
+#audioRoutingPresetBar { justify-content: flex-end; }
+
+/* Somata 9.1: clean geometry (no Morphing sidebar), long N slider
+   bracketed with −/+ and visible multiplier arrow buttons. */
+#geometrySettingsGroup > .morph-sidebar-section { display:none!important; }
+#geometrySettingsGroup .geometry-n-row { width:100%; min-width:0; }
+#geometrySettingsGroup .geometry-n-heading {
+    width:100%; display:flex; align-items:center; gap:5px; min-width:0;
+}
+#geometrySettingsGroup .geometry-n-title {
+    flex:0 1 auto; min-width:0; color:var(--text-muted);
+    font-size:11px; line-height:1.2; white-space:nowrap;
+}
+#geometrySettingsGroup .geometry-n-result {
+    flex:0 0 auto; margin-left:auto; position:relative; top:-4px;
+    color:#b6c1da; font-size:9px; line-height:1; white-space:nowrap;
+}
+#geometrySettingsGroup .geometry-n-values {
+    display:grid; grid-template-columns:42px 8px 61px;
+    gap:4px; flex:0 0 auto; align-items:center; min-width:0;
+}
+#geometrySettingsGroup .geometry-n-values > #numN {
+    box-sizing:border-box; width:42px!important; min-width:0!important;
+    height:27px; padding:2px 3px; font-size:11px; text-align:center;
+    appearance:textfield; -moz-appearance:textfield;
+}
+#geometrySettingsGroup .geometry-n-values > #numN::-webkit-inner-spin-button,
+#geometrySettingsGroup .geometry-n-values > #numN::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+#geometrySettingsGroup .geometry-n-values > .lamp-mult-label {
+    min-width:0; width:8px; justify-self:center; margin:0; padding:0;
+}
+#geometrySettingsGroup .geometry-n-slider-controls {
+    width:100%; min-width:0; display:grid;
+    grid-template-columns:28px minmax(0,1fr) 28px;
+    gap:6px; align-items:center;
+}
+#geometrySettingsGroup .geometry-n-slider-controls > #paramN {
+    width:100%; min-width:0; margin:0;
+}
+#geometrySettingsGroup .geometry-n-slider-controls > .geometry-n-step {
+    width:28px; min-width:0; height:28px; min-height:28px;
+    padding:0; font-size:14px; line-height:1; border-radius:6px;
+}
+#geometrySettingsGroup .geometry-n-multiplier-stepper {
+    width:61px; min-width:0; display:flex; align-items:stretch; overflow:hidden;
+    border:1px solid var(--border-light); border-radius:6px;
+    background:var(--panel-bg);
+}
+#geometrySettingsGroup .geometry-n-multiplier-stepper > #paramNMultiplier {
+    appearance:textfield; -moz-appearance:textfield; box-sizing:border-box;
+    flex:1 1 auto; width:40px!important; min-width:0!important;
+    height:25px; margin:0; padding:2px 1px 2px 3px;
+    border:0; border-radius:0; text-align:center; font-size:11px;
+}
+#geometrySettingsGroup .geometry-n-multiplier-stepper > #paramNMultiplier::-webkit-inner-spin-button,
+#geometrySettingsGroup .geometry-n-multiplier-stepper > #paramNMultiplier::-webkit-outer-spin-button { -webkit-appearance:none; margin:0; }
+#geometrySettingsGroup .geometry-n-spin-actions {
+    display:flex; flex:0 0 17px; flex-direction:column; min-width:0;
+    border-left:1px solid var(--border-light);
+}
+#geometrySettingsGroup .geometry-n-spin-actions button {
+    display:flex; justify-content:center; align-items:center;
+    box-sizing:border-box; flex:1 1 50%; min-width:0; min-height:0;
+    padding:0; margin:0; border:0; border-radius:0;
+    background:rgba(75,89,122,.15); color:#cbd5e1;
+    font:8px/1 sans-serif; cursor:pointer;
+}
+#geometrySettingsGroup .geometry-n-spin-actions button+button { border-top:1px solid var(--border-light); }
+#geometrySettingsGroup .geometry-n-spin-actions button:hover { background:rgba(99,102,241,.45); color:#fff; }
+#geometrySettingsGroup .geometry-n-spin-actions button:focus-visible { outline:2px solid #818cf8; outline-offset:-2px; }
+@media(max-width:430px){
+    #geometrySettingsGroup .geometry-n-title { font-size:10px; }
+    #geometrySettingsGroup .geometry-n-heading { gap:3px; }
+    #geometrySettingsGroup .geometry-n-values { grid-template-columns:37px 8px 55px; gap:3px; }
+    #geometrySettingsGroup .geometry-n-values > #numN { width:37px!important; }
+    #geometrySettingsGroup .geometry-n-multiplier-stepper { width:55px; }
+    #geometrySettingsGroup .geometry-n-slider-controls { grid-template-columns:27px minmax(0,1fr) 27px; gap:5px; }
+    #geometrySettingsGroup .geometry-n-slider-controls > .geometry-n-step { width:27px; height:27px; min-height:27px; }
+}
+#geometrySettingsGroup .geometry-radius-rotation {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    width: 100%;
+}
+#geometrySettingsGroup .geometry-radius-rotation > .control-row { width: 100%; min-width: 0; }
+#geometrySettingsGroup .geometry-radius-rotation .lamp-slider-mult { width: 100%; min-width: 0; }
+#geometrySettingsGroup .geometry-radius-rotation #paramRotation { width: 100%; }

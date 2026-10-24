@@ -1,5 +1,5 @@
 'use strict';
-/** Somata 9.0.8 — tests the extracted release, not a development folder.
+/** Somata 9.1 — tests the extracted release, not a development folder.
  * Run: node tests/run-all.js                (quick acceptance)
  *      node tests/run-extended.js           (all regressions, no benchmarks)
  *      node tests/run-v9.js --full --bench  (plus opt-in benchmarks)
@@ -12,7 +12,7 @@ const testsRoot=__dirname;
 const full=process.argv.includes('--full');
 const bench=process.argv.includes('--bench');
 const quick=[
- 'static-modules.js','browser-preflight.js',
+ 'static-modules.js','browser-preflight.js','v910-ui-layout-regression.js',
  'v900-tempo-lock-regression.js','v900-auto-tap-browser-regression.js',
  'v902-curated-playlist-browser-regression.js',
  'v901-corridor-lightning-regression.js',
@@ -25,8 +25,12 @@ const quick=[
  'v904-settings-fill-diagnostics-regression.js',
  'v904-static-animation-blue-types-regression.js',
  'v904-strict-spiral-static-edit-regression.js',
+ 'v9011-spiral-static-edit-and-layout-regression.js',
+ 'v9011-spiral-edit-cpu-blue-transports-regression.js',
  'v905-spiral-static-control-corridor-idle.js',
  'v905-fill-gpu-warmup-lifecycle.js',
+ 'v9010-spiral-closure-cubic-ranges-regression.js',
+ 'v913-spiral-static-edit-fill-authority-regression.js',
  'v7123-tap-wheel-bpm-regression.js',
  'v7122-shared-parameter-matrix-parity-regression.js',
  'v762-static-dynamic-geometry-invariant.js',
@@ -45,7 +49,7 @@ const cases=full?fs.readdirSync(testsRoot).filter(f=>f.endsWith('.js')&&!helpers
 // signal, NOT a historical test that should be masked as an expected PASS.
 let passed=0,failed=0,timedOut=0;
 const timeoutMs=Math.max(2000,Number(process.env.SOMATA_TEST_TIMEOUT_MS)||35000);
-console.log(`Somata 9.0.8 tests: ${full?'FULL':'QUICK'} (${cases.length} cases; ${timeoutMs} ms/case)`);
+console.log(`Somata 9.1 tests: ${full?'FULL':'QUICK'} (${cases.length} cases; ${timeoutMs} ms/case)`);
 for(let i=0;i<cases.length;i++){
  const name=cases[i];console.log(`[${i+1}/${cases.length}] ${name}`);
  const log=path.join(os.tmpdir(),`somata-v9-test-${process.pid}-${i}.log`);

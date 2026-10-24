@@ -1,0 +1,14 @@
+v9010-spiral-closure-cubic-ranges-regression.js                       PASS
+spiral-profile-fill-continuity.js                                     PASS
+spiral-morph-continuity.js                                            PASS
+v7612-spiral-performance-path-regression.js                           PASS
+v763-spiral-carrier-profile-invariant.js                              PASS
+v764-spiral-static-round-fade-regression.js                           PASS
+v765-spiral-glow-copy-fade-regression.js                              PASS
+v766-spiral-keypoint-transport-regression.js                          PASS
+v767-spiral-constant-step-corridor-regression.js                      PASS
+v8170-exact-spiral-fragment-width-regression.js                       PASS
+v880-spiral-arc-lookup-regression.js                                  PASS
+v904-strict-spiral-static-edit-regression.js                          PASS
+v905-spiral-static-control-corridor-idle.js                           PASS
+v860-spiral-corridor-shared-attributes-regression.js                  PASS

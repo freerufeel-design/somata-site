@@ -113,3 +113,8 @@ Node/Chromium проверяет действия UI, состояние, finite
 - These are simulated GPU tests, **not** an NVIDIA VRAM measurement or a physical 2-hour soak. Keep physical GPU validation mandatory.
 
 - `v908-device-loss-circuit-regression.js`: repeated device loss cooldown, circuit breaker and general WebGPU queue watchdog with a deliberately unresolved fence.
+
+## 9.0.11 — Static Spiral realtime GPU edit / sidebar overflow
+
+- `v9011-spiral-static-edit-and-layout-regression.js`: validates no overflow of animation selectors, six spiral modes present, finite static edit, and actual intermediate GPU provider frame routed between stable endpoint objects.
+- `v9011-spiral-edit-cpu-blue-transports-regression.js`: validates exact retained Blue Bézier pair preparation for all six Spiral types and valid segment ranges. Headless tests cannot assert physical NVIDIA framebuffer output.

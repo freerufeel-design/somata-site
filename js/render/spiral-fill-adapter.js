@@ -3,15 +3,16 @@ window.__spiroRegisterModule?.('js/render/spiral-fill-adapter');
 // Spiral-specific Fill bridge. This is the only render module allowed to translate
 // retained Spiral/Morph rails into Fill meshes and to seed their shared Layer Scene.
 function somataSpiralFillMorphT(frameCtx){
+    if(frameCtx?.spiralEditMorph&&Number.isFinite(Number(frameCtx.spiralEditMorph.progress)))return Number(frameCtx.spiralEditMorph.progress);
     if(Number.isFinite(Number(frameCtx?.blueMorphProvider?.geometryT)))return Number(frameCtx.blueMorphProvider.geometryT);
     if(Number.isFinite(Number(frameCtx?.geometryPlan?.progress)))return Number(frameCtx.geometryPlan.progress);
     return Number(runtimeState?.morph?.geometryT)||0;
 }
 function somataSpiralFillAuxPaths(frameCtx){
-    let paths=null;try{paths=typeof getGpuSpiralBezierMorphAuxPaths==='function'?getGpuSpiralBezierMorphAuxPaths(frameCtx.layerIndex,somataSpiralFillMorphT(frameCtx)):null;}catch(_){paths=null;}return paths;
+    let paths=null;try{paths=typeof getGpuSpiralBezierMorphAuxPaths==='function'?getGpuSpiralBezierMorphAuxPaths(frameCtx.layerIndex,somataSpiralFillMorphT(frameCtx),frameCtx):null;}catch(_){paths=null;}return paths;
 }
 function somataSpiralMorphFillMesh(frameCtx){
-    if(frameCtx?.geometryPlan?.dynamic!==true||!isSpiralLayer(frameCtx?.layer)||frameCtx?.layer?.spiralClosed===false)return null;
+    if((frameCtx?.geometryPlan?.dynamic!==true&&!frameCtx?.spiralEditMorph)||!isSpiralLayer(frameCtx?.layer)||frameCtx?.layer?.spiralClosed===false)return null;
     const paths=somataSpiralFillAuxPaths(frameCtx);if(!paths?.length)return null;
     return FillMeshPreparer.prepareSpiralMorphBands?.(frameCtx,paths)||null;
 }
@@ -32,7 +33,7 @@ function somataPrepareRetainedSpiralFillScene(frameCtx,{glowRequested=false}={})
     if(glowRequested&&SomataGeometryRoleService.canRenderRole(frameCtx,'glow')!==true)return{handled:false,required:true,reason:'retained geometry Glow role not active'};
     if(state.tunnel?.active===true)return null; // generic Corridor path owns scene composition
     if(contract.nativeGpuFillEligible!==true)return{handled:false,required:true,reason:'retained Spiral Fill has no native GPU topology for this frame'};
-    const mesh=frameCtx?.geometryPlan?.dynamic===true?somataSpiralMorphFillMesh(frameCtx):(frameCtx?._nativeFillMeshCandidate||frameCtx?._fillMeshShadow||FillMeshPreparer.prepareFrame?.(frameCtx));
+    const mesh=(frameCtx?.geometryPlan?.dynamic===true||frameCtx?.spiralEditMorph)?somataSpiralMorphFillMesh(frameCtx):(frameCtx?._nativeFillMeshCandidate||frameCtx?._fillMeshShadow||FillMeshPreparer.prepareFrame?.(frameCtx));
     if(!mesh?.nativeComplete||!(Number(mesh.fanTriangleCount)>0))return{handled:false,required:true,reason:'native retained Spiral Fill mesh unavailable'};
     try{FillGPURenderer.isAvailable?.();}catch(_){}
     if(!FillGPURenderer.canEncodeMeshToTexture?.(frameCtx,mesh))return{handled:false,required:true,reason:'native WebGPU Fill pipeline warming/unavailable'};

@@ -3,10 +3,10 @@
 window.__spiroRegisterModule?.('js/gpu/spiral-bezier-morph-renderer');
 
 const WebGPUSpiralBezierMorphRenderer = (() => {
-    const SUBDIV=12, ARC_SUBDIV=8, FLOATS_PER_CUBIC=24;
+    const SUBDIV=8, ARC_SUBDIV=8, FLOATS_PER_CUBIC=24;
     let device=null,format=null,pipelineMax=null,pipelineOver=null,uniformPipelineMax=null,uniformPipelineOver=null,effectCubicPipeline=null,closurePipeline=null,tangentRepairPipeline=null,fastRailPipeline=null,cornerBuffer=null,renderUniformLayout=null,renderCubicLayout=null,renderCopyLayout=null,renderPipelineLayout=null;
     let width=0,height=0,generation=-1,ready=false,initializing=null,lastError='not-initialized';
-    const resources=new Map(),retiredResources=[],staticVisualResources=new Map();
+    const resources=new Map(),retiredResources=[],staticVisualResources=new Map(),staticEditResources=new Map();
     let retireTimer=0;
     const stats={phaseBuilds:0,layerBuilds:0,staticVisualBuilds:0,staticVisualHits:0,uploads:0,uploadSkips:0,frames:0,baseFrames:0,glowFrames:0,fusedFrames:0,corridorFrames:0,deferredLayerSceneFrames:0,directFrameSceneFrames:0,cubics:0,gpuSegments:0,arcSubdiv:ARC_SUBDIV,cubicComputeDispatches:0,cubicComputeReuses:0,tangentRepairDispatches:0,fastRailDispatches:0,fastRailReuses:0,fastRailSegments:0,auxFrames:0,auxHits:0,auxPoints:0,carrierMappedFrames:0,carrierMappedUploads:0,carrierMappedUploadSkips:0,carrierProfilePrepares:0,carrierIdentityCubics:0,carrierMappedFallbacks:0,carrierRotationalBuilds:0,carrierRotationalReuses:0,retired:0,fallbacks:0,errors:0,gpuSceneUnavailable:0};
     const decision={eligible:false,reason:'not-requested',layerIndex:-1,frameId:-1};
@@ -153,6 +153,8 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         for(const b of [rec?.metaBuffer,rec?.copyBuffer,rec?.uniformBase,rec?.uniformGlow,rec?.fastRailBuffer,rec?.fastUniformBuffer])try{b?.destroy?.();}catch(_){}
     }
     function resetStaticVisuals(){for(const rec of staticVisualResources.values())destroyStaticVisual(rec);staticVisualResources.clear();}
+    function resetStaticEdits(){for(const slot of staticEditResources.values())if(slot.rec)retiredResources.push(slot.rec);staticEditResources.clear();scheduleRetiredFlush();}
+
     function flushRetired(){retireTimer=0;while(retiredResources.length)destroyResource(retiredResources.pop());}
     function scheduleRetiredFlush(){if(retireTimer)return;const run=()=>flushRetired();if(typeof requestIdleCallback==='function')retireTimer=requestIdleCallback(run,{timeout:800});else retireTimer=setTimeout(run,80);}
     function retireCurrentResources(reason='phase-change'){try{invalidateGpuMorphArcResources?.(`spiral-bezier-${reason}`);}catch(_){}for(const rec of resources.values()){retiredResources.push(rec);stats.retired++;}resources.clear();decision.reason=reason;scheduleRetiredFlush();}
@@ -168,7 +170,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
     function invalidate(reason='phase-change'){retireCurrentResources(reason);}
 
     function park(reason='stopped'){decision.eligible=false;decision.reason=reason;for(const rec of resources.values()){rec.copyPackedFrameId=-1;rec.auxT=NaN;}return true;}
-    function reset(){for(const rec of resources.values())destroyResource(rec);resources.clear();resetStaticVisuals();flushRetired();try{cornerBuffer?.destroy?.();}catch(_){}pipelineMax=null;pipelineOver=null;uniformPipelineMax=null;uniformPipelineOver=null;effectCubicPipeline=null;closurePipeline=null;tangentRepairPipeline=null;fastRailPipeline=null;cornerBuffer=null;renderUniformLayout=null;renderCubicLayout=null;renderCopyLayout=null;renderPipelineLayout=null;width=0;height=0;device=null;ready=false;}
+    function reset(){for(const rec of resources.values())destroyResource(rec);resources.clear();resetStaticVisuals();resetStaticEdits();flushRetired();try{cornerBuffer?.destroy?.();}catch(_){}pipelineMax=null;pipelineOver=null;uniformPipelineMax=null;uniformPipelineOver=null;effectCubicPipeline=null;closurePipeline=null;tangentRepairPipeline=null;fastRailPipeline=null;cornerBuffer=null;renderUniformLayout=null;renderCubicLayout=null;renderCopyLayout=null;renderPipelineLayout=null;width=0;height=0;device=null;ready=false;}
     async function ensureReady(){
         const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration?.():-1;
         if(ready&&device&&gen===generation)return true;if(initializing)return initializing;
@@ -504,11 +506,11 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         if(global!==rec.cubicCount)return null;rec.carrierCpuT=tt;rec.carrierOverflow=overflow;return packed;
     }
 
-    function buildLayerCpuResource(layerIndex){
-        const srcLayer=runtimeState.morph?.renderSourceLayers?.[layerIndex],dstLayer=runtimeState.morph?.renderTargetLayers?.[layerIndex];if(!srcLayer||!dstLayer)return null;
+    function buildLayerCpuResource(layerIndex,editPair=null){
+        const srcLayer=editPair?.sourceLayer||runtimeState.morph?.renderSourceLayers?.[layerIndex],dstLayer=editPair?.targetLayer||runtimeState.morph?.renderTargetLayers?.[layerIndex];if(!srcLayer||!dstLayer)return null;
         if(!(srcLayer.spiralEnabled===true||dstLayer.spiralEnabled===true))return null;if(state?.fourierMode===true)return null;
-        const spiralTransport=typeof getSpiralMorphType==='function'?getSpiralMorphType():String(state?.morph?.spiralMorphType||'phaseCircle');
-        const profileMorphMode=String(state?.morph?.mode||'circleSlide');
+        const spiralTransport=editPair?.spiralType||(typeof getSpiralMorphType==='function'?getSpiralMorphType():String(state?.morph?.spiralMorphType||'phaseCircle'));
+        const profileMorphMode=String(editPair?.mode||state?.morph?.mode||'circleSlide');
         const carrierMappedEligible=srcLayer?.spiralEnabled===true&&dstLayer?.spiralEnabled===true&&spiralTransport!=='torn'&&profileMorphMode!=='fade';
         let srcPaths=buildOrbitPolylines(srcLayer)||[],dstPaths=buildOrbitPolylines(dstLayer)||[];if(!srcPaths.length||!dstPaths.length)return null;const pairs=spiralTransport==='minimalTurn'?pairMinimalTurnSpiralPaths(srcPaths,dstPaths,srcLayer,dstLayer):stableSpiralPairs(srcPaths,dstPaths,srcLayer,dstLayer);if(!pairs.length)return null;
 
@@ -532,10 +534,16 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         if(!cubicCount)return null;const data=new Float32Array(cubicCount*FLOATS_PER_CUBIC);let ci=0;for(const r of records)ci=packPairCubics(r.sc,r.dc,r.pair.sourcePathPresent!==false,r.pair.targetPathPresent!==false,data,ci,spiralTransport,profileMorphMode,r.crossFamilyCartesianTransport===true);
         const topologyMergeSplitCount=records.reduce((n,r)=>n+((r.pair.sourcePathPresent!==false)!==(r.pair.targetPathPresent!==false)?1:0),0);
         let cartesianFallbackCubics=0,maxPackedPolarTurn=0;for(let i=0;i<cubicCount;i++){const o=i*FLOATS_PER_CUBIC;if(data[o+22]>.5)cartesianFallbackCubics++;for(let k=0;k<4;k++)maxPackedPolarTurn=Math.max(maxPackedPolarTurn,Math.abs(data[o+9+k*2]-data[o+1+k*2]));}
-        const pathCount=records.length,cpuSegmentMeta=new Uint32Array(cubicCount*4),cpuPathSegmentRanges=new Uint32Array(pathCount*4),pathRanges=new Uint32Array(pathCount*4),cpuPathPeriodic=new Uint32Array(pathCount),cpuEndpointPathLengths=new Float32Array(pathCount*2),cpuPathKnotFractions=new Array(pathCount),cpuPathLampKeyFractions=new Array(pathCount),cpuPathCornerFractions=new Array(pathCount),cpuPathClosure=new Float32Array(pathCount*8);let seg=0,pointBase=0,maxEndpointClosureError=0,maxEndpointTangentClosureError=0;
+        const pathCount=records.length,cpuSegmentMeta=new Uint32Array(cubicCount*4),cpuPathSegmentRanges=new Uint32Array(pathCount*4),pathRanges=new Uint32Array(pathCount*4),closureCubicRanges=new Uint32Array(pathCount*4),cpuPathPeriodic=new Uint32Array(pathCount),cpuEndpointPathLengths=new Float32Array(pathCount*2),cpuPathKnotFractions=new Array(pathCount),cpuPathLampKeyFractions=new Array(pathCount),cpuPathCornerFractions=new Array(pathCount),cpuPathClosure=new Float32Array(pathCount*8);let seg=0,pointBase=0,maxEndpointClosureError=0,maxEndpointTangentClosureError=0;
         for(let pi=0;pi<records.length;pi++){
             const rec0=records[pi],n=rec0.sc.length,po=pi*4;cpuPathSegmentRanges[po]=seg;cpuPathSegmentRanges[po+1]=n;cpuPathSegmentRanges[po+2]=pointBase;cpuPathSegmentRanges[po+3]=n+1;
+            // Public/arc path ranges are in *points*.  The closure compute shader
+            // indexes currentCubics (two vec4 per *cubic*), NOT points.  Before
+            // 9.0.10 we uploaded pointBase / n+1 to that shader; from the second
+            // spiral branch onwards it modified unrelated or out-of-range cubics.
             pathRanges[po]=pointBase;pathRanges[po+1]=n+1;pathRanges[po+2]=rec0.closed?1:0;pathRanges[po+3]=pi;
+            closureCubicRanges[po]=seg;closureCubicRanges[po+1]=n;
+            closureCubicRanges[po+2]=rec0.closed?1:0;closureCubicRanges[po+3]=pi;
             const co=pi*8,sc0=rec0.sourceClosure||{},dc0=rec0.targetClosure||{};cpuPathClosure[co]=Number(sc0.delta)||0;cpuPathClosure[co+1]=Number(sc0.logScale)||0;cpuPathClosure[co+2]=Number(dc0.delta)||0;cpuPathClosure[co+3]=Number(dc0.logScale)||0;cpuPathClosure[co+4]=sc0.periodic?1:0;cpuPathClosure[co+5]=dc0.periodic?1:0;cpuPathClosure[co+6]=(sc0.periodic&&dc0.periodic)?1:0;cpuPathClosure[co+7]=(sc0.tangentProtected?1:0)+(dc0.tangentProtected?2:0);maxEndpointClosureError=Math.max(maxEndpointClosureError,Number(sc0.error)||0,Number(dc0.error)||0);maxEndpointTangentClosureError=Math.max(maxEndpointTangentClosureError,sc0.tangentProtected?(Number(sc0.tangentError)||0):0,dc0.tangentProtected?(Number(dc0.tangentError)||0):0);
 
             cpuPathPeriodic[pi]=(sc0.periodic&&dc0.periodic&&cpuPathClosure[co+6]>.5)?1:0;
@@ -550,15 +558,9 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         let carrierFirst=0;for(let ri=0;ri<records.length;ri++){const r=records[ri],sbi=Number(r.pair?.src?.spiralBranchIndex),dbi=Number(r.pair?.dst?.spiralBranchIndex);r.firstSegment=carrierFirst;carrierFirst+=r.count;r.sourceCarrier=carrierLayerSpec(srcLayer,Number.isFinite(sbi)?sbi:ri);r.targetCarrier=carrierLayerSpec(dstLayer,Number.isFinite(dbi)?dbi:ri);r.currentBranchIndex=Number.isFinite(sbi)?sbi:(Number.isFinite(dbi)?dbi:ri);r.profileTargetCount=0;}
         const auxPairs=records.map((r,pairIndex)=>({source:r.sp,target:r.dp,sourcePresent:r.pair.sourcePathPresent!==false,targetPresent:r.pair.targetPathPresent!==false,closed:r.closed===true,points:[],pairIndex,sourceBranchIndex:Number(r.pair?.src?.spiralBranchIndex),targetBranchIndex:Number(r.pair?.dst?.spiralBranchIndex),sourceBranchCount:Math.max(2,Math.round(Number(srcLayer?.N)||records.length)),targetBranchCount:Math.max(2,Math.round(Number(dstLayer?.N)||records.length)),branchPhase:0}));const allClosed=records.length>0&&records.every(r=>r.closed===true);
         const interpolationMetric=spiralTransport==='topology'?'cartesian-keypoints':(spiralTransport==='continuous'?'cartesian':(spiralTransport==='minimalTurn'?'least-turn-polar':(spiralTransport==='torn'?(profileMorphMode==='topology'?'cartesian':'profile-mode'):(profileMorphMode==='calm'?'polar-calm':'polar'))));
-        return{layerIndex,sourceLayer:srcLayer,targetLayer:dstLayer,carrierMapped,carrierRecords:records,carrierCpuT:NaN,carrierPacked:null,carrierCurrentByPath:null,carrierOverflow:false,carrierUploadedT:NaN,carrierUploadedGeneration:-1,phaseSerial:Number(runtimeState.morph?.gpuPhasePrepareSerial)||0,morphType:spiralTransport,spiralTransport,profileMorphMode,interpolationMetric,sourceSpline:srcLayer?.profileMode==='spline',targetSpline:dstLayer?.profileMode==='spline',data,cubicCount,segmentCount:cubicCount,pathCount,pointCount:pointBase,allClosed,topologyMergeSplitCount,continuousTopologyTransport:spiralTransport==='phaseCircle'||spiralTransport==='minimalTurn'||(spiralTransport!=='torn'&&profileMorphMode!=='fade'),stableSpiralPairing:records.every(r=>r.pair?.stableSpiralPairing===true),exactSubdivisionOnly:records.every(r=>r.exactSubdivisionOnly===true),arcEqualizedRecords:records.filter(r=>r.arcEqualized===true).length,cartesianFallbackCubics,maxPackedPolarTurn,topologySignature:`spiral-bezier:${profileMorphMode}:${spiralTransport}:${layerIndex}:${pathCount}:${cubicCount}:${srcLayer?.profileMode==='spline'?'S':'G'}${dstLayer?.profileMode==='spline'?'S':'G'}:${records.map(r=>r.closed?1:0).join('')}`,cpuSegmentMeta,cpuPathSegmentRanges,cpuPathRanges:pathRanges,cpuPathPeriodic,cpuEndpointPathLengths,cpuPathKnotFractions,cpuPathLampKeyFractions,cpuPathCornerFractions,cpuPathClosure,maxEndpointClosureError,maxEndpointTangentClosureError,pathRanges,auxPairs,buffer:null,bind:null,uniformBase:null,uniformGlow:null,uniformBaseBind:null,uniformGlowBind:null,cubicBuffer:null,cubicUniformBuffer:null,cubicBind:null,pathRangeBuffer:null,segmentMetaBuffer:null,pathSegmentRangeBuffer:null,pathClosureBuffer:null,closureBind:null,tangentRepairBind:null,bezierVisualRail:true,bezierSubdiv:SUBDIV,arcSubdiv:ARC_SUBDIV,specialSpiralBezierRail:true,exactEndpointCubics:true,gpuOnlySpiralEffects:true,copyBuffer:null,copyBind:null,copyCapacity:0,copyData:new Float32Array(0),copyPackedFrameId:-1,copyPackedCount:0,copyPackedMultiColor:false,auxT:NaN,lastCubicT:NaN,currentCubicsCommittedFrameId:-1,currentCubicsCommittedT:NaN,currentCubicsRootProducerFrameId:-1,currentCubicsRootProducerT:NaN,ready:false};
+        return{layerIndex,sourceLayer:srcLayer,targetLayer:dstLayer,carrierMapped,carrierRecords:records,carrierCpuT:NaN,carrierPacked:null,carrierCurrentByPath:null,carrierOverflow:false,carrierUploadedT:NaN,carrierUploadedGeneration:-1,phaseSerial:Number(runtimeState.morph?.gpuPhasePrepareSerial)||0,staticEdit:editPair!==null,morphType:spiralTransport,spiralTransport,profileMorphMode,interpolationMetric,sourceSpline:srcLayer?.profileMode==='spline',targetSpline:dstLayer?.profileMode==='spline',data,cubicCount,segmentCount:cubicCount,pathCount,pointCount:pointBase,allClosed,topologyMergeSplitCount,continuousTopologyTransport:spiralTransport==='phaseCircle'||spiralTransport==='minimalTurn'||(spiralTransport!=='torn'&&profileMorphMode!=='fade'),stableSpiralPairing:records.every(r=>r.pair?.stableSpiralPairing===true),exactSubdivisionOnly:records.every(r=>r.exactSubdivisionOnly===true),arcEqualizedRecords:records.filter(r=>r.arcEqualized===true).length,cartesianFallbackCubics,maxPackedPolarTurn,topologySignature:`spiral-bezier:${profileMorphMode}:${spiralTransport}:${layerIndex}:${pathCount}:${cubicCount}:${srcLayer?.profileMode==='spline'?'S':'G'}${dstLayer?.profileMode==='spline'?'S':'G'}:${records.map(r=>r.closed?1:0).join('')}`,cpuSegmentMeta,cpuPathSegmentRanges,cpuPathRanges:pathRanges,cpuPathPeriodic,cpuEndpointPathLengths,cpuPathKnotFractions,cpuPathLampKeyFractions,cpuPathCornerFractions,cpuPathClosure,maxEndpointClosureError,maxEndpointTangentClosureError,pathRanges:closureCubicRanges,closureCubicRanges,auxPairs,buffer:null,bind:null,uniformBase:null,uniformGlow:null,uniformBaseBind:null,uniformGlowBind:null,cubicBuffer:null,cubicUniformBuffer:null,cubicBind:null,pathRangeBuffer:null,segmentMetaBuffer:null,pathSegmentRangeBuffer:null,pathClosureBuffer:null,closureBind:null,tangentRepairBind:null,bezierVisualRail:true,bezierSubdiv:SUBDIV,arcSubdiv:ARC_SUBDIV,specialSpiralBezierRail:true,exactEndpointCubics:true,gpuOnlySpiralEffects:true,copyBuffer:null,copyBind:null,copyCapacity:0,copyData:new Float32Array(0),copyPackedFrameId:-1,copyPackedCount:0,copyPackedMultiColor:false,auxT:NaN,lastCubicT:NaN,currentCubicsCommittedFrameId:-1,currentCubicsCommittedT:NaN,currentCubicsRootProducerFrameId:-1,currentCubicsRootProducerT:NaN,ready:false};
     }
-    async function preparePhase(){
-        if(!(state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()))){retireCurrentResources('prepare-ineligible');return 0;}
-        if(!await ensureReady()){retireCurrentResources('prepare-unavailable');return 0;}
-        const nextResources=new Map();let built=0;
-        try{
-            for(let i=0;i<(state.layers?.length||0);i++){
-                const rec=buildLayerCpuResource(i);if(!rec)continue;
+    function allocateMorphPairGpu(rec,i){
                 rec.buffer=device.createBuffer({label:`Somata Spiral Bézier Morph L${i}`,size:Math.max(96,Math.ceil(rec.data.byteLength/16)*16),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.buffer,0,rec.data.buffer,rec.data.byteOffset,rec.data.byteLength);
                 rec.cubicBuffer=device.createBuffer({label:`Somata Spiral Bézier shared current cubics L${i}`,size:Math.max(32,rec.cubicCount*32),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
                 rec.fastRailBuffer=device.createBuffer({label:`Somata 7.5 Spiral Fast Visual Rail L${i}`,size:Math.max(32,rec.cubicCount*SUBDIV*32),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
@@ -573,7 +575,18 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
                 rec.closureBind=device.createBindGroup({layout:closurePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:rec.cubicBuffer}},{binding:1,resource:{buffer:rec.pathSegmentRangeBuffer}},{binding:2,resource:{buffer:rec.pathClosureBuffer}},{binding:3,resource:{buffer:rec.cubicUniformBuffer}}]});
                 rec.tangentRepairBind=device.createBindGroup({layout:tangentRepairPipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:rec.cubicBuffer}},{binding:1,resource:{buffer:rec.segmentMetaBuffer}},{binding:2,resource:{buffer:rec.cubicUniformBuffer}}]});
                 rec.uniformBase=device.createBuffer({label:`Somata Spiral Bézier Morph base uniforms L${i}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});rec.uniformGlow=device.createBuffer({label:`Somata Spiral Bézier Morph glow uniforms L${i}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
-                rec.uniformBaseBind=device.createBindGroup({layout:renderUniformLayout,entries:[{binding:0,resource:{buffer:rec.uniformBase}}]});rec.uniformGlowBind=device.createBindGroup({layout:renderUniformLayout,entries:[{binding:0,resource:{buffer:rec.uniformGlow}}]});rec.ready=true;nextResources.set(i,rec);built++;stats.layerBuilds++;stats.uploads+=rec.data.byteLength;stats.cubics+=rec.cubicCount;stats.gpuSegments+=rec.cubicCount*SUBDIV;stats.fastRailSegments+=rec.cubicCount*SUBDIV;
+                rec.uniformBaseBind=device.createBindGroup({layout:renderUniformLayout,entries:[{binding:0,resource:{buffer:rec.uniformBase}}]});rec.uniformGlowBind=device.createBindGroup({layout:renderUniformLayout,entries:[{binding:0,resource:{buffer:rec.uniformGlow}}]});rec.ready=true;
+        return rec;
+    }
+    async function preparePhase(){
+        if(!(state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()))){retireCurrentResources('prepare-ineligible');return 0;}
+        if(!await ensureReady()){retireCurrentResources('prepare-unavailable');return 0;}
+        const nextResources=new Map();let built=0;
+        try{
+            for(let i=0;i<(state.layers?.length||0);i++){
+                const rec=buildLayerCpuResource(i);if(!rec)continue;
+                allocateMorphPairGpu(rec,i);
+                nextResources.set(i,rec);built++;stats.layerBuilds++;stats.uploads+=rec.data.byteLength;stats.cubics+=rec.cubicCount;stats.gpuSegments+=rec.cubicCount*SUBDIV;stats.fastRailSegments+=rec.cubicCount*SUBDIV;
             }
             replaceResources(nextResources,'phase-atomic-swap');
             stats.phaseBuilds++;return built;
@@ -584,6 +597,38 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         }
     }
 
+    // User-initiated finite Spiral edits use the *same retained Bezier GPU Morph*
+    // as Blue. Endpoints are prepared once per edit, then only the progress
+    // uniform changes each frame. This never aliases Blue's own resources.
+    function beginStaticEdit(layerIndex,pair){
+        if(!pair?.sourceLayer||!pair?.targetLayer)return false;
+        const i=Math.max(0,Number(layerIndex)||0),previous=staticEditResources.get(i);
+        if(previous?.source===pair.sourceLayer&&previous?.target===pair.targetLayer&&
+           previous?.type===pair.spiralType&&previous?.mode===pair.mode&&previous.generation===generation){
+            if(previous.rec?.ready)return true;
+            if(previous.pending||performance.now()-(previous.lastAttempt||0)<300)return false;
+            staticEditResources.delete(i);
+        }
+        if(previous?.rec){retiredResources.push(previous.rec);stats.retired++;scheduleRetiredFlush();}
+        const slot={source:pair.sourceLayer,target:pair.targetLayer,type:pair.spiralType,mode:pair.mode,generation,rec:null,pending:true,lastAttempt:performance.now()};
+        staticEditResources.set(i,slot);
+        Promise.resolve(ensureReady()).then(ok=>{
+            if(staticEditResources.get(i)!==slot)return;
+            slot.generation=generation;
+            if(!ok){slot.pending=false;return;}
+            const cpu=buildLayerCpuResource(i,{sourceLayer:slot.source,targetLayer:slot.target,spiralType:slot.type,mode:slot.mode});
+            if(!cpu){slot.pending=false;return;}
+            try{
+                cpu.staticEdit=true;
+                allocateMorphPairGpu(cpu,i);
+                if(staticEditResources.get(i)!==slot){retiredResources.push(cpu);scheduleRetiredFlush();return;}
+                slot.rec=cpu;slot.pending=false;stats.layerBuilds++;stats.uploads+=cpu.data.byteLength;
+                requestMainCanvasRender?.();
+            }catch(error){slot.pending=false;lastError=String(error?.message||error);stats.errors++;destroyResource(cpu);}
+        }).catch(error=>{slot.pending=false;lastError=String(error?.message||error);stats.errors++;});
+        return false;
+    }
+    function getStaticEditResource(frameCtx){return staticEditResources.get(Number(frameCtx?.layerIndex)||0)?.rec||null;}
     function getStaticVisualResource(frameCtx){
         if(!frameCtx||frameCtx.morphFrameActive||typeof isSpiralLayer!=='function'||!isSpiralLayer(frameCtx.layer))return null;
         if(!ready||!device)return null;
@@ -608,8 +653,8 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
             staticVisualResources.set(key,rec);stats.staticVisualBuilds++;stats.uploads+=meta.byteLength;return rec;
         }catch(err){lastError=String(err?.message||err);stats.errors++;return null;}
     }
-    function getVisualResource(frameCtx){return frameCtx?.morphFrameActive?getResource(frameCtx.layerIndex):getStaticVisualResource(frameCtx);}
-    function resolveEffectT(rec,t){let tt=clamp(Number(t)||0,0,1);const currentPhaseSerial=Number(runtimeState.morph?.gpuPhasePrepareSerial)||0;if(runtimeState.morph?.gpuPhasePreparing===true&&Number(rec?.phaseSerial)!==currentPhaseSerial)tt=clamp(Number(runtimeState.morph?.gpuPhaseHandoffT),0,1);return tt;}
+    function getVisualResource(frameCtx){return frameCtx?.spiralEditMorph?getStaticEditResource(frameCtx):frameCtx?.morphFrameActive?getResource(frameCtx.layerIndex):getStaticVisualResource(frameCtx);}
+    function resolveEffectT(rec,t){let tt=clamp(Number(t)||0,0,1);if(rec?.staticEdit===true)return tt;const currentPhaseSerial=Number(runtimeState.morph?.gpuPhasePrepareSerial)||0;if(runtimeState.morph?.gpuPhasePreparing===true&&Number(rec?.phaseSerial)!==currentPhaseSerial)tt=clamp(Number(runtimeState.morph?.gpuPhaseHandoffT),0,1);return tt;}
     function resolveProfileModeTransitionT(rec,t){
         const tt=Math.max(0,Math.min(1,Number(t)||0));
         if(rec?.sourceSpline===rec?.targetSpline)return tt;
@@ -655,6 +700,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         if(!frameCtx)return'no-frame';
         const hiddenGraffitiGlow=mode==='glow'&&frameCtx.lineProfileStrokeOnly===true&&frameCtx.lineProfileApplication==='graffiti';
         if(state?.fourierMode===true)return'fourier';if(state?.showRoundingGuides)return'rounding-guides';if(frameCtx.lineProfileStrokeOnly&&!hiddenGraffitiGlow)return'profile-replaces-base';if(mode==='base'&&!frameCtx.lineDisplayEnabled)return'line-hidden';
+        if(frameCtx.spiralEditMorph){if(!ready)return'renderer-warming';const rec=getStaticEditResource(frameCtx);return rec?.ready?'':'edit-resource-not-ready';}
         if(frameCtx.morphFrameActive){if(frameCtx.geometryProvider!==frameCtx.blueMorphProvider)return'another-provider';if(frameCtx.geometryPlan?.kind!=='blue-circle-slide'&&frameCtx.geometryPlan?.kind!=='blue-prepared')return'kind-'+String(frameCtx.geometryPlan?.kind||'unknown');const rec=getResource(frameCtx.layerIndex);if(!rec?.ready)return'resource-not-ready';return'';}
 
         if(typeof isSpiralLayer!=='function'||!isSpiralLayer(frameCtx.layer))return'not-static-spiral';
@@ -693,9 +739,9 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         rec.copyPackedFrameId=fid;rec.copyPackedCount=k;rec.copyPackedMultiColor=multiColor;return k;
     }
     function prepareUniform(frameCtx,rec,copyCount,ctx,mode,opts){
-        const tr=ctx.getTransform(),a=Number(tr.a)||1,b=Number(tr.b)||0,c=Number(tr.c)||0,d=Number(tr.d)||1,e=Number(tr.e)||0,f=Number(tr.f)||0;const matrixScale=Math.sqrt(Math.max(1e-12,Math.abs(a*d-b*c))),combined=Math.max(.001,Math.abs(Number(frameCtx.combinedScale)||1)),outerScale=matrixScale/combined;const hw=Math.max(.18,Math.max(.001,Number(frameCtx.strokeWidth)||1.5)*outerScale*.5),gr=mode==='glow'?Math.max(.5,Number(opts?.radiusPx)||0):0,core=mode==='base'?clamp(Number(opts?.alphaScale??1),0,1)*clamp(Number(frameCtx.baseAlpha)||0,0,1):0,glow=mode==='glow'?clamp(Number(opts?.alphaScale??1),0,1)*clamp(Number(frameCtx.baseAlpha)||0,0,1):0;let t=rec?.staticVisual===true?0:clamp(Number(frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress)||0,0,1);
+        const tr=ctx.getTransform(),a=Number(tr.a)||1,b=Number(tr.b)||0,c=Number(tr.c)||0,d=Number(tr.d)||1,e=Number(tr.e)||0,f=Number(tr.f)||0;const matrixScale=Math.sqrt(Math.max(1e-12,Math.abs(a*d-b*c))),combined=Math.max(.001,Math.abs(Number(frameCtx.combinedScale)||1)),outerScale=matrixScale/combined;const hw=Math.max(.18,Math.max(.001,Number(frameCtx.strokeWidth)||1.5)*outerScale*.5),gr=mode==='glow'?Math.max(.5,Number(opts?.radiusPx)||0):0,core=mode==='base'?clamp(Number(opts?.alphaScale??1),0,1)*clamp(Number(frameCtx.baseAlpha)||0,0,1):0,glow=mode==='glow'?clamp(Number(opts?.alphaScale??1),0,1)*clamp(Number(frameCtx.baseAlpha)||0,0,1):0;let t=rec?.staticVisual===true?0:clamp(Number(frameCtx.spiralEditMorph?.progress??frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress)||0,0,1);
         const currentPhaseSerial=Number(runtimeState.morph?.gpuPhasePrepareSerial)||0;
-        if(rec?.staticVisual!==true&&runtimeState.morph?.gpuPhasePreparing===true&&Number(rec?.phaseSerial)!==currentPhaseSerial)t=clamp(Number(runtimeState.morph?.gpuPhaseHandoffT),0,1);
+        if(rec?.staticEdit!==true&&rec?.staticVisual!==true&&runtimeState.morph?.gpuPhasePreparing===true&&Number(rec?.phaseSerial)!==currentPhaseSerial)t=clamp(Number(runtimeState.morph?.gpuPhaseHandoffT),0,1);
         const centerShade=rec?.lastCenterShade?.enabled===true?rec.lastCenterShade:spiralCenterShadeSpec(frameCtx);rec.lastCenterShade=centerShade;uf.fill(0);uf[0]=width;uf[1]=height;uu[2]=rec.cubicCount>>>0;uu[3]=copyCount>>>0;uf[4]=a;uf[5]=c;uf[6]=e;uf[8]=b;uf[9]=d;uf[10]=f;uf[12]=hw;uf[13]=gr;uf[14]=core;uf[15]=glow;uf[16]=t;uf[17]=centerShade.enabled?centerShade.startRadius:0;uf[18]=centerShade.enabled?centerShade.endRadius:0;uf[19]=centerShade.enabled?1:0;const buf=mode==='glow'?rec.uniformGlow:rec.uniformBase;device.queue.writeBuffer(buf,0,uniformBytes);stats.uploads+=80;return mode==='glow'?rec.uniformGlowBind:rec.uniformBaseBind;
     }
     function resolveTarget(frameCtx,opts={}){
@@ -738,7 +784,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         if(!isEligible(frameCtx,mode)){stats.fallbacks++;return false;}const rec=getVisualResource(frameCtx);const target=resolveTarget(frameCtx,opts);if(!rec?.ready||!target){stats.fallbacks++;return false;}
         try{
             targetCtx.save();applyLayerFrameEffectTransform(targetCtx,frameCtx);const copies=packCopies(frameCtx,rec);if(!copies){targetCtx.restore();return true;}const ub=prepareUniform(frameCtx,rec,copies,targetCtx,mode,opts);targetCtx.restore();
-            const enc=device.createCommandEncoder({label:`Somata 7.5 Spiral Fast Rail ${rec.staticVisual===true?'Static':'Morph'} ${mode}`});const currentT=rec.staticVisual===true?0:resolveEffectT(rec,frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress);
+            const enc=device.createCommandEncoder({label:`Somata 7.5 Spiral Fast Rail ${rec.staticVisual===true?'Static':'Morph'} ${mode}`});const currentT=rec.staticVisual===true?0:resolveEffectT(rec,frameCtx.spiralEditMorph?.progress??frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress);
             if(rec.staticVisual!==true){
                 if(canReuseOrderedCurrentCubics(rec,frameCtx,target,currentT))stats.cubicComputeReuses++;else if(!encodeEffectCubics(rec,enc,currentT)){stats.fallbacks++;return false;}
                 if(canReuseOrderedFastRail(rec,frameCtx,target,currentT))stats.fastRailReuses++;else if(!encodeFastRail(rec,enc,currentT)){stats.fallbacks++;return false;}
@@ -752,14 +798,18 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         if(!isEligible(frameCtx,'glow')||!isEligible(frameCtx,'base')){stats.fallbacks++;return false;}const rec=getVisualResource(frameCtx),target=resolveTarget(frameCtx,opts);if(!target){stats.fallbacks++;return false;}
         try{
             targetCtx.save();applyLayerFrameEffectTransform(targetCtx,frameCtx);const copies=packCopies(frameCtx,rec);if(!copies){targetCtx.restore();return true;}const ug=prepareUniform(frameCtx,rec,copies,targetCtx,'glow',{radiusPx:opts.radiusPx,alphaScale:opts.glowAlphaScale}),ub=prepareUniform(frameCtx,rec,copies,targetCtx,'base',{alphaScale:opts.baseAlphaScale});targetCtx.restore();
-            const enc=device.createCommandEncoder({label:`Somata 7.5 Spiral Fast Rail ${rec.staticVisual===true?'Static':'Morph'} fused Glow+Base`});const currentT=rec.staticVisual===true?0:resolveEffectT(rec,frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress);
+            const enc=device.createCommandEncoder({label:`Somata 7.5 Spiral Fast Rail ${rec.staticVisual===true?'Static':'Morph'} fused Glow+Base`});const currentT=rec.staticVisual===true?0:resolveEffectT(rec,frameCtx.spiralEditMorph?.progress??frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress);
             if(rec.staticVisual!==true){if(canReuseOrderedCurrentCubics(rec,frameCtx,target,currentT))stats.cubicComputeReuses++;else if(!encodeEffectCubics(rec,enc,currentT)){stats.fallbacks++;return false;}if(canReuseOrderedFastRail(rec,frameCtx,target,currentT))stats.fastRailReuses++;else if(!encodeFastRail(rec,enc,currentT)){stats.fallbacks++;return false;}}
             const pass=enc.beginRenderPass({colorAttachments:[{view:target.view,clearValue:{r:0,g:0,b:0,a:0},loadOp:target.loadOp||'clear',storeOp:'store'}]});const segmented=(frameCtx?.lineLayerMode??frameCtx?.spiralLineType)==='segmented';pass.setPipeline(segmented?pipelineOver:(target.deferredFrame?pipelineOver:pipelineMax));pass.setBindGroup(1,rec.bind);pass.setBindGroup(2,rec.copyBind);pass.setVertexBuffer(0,cornerBuffer);pass.setBindGroup(0,ug);pass.draw(4,rec.cubicCount*SUBDIV*copies);const basePipe=!segmented&&uniformPipelineMax?((target.deferredFrame||rec.copyPackedMultiColor)?uniformPipelineOver:uniformPipelineMax):(segmented?pipelineOver:((target.deferredFrame||rec.copyPackedMultiColor)?pipelineOver:pipelineMax));pass.setPipeline(basePipe);pass.setBindGroup(0,ub);pass.draw(4,rec.cubicCount*SUBDIV*copies);pass.end();
             if(!finishEncoded(frameCtx,targetCtx,enc,target,opts,rec,currentT))return false;stats.frames++;stats.glowFrames++;stats.baseFrames++;stats.fusedFrames++;if(state.tunnel?.active===true)stats.corridorFrames++;return true;
         }catch(err){try{targetCtx.restore();}catch(_){}lastError=String(err?.message||err);stats.errors++;stats.fallbacks++;return false;}
     }
-    function auxiliaryPaths(layerIndex,t){
-        const rec=getResource(layerIndex);if(!rec?.ready||!rec?.pathCount)return null;const tt=resolveEffectT(rec,t);if(Number.isFinite(rec.auxT)&&Math.abs(rec.auxT-tt)<1e-12){stats.auxHits++;return rec.auxPairs;}
+    function auxiliaryPaths(layerIndex,t,frameCtx=null){
+        // Static edit Spiral has a dedicated retained GPU pair.  Fill and visual
+        // Line MUST sample the same source, not the stale/global Blue morph pair.
+        // Other consumers keep the original two-argument Blue Morph contract.
+        const rec=frameCtx?.spiralEditMorph?getStaticEditResource(frameCtx):getResource(layerIndex);
+        if(!rec?.ready||!rec?.pathCount)return null;const tt=resolveEffectT(rec,t);if(Number.isFinite(rec.auxT)&&Math.abs(rec.auxT-tt)<1e-12){stats.auxHits++;return rec.auxPairs;}
         if(rec.carrierMapped===true){
             if(!ensureCarrierMappedCurrent(rec,tt))return null;const subdiv=6,cubicAt=(p0,c1,c2,p3,q)=>{const z=1-q,z2=z*z,q2=q*q;return{x:z2*z*p0.x+3*z2*q*c1.x+3*z*q2*c2.x+q2*q*p3.x,y:z2*z*p0.y+3*z2*q*c1.y+3*z*q2*c2.y+q2*q*p3.y};};
             for(let pi=0;pi<rec.pathCount;pi++){const pair=rec.auxPairs[pi],cubics=rec.carrierCurrentByPath?.[pi]||[],need=cubics.length*subdiv+1;while(pair.points.length<need)pair.points.push({x:0,y:0,widthScale:1});pair.points.length=need;let w=0;for(let j=0;j<cubics.length;j++){const q=cubics[j],q0=j===0?0:1,l0=Math.log(Math.max(.02,Number(q.widthScale0)||1)),l1=Math.log(Math.max(.02,Number(q.widthScale1)||1));for(let sj=q0;sj<=subdiv;sj++){const u=sj/subdiv,p=cubicAt(q.p0,q.c1,q.c2,q.p3,u),dst=pair.points[w++];dst.x=p.x;dst.y=p.y;dst.widthScale=Math.exp(l0+(l1-l0)*u);}}pair.points.length=w;pair.closed=false;pair.alpha=1;const sn=Math.max(1,Number(pair.sourceBranchCount)||rec.pathCount),dn=Math.max(1,Number(pair.targetBranchCount)||rec.pathCount),sa=Number.isFinite(pair.sourceBranchIndex)?(((pair.sourceBranchIndex/sn)%1)+1)%1:NaN,da=Number.isFinite(pair.targetBranchIndex)?(((pair.targetBranchIndex/dn)%1)+1)%1:NaN;if(Number.isFinite(sa)&&Number.isFinite(da)){let d=da-sa;d=((d+.5)%1+1)%1-.5;pair.branchPhase=((sa+d*tt)%1+1)%1;}else pair.branchPhase=Number.isFinite(sa)?sa:(Number.isFinite(da)?da:pi/Math.max(1,rec.pathCount));}
@@ -788,12 +838,12 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
     function debugCarrierMappedPlan(layerIndex=0,t=0){const rec=buildLayerCpuResource(layerIndex);if(!rec)return null;const packed=rec.carrierMapped?ensureCarrierMappedCurrent(rec,t):null;return{carrierMapped:rec.carrierMapped===true,carrierOverflow:rec.carrierOverflow===true,cubicCount:rec.cubicCount,pathCount:rec.pathCount,interpolationMetric:rec.interpolationMetric,exactSubdivisionOnly:rec.exactSubdivisionOnly===true,arcEqualizedRecords:Number(rec.arcEqualizedRecords)||0,packed:packed?Array.from(packed):null,carrierFrames:(rec.carrierFrameSpecs||[]).map(f=>({anchor:{...f.anchor},end:{...f.end},delta:Number(f.delta)||0,targetScale:Number(f.targetScale)||1,N:Number(f.N)||0,step:Number(f.step)||0,direction:Number(f.direction)||1,metric:f.metric||''})),paths:(rec.carrierCurrentByPath||[]).map(path=>path.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3},widthScale0:Number(q.widthScale0)||1,widthScale1:Number(q.widthScale1)||1}))),sourcePaths:(rec.carrierRecords||[]).map(r=>r.sc.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}}))),targetPaths:(rec.carrierRecords||[]).map(r=>r.dc.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}})))};}
     function debugCarrierAdvanceBench(layerIndex=0,samples=60){const rec=buildLayerCpuResource(layerIndex);if(!rec?.carrierMapped)return null;const n=Math.max(1,Math.min(600,Math.round(Number(samples)||60)));const t0=performance.now();let checksum=0;for(let i=0;i<n;i++){const t=(i+.5)/n,packed=ensureCarrierMappedCurrent(rec,t);if(!packed)return null;checksum+=packed[0]||0;}const ms=performance.now()-t0;return{samples:n,ms,msPerSample:ms/n,cubicCount:rec.cubicCount,pathCount:rec.pathCount,bytesPerRail:rec.cubicCount*8*4,checksum,carrierOverflow:rec.carrierOverflow===true};}
     function status(){const active=[...resources.entries()].map(([layerIndex,r])=>({layerIndex,morphType:r.morphType||'',spiralTransport:r.spiralTransport||r.morphType||'',profileMorphMode:r.profileMorphMode||'',interpolationMetric:r.interpolationMetric||'',carrierMapped:r.carrierMapped===true,carrierOverflow:r.carrierOverflow===true,cubicCount:r.cubicCount||0,pathCount:r.pathCount||0,topologyMergeSplitCount:r.topologyMergeSplitCount||0,continuousTopologyTransport:r.continuousTopologyTransport===true,exactSubdivisionOnly:r.exactSubdivisionOnly===true,arcEqualizedRecords:Number(r.arcEqualizedRecords)||0,cartesianFallbackCubics:r.cartesianFallbackCubics||0,maxPackedPolarTurn:Number(r.maxPackedPolarTurn)||0,ready:r.ready===true,periodicPaths:r.cpuPathClosure?Array.from({length:r.pathCount||0},(_,pi)=>r.cpuPathClosure[pi*8+4]>0.5&&r.cpuPathClosure[pi*8+5]>0.5).filter(Boolean).length:0,maxEndpointClosureError:Number(r.maxEndpointClosureError)||0,maxEndpointTangentClosureError:Number(r.maxEndpointTangentClosureError)||0}));return{supported:!!globalThis.navigator?.gpu,ready,initializing:Boolean(initializing),generation,lastError,resources:resources.size,active,staticVisualResources:staticVisualResources.size,stats:{...stats},lastDecision:{...decision},contract:'Somata 7.8.3 keeps the late-7.7.9 exact carrier/profile constructor for Spiral, no arc resampling, and one upload per t. Circular Spiral transports reuse an exact rotational carrier template across sibling branches; Topology and Torn stay explicit per-branch. Web and Lightning are 7.5-reference consumers: strict Spiral effects may only consume the exact specialized visible Spiral rail and never the generic shared morph rail. Continuous fixes N/K; Phase fixes N and transports K as the phase step; Phase-circle adds no-fade branch clone/merge; Minimal-turn keeps the step constant while N branches clone/merge; Topology linearly transports both key endpoints; Torn uses exact Bezier subdivision only. Every spiral-to-spiral rail keeps periodic closure. Corridor center reveal remains whole-copy alpha; constant-step Corridor copy phase is synchronized to the exact current carrier delta; Glow follows the retained Spiral rail, and Glow/Base share the same packed copy transforms.'};}
-    return{warmup,isReady:()=>ready,preparePhase,invalidate,park,getResource,isEligible,reason,render,renderGlowAndBase,auxiliaryPaths,status,debugBuildCpuResource:buildLayerCpuResource,debugCarrierMappedPlan,debugCarrierAdvanceBench,debugCenterShadeSpec:spiralCenterShadeSpec,debugCenterShadeAlpha:centerShadeAlphaForRadius};
+    return{warmup,isReady:()=>ready,beginStaticEdit,getStaticEditResource,preparePhase,invalidate,park,getResource,isEligible,reason,render,renderGlowAndBase,auxiliaryPaths,status,debugBuildCpuResource:buildLayerCpuResource,debugBuildCpuStaticEditResource:buildLayerCpuResource,debugCarrierMappedPlan,debugCarrierAdvanceBench,debugCenterShadeSpec:spiralCenterShadeSpec,debugCenterShadeAlpha:centerShadeAlphaForRadius};
 })();
 window.prepareGpuSpiralBezierMorphResources=()=>WebGPUSpiralBezierMorphRenderer.preparePhase();
 window.invalidateGpuSpiralBezierMorphResources=(reason)=>WebGPUSpiralBezierMorphRenderer.invalidate(reason);
 window.parkGpuSpiralBezierMorphResources=(reason)=>WebGPUSpiralBezierMorphRenderer.park(reason);
-window.getGpuSpiralBezierMorphAuxPaths=(layerIndex,t)=>WebGPUSpiralBezierMorphRenderer.auxiliaryPaths(layerIndex,t);
+window.getGpuSpiralBezierMorphAuxPaths=(layerIndex,t,frameCtx=null)=>WebGPUSpiralBezierMorphRenderer.auxiliaryPaths(layerIndex,t,frameCtx);
 window.__somataSpiralBezierMorphStatus=()=>WebGPUSpiralBezierMorphRenderer.status();
 window.__somataSpiralMorphCpuPlan=(layerIndex=0)=>WebGPUSpiralBezierMorphRenderer.debugBuildCpuResource(layerIndex);
 window.__somataSpiralCarrierMorphPlan=(layerIndex=0,t=0)=>WebGPUSpiralBezierMorphRenderer.debugCarrierMappedPlan(layerIndex,t);

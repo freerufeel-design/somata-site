@@ -7,7 +7,7 @@ const assert=(x,s)=>{if(!x)throw Error(s)};
   const playlist=JSON.parse(fs.readFileSync(path.join(root,'default.plist'),'utf8'));
   const correct=m=>m.showFps===true&&m.showPresets===false&&m.showProjects===true&&m.showMorphs===false&&m.showProfiles===false&&m.pauseOnSpace===false;
   assert(correct(playlist.menuSettings),'default playlist visibility');
-  assert(playlist.projects.length===10&&playlist.projects.every(p=>correct(p.project.settings.menuSettings)),'project-specific visibility');
+  assert(playlist.projects.length===22&&playlist.projects.every(p=>{const m=p.project.settings.menuSettings;return m.showPresets===false&&m.showProjects===true&&m.showMorphs===false&&typeof m.showProfiles==='boolean'}),'original project-specific visibility fixtures');
   const copy=JSON.parse(fs.readFileSync(path.join(root,'COSMIC_ODYSSEY_10.plist'),'utf8'));
   assert(correct(copy.menuSettings)&&copy.projects.length===10&&copy.projects.every(p=>correct(p.project.settings.menuSettings)),'standalone COSMIC playlist visibility');
   assert(JSON.parse(fs.readFileSync(path.join(root,'STANDARD_ORIGINAL_23_PROJECTS.plist'),'utf8')).projects.length===23,'standard projects lost');
@@ -40,12 +40,12 @@ const assert=(x,s)=>{if(!x)throw Error(s)};
         errorBridge:errs.length===after.length+1&&errs[errs.length-1].includes('GPU-TEST1234'),
         popup:__somataScreenErrors.visible,autoShow:__somataScreenErrors.autoShow};
     })()`);
-    assert(data.vis.showPresets===false&&data.vis.showProjects===true&&data.vis.hideMorphChooser===true&&data.vis.hideProfiles===true,'default application menu state');
-    assert(data.prefs.fps===true&&data.prefs.auto===false&&data.prefs.presets===false&&data.prefs.projects===true&&data.prefs.morphs===false&&data.prefs.profiles===false&&data.prefs.pause===false,'UI defaults differ from image');
+    assert(data.vis.showPresets===false&&data.vis.showProjects===true&&data.vis.hideMorphChooser===true&&data.vis.hideProfiles===false,'Somata 9.1 application menu state');
+    assert(data.prefs.fps===true&&data.prefs.auto===false&&data.prefs.presets===false&&data.prefs.projects===true&&data.prefs.morphs===false&&data.prefs.profiles===true&&data.prefs.pause===false,'UI defaults differ from Somata 9.1 requirements');
     assert(data.fillRetries===0&&data.fillResults.every(x=>x===false),'failed Fill must not restart render loop');
     assert(data.bridge&&data.errorBridge,'GPU warnings and errors must reach on-screen FPS console');
     assert(data.autoShow===false,'error console must respect user selected auto-show preference');
     assert(!uncaughtExceptions(h.events).length,'uncaught browser exceptions');
-    console.log('PASS v904 settings, 10 playlists, GPU Fill backoff and FPS diagnostic bridge',JSON.stringify(data));
+    console.log('PASS v910 settings, 10 playlists, GPU Fill backoff and FPS diagnostic bridge',JSON.stringify(data));
   }finally{await h.close()}
 })().catch(e=>{console.error('FAIL v904',e.stack||e);process.exit(1)});

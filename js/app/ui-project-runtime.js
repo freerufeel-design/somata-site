@@ -2382,11 +2382,17 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         }
         function installMorphSidebarSettings(){
             const panel=document.getElementById('morphSettingsPanel'),grid=panel?.querySelector('.morph-settings-grid');if(!grid||grid.dataset.sidebarMoved==='1')return;grid.dataset.sidebarMoved='1';
-            const geometry=document.getElementById('geometrySettingsGroup');
-            const general=morphSidebarHost(geometry,'Морфинг');
-            const direct=[...grid.children];
-            const headerTools=panel.querySelector('.morph-checkbox-tools');if(headerTools){headerTools.classList.add('morph-sidebar-actions');moveMorphNode(general,headerTools);}
-            const fade=document.getElementById('morphFadeDurationRow');moveMorphNode(general,fade);
+            // 9.1: no extra Morphing card or dangling controls in Geometry.
+            // Restore legacy tool nodes to the Morph panel, where their bindings live.
+            const oldCard=document.querySelector('#geometrySettingsGroup > .morph-sidebar-section');
+            if(oldCard){
+                const tools=oldCard.querySelector('.morph-checkbox-tools');
+                const heading=panel.querySelector('.morph-settings-title');
+                if(tools&&heading)heading.appendChild(tools);
+                const fade=oldCard.querySelector('#morphFadeDurationRow');
+                if(fade)grid.appendChild(fade);
+                oldCard.remove();
+            }
             // 7.11.1: cycle period belongs with the top Blue timing controls, not in the left sidebar.
             // 7.10.5: artistic Line/Fill/Geometry/Lamps controls live only in the central Morph routing UI.
             // Legacy DOM controls stay in the hidden compatibility grid so the existing Blue engine keeps its state contract.
@@ -5457,6 +5463,17 @@ syncMorphProfileUI();
             document.getElementById('btnIncN').addEventListener('click', () => {
                 const r=document.getElementById('paramN');if(r)applyCompactN((Number(r.value)||2)+1);
             });
+            // Visible buttons use the same logarithmic increments as multiplier
+            // keyboard arrows and mouse-wheel support (including fractions).
+            const stepGeometryNMultiplier=(direction)=>{
+                const input=document.getElementById('paramNMultiplier');
+                if(!input||input.disabled)return;
+                input.value=String(Math.max(0.01,logarithmicStep(input.value,direction)));
+                input.dispatchEvent(new Event('input',{bubbles:true}));
+                input.dispatchEvent(new Event('change',{bubbles:true}));
+            };
+            document.getElementById('btnIncNMultiplier')?.addEventListener('click',()=>stepGeometryNMultiplier(1));
+            document.getElementById('btnDecNMultiplier')?.addEventListener('click',()=>stepGeometryNMultiplier(-1));
 
             document.getElementById('paramK').addEventListener('input', (e) => setLayerK(e.target.value));
             document.getElementById('numK').addEventListener('change', (e) => setLayerK(e.target.value));
@@ -15186,11 +15203,16 @@ syncMorphProfileUI();
 
         const HEADER_VISIBILITY_KEY='SpiroStar.headerVisibility.v7';
         function applyHeaderVisibility(){
-            const h=state.uiVisibility||{showPresets:false,showProjects:true,hideMorphChooser:true,hideProfiles:true};
+            // Somata 9.1: profiles are permanently visible; the redundant preset
+            // and miniature morph selectors have been retired, including for old saves.
+            const h=state.uiVisibility||(state.uiVisibility={showProjects:true});
+            h.showPresets=false;
+            h.hideMorphChooser=true;
+            h.hideProfiles=false;
             document.getElementById('presetChooserPanel')?.classList.toggle('header-choice-hidden',h.showPresets!==true);
             document.getElementById('projectChooserPanel')?.classList.toggle('header-choice-hidden',h.showProjects!==true);
             document.getElementById('morphTypeTopNav')?.classList.toggle('header-choice-hidden',h.hideMorphChooser===true);
-            document.getElementById('profileSettingsGroup')?.classList.toggle('hidden',h.hideProfiles===true);
+            document.getElementById('profileSettingsGroup')?.classList.remove('hidden');
             const p=document.getElementById('showPresetChooser');if(p)p.checked=h.showPresets===true;
             const j=document.getElementById('hideProjectChooser');if(j)j.checked=h.showProjects!==false;
             const m=document.getElementById('hideMorphChooser');if(m)m.checked=h.hideMorphChooser!==true;

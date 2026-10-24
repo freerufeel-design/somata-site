@@ -8,20 +8,25 @@ const SomataAmbientPrism=(()=>{
         rainbow:{enabled:false,offset:6,strength:40},
         reiatsu:{enabled:false,strength:25,speed:100},
         earthquake:{enabled:false,strength:25,speed:100},
-        clouds:{enabled:false,density:42,color:'#acc5e7',hue:0,opacity:24,speed:12}
+        clouds:{enabled:false,density:42,color:'#acc5e7',hue:0,opacity:24,speed:12},
+        noise:{enabled:false,type:'turbulence',scale:46,stretchX:1,stretchY:1,color:'#dce9ff',hue:0,opacity:18,speed:18},
+        glitch:{enabled:false,frequency:18,intensity:30}
     };
     const prismDefaults={enabled:false,mode:'3d',source2d:'sprite',spriteDataUrl:'',shape:'sphere',size:260,refraction:16,dispersion:55,opacity:63,lightHue:192,lightIntensity:55,fillHue:194,fill:9,speed:15,positionX:0,positionY:0,tiltX:12,tiltY:0};
     const keys={rain:['Enabled','Angle','Density','Color','Hue','Opacity','Speed'],
         dichotomy:['Enabled','Count','Offset','Opacity','Hue','ColorA','ColorB','ColorC'],
         rainbow:['Enabled','Offset','Strength'],reiatsu:['Enabled','Strength','Speed'],earthquake:['Enabled','Strength','Speed'],
-        clouds:['Enabled','Density','Color','Hue','Opacity','Speed']};
-    const multiplierKeys=Object.freeze({rainbow:Object.freeze(['offset', 'strength']),rain:Object.freeze(['density', 'hue', 'speed']),dichotomy:Object.freeze(['offset', 'hue', 'opacity']),reiatsu:Object.freeze(['strength', 'speed']),earthquake:Object.freeze(['strength', 'speed']),clouds:Object.freeze(['density', 'hue', 'opacity', 'speed']),prism:Object.freeze(['size', 'refraction', 'dispersion', 'speed', 'positionX', 'positionY', 'tiltX', 'tiltY'])});
+        clouds:['Enabled','Density','Color','Hue','Opacity','Speed'],
+        noise:['Enabled','Type','Scale','StretchX','StretchY','Color','Hue','Opacity','Speed'],
+        glitch:['Enabled','Frequency','Intensity']};
+    const multiplierKeys=Object.freeze({rainbow:Object.freeze(['offset', 'strength']),rain:Object.freeze(['density', 'hue', 'speed']),dichotomy:Object.freeze(['offset', 'hue', 'opacity']),reiatsu:Object.freeze(['strength', 'speed']),earthquake:Object.freeze(['strength', 'speed']),clouds:Object.freeze(['density', 'hue', 'opacity', 'speed']),noise:Object.freeze(['scale','stretchX','stretchY','hue','opacity','speed']),glitch:Object.freeze(['frequency','intensity']),prism:Object.freeze(['size', 'refraction', 'dispersion', 'speed', 'positionX', 'positionY', 'tiltX', 'tiltY'])});
     const multiplierValue=(v,unlimited=false)=>{const n=Number(v);return Number.isFinite(n)&&n>0?(unlimited?n:Math.max(.125,Math.min(8,n))):1;};
     let root,ambientCanvas,prismCanvas,ambientCtx,prismCtx,width=0,height=0,dpr=1,started=false;
     let lastConfig='',lastRender=0,frameCounter=0,postScenePaintCount=0,lastOpticalSceneFrameId=0;
     let spriteImage=null,spriteSource='';
     // Small reusable luminance mask for color-channel splitting and energy halos.
     let edgeSource=null,edgeCtx=null,edgeTint=null,edgeTintCtx=null,edgeWidth=0,edgeHeight=0;
+    const ambientTextureCache=new Map();
 
     const clamp=(v,min,max,fallback=min)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):fallback));
     const read=(obj,k,fallback)=>obj?.[k]===undefined?fallback:obj[k];
@@ -60,7 +65,7 @@ const SomataAmbientPrism=(()=>{
         for(const key of multiplierKeys.prism)if(state.prism[key+'Multiplier']===undefined)state.prism[key+'Multiplier']=1;
     }
     function active(){normalize();return Object.values(state.ambient).some(x=>x.enabled===true)||state.prism.enabled===true||state.showVignette===true;}
-    function animated(){normalize();return Object.entries(state.ambient).some(([k,x])=>x.enabled===true&&['rain','reiatsu','earthquake','clouds'].includes(k)) ||
+    function animated(){normalize();return Object.entries(state.ambient).some(([k,x])=>x.enabled===true&&['rain','reiatsu','earthquake','clouds','noise','glitch'].includes(k)) ||
         state.prism.enabled===true&&Number(state.prism.speed)>0 ||
         state.ambient.rainbow.enabled===true;}
     function create(){
@@ -100,6 +105,33 @@ const SomataAmbientPrism=(()=>{
         return document.getElementById('mainCanvas');
     }
     function random(n){const x=Math.sin(n*127.1+78.233)*43758.5453;return x-Math.floor(x);}
+    const lerp=(a,b,t)=>a+(b-a)*t;
+    const smoothstep=t=>t*t*(3-2*t);
+    function latticeNoise(x,y,seed=0){
+        const ix=Math.floor(x),iy=Math.floor(y),fx=x-ix,fy=y-iy;
+        const h=(px,py)=>random(px*157.13+py*313.37+seed*97.17);
+        const v00=h(ix,iy),v10=h(ix+1,iy),v01=h(ix,iy+1),v11=h(ix+1,iy+1);
+        const ux=smoothstep(fx),uy=smoothstep(fy);
+        return lerp(lerp(v00,v10,ux),lerp(v01,v11,ux),uy);
+    }
+    function fbmNoise(x,y,seed=0,octaves=4){
+        let sum=0,amp=.5,freq=1,norm=0;
+        for(let i=0;i<octaves;i++){
+            sum+=latticeNoise(x*freq,y*freq,seed+i*11.73)*amp;
+            norm+=amp;amp*=.5;freq*=2;
+        }
+        return norm>0?sum/norm:0;
+    }
+    function textureCache(key,build){
+        if(ambientTextureCache.has(key))return ambientTextureCache.get(key);
+        const value=build();
+        ambientTextureCache.set(key,value);
+        if(ambientTextureCache.size>48){
+            const oldest=ambientTextureCache.keys().next().value;
+            ambientTextureCache.delete(oldest);
+        }
+        return value;
+    }
     function rain(ctx,cfg,time){
         const amount=Math.min(4800,Math.max(0,Math.round(Math.max(0,Number(cfg.density)||0)*width*height/850000)));
         if(!amount)return;
@@ -125,33 +157,141 @@ const SomataAmbientPrism=(()=>{
         }
         ctx.stroke();ctx.restore();
     }
+    function buildCloudTexture(tone,seed,alphaScale=1){
+        const key=`cloud:${tone}:${seed}:${alphaScale}`;
+        return textureCache(key,()=>{
+            const canvas=document.createElement('canvas');
+            const w=192,h=108;canvas.width=w;canvas.height=h;
+            const c=canvas.getContext('2d',{alpha:true});
+            const img=c.createImageData(w,h);
+            const m=String(tone).match(/^#([\da-f]{6})$/i),v=m?parseInt(m[1],16):0xffffff;
+            const r=v>>16,g=(v>>8)&255,b=v&255;
+            for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+                const nx=x/w,ny=y/h;
+                const base=fbmNoise(nx*3.2+seed*.13,ny*2.1+seed*.19,seed,5);
+                const wisps=fbmNoise(nx*7.4+seed*.31,ny*4.8+seed*.11,seed+19,3);
+                const ridge=1-Math.abs(fbmNoise(nx*4.7+seed*.07,ny*3.4+seed*.23,seed+7,4)*2-1);
+                const shape=Math.max(0,base*.72+wisps*.18+ridge*.25-(0.50+Math.abs(ny-.45)*.22));
+                const alpha=Math.max(0,Math.min(1,shape*1.9));
+                const i=(y*w+x)*4;
+                img.data[i]=r;img.data[i+1]=g;img.data[i+2]=b;img.data[i+3]=Math.round(255*Math.pow(alpha,1.35)*alphaScale);
+            }
+            c.putImageData(img,0,0);
+            return canvas;
+        });
+    }
     function clouds(ctx,cfg,time){
-        // Density multiplier remains effective well beyond the base 0..100 slider.
-        // A controlled draw budget prevents high multipliers from stalling WebGPU.
         const density=Math.max(0,Number(cfg.density)||0);
-        const count=Math.max(0,Math.min(256,Math.round(density*.2)));
-        if(!count)return;
-        const alpha=clamp(cfg.opacity,0,100)/100*.7;
-        const velocity=Math.max(0,Number(cfg.speed)||0); // multiplier changes real drift
+        const layers=Math.max(0,Math.min(6,Math.round(1+density/18)));
+        if(!layers)return;
+        const alpha=clamp(cfg.opacity,0,100)/100;
+        const velocity=Math.max(0,Number(cfg.speed)||0);
+        const floatTime=time*velocity/12; // 0 speed must freeze drift AND vertical float
         const tone=hueShift(cfg.color,cfg.hue||0);
         ctx.save();
-        for(let i=0;i<count;i++){
-            const direction=i%3===0?-0.65:1;
-            const shift=(time*velocity*(.36+random(i+211)*.64)*direction)%Math.max(1,width+420);
-            const cx=((random(i+33)*width+shift+width*8+240)%(width+480))-240;
-            const cy=((random(i+103)*height+Math.sin(time*.075*velocity/12+random(i+231)*8)*15+height)%height);
-            const rx=48+random(i+201)*155,ry=22+random(i+231)*67;
-            // A soft multi-lobe plume instead of static radial smudges.
-            const gradient=ctx.createRadialGradient(cx,cy,0,cx,cy,rx);
-            gradient.addColorStop(0,hexRgba(tone,alpha*(.32+random(i+77)*.36)));
-            gradient.addColorStop(.54,hexRgba(tone,alpha*.16));
-            gradient.addColorStop(1,hexRgba(tone,0));
-            ctx.fillStyle=gradient;ctx.save();ctx.translate(cx,cy);ctx.scale(1,ry/rx);ctx.translate(-cx,-cy);
-            ctx.beginPath();ctx.arc(cx,cy,rx,0,Math.PI*2);ctx.fill();ctx.restore();
+        ctx.globalCompositeOperation='screen';
+        for(let i=0;i<layers;i++){
+            const tex=buildCloudTexture(tone,i+1,.45+.1*i);
+            const scale=1.02+i*.18+(density/100)*.25;
+            const drawW=width*scale*1.15,drawH=height*(.58+i*.08);
+            const drift=((time*velocity*(4+i*1.7))%(drawW*.8));
+            const baseX=-drawW*.15-drift;
+            const baseY=height*(.04+.08*i/layers)+Math.sin(floatTime*.2+i)*height*.03;
+            ctx.globalAlpha=alpha*(.15+.12*i);
+            ctx.drawImage(tex,baseX,baseY,drawW,drawH);
+            ctx.drawImage(tex,baseX+drawW*.78,baseY+8*Math.sin(floatTime*.15+i),drawW,drawH);
+            ctx.drawImage(tex,baseX-drawW*.78,baseY-6*Math.cos(floatTime*.11+i),drawW,drawH);
+        }
+        ctx.restore();
+    }
+    function noiseFieldType(type,x,y,seed,time){
+        if(type==='grain')return fbmNoise(x*9+y*.35+time*.1,y*9-x*.25+time*.12,seed,2);
+        if(type==='value')return fbmNoise(x*3.5+time*.04,y*3.5-time*.03,seed,4);
+        if(type==='scanlines'){
+            const carrier=fbmNoise(x*2.1+time*.03,y*2.1,seed,3);
+            const lines=.5+.5*Math.sin((y*40+time*10+fbmNoise(x*4,y*4,seed,2)*8));
+            return carrier*.55+lines*.45;
+        }
+        const base=fbmNoise(x*4.8+time*.06,y*4.8-time*.04,seed,5);
+        return Math.abs(base*2-1);
+    }
+    function noiseAmbient(ctx,cfg,time){
+        const opacity=clamp(cfg.opacity,0,100)/100;
+        if(opacity<=0)return;
+        const type=String(cfg.type||'turbulence');
+        const scale=Math.max(6,Number(cfg.scale)||46);
+        const stretchX=Math.max(.125,Number(cfg.stretchX)||1);
+        const stretchY=Math.max(.125,Number(cfg.stretchY)||1);
+        const speed=Math.max(0,Number(cfg.speed)||0);
+        const tone=hueShift(String(cfg.color||'#dce9ff'),cfg.hue||0);
+        const texW=Math.max(72,Math.min(220,Math.round(width/10)));
+        const texH=Math.max(40,Math.min(160,Math.round(height/10)));
+        const tick=Math.round(time*speed*4)/4;
+        const key=`noise:${type}:${texW}:${texH}:${tone}:${scale.toFixed(2)}:${stretchX.toFixed(3)}:${stretchY.toFixed(3)}:${tick}`;
+        const tex=textureCache(key,()=>{
+            const canvas=document.createElement('canvas');canvas.width=texW;canvas.height=texH;
+            const c=canvas.getContext('2d',{alpha:true});
+            const img=c.createImageData(texW,texH);
+            const m=String(tone).match(/^#([\da-f]{6})$/i),v=m?parseInt(m[1],16):0xffffff;
+            const r=v>>16,g=(v>>8)&255,b=v&255;
+            const ox=tick*.11,oy=tick*.07;
+            for(let y=0;y<texH;y++)for(let x=0;x<texW;x++){
+                const nx=(x/texW)*(texW/scale)/stretchX+ox;
+                const ny=(y/texH)*(texH/scale)/stretchY+oy;
+                let val=noiseFieldType(type,nx,ny,17.31,tick);
+                if(type==='turbulence')val=Math.pow(Math.min(1,val*1.25),1.25);
+                if(type==='value')val=Math.pow(val,1.6);
+                if(type==='grain')val=.3+val*.7;
+                const a=val*opacity*.85;
+                const i=(y*texW+x)*4;
+                img.data[i]=r;img.data[i+1]=g;img.data[i+2]=b;img.data[i+3]=Math.round(255*Math.max(0,Math.min(1,a)));
+            }
+            c.putImageData(img,0,0);
+            return canvas;
+        });
+        ctx.save();
+        ctx.globalCompositeOperation='screen';
+        ctx.globalAlpha=.92;
+        ctx.imageSmoothingEnabled=true;
+        ctx.drawImage(tex,0,0,width,height);
+        ctx.restore();
+    }
+    function glitchAmbient(ctx,cfg,time){
+        const frequency=clamp(cfg.frequency,0,100),intensity=clamp(cfg.intensity,0,100)/100;
+        if(intensity<=0||frequency<=0)return;
+        const scene=sourceScene();
+        if(!scene?.width||!scene?.height)return;
+        const phase=time*(.9+frequency/30);
+        const trigger=(Math.sin(phase*2.7)+1)*.5;
+        if(trigger<1-frequency/100)return;
+        const bands=Math.max(2,Math.round(2+intensity*7));
+        const maxOffset=Math.max(4,Math.round(width*(.006+intensity*.045)));
+        ctx.save();
+        ctx.globalCompositeOperation='lighter';
+        for(let i=0;i<bands;i++){
+            const h=Math.max(6,Math.round(height*(.015+random(i+phase)*.08)));
+            const y=Math.round(random(i*71+phase*13)*(height-h));
+            const offset=(random(i*37+phase*17)*2-1)*maxOffset;
+            const alpha=.08+intensity*.18;
+            try{ctx.globalAlpha=alpha;ctx.drawImage(scene,0,y,width,h,offset,y,width,h);}catch(_){ }
+            if(i%2===0){
+                try{ctx.globalAlpha=alpha*.8;ctx.drawImage(scene,0,y,width,h,offset*1.35,y+1,width,h);}catch(_){ }
+            }
+        }
+        // RGB tear lines
+        const splits=[['rgba(255,72,99,.14)',-1],['rgba(75,255,246,.14)',1],['rgba(104,120,255,.10)',2]];
+        for(let i=0;i<splits.length;i++){
+            const [color,mul]=splits[i];
+            const y=Math.round(random(phase*23+i*19)*height);
+            const h=Math.max(1,Math.round(1+intensity*6));
+            ctx.fillStyle=color;ctx.globalAlpha=.5;
+            ctx.fillRect(0,y,width,h);
+            try{ctx.globalAlpha=.07+intensity*.08;ctx.drawImage(scene,0,Math.max(0,y-h*2),width,Math.min(height-y,h*6),mul*maxOffset*.35,y,width,Math.min(height-y,h*6));}catch(_){ }
         }
         ctx.restore();
     }
     function hueShift(hex,degrees){
+
         const m=String(hex).match(/^#([\da-f]{6})$/i);if(!m||!degrees)return hex;
         const n=parseInt(m[1],16),rgb=[n>>16,(n>>8)&255,n&255].map(v=>v/255);
         const max=Math.max(...rgb),min=Math.min(...rgb),d=max-min,l=(max+min)/2;
@@ -733,9 +873,11 @@ const SomataAmbientPrism=(()=>{
             chroma(ambientCtx,sourceScene(),c,colors,c.offset,c.strength/100);
         }
         if(cfg.clouds.enabled)clouds(ambientCtx,cfg.clouds,time);
+        if(cfg.noise.enabled)noiseAmbient(ambientCtx,cfg.noise,time);
         if(cfg.rain.enabled)rain(ambientCtx,cfg.rain,time);
         if(cfg.reiatsu.enabled)reiatsu(ambientCtx,cfg.reiatsu,time);
         if(cfg.earthquake.enabled)earthquake(ambientCtx,cfg.earthquake,time);else clearReiatsu();
+        if(cfg.glitch.enabled)glitchAmbient(ambientCtx,cfg.glitch,time);
         vignette(ambientCtx);
         const mode=pr.mode==='3d'?'3d':'2d';
         // 3D must never silently fall back to a 2D illusion on GPU failure.
@@ -833,7 +975,7 @@ const SomataAmbientPrism=(()=>{
     function toggleAmbient(){normalize();const any=Object.values(state.ambient).some(x=>x.enabled===true);
         if(any){ambientRemembered=Object.fromEntries(Object.entries(state.ambient).filter(([k,x])=>x.enabled===true).map(([k])=>[k,true]));
             for(const x of Object.values(state.ambient))x.enabled=false;
-        }else{const restored=ambientRemembered||{rain:true};for(const [key,x] of Object.entries(state.ambient))x.enabled=restored[key]===true;}
+        }else{const restored=ambientRemembered||{clouds:true};for(const [key,x] of Object.entries(state.ambient))x.enabled=restored[key]===true;}
         syncUI();return !any;
     }
     function togglePrism(){normalize();state.prism.enabled=!state.prism.enabled;syncUI();return state.prism.enabled;}

@@ -266,8 +266,10 @@ var FillMeshPreparer = (() => {
     function prepareSpiralMorphBands(frameCtx, auxPaths) {
         const layer=frameCtx?.layer;
         if(!layer?.fill||layer?.spiralFillEnabled!==true||layer?.spiralClosed===false||!isSpiralLayer(layer)||!Array.isArray(auxPaths)||auxPaths.length<2)return null;
-        const sourceLayer=frameCtx?.blueMorphProvider?.sourceLayer||frameCtx?.sourceLayer||frameCtx?.geometryPlan?.sourceLayer||null;
-        const targetLayer=frameCtx?.blueMorphProvider?.targetLayer||frameCtx?.geometryPlan?.targetLayer||null;
+        // The static Spiral edit renderer owns its own exact endpoint pair.
+        // Do not fall back to unrelated Blue endpoints while an edit is active.
+        const sourceLayer=frameCtx?.spiralEditMorph?.sourceLayer||frameCtx?.blueMorphProvider?.sourceLayer||frameCtx?.sourceLayer||frameCtx?.geometryPlan?.sourceLayer||null;
+        const targetLayer=frameCtx?.spiralEditMorph?.targetLayer||frameCtx?.blueMorphProvider?.targetLayer||frameCtx?.geometryPlan?.targetLayer||null;
         const sourceClosed=sourceLayer?.spiralEnabled===true?sourceLayer.spiralClosed!==false:true;
         const targetClosed=targetLayer?.spiralEnabled===true?targetLayer.spiralClosed!==false:true;
         if(!sourceClosed||!targetClosed)return null;

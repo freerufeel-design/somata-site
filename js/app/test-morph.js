@@ -77,6 +77,23 @@ const SomataTestMorph=(()=>{
         const structural=hasStructuralChange(r.from,r.to);
         const mode=['topology','calm','circleSlide','fade','light'].includes(cfg.mode)?cfg.mode:'circleSlide';
         const geometryChanged=observedKeys.some(k=>differs(r.from,r.to,k));
+        // Real-time Spiral static edits use the retained GPU Blue Spiral transport.
+        // No ongoing oscillator: a finite edit starts only when source parameters change.
+        const resolvedSpiralType=SPIRAL_TYPES.has(cfg.spiralType)?cfg.spiralType:'phaseCircle';
+        const useContinuousSpiralFade=Boolean(isSpiral&&structural&&resolvedSpiralType==='continuous');
+        const editPair=isSpiral&&geometryChanged&&!useContinuousSpiralFade?{sourceLayer:r.fromEndpoint,targetLayer:r.toEndpoint,
+            spiralType:resolvedSpiralType,mode,progress:u}:null;
+        const gpuEditReady=Boolean(editPair&&typeof WebGPUSpiralBezierMorphRenderer!=='undefined'&&
+            WebGPUSpiralBezierMorphRenderer.beginStaticEdit?.(frameCtx.layerIndex,editPair));
+        if(gpuEditReady){
+            frameCtx.spiralEditMorph=editPair;
+            frameCtx.geometryProvider={kind:'blue-circle-slide',active:true,geometryActive:true,progress:u,
+                sourceLayer:r.fromEndpoint,targetLayer:r.toEndpoint,
+                sourceProfileMode:r.fromEndpoint.profileMode,targetProfileMode:r.toEndpoint.profileMode,
+                slideTypeOverride:cfg.slide};
+            frameCtx.geometryMorphEnabled=true;
+            frameCtx.topologyMorphEnabled=structural;
+        }
         // Keep a finite authored edit tween; the *geometry* transition for polygons
         // uses exactly the same executors as Blue. For strict Spiral do not invent
         // a CPU carrier: its exact WebGPU rail remains authoritative.
@@ -100,7 +117,7 @@ const SomataTestMorph=(()=>{
         // Until the exact retained GPU edit-pair is supported, switch endpoint
         // topology at zero opacity, not during a visibly abrupt jump. Both halves
         // are rendered by the existing exact static Spiral backend.
-        if(isSpiral&&structural&&t<1){
+        if(isSpiral&&structural&&(useContinuousSpiralFade||!gpuEditReady)&&t<1){
             // Exact Spiral static-edit topology is a two-endpoint GPU render,
             // not a freshly reconstructed intermediate on every Corridor frame.
             // During fade both structural AND numeric geometry must stay at the
@@ -120,7 +137,8 @@ const SomataTestMorph=(()=>{
         last={layerId:id,progress:t,eased:u,mode:cfg.mode,spiralType:cfg.spiralType,transitioning:t<1,
             sourceN:r.from.N,renderN:layer.N,targetN:r.to.N,sourceK:r.from.K,renderK:layer.K,targetK:r.to.K,
             renderRotation:layer.rotation,structural,mode,strictSpiral:isSpiral,
-            topologyEndpointFade:isSpiral&&structural};
+            topologyEndpointFade:isSpiral&&structural&&(useContinuousSpiralFade||!gpuEditReady),retainedGpuEdit:gpuEditReady,
+            forcedContinuousFade:useContinuousSpiralFade===true};
         return true;
     }
     function phase(layer,now=performance.now()){

@@ -4909,7 +4909,7 @@ fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
 
             const FLOATS_PER_INSTANCE=11;
 
-            const BEZIER_SUBDIVISIONS=12,BEZIER_FLOATS_PER_CUBIC=20;
+            const BEZIER_SUBDIVISIONS=8,BEZIER_FLOATS_PER_CUBIC=20;
             let bezierBindGroupLayout=null,bezierPipelineMax=null,bezierPipelineOver=null,bezierUniformPipelineMax=null,bezierUniformPipelineOver=null;
             let bezierGeometryCache=new WeakMap(),bezierBufferRecords=new Set(),bezierBuilds=0,bezierHits=0,bezierUploads=0,bezierCubics=0,bezierGpuSegments=0,bezierCpuSamplesAvoided=0;
 
@@ -5172,7 +5172,17 @@ fn joinedTangent(ci:u32,t:f32,flags:f32,fallback:vec2<f32>)->vec2<f32>{
     let chord=cubic(g0.xy,g0.zw,g1.xy,g1.zw,min(1.0,t+0.001))-cubic(g0.xy,g0.zw,g1.xy,g1.zw,max(0.0,t-0.001));
     let tangent=joinedTangent(ci,t,g4.w,chord);let normal=vec2<f32>(-tangent.y,tangent.x);
     let hw=max(0.001,exp(mix(log(max(0.001,g2.x)),log(max(0.001,g2.y)),t)));let pad=hw+0.75;
-    let p=center+normal*(v.corner.y*pad);let rawAlpha=mix(g2.z,g2.w,t);var color=vec4<f32>(g3.rgb,clamp(rawAlpha*g3.a,0.0,1.0));
+    // Adjacent Bézier micro-quads share an exact center, but independent
+    // tangent normals can leave sub-pixel triangular cracks at sharp joins.
+    // The Spiral fast rail already overlaps joined strips; use the same
+    // overlap on the ordinary/static Bézier fallback without changing cubics.
+    let right=v.corner.x>0.0;
+    let first=(g4.w>=.5&&g4.w<1.5)||g4.w>=2.5;
+    let last=g4.w>=1.5;
+    let hasNeighbor=select(sub>0u||!first,sub+1u<${BEZIER_SUBDIVISIONS}u||!last,right);
+    let overlap=select(0.0,min(.55,max(.18,hw*.16)),hasNeighbor);
+    let along=select(-overlap,overlap,right);
+    let p=center+tangent*along+normal*(v.corner.y*pad);let rawAlpha=mix(g2.z,g2.w,t);var color=vec4<f32>(g3.rgb,clamp(rawAlpha*g3.a,0.0,1.0));
     if(u.effectUniformEnabled>0.5){if(u.overrideEnabled>0.5){color=vec4<f32>(u.overrideColor.rgb,clamp(rawAlpha*u.alphaScale*u.overrideColor.a,0.0,1.0));}else{color.a=clamp(color.a*u.alphaScale,0.0,1.0);}}
     var o:UniformVSOut;o.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);o.edge=v.corner.y*pad;o.halfWidth=hw;o.color=color;return o;
 }

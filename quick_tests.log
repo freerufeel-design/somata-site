@@ -1,0 +1,60 @@
+Somata 9.0.10 tests: QUICK (29 cases; 35000 ms/case)
+[1/29] static-modules.js
+PASS
+[2/29] browser-preflight.js
+PASS
+[3/29] v900-tempo-lock-regression.js
+PASS
+[4/29] v900-auto-tap-browser-regression.js
+PASS
+[5/29] v902-curated-playlist-browser-regression.js
+PASS
+[6/29] v901-corridor-lightning-regression.js
+PASS
+[7/29] v906-lightning-trigger-routing-regression.js
+PASS
+[8/29] v907-lightning-gpu-encode-regression.js
+PASS
+[9/29] v908-gpu-stall-backpressure-regression.js
+PASS
+[10/29] v908-device-loss-circuit-regression.js
+PASS
+[11/29] v903-static-edit-animation-regression.js
+PASS
+[12/29] v903-static-animation-render-impact.js
+PASS
+[13/29] v904-settings-fill-diagnostics-regression.js
+PASS
+[14/29] v904-static-animation-blue-types-regression.js
+PASS
+[15/29] v904-strict-spiral-static-edit-regression.js
+PASS
+[16/29] v905-spiral-static-control-corridor-idle.js
+PASS
+[17/29] v905-fill-gpu-warmup-lifecycle.js
+PASS
+[18/29] v9010-spiral-closure-cubic-ranges-regression.js
+PASS
+[19/29] v7123-tap-wheel-bpm-regression.js
+PASS
+[20/29] v7122-shared-parameter-matrix-parity-regression.js
+PASS
+[21/29] v762-static-dynamic-geometry-invariant.js
+PASS
+[22/29] v763-spiral-carrier-profile-invariant.js
+PASS
+[23/29] v770-web-lightning-reference-authority-regression.js
+PASS
+[24/29] v779-lightning-static-dynamic-unified-regression.js
+PASS
+[25/29] v75-spiral-effect-fault-recovery.js
+PASS
+[26/29] orange-family-pools.js
+PASS
+[27/29] v8210-dynamic-optical-live-scene-regression.js
+PASS
+[28/29] v8214-ambients-compositor-and-effects-regression.js
+PASS
+[29/29] v7117-memory-retention-regression.js
+PASS
+SUMMARY: PASS=29 FAIL=0 TIMEOUT=0 TOTAL=29

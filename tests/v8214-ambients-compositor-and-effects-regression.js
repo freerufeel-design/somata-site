@@ -10,7 +10,7 @@ for(const id of ['ambientOverPrism','showVignetteSetting','tunnelVignetteAmount'
 assert(!html.includes('🩷 Амбиенты'),'no unsupported icon glyph in heading');
 assert(prism.includes("window.SomataAmbientPrism?.ambientOverPrism?.()!==true"),'3D optical capture must exclude top ambients');
 assert(amb.includes('ambientCanvas.style.zIndex=state.ambientOverPrism'), 'CSS stack toggles must update live');
-assert(amb.includes('Math.min(256'),'cloud density budget must not clamp to 32 clouds');
+assert(amb.includes('Math.min(6,')&&amb.includes('ambientTextureCache.size>48'),'multilayer cloud texture budget must be bounded');
 assert(amb.includes('function earthquake(ctx,cfg,t)')&&amb.includes('function reiatsu(ctx,cfg,t)'),'quake and Reiatsu must be independent implementations');
 const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness');
 (async()=>{
@@ -42,20 +42,18 @@ const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness')
     const buckets=new Set(ys.filter(y=>y>=0&&y<canvas.clientHeight).map(y=>Math.min(4,Math.floor(5*y/Math.max(1,canvas.clientHeight)))));
     state.ambient.rain.enabled=false;
     state.ambient.clouds.enabled=true;state.ambient.clouds.density=50;state.ambient.clouds.densityMultiplier=1;
-    const savedArc=CanvasRenderingContext2D.prototype.arc;let arcs=0;
-    CanvasRenderingContext2D.prototype.arc=function(){if(this.canvas===canvas)arcs++;return savedArc.apply(this,arguments);};
-    c.render(1000);const sparse=arcs;arcs=0;state.ambient.clouds.densityMultiplier=8;c.render(1000);const dense=arcs;
-    CanvasRenderingContext2D.prototype.arc=savedArc;
+    // 9.0.9 uses bounded layered textures, not hundreds of radial arcs.
+    const savedDraw=CanvasRenderingContext2D.prototype.drawImage;let cloudDraws=[];
+    CanvasRenderingContext2D.prototype.drawImage=function(...args){if(this.canvas===canvas)cloudDraws.push([args[1],args[2],args[3],args[4]]);return savedDraw.apply(this,args);};
+    c.render(1000);const sparse=cloudDraws.length;cloudDraws=[];
+    state.ambient.clouds.densityMultiplier=8;c.render(1000);const dense=cloudDraws.length;cloudDraws=[];
     // A real, independent cloud velocity and speed multiplier, including 0 = freeze.
-    const originalTranslate=CanvasRenderingContext2D.prototype.translate;
-    let cloudOrigins=[];
-    CanvasRenderingContext2D.prototype.translate=function(x,y){if(this.canvas===canvas)cloudOrigins.push([x,y]);return originalTranslate.apply(this,arguments);};
     state.ambient.clouds.densityMultiplier=1;state.ambient.clouds.speed=24;state.ambient.clouds.speedMultiplier=1;
-    c.render(1200);const cloudStart=cloudOrigins[0];cloudOrigins=[];
-    state.ambient.clouds.speedMultiplier=8;c.render(1200);const cloudFast=cloudOrigins[0];cloudOrigins=[];
-    state.ambient.clouds.speed=0;c.render(1200);const cloudStill1=cloudOrigins[0];cloudOrigins=[];
-    c.render(2500);const cloudStill2=cloudOrigins[0];
-    CanvasRenderingContext2D.prototype.translate=originalTranslate;
+    c.render(1200);const cloudStart=cloudDraws[0];cloudDraws=[];
+    state.ambient.clouds.speedMultiplier=8;c.render(1200);const cloudFast=cloudDraws[0];cloudDraws=[];
+    state.ambient.clouds.speed=0;c.render(1200);const cloudStill1=cloudDraws[0];cloudDraws=[];
+    c.render(2500);const cloudStill2=cloudDraws[0];
+    CanvasRenderingContext2D.prototype.drawImage=savedDraw;
     state.ambient.clouds.enabled=false;
     state.ambient.reiatsu.enabled=true;state.ambient.reiatsu.strength=85;
     const savedMove=CanvasRenderingContext2D.prototype.moveTo,savedEllipse=CanvasRenderingContext2D.prototype.ellipse;
@@ -90,7 +88,7 @@ const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness')
   assert(result.dichotomy>0,'dichotomy must draw colored contours, '+JSON.stringify(result));
   assert(result.rainbow>0,'rainbow must draw colored contours, '+JSON.stringify(result));
   assert(result.buckets.length>=4,'rain must cover viewport rows '+JSON.stringify(result));
-  assert(result.dense>=result.sparse*5,'cloud density multiplier must affect number of clouds '+JSON.stringify(result));
+  assert(result.dense>result.sparse&&result.dense<=18,'cloud density multiplier must increase drawn cloud layers within budget '+JSON.stringify(result));
   assert.notDeepEqual(result.cloudStart,result.cloudFast,'cloud speed multiplier must move plumes');
   assert.deepEqual(result.cloudStill1,result.cloudStill2,'zero cloud speed must stop cloud motion');
   assert(result.reiatsu.lines>0&&result.reiatsu.circles===0,'spiritual-pressure streaks must replace circle mode');
@@ -99,6 +97,6 @@ const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness')
   assert(result.corridorVignette>result.baseline,'global vignette must remain over active Corridor');
   assert.equal(result.multiplier,8);assert(result.multiplied>result.baseline,'vignette x8 must reach deeper into the image '+JSON.stringify(result));
   assert.deepEqual(uncaughtExceptions(h.events),[]);
-  console.log('PASS v8.20.14 Canvas chromatic d/b effects, rain coverage, clouds density, ambient above-lens stacking, vignette multiplier',JSON.stringify(result));
+  console.log('PASS Canvas chromatic d/b effects, rain coverage, layered clouds density, ambient above-lens stacking, vignette multiplier',JSON.stringify(result));
  }finally{await h.close();}
 })().catch(e=>{console.error('FAIL v8.20.14',e.stack||e);process.exitCode=1});
