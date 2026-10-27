@@ -133,7 +133,8 @@ const SomataParameterMatrix=(()=>{
         Object.freeze({id:'geometry.shape',group:'Геометрия',label:'Форма',type:'special',kind:'shape',min:0,max:1,step:1,subcontrols:Object.freeze(['Семейство формы','Наборы профилей']),audioSupported:false,reason:'Форма использует дискретную перестройку топологии; аудиомаршрут пока не реализован'}),
         Object.freeze({id:'geometry.orbits',group:'Геометрия',label:'Орбиты',type:'integer',kind:'orbits',min:1,max:100,step:1,unit:'%',subcontrols:Object.freeze(['Доля орбит (%)']),audioSupported:true,framePath:'customSuborbits'}),
         Object.freeze({id:'geometry.chaos',group:'Геометрия',label:'Морфинг хаоса',type:'special',kind:'chaos',min:0,max:1,step:1,subcontrols:Object.freeze(['Разброс шага ±','Замыканий до']),audioSupported:false,reason:'Хаос требует пересборки топологии; непрерывная аудиомодуляция не поддерживается'}),
-        Object.freeze({id:'spiral.layers',group:'Спирали',label:'Спиральные слои',type:'special',kind:'spiralLayers',min:0,max:8,step:1,subcontrols:Object.freeze(['Число спиральных слоёв']),audioSupported:false,reason:'Количество слоёв изменяет структуру сцены; непрерывная аудиомодуляция не поддерживается'})
+        Object.freeze({id:'spiral.order',group:'Спирали',label:'Порядок спирали',type:'special',kind:'spiralOrder',min:-20,max:20,step:1,audioSupported:false,reason:'Порядок геометрической спирали задаётся через Blue Morph'}),
+        Object.freeze({id:'spiral.layers',group:'Спирали',label:'Спиральные слои',type:'special',kind:'spiralLayers',min:0,max:8,step:1,subcontrols:Object.freeze(['Число слоёв','Тангенциальность']),audioSupported:false,reason:'Количество слоёв изменяет структуру сцены; непрерывная аудиомодуляция не поддерживается'})
     ]);
     const nestedExtras=Object.freeze({
         'layer.strokeColor':Object.freeze(['Палитра','Менять палитру каждый цикл','Фиксированные цвета','Синхронизировать между морфингами']),
@@ -141,7 +142,6 @@ const SomataParameterMatrix=(()=>{
         'layer.radius':Object.freeze(['Сохранять пропорции размеров слоёв']),
         'layer.rotation':Object.freeze(['Случайно менять направление поворота']),
         'web.width':Object.freeze(['Использовать толщину относительно линии']),
-        'spiral.step':Object.freeze(['Приравнять шаг спирали к K']),
         'spiral.fillEnabled':Object.freeze(['Настраивать тип заливки спирали','Тип заливки спирали'])
     });
     // Unified metadata for compound UI controls that are not standalone routing
@@ -160,7 +160,8 @@ const SomataParameterMatrix=(()=>{
         'geometry.shape':Object.freeze({kind:'special',control:'select',label:'Форма',widgets:Object.freeze(['Семейство формы','Наборы профилей'])}),
         'geometry.orbits':Object.freeze({kind:'special',control:'range',label:'Орбиты',widgets:Object.freeze(['Доля орбит (%)']),labelWidget:'plainText',min:1,max:100,step:1,unit:'%',hasCheckbox:true,hasGroupIcon:true,hasRemove:true}),
         'geometry.chaos':Object.freeze({kind:'special',control:'numbers',label:'Морфинг хаоса',widgets:Object.freeze(['Разброс шага ±','Замыканий до'])}),
-        'spiral.layers':Object.freeze({kind:'special',control:'numbers',label:'Спиральные слои',widgets:Object.freeze(['Число спиральных слоёв'])})
+        'spiral.layers':Object.freeze({kind:'special',control:'numbers',label:'Спиральные слои',widgets:Object.freeze(['Число слоёв','Тангенциальность']),fields:Object.freeze([{kind:'range',label:'Слои',min:'spiralLayersMin',max:'spiralLayersMax',limitMin:0,limitMax:8},{kind:'number',label:'Танг.',key:'spiralTangentialChance',min:0,max:100,unit:'%'}]),coverage:true}),
+        'spiral.order':Object.freeze({kind:'special',control:'numbers',label:'Порядок спирали',widgets:Object.freeze(['Порядок спирали']),fields:Object.freeze([{kind:'range',label:'Порядок',min:'spiralOrderMin',max:'spiralOrderMax',limitMin:-20,limitMax:20}]),coverage:true})
     });
     // Authoritative input stepping for all three editors. Percentage-like
     // linear values use +/-1, logarithmic/multiplier controls keep their native
@@ -176,44 +177,92 @@ const SomataParameterMatrix=(()=>{
     };
     const rowLayout=id=>{
         if(specialRowLayouts[id])return specialRowLayouts[id];
+        refresh();
+        if(rowCache.has(id))return rowCache.get(id);
         const def=lookup(id);if(!def)return null;
         const numeric=['number','integer','angle','multiplier'].includes(def.type);
         const controls=[{widget:'handle'},{widget:'toggle'},{widget:'groupIcon'},{widget:'picker'}];
-        if(numeric)controls.push({widget:'range',min:def.min,max:def.max,step:stepFor(def).step,stepMode:stepFor(def).mode});
+        if(numeric){const stepping=stepFor(def);controls.push({widget:'range',min:def.min,max:def.max,step:stepping.step,stepMode:stepping.mode});}
         for(const child of subcontrolDefinitions(id))controls.push({widget:'subcontrol',id:child.id,label:child.label,type:child.type,min:child.min,max:child.max,step:child.step});
         controls.push({widget:'remove'});
-        return Object.freeze({kind:'binding',control:numeric?'range-and-children':'children',label:def.label,controls:Object.freeze(controls.map(c=>Object.freeze(c))),widgets:subcontrols(id)});
+        const result=Object.freeze({kind:'binding',control:numeric?'range-and-children':'children',label:def.label,controls:Object.freeze(controls.map(c=>Object.freeze(c))),widgets:subcontrols(id)});
+        rowCache.set(id,result);
+        return result;
     };
     const parents=new Map(Object.entries(children).flatMap(([p,ids])=>ids.map(id=>[id,p])));
-    const all=()=>{
-        const defs=registry.sharedRoutingDefinitions().filter(d=>d.type!=='boolean'&&!parents.has(d.id));
-        const groups=[...new Set(defs.map(d=>d.morph?.group||d.group))];
-        const ordered=[];
-        for(const group of groups){
-            if(group==='Геометрия')ordered.push(...special.slice(0,3));
-            if(group==='Спирали')ordered.push(special[3]);
-            ordered.push(...defs.filter(d=>(d.morph?.group||d.group)===group));
+    const parentId=id=>parents.get(id)||'';
+    // Metadata-derived views share one registry-revision boundary. Re-registering
+    // a parameter invalidates row, nested-control and audio descriptions together.
+    const specialById=new Map(special.map(def=>[def.id,def]));
+    const childIds=Object.freeze(Object.values(children).flat());
+    let cachedRevision=-1,cachedAll=Object.freeze([]),cachedGroups=Object.freeze([]),cachedAudio=null;
+    const descendantCache=new Map(),subcontrolCache=new Map(),labelCache=new Map(),rowCache=new Map();
+    const refresh=()=>{
+        const revision=registry.version();
+        if(cachedRevision===revision)return;
+        descendantCache.clear();subcontrolCache.clear();labelCache.clear();rowCache.clear();cachedAudio=null;
+        const grouped=new Map();
+        for(const def of registry.sharedRoutingDefinitions()){
+            if(def.type==='boolean'||parents.has(def.id))continue;
+            const group=def.morph?.group||def.group;
+            if(!grouped.has(group))grouped.set(group,[]);
+            grouped.get(group).push(def);
         }
-        return Object.freeze(ordered);
+        const ordered=[];
+        for(const [group,defs] of grouped){
+            if(group==='Геометрия')ordered.push(...special.slice(0,3));
+            if(group==='Спирали')ordered.push(...special.filter(def=>def.group==='Спирали'));
+            ordered.push(...defs);
+        }
+        cachedAll=Object.freeze(ordered);
+        cachedGroups=Object.freeze([...new Set(ordered.map(d=>d.morph?.group||d.group))]);
+        cachedRevision=revision;
     };
-    const lookup=id=>special.find(x=>x.id===id)||registry.get(id)||null;
-    const descendants=id=>Object.freeze((children[id]||[]).map(childId=>Object.freeze({id:childId,label:childLabels[childId]||registry.get(childId)?.label||childId,definition:registry.get(childId)})));
-    const subcontrolDefinitions=id=>Object.freeze([
-        ...(lookup(id)?.subcontrols||[]).map(label=>Object.freeze({id:`${id}.${label}`,label,type:'special'})),
-        ...(extraControlSchema[id]||[]),
-        ...(nestedExtras[id]||[]).filter(label=>!(extraControlSchema[id]||[]).some(x=>x.label===label)).map(label=>Object.freeze({id:`${id}.${label}`,label,type:'option'})),
-        ...descendants(id).map(x=>Object.freeze({id:x.id,label:x.label,type:x.definition?.type,min:x.definition?.min,max:x.definition?.max,step:x.definition?.step}))
-    ]);
-    const subcontrols=id=>Object.freeze(subcontrolDefinitions(id).map(d=>d.label));
-    const groups=()=>Object.freeze([...new Set(all().map(d=>d.morph?.group||d.group))]);
-    const audioDefinitions=()=>Object.freeze([
-        ...all().filter(d=>d.kind==='orbits').map(d=>Object.freeze({key:d.id,parameterId:d.id,group:d.group,label:d.label,type:d.type,mode:'add',span:6,min:d.min,max:d.max,genericFrame:true,frameTarget:'layer',framePath:d.framePath})),
-        ...Object.values(children).flat().map(id=>registry.get(id)).filter(d=>d&&d.morph?.framePath&&['number','integer','multiplier'].includes(d.type)).map(d=>Object.freeze({
-            key:d.id,parameterId:d.id,group:d.morph?.group||d.group,label:childLabels[d.id]||d.label,type:d.type,mode:'add',span:Number.isFinite(d.max)&&Number.isFinite(d.min)?Math.max(.01,Math.min(100,(d.max-d.min)*.25)):1,
-            min:d.min,max:d.max,genericFrame:true,frameTarget:d.morph?.frameTarget||'effect',framePath:d.morph.framePath
-        }))
-    ]);
-    return Object.freeze({all,groups,get:lookup,children,childLabels,descendants,subcontrols,subcontrolDefinitions,special,specialRowLayouts,rowLayout,stepFor,audioDefinitions,version:'7.11.16'});
+    const all=()=>{refresh();return cachedAll;};
+    const lookup=id=>specialById.get(id)||registry.get(id)||null;
+    const descendants=id=>{
+        refresh();
+        if(descendantCache.has(id))return descendantCache.get(id);
+        const result=Object.freeze((children[id]||[]).map(childId=>{
+            const definition=registry.get(childId);
+            return Object.freeze({id:childId,label:childLabels[childId]||definition?.label||childId,definition});
+        }));
+        descendantCache.set(id,result);
+        return result;
+    };
+    const subcontrolDefinitions=id=>{
+        refresh();
+        if(subcontrolCache.has(id))return subcontrolCache.get(id);
+        const extra=extraControlSchema[id]||[];
+        const extraLabels=new Set(extra.map(item=>item.label));
+        const result=Object.freeze([
+            ...(lookup(id)?.subcontrols||[]).map(label=>Object.freeze({id:`${id}.${label}`,label,type:'special'})),
+            ...extra,
+            ...(nestedExtras[id]||[]).filter(label=>!extraLabels.has(label)).map(label=>Object.freeze({id:`${id}.${label}`,label,type:'option'})),
+            ...descendants(id).map(x=>Object.freeze({id:x.id,label:x.label,type:x.definition?.type,min:x.definition?.min,max:x.definition?.max,step:x.definition?.step}))
+        ]);
+        subcontrolCache.set(id,result);
+        return result;
+    };
+    const subcontrols=id=>{
+        refresh();
+        if(!labelCache.has(id))labelCache.set(id,Object.freeze(subcontrolDefinitions(id).map(d=>d.label)));
+        return labelCache.get(id);
+    };
+    const groups=()=>{refresh();return cachedGroups;};
+    const audioDefinitions=()=>{
+        refresh();
+        if(cachedAudio)return cachedAudio;
+        cachedAudio=Object.freeze([
+            ...cachedAll.filter(d=>d.kind==='orbits').map(d=>Object.freeze({key:d.id,parameterId:d.id,group:d.group,label:d.label,type:d.type,mode:'add',span:6,min:d.min,max:d.max,genericFrame:true,frameTarget:'layer',framePath:d.framePath})),
+            ...childIds.map(id=>registry.get(id)).filter(d=>d&&d.morph?.framePath&&['number','integer','multiplier'].includes(d.type)).map(d=>Object.freeze({
+                key:d.id,parameterId:d.id,group:d.morph?.group||d.group,label:childLabels[d.id]||d.label,type:d.type,mode:'add',span:Number.isFinite(d.max)&&Number.isFinite(d.min)?Math.max(.01,Math.min(100,(d.max-d.min)*.25)):1,
+                min:d.min,max:d.max,genericFrame:true,frameTarget:d.morph?.frameTarget||'effect',framePath:d.morph.framePath
+            }))
+        ]);
+        return cachedAudio;
+    };
+    return Object.freeze({all,groups,get:lookup,parentId,children,childLabels,descendants,subcontrols,subcontrolDefinitions,special,specialRowLayouts,rowLayout,stepFor,audioDefinitions,version:'7.11.16'});
 })();
 window.SomataParameterMatrix=SomataParameterMatrix;
 window.__somataParameterMatrixStatus=()=>({groups:SomataParameterMatrix.groups(),count:SomataParameterMatrix.all().length,ids:SomataParameterMatrix.all().map(d=>d.id),subcontrols:SomataParameterMatrix.all().map(d=>[d.id,SomataParameterMatrix.subcontrols(d.id)])});

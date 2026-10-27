@@ -3,7 +3,12 @@ window.__spiroRegisterModule?.('js/core/parameter-routing');
 // Shared artistic-parameter registry and Morph-profile compatibility layer.
 // This module owns metadata/routing only. Existing Blue/Orange/Green mathematics remain authoritative.
 const SomataParameterRegistry=(()=>{
-    const defs=new Map(),audioOrder=[];
+    const defs=new Map(),audioOrder=[],audioOrderSeen=new Set();
+    // Metadata is immutable after registration. Rebuild derived views only when
+    // the registry actually changes (including replacement of an existing id).
+    // Public list APIs still return independent arrays, as they did before.
+    let revision=0,morphableRevision=-1,sharedRevision=-1,groupRevision=-1,audioRevision=-1,compatRevision=-1;
+    let morphableCache=[],sharedCache=[],groupCache=[],audioCache=[],compatCache=[];
     const clone=v=>Array.isArray(v)?v.map(clone):(v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,clone(x)])):v);
     function merge(a,b){
         const out={...(a||{}),...(b||{})};
@@ -12,18 +17,21 @@ const SomataParameterRegistry=(()=>{
     }
     function register(def){
         if(!def||typeof def.id!=='string'||!def.id.trim())throw new Error('ParameterDefinition.id required');
-        const id=def.id.trim(),next=Object.freeze(merge(defs.get(id),{...def,id}));defs.set(id,next);return next;
+        const id=def.id.trim(),next=Object.freeze(merge(defs.get(id),{...def,id}));defs.set(id,next);revision++;return next;
     }
     function get(id){return defs.get(String(id||''))||null;}
     function all(){return [...defs.values()];}
     function morphable(){
-        const out=[],seen=new Set();
-        for(const d of all()){
-            if(d.morph?.supported!==true)continue;
-            const key=d.ui?.mainId?`ui:${d.ui.mainId}`:(d.morph?.framePath?`${d.morph?.frameTarget||'effect'}:${d.morph.framePath}`:`id:${d.id}`);
-            if(seen.has(key))continue;seen.add(key);out.push(d);
+        if(morphableRevision!==revision){
+            const out=[],seen=new Set();
+            for(const d of defs.values()){
+                if(d.morph?.supported!==true)continue;
+                const key=d.ui?.mainId?`ui:${d.ui.mainId}`:(d.morph?.framePath?`${d.morph?.frameTarget||'effect'}:${d.morph.framePath}`:`id:${d.id}`);
+                if(seen.has(key))continue;seen.add(key);out.push(d);
+            }
+            morphableCache=out;morphableRevision=revision;
         }
-        return out;
+        return morphableCache.slice();
     }
     function inferredAudioDefinition(d){
         const explicit=d?.audio?.supported===true?d.audio:null,type=d?.type||'number';
@@ -53,10 +61,30 @@ const SomataParameterRegistry=(()=>{
         });
     }
     const ROUTING_COMPOUND_CHILD_IDS=new Set(["layer.radiusMultiplier", "layer.strokeWidthMultiplier", "layer.glowMultiplier", "layer.glowIntensityMultiplier", "graffiti.nibLengthMultiplier", "graffiti.sizeFocus", "graffiti.rotationMultiplier", "graffiti.rotationFocus", "web.oscillationStrengthMultiplier", "web.depthMultiplier", "web.widthPercent", "lamps.radiusMultiplier", "lamps.softnessMultiplier", "lamps.densityMultiplier", "lamps.scatterMultiplier", "lamps.sizeVariationMultiplier", "lamps.brightnessVariationMultiplier", "lamps.adaptiveStrengthMultiplier", "sweep.speedMultiplier", "sweep.glowMultiplier", "sweep.glowIntensityMultiplier", "sweep.softnessMultiplier", "lightning.rateMultiplier", "lightning.glowMultiplier", "lightning.intensityMultiplier", "lightning.softnessMultiplier", "lineMotion.amplitudeMultiplier", "lineMotion.wavelengthMultiplier", "sprite.widthMultiplier", "particles.densityMultiplier", "particles.scatterMultiplier", "particles.sizeVariationMultiplier", "particles.speedMultiplier", "particles.spiralRadiusMultiplier", "tunnel.depthCurveMultiplier"]);
-    function sharedRoutingDefinitions(){return morphable().filter(d=>d?.type!=='boolean'&&!ROUTING_COMPOUND_CHILD_IDS.has(d.id));}
-    function sharedRoutingGroups(){const out=[];for(const d of sharedRoutingDefinitions()){const g=String(d?.morph?.group||d?.group||'');if(g&&!out.includes(g))out.push(g);}return out;}
-    function audioDefinitions(){return sharedRoutingDefinitions().map(inferredAudioDefinition);}
+    function sharedRoutingDefinitions(){
+        if(sharedRevision!==revision){
+            sharedCache=morphable().filter(d=>d?.type!=='boolean'&&!ROUTING_COMPOUND_CHILD_IDS.has(d.id));
+            sharedRevision=revision;
+        }
+        return sharedCache.slice();
+    }
+    function sharedRoutingGroups(){
+        if(groupRevision!==revision){
+            const out=[],seen=new Set();
+            for(const d of sharedRoutingDefinitions()){
+                const group=String(d?.morph?.group||d?.group||'');
+                if(group&&!seen.has(group)){seen.add(group);out.push(group);}
+            }
+            groupCache=out;groupRevision=revision;
+        }
+        return groupCache.slice();
+    }
+    function audioDefinitions(){
+        if(audioRevision!==revision){audioCache=sharedRoutingDefinitions().map(inferredAudioDefinition);audioRevision=revision;}
+        return audioCache.slice();
+    }
     function audioCompatibilityDefinitions(){
+        if(compatRevision===revision)return compatCache.slice();
         const sharedKeys=new Set(audioDefinitions().map(d=>d.key)),out=[];
         const seen=new Set();
         for(const id of audioOrder){
@@ -70,13 +98,28 @@ const SomataParameterRegistry=(()=>{
                 genericFrame:false,compatibilityOnly:true
             }));
         }
-        return out;
+        compatCache=out;compatRevision=revision;
+        return compatCache.slice();
+    }
+    // Routing uses the same frame paths repeatedly. Keep a bounded cache to
+    // avoid split/allocation in both readers and writers without retaining
+    // unbounded strings supplied by plugins or imported profiles.
+    const pathPartsCache=new Map(),PATH_CACHE_LIMIT=256;
+    function pathParts(path){
+        const key=String(path);
+        let parts=pathPartsCache.get(key);
+        if(!parts){
+            parts=Object.freeze(key.split('.'));
+            if(pathPartsCache.size>=PATH_CACHE_LIMIT)pathPartsCache.clear();
+            pathPartsCache.set(key,parts);
+        }
+        return parts;
     }
     function valueAt(root,path){
-        if(!root||!path)return undefined;let cur=root;for(const part of String(path).split('.')){if(cur==null)return undefined;cur=cur[part];}return cur;
+        if(!root||!path)return undefined;let cur=root;for(const part of pathParts(path)){if(cur==null)return undefined;cur=cur[part];}return cur;
     }
     function applyPath(root,path,value){
-        if(!root||!path)return root;const parts=String(path).split('.');let cur=root;
+        if(!root||!path)return root;const parts=pathParts(path);let cur=root;
         for(let i=0;i<parts.length-1;i++){const k=parts[i];if(!cur[k]||typeof cur[k]!=='object'||Array.isArray(cur[k]))cur[k]={};cur=cur[k];}
         cur[parts[parts.length-1]]=value;return root;
     }
@@ -96,7 +139,7 @@ const SomataParameterRegistry=(()=>{
     legacy('layer.fillColor','Заливка','Цвет заливки','paramFillColor','fillColor','byFillColor','morphByFillColor',null,null,0,1,1,{type:'color',morphGroup:'Линия'});
 
     const audio=(id,group,label,mode,span,min,max,opts={})=>{
-        if(!audioOrder.includes(id))audioOrder.push(id);
+        if(!audioOrderSeen.has(id)){audioOrderSeen.add(id);audioOrder.push(id);}
         const existing=defs.get(id);
         const entry={id,audio:{supported:true,key:opts.audioKey||id,mode,span,min,max,label,group}};
         if(!existing){
@@ -137,12 +180,10 @@ const SomataParameterRegistry=(()=>{
     audio('lightning.rate','Молния','Частота ударов','positiveFactor',2,0,1000,{framePath:'sweep.lightningRatePercent',uiId:'sweepLightningRatePercent'});
     audio('lightning.duration','Молния','Продолжительность удара','add',300,30,700,{framePath:'sweep.lightningDurationMs',uiId:'sweepLightningDuration'});
     audio('lightning.width','Молния','Толщина','add',75,1,100,{framePath:'sweep.lightningWidthPercent',uiId:'sweepLightningWidthPercent'});
-    audio('lightning.brightness','Молния','Яркость','add',120,0,200,{framePath:'sweep.lightningBrightness',uiId:'sweepLightningBrightness'});
     audio('lightning.glow','Молния','Размер свечения','positiveFactor',1.8,0,1000000,{framePath:'sweep.lightningGlow',uiId:'sweepLightningGlow'});
-    audio('lightning.intensity','Молния','Интенсивность свечения','positiveFactor',1.8,0,400,{framePath:'sweep.lightningGlowIntensity',uiId:'sweepLightningGlowIntensity'});
+    audio('lightning.intensity','Молния','Яркость','positiveFactor',1.8,0,400,{framePath:'sweep.lightningGlowIntensity',uiId:'sweepLightningGlowIntensity'});
     audio('lightning.softness','Молния','Мягкость','add',100,0,150,{framePath:'sweep.lightningSoftness',uiId:'sweepLightningSoftness'});
     audio('lightning.lineOpacity','Молния','Основа · прозрачность','add',100,0,100,{framePath:'sweep.lightningLineOpacity',uiId:'sweepLightningLineOpacity'});
-    audio('lightning.afterglowMs','Молния','Послесвечение · длительность','add',400,0,900,{framePath:'sweep.lightningAfterglowMs',uiId:'sweepLightningAfterglowMs'});
     audio('lightning.microStrikes','Молния','Микроудары','add',3,0,Infinity,{framePath:'sweep.lightningMicroStrikes',uiId:'sweepLightningMicroStrikes',type:'integer'});
     audio('tunnel.speed','Коридор','Скорость','add',45,-100,100,{morph:true,scope:'global',uiId:'tunnelSpeedStrength',frameTarget:'global',framePath:'tunnel.speedPercent'});
     audio('tunnel.spacing','Коридор','Дистанция','add',160,20,2000,{morph:true,scope:'global',uiId:'tunnelSpacingStrength',frameTarget:'global',framePath:'tunnel.spacingPercent'});
@@ -261,7 +302,8 @@ const SomataParameterRegistry=(()=>{
     generic('sweep.glowIntensityMultiplier','Проблеск','Множитель интенсивности','sweepGlowIntensityMultiplier','sweep.glowIntensityMultiplier',0,64,.01);
     generic('sweep.softnessMultiplier','Проблеск','Множитель мягкости','sweepSoftnessMultiplier','sweep.softnessMultiplier',0,64,.01);
     generic('lightning.everyN','Молния','Каждый N-й','sweepLightningEveryN','sweep.lightningEveryN',2,24,1,{type:'integer'});
-    generic('lightning.rateMultiplier','Молния','Множитель частоты ударов','sweepLightningRateMultiplier','sweep.lightningRateMultiplier',.015625,64,.01);
+    generic('lightning.rateMultiplier','Молния','Множитель интервала ударов','sweepLightningRateMultiplier','sweep.lightningRateMultiplier',0,64,.01);
+    generic('lightning.widthMultiplier','Молния','Множитель толщины','sweepLightningWidthMultiplier','sweep.lightningWidthMultiplier',0,64,.01);
     generic('lightning.glowMultiplier','Молния','Множитель размера свечения','sweepLightningGlowMultiplier','sweep.lightningGlowMultiplier',0,64,.01);
     generic('lightning.intensityMultiplier','Молния','Множитель интенсивности','sweepLightningGlowIntensityMultiplier','sweep.lightningGlowIntensityMultiplier',0,64,.01);
     generic('lightning.softnessMultiplier','Молния','Множитель мягкости','sweepLightningSoftnessMultiplier','sweep.lightningSoftnessMultiplier',0,64,.01);
@@ -296,15 +338,14 @@ const SomataParameterRegistry=(()=>{
 
     // Spiral is intentionally the final shared routing group. These are authored layer settings,
     // so both Standard Morph and Audio Link see the exact same canonical definitions.
-    generic('spiral.order','Спирали','Порядок спирали','paramSpiralOrder','spiralOrder',-20,20,1,{type:'integer',frameTarget:'layer'});
-    generic('spiral.step','Спирали','Шаг спирали','paramSpiralStep','spiralStep',0,120,.01,{frameTarget:'layer'});
-    generic('spiral.stepLinked','Спирали','Приравнять к шагу K','paramSpiralStepLinked','spiralStepLinked',0,1,1,{type:'boolean',frameTarget:'layer'});
+    // Legacy spiral.order / spiral.step / spiral.stepLinked remain in saved data,
+    // but authored controls are now only the special «Спиральные слои» range and geometry K.
     generic('spiral.tangential','Спирали','Тангенциальность','paramSpiralTangential','spiralTangential',0,1,1,{type:'boolean',frameTarget:'layer'});
     generic('spiral.roundSeams','Спирали','Скруглять стыки','paramSpiralRoundSeams','spiralRoundSeams',0,1,1,{type:'boolean',frameTarget:'layer'});
     generic('spiral.fillEnabled','Спирали','Заливка спирали','paramSpiralFillEnabled','spiralFillEnabled',0,1,1,{type:'boolean',frameTarget:'layer'});
     generic('spiral.fillType','Спирали','Тип заливки','paramSpiralFillType','spiralFillType',0,1,1,{type:'enum',values:['interwinding','chopped'],frameTarget:'layer'});
 
-    return Object.freeze({register,get,all,morphable,sharedRoutingDefinitions,sharedRoutingGroups,audioDefinitions,audioCompatibilityDefinitions,valueAt,applyPath,clone});
+    return Object.freeze({register,get,all,morphable,sharedRoutingDefinitions,sharedRoutingGroups,audioDefinitions,audioCompatibilityDefinitions,valueAt,applyPath,clone,version:()=>revision});
 })();
 window.SomataParameterRegistry=SomataParameterRegistry;
 
@@ -418,7 +459,7 @@ const SomataMorphParameterRouting=(()=>{
         config.options={...(config.options||{})};
         for(const def of SomataParameterRegistry.morphable().filter(d=>d.morph?.legacy===true)){if(def.morph?.option)config.options[def.morph.option]=false;}
         config.options.byShape=spec.shape===true;
-        config.options.bySpiralLayers=false;
+        config.options.bySpiralLayers=false;config.options.bySpiralOrder=false;
         config.monoOrbitTransforms=Array.isArray(spec.orbits);
         config.orbitPercentMin=Array.isArray(spec.orbits)?Number(spec.orbits[0])||0:0;
         config.orbitPercentMax=Array.isArray(spec.orbits)?Number(spec.orbits[1])||0:0;
@@ -568,7 +609,7 @@ const SomataMorphParameterRouting=(()=>{
             // Blue-specific compound rows are not canonical Registry bindings, but a fresh
             // profile must still be truly empty until the user explicitly adds them.
             config.options.byShape=false;
-            config.options.bySpiralLayers=false;
+            config.options.bySpiralLayers=false;config.options.bySpiralOrder=false;
             config.monoOrbitTransforms=false;
             config.chaosMorphEnabled=false;
         }
@@ -596,10 +637,6 @@ const SomataMorphParameterRouting=(()=>{
         a=Number(a);b=Number(b);if(!Number.isFinite(a)||!Number.isFinite(b))return Number.isFinite(b)?b:a;
         if(def.morph?.interpolation==='angle'){let d=((b-a+540)%360)-180;return a+d*t;}
         const v=a+(b-a)*t;return def.type==='integer'?Math.round(v):v;
-    }
-    function applyBindingMultiplier(def,binding,source,target){
-        // 7.10.7: no invented per-binding Morph multiplier. Pure boolean parameters are not Blue Morph bindings.
-        return target;
     }
     function applyFrame(frameCtx){
         if(typeof runtimeState==='undefined'||typeof state==='undefined')return;
@@ -633,7 +670,7 @@ const SomataMorphParameterRouting=(()=>{
                 let source=cell?cell.target:current;
                 let next=affected?randomTarget(def,binding):SomataParameterRegistry.valueAt(frameCtx.effectLayer??frameCtx.sourceLayer??target,path);
                 if(def.type!=='boolean'&&def.type!=='enum'){if(!Number.isFinite(Number(source)))source=Number(binding.min)||0;if(!Number.isFinite(Number(next)))next=Number(current);}
-                if(next==null)next=current;next=applyBindingMultiplier(def,binding,source,next);cell={serial,source,target:next};cells.set(key,cell);
+                if(next==null)next=current;cell={serial,source,target:next};cells.set(key,cell);
             }
             const value=lerpValue(def,cell.source,cell.target,t);
             if((def.type==='boolean'||def.type==='enum')?value!=null:Number.isFinite(Number(value)))SomataParameterRegistry.applyPath(target,path,value);
@@ -648,7 +685,7 @@ const SomataMorphParameterRouting=(()=>{
         const serial=Number(rt.phaseSerial)||0,t=Math.max(0,Math.min(1,Number(rt.geometryT)||0));
         if(!rt.parameterRouting||rt.parameterRouting.profileId!==p.id)rt.parameterRouting={profileId:p.id,cells:new Map()};
         const cells=rt.parameterRouting.cells,key=`global|${def.id}`;let cell=cells.get(key);
-        if(!cell||cell.serial!==serial){let source=cell?cell.target:authored,next=randomTarget(def,binding);if(!Number.isFinite(Number(source)))source=Number(authored)||0;if(!Number.isFinite(Number(next)))next=Number(authored)||0;next=applyBindingMultiplier(def,binding,source,next);cell={serial,source,target:next};cells.set(key,cell);}
+        if(!cell||cell.serial!==serial){let source=cell?cell.target:authored,next=randomTarget(def,binding);if(!Number.isFinite(Number(source)))source=Number(authored)||0;if(!Number.isFinite(Number(next)))next=Number(authored)||0;cell={serial,source,target:next};cells.set(key,cell);}
         return lerpValue(def,cell.source,cell.target,t);
     }
     function resetRuntime(rt){if(rt&&typeof rt==='object')rt.parameterRouting=null;}
@@ -661,7 +698,6 @@ window.SomataMorphParameterRouting=SomataMorphParameterRouting;
 // Their fixed generator controls remain Orange-owned; the shared group vocabulary is UI metadata only.
 const SomataOrangeMorphProfiles=(()=>{
     const clone=SomataParameterRegistry.clone, drafts=new WeakMap();
-    const runtimeKeys=new Set(['active','autoStartedByProject','paused','pauseStartedAt','originLayers','originActiveLayerId','originPresetValue','transitioning','nextSwitchAt','fadeStart','progress','raf','sourceLayers','targetLayers','sourceDrawData','targetDrawData','sourceLampPoints','targetLampPoints','webUiHoldStart','featureOverrides']);
     // Orange presets store only Orange editor controls. Unknown/legacy keys
     // must never silently turn into new scene-wide assignments.
     const editableMinimalKeys=new Set(['mode','family','profileGroups','generatorStyle','routingBindings','defaultActive','intervalSec','fadeSec','instantSwitch']);
@@ -717,6 +753,9 @@ const SomataOrangeMorphProfiles=(()=>{
         if(!cfg.minimal||typeof cfg.minimal!=='object')cfg.minimal={};
         cfg.randomOptions=cfg.randomOptions&&typeof cfg.randomOptions==='object'?cfg.randomOptions:{};
         const ro=cfg.randomOptions;
+        ro.spiralOrderMin=Number.isFinite(Number(ro.spiralOrderMin))?Math.max(-20,Math.min(20,Math.round(Number(ro.spiralOrderMin)))):-1;
+        ro.spiralOrderMax=Number.isFinite(Number(ro.spiralOrderMax))?Math.max(ro.spiralOrderMin,Math.min(20,Math.round(Number(ro.spiralOrderMax)))):1;
+        ro.spiralTangentialChance=Number.isFinite(Number(ro.spiralTangentialChance))?Math.max(0,Math.min(100,Math.round(Number(ro.spiralTangentialChance)))):50;
         if(typeof ro.fillHarmony!=='string'||!['native','analogous','square','triadic','split','complement','all'].includes(ro.fillHarmony))ro.fillHarmony='native';
         ro.fillLayersMin=Math.max(0,Math.min(1,Math.round(Number(ro.fillLayersMin)||0)));
         ro.fillLayersMax=Math.max(ro.fillLayersMin,Math.min(1,Math.round(Number(ro.fillLayersMax??1))));

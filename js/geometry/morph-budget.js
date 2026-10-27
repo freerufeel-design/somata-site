@@ -17,25 +17,26 @@ function morphBudgetConstrainedDevice(){
     }catch(_e){return false;}
 }
 function morphBudgetGcd(a,b){a=Math.max(1,Math.round(Number(a)||1));b=Math.max(1,Math.round(Number(b)||1));while(b){const t=a%b;a=b;b=t;}return a||1;}
-function morphBudgetProfileInfo(layer,profile){
+function morphBudgetProfileInfo(layer,profile,needFlat=true){
     const mode=String(profile?.mode||layer?.profileMode||'segments');
     const nodes=Array.isArray(profile?.nodes)?profile.nodes:(Array.isArray(layer?.profileNodes)?layer.profileNodes:[]);
     const count=Math.max(2,nodes.length||2);
     let flat=true;
-    if(nodes.length>=2){
+    if(needFlat&&nodes.length>=2){
         for(const p of nodes){if(Math.abs(Number(p?.y)||0)>1e-4){flat=false;break;}}
     }
     const smooth=mode==='spline';
     return{mode,nodes,count,flat,smooth};
 }
-function estimateMorphEndpointComplexity(layer,visual,profile){
+function estimateMorphEndpointComplexity(layer,visual,profile,constrainedDevice){
     const N=Math.max(2,Math.round(Number(visual?.N??layer?.N)||4));
     const K=Math.max(1,Math.min(Math.floor(N/2),Math.round(Number(visual?.K??layer?.K)||1)));
     const chaos=visual?.chaosStar===true;
     const g=chaos?1:morphBudgetGcd(N,K);
     const orbitVertices=Math.max(2,Math.ceil(N/g));
-    const info=morphBudgetProfileInfo(layer,profile);
     const spiral=visual?.spiralEnabled===true||layer?.spiralEnabled===true;
+    // Flatness only affects polygon sampling; Spiral budgets never consume it.
+    const info=morphBudgetProfileInfo(layer,profile,!spiral);
     const rounding=Math.max(0,Number(visual?.rounding??layer?.rounding)||0);
     let estimate=orbitVertices;
     if(spiral){
@@ -44,7 +45,7 @@ function estimateMorphEndpointComplexity(layer,visual,profile){
         const order=Math.max(0,Math.abs(Number(visual?.spiralOrder??layer?.spiralOrder)||0));
         const radius=Math.max(1,Math.abs(Number(visual?.radius??layer?.radius)||220));
         const zoom=Math.max(.05,Math.abs(Number(state?.zoom)||1));
-        const constrained=morphBudgetConstrainedDevice();
+        const constrained=typeof constrainedDevice==='boolean'?constrainedDevice:morphBudgetConstrainedDevice();
         const dpr=Math.max(1,Math.min(constrained?1.5:2,Number(window?.devicePixelRatio)||1));
         const screenRadius=radius*zoom*dpr;
         const orderDemand=48+Math.sqrt(order+1)*44+Math.min(220,order*10);
@@ -71,9 +72,15 @@ function quantizeMorphSampleBudget(value,minValue=48,maxValue=720){
     for(const tier of MORPH_SAMPLE_TIERS)if(tier>=v&&tier>=minValue&&tier<=maxValue)return tier;
     return maxValue;
 }
-function chooseMorphLayerSampleBudget(layer,sourceVisual,targetVisual,sourceProfile,targetProfile,layerIndex=-1){
-    const a=estimateMorphEndpointComplexity(layer,sourceVisual,sourceProfile);
-    const b=estimateMorphEndpointComplexity(layer,targetVisual,targetProfile);
+function chooseMorphLayerSampleBudget(layer,sourceVisual,targetVisual,sourceProfile,targetProfile,layerIndex=-1,sharedDeviceConstrained=undefined){
+    // Both endpoints share a single device within this synchronous budget pass.
+    // Avoid repeated media/CPU queries when a layer has two Spiral endpoints.
+    const needsDevice=sourceVisual?.spiralEnabled===true||targetVisual?.spiralEnabled===true||layer?.spiralEnabled===true;
+    const deviceConstrained=needsDevice
+        ? (typeof sharedDeviceConstrained==='boolean'?sharedDeviceConstrained:morphBudgetConstrainedDevice())
+        : undefined;
+    const a=estimateMorphEndpointComplexity(layer,sourceVisual,sourceProfile,deviceConstrained);
+    const b=estimateMorphEndpointComplexity(layer,targetVisual,targetProfile,deviceConstrained);
     const spiral=a.spiral||b.spiral;
     const smooth=a.smooth||b.smooth;
     const raw=Math.max(a.estimate,b.estimate);
@@ -98,10 +105,20 @@ function prepareMorphLayerSampleBudgets(){
     morphBudgetRuntime.last=[];
     const layers=state?.layers||[];
     const out=new Array(layers.length);
+    const morph=runtimeState?.morph;
+    const sourceVisuals=morph?.sourceVisuals||[],targetVisuals=morph?.targetVisuals||[];
+    const sourceProfiles=morph?.sourceProfiles||[],targetProfiles=morph?.targetProfiles||[];
+    // Device characteristics cannot change during this synchronous phase. Query
+    // lazily and only once, even when dozens of layers have Spiral endpoints.
+    let sharedDeviceConstrained;
     for(let i=0;i<layers.length;i++){
+        const layer=layers[i],source=sourceVisuals[i]||{},target=targetVisuals[i]||{};
+        if(sharedDeviceConstrained===undefined &&
+           (source.spiralEnabled===true||target.spiralEnabled===true||layer?.spiralEnabled===true)){
+            sharedDeviceConstrained=morphBudgetConstrainedDevice();
+        }
         out[i]=chooseMorphLayerSampleBudget(
-            layers[i],runtimeState?.morph?.sourceVisuals?.[i]||{},runtimeState?.morph?.targetVisuals?.[i]||{},
-            runtimeState?.morph?.sourceProfiles?.[i]||{},runtimeState?.morph?.targetProfiles?.[i]||{},i
+            layer,source,target,sourceProfiles[i]||{},targetProfiles[i]||{},i,sharedDeviceConstrained
         );
     }
     if(runtimeState?.morph)runtimeState.morph._sampleBudgets=out;

@@ -10,11 +10,11 @@ function assert(v,s){if(!v)throw Error(s)}
    Object.assign(layer,{spiralEnabled:false,spiralOrder:0});
    const toggle=document.getElementById('testMorphEnabled');if(toggle.checked)toggle.click();toggle.click();
    SomataTestMorph.syncUI();
-   const row=document.getElementById('testMorphSpiralRow');
+   const row=document.getElementById('testMorphSpiralSlide');
    const hiddenPolygon=row.classList.contains('hidden');
    layer.spiralEnabled=true;layer.spiralOrder=2;SomataTestMorph.syncUI();
    const visibleSpiral=!row.classList.contains('hidden');
-   const select=document.getElementById('testMorphSpiralType');
+   const select=document.getElementById('testMorphSpiralSlide');
    const vals=[...select.options].map(x=>x.value);
    select.value='minimalTurn';select.dispatchEvent(new Event('change',{bubbles:true}));
    const persisted=layer.testMorph?.spiralType;
@@ -31,6 +31,8 @@ function assert(v,s){if(!v)throw Error(s)}
    const speed=state.tunnel.speedStrength;
    state.tunnel.speedStrength=0;
    document.getElementById('btnTunnel')?.click();
+   // Corridor entry is intentionally animated for a finite duration.
+   await new Promise(r=>setTimeout(r,1100));
    await new Promise(r=>setTimeout(r,170));
    const x=__somataCorridorTickStatus();
    await new Promise(r=>setTimeout(r,260));
@@ -41,7 +43,7 @@ function assert(v,s){if(!v)throw Error(s)}
     exactAtMid:half.layer.N===n+2,idle,corridorIdleInvalidations:y.motionInvalidations-x.motionInvalidations,corridorIdleSkips:y.idleSkips-x.idleSkips,before:before.active};
   })()`,{timeoutMs:20000});
   assert(data.hiddenPolygon&&data.visibleSpiral,'Spiral transport selector not conditional');
-  assert(JSON.stringify(data.vals)===JSON.stringify(['torn','continuous','phase','phaseCircle','minimalTurn','topology']),'Blue spiral type parity');
+  assert(JSON.stringify(data.vals)===JSON.stringify(['torn','continuous','phase','minimalTurn','phaseCircle']),'Blue spiral type parity');
   assert(data.persisted==='minimalTurn'&&data.remains==='minimalTurn','selector not bound to authored layer');
   assert(data.spiralState.spiralType==='minimalTurn'&&data.spiralState.topologyEndpointFade,'strict Spiral transition mode/status');
   assert(data.exactAtMid&&data.idle,'Spiral geometry did not settle at exact endpoint');

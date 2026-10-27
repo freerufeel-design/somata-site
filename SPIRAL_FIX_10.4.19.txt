@@ -1,0 +1,51 @@
+Somata 10.4.19.5 — Непрерывный spline Morph (27.10.2026)
+- Неразрывные Spiral-режимы с нелинейным профилем смешивают готовые Bézier controls, а не перестраивают spline на каждом кадре.
+- Периодическая фаза Spiral/Corridor сохраняется при изменении N/K; окончательная геометрия не изменена.
+- Регрессии: v10427 (нет повторного построения) и v10428 (периодическая непрерывность). Разрывный torn не затронут.
+
+Somata 10.4.19 — разделение параметров Spiral и отмена конечного скругления
+Дата: 27.10.2026. Патч поверх последней 10.4.19, не архитектурная миграция.
+
+1. Blue / Orange Morph: раздельные строки из единой схемы js/core/parameter-matrix.js.
+   «Спиральные слои» — диапазон числа слоёв, вероятность тангенциальности,
+   процент охвата слоёв, чекбокс и ×.
+   «Порядок спирали» — только диапазон порядка спирали, процент охвата
+   слоёв, чекбокс и ×. Обе строки имеют единый выпадающий выбор параметра.
+2. Значения Blue (state.morph) и Orange (state.randomOptions / профили Orange)
+   независимы. Orange изменяет реальные сгенерированные слои; независимый
+   порядок может применяться к существующим спиралям без добавления новых.
+3. Тангенциальная геометрия: при любой ненулевой смеси тангенциальности
+   автоматический финальный fillet шва не применяется. Саму тангенциальную
+   деформацию и настроенное скругление сегментов профиля не изменяли.
+   Правило действует и в Static, и в Morph, включая retained GPU carrier.
+4. Регрессии v10420: совместимый UI Blue/Orange + реальные изменения полей.
+   v10421: финальные Bézier-контрольные точки Morph равны статике.
+   v10422: отсутствие seam fillet при тангенциальности в 8 случаях.
+   v10423: реальные выходные слои генератора Orange и порядок без слоя.
+5. Упаковка обновляет cache-busting с 10.4.19.1 на 10.4.19.2.
+
+Важное ограничение: автоматические проверки в headless Chromium не являются
+подтверждением изображения WebGPU на видеокарте NVIDIA. Требуется
+визуальная проверка отсутствия рывка в конце тангенциальности.
+
+6. Patch 10.4.19.3: По запросу сохранена полная конечная геометрия спирали.
+   Для изменения только тангенциальности общий Spiral Bézier Morph плавно
+   интерполирует готовые исходные/целевые контрольные точки (smoothstep).
+   Промежуточные кадры больше не меняют дискретное разбиение кривых.
+   Это распространяется на Blue Morph и retained GPU static-edit.
+   Остальные Morph-переходы не изменены; восстановленного fillet не добавляли.
+   Регрессия v10424 включает 16 вариантов и входит в quick pipeline.
+   Cache-busting: 10.4.19.3. Визуальная NVIDIA-проверка необходима.
+
+7. Patch 10.4.19.4: animation/nonlinear spline end-of-Morph snap.
+   - On Blue Morph cycle boundary keep the last *pre-sampled spline* as a
+     temporary display-only rail. The authored control points are unchanged;
+     invalidating a profile edit or stopping playback removes the overlay.
+   - Static GPU Spiral resources no longer re-finalize/re-round already baked
+     retained Bézier cubics. This was a second rounding operation after Morph.
+   - GPU cache signature includes the active sampled spline overlay and returns
+     to the ordinary signature on playback stop.
+   - New regression v10425 checks the actual Blue UI cycle-boundary handoff;
+     v10426 checks packed static GPU Bézier controls against the exact retained
+     line for 12 spline/segments/rounding cases.
+   - Script cache-busting: 10.4.19.4. Physical NVIDIA display is not simulated.

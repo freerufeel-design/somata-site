@@ -8,7 +8,12 @@ const assert=(v,s)=>{if(!v)throw Error(s)};
    document.getElementById('btnSidebarShape')?.click();
    const layer=state.layers.find(x=>x.id===state.activeLayerId);
    Object.assign(layer,{spiralEnabled:true,spiralClosed:true,spiralOrder:3,N:8,K:3,opacity:100});
-   const enabled=document.getElementById('testMorphEnabled');if(!enabled.checked)enabled.click();
+   // Re-arm after authoring the 8-point baseline: enabling a static tween
+   // snapshots that baseline. Otherwise the boot-time N=4 remains observed
+   // and the next explicit edit is incorrectly measured from 4, not 8.
+   const enabled=document.getElementById('testMorphEnabled');
+   if(enabled.checked)enabled.click();
+   enabled.click();
    SomataTestMorph.syncUI();
    const panel=document.getElementById('testMorphControls'),row=document.getElementById('testMorphSpiralRow');
    const elements=[...panel.querySelectorAll('select,input')];
@@ -38,7 +43,7 @@ const assert=(v,s)=>{if(!v)throw Error(s)};
   assert(out.first.kind==='blue-circle-slide'&&out.middle.kind==='blue-circle-slide','real GPU edit not routed into Blue geometry');
   assert(out.middle.edit>0&&out.middle.edit<1&&out.noFade,'no realtime 0<t<1 Spiral morph');
   assert(out.settled&&out.nowN===out.origin+5,'static geometry was not restored after edit');
-  assert(out.availableTypes.length===6,'Spiral morph transports missing');
+  assert(out.availableTypes.length===5,'Spiral morph transports missing');
   assert(!uncaughtExceptions(h.events).length,'uncaught browser errors');
   console.log('PASS v9011 Spiral static GPU realtime + sidebar fitting',JSON.stringify({calls:out.calls.length,inside:out.inside,midProgress:out.middle.edit,settled:out.settled}));
  }finally{await h.close();}

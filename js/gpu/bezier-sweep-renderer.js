@@ -10,7 +10,24 @@ const WebGPUBezierSweepRenderer=(()=>{
     let haloPipeline=null,corePipeline=null,haloCorridorPipeline=null,coreCorridorPipeline=null;
     let compositeAddPipeline=null,compositeOverPipeline=null,compositePipelines=Object.create(null),compositeLayout=null,scratchTexture=null,scratchView=null,compositeBind=null,width=0,height=0,targetViews=new WeakMap();
     let uniformPairPool=[],cubicBindCache=new WeakMap(),copyBindCache=new WeakMap();
-    const stats={frames:0,deferredFrames:0,directFrames:0,cubics:0,gpuSubsegments:0,corridorFrames:0,copies:0,uniformPoolBuilds:0,uniformPoolReuses:0,cubicBindCacheHits:0,copyBindCacheHits:0,failures:0};
+    // Retain a bounded number of *static* spectral contour buffers. Only mask angle
+    // changes every frame; rebuilding and destroying identical GPU buffers stalls.
+    const spectralBufferCache=new Map();
+    const MAX_SPECTRAL_BUFFERS=12,MAX_SPECTRAL_BYTES=16*1024*1024;
+    let spectralBufferBytes=0;
+    function trimSpectralBuffers(){
+        for(const [key,rec] of spectralBufferCache){
+            if(spectralBufferCache.size<=MAX_SPECTRAL_BUFFERS&&spectralBufferBytes<=MAX_SPECTRAL_BYTES)break;
+            if(rec.users>0)continue;
+            spectralBufferCache.delete(key);spectralBufferBytes-=rec.size;
+            try{rec.buffer.destroy();}catch(_){}
+        }
+    }
+    function clearSpectralBuffers(){
+        for(const rec of spectralBufferCache.values())try{rec.buffer.destroy();}catch(_){}
+        spectralBufferCache.clear();spectralBufferBytes=0;
+    }
+    const stats={frames:0,deferredFrames:0,directFrames:0,cubics:0,gpuSubsegments:0,corridorFrames:0,copies:0,uniformPoolBuilds:0,uniformPoolReuses:0,cubicBindCacheHits:0,copyBindCacheHits:0,spectralResidentHits:0,spectralResidentUploads:0,failures:0};
     const WGSL=`
 struct U { head:vec4<f32>, row0:vec4<f32>, row1:vec4<f32>, style:vec4<f32>, color:vec4<f32>, sector:vec4<f32>, flags:vec4<f32> };
 @group(0) @binding(0) var<uniform> u:U;
@@ -41,13 +58,17 @@ fn makeVertex(vid:u32,iid:u32,useCopy:bool)->VOut{
 @vertex fn vsCorridor(@builtin(vertex_index) vid:u32,@builtin(instance_index) iid:u32)->VOut{return makeVertex(vid,iid,true);}
 fn sectorVisible(v:VOut)->bool{
  if(u.flags.x<0.5){return true;}
- let tau=6.28318530718;let progress=clamp(u.sector.z,0.0,1.0);let head=progress*tau;if(head<=0.000001){return false;}
- let span=clamp(u.sector.w,0.000001,tau);let tail=max(0.0,head-span);let s=clamp(v.local.x/max(0.0001,v.segLen),0.0,1.0);let p=mix(v.sourceA,v.sourceB,s)-u.sector.xy;let a=atan2(p.y,p.x);let p0=cubicData[0u].xy-u.sector.xy;let start=atan2(p0.y,p0.x);let dir=select(-1.0,1.0,u.flags.y>=0.0);let raw=select(start-a,a-start,dir>0.0);let rel=raw-floor(raw/tau)*tau;
-
- return rel+0.00001>=tail&&rel<=head+0.00001;
+ // No per-pixel atan2: sector boundaries are calculated once on CPU, then
+ // tested with oriented 2-D cross products. The same test covers the wrap seam.
+ let kind=abs(u.flags.y);if(kind<0.5){return false;}if(kind>=2.5){return true;}
+ let p=mix(v.sourceA,v.sourceB,clamp(v.local.x/max(0.0001,v.segLen),0.0,1.0))-u.sector.xy;
+ let s=u.sector.zw;let e=u.flags.zw;let dir=select(-1.0,1.0,u.flags.y>0.0);
+ let c0=dir*(s.x*p.y-s.y*p.x);let c1=dir*(p.x*e.y-p.y*e.x);
+ if(kind>1.5){return c0>=-0.00001||c1>=-0.00001;}
+ return c0>=-0.00001&&c1>=-0.00001;
 }
 @fragment fn fsHalo(v:VOut)->@location(0) vec4<f32>{
- if(v.copyAlpha<=0.00001||!sectorVisible(v)){discard;}let cx=clamp(v.local.x,0.0,v.segLen);let d=length(vec2<f32>(v.local.x-cx,v.local.y));let edge=max(0.0,d-v.halfWidth);if(v.glowRadius<=0.01){discard;}let q=edge/max(0.0001,v.glowRadius);let s=clamp(v.softness,0.0,1.5);let start=mix(0.84,0.02,min(1.0,s));var glow=1.0-smoothstep(start,1.0,q);if(s>1.0){glow=pow(max(0.0,glow),mix(1.0,0.58,min(1.0,(s-1.0)*2.0)));}let aa=clamp(v.alpha*glow*v.copyAlpha,0.0,1.0);if(aa<0.00015){discard;}return vec4<f32>(u.color.rgb*aa,aa);
+ if(v.copyAlpha<=0.00001||!sectorVisible(v)){discard;}let cx=clamp(v.local.x,0.0,v.segLen);let d=length(vec2<f32>(v.local.x-cx,v.local.y));let edge=max(0.0,d-v.halfWidth);if(v.glowRadius<=0.01){discard;}let q=edge/max(0.0001,v.glowRadius);let s=max(0.0,v.softness);let start=mix(0.84,0.02,min(1.0,s));var glow=1.0-smoothstep(start,1.0,q);if(s>1.0){glow=pow(max(0.0,glow),1.0/(1.0+(s-1.0)*0.84));}let aa=clamp(v.alpha*glow*v.copyAlpha,0.0,1.0);if(aa<0.00015){discard;}return vec4<f32>(u.color.rgb*aa,aa);
 }
 @fragment fn fsCore(v:VOut)->@location(0) vec4<f32>{
  if(v.copyAlpha<=0.00001||!sectorVisible(v)){discard;}let cx=clamp(v.local.x,0.0,v.segLen);let d=length(vec2<f32>(v.local.x-cx,v.local.y));let coverage=min(1.0,2.0*v.halfWidth)*clamp(v.halfWidth+0.5-d,0.0,1.0);let aa=clamp(v.alpha*coverage*v.copyAlpha,0.0,1.0);if(aa<0.00015){discard;}let gain=max(0.0,u.color.a);var lit=u.color.rgb*min(1.0,gain);if(gain>1.0){lit=mix(u.color.rgb,vec3<f32>(1.0),min(1.0,gain-1.0));}return vec4<f32>(lit*aa,aa);
@@ -77,7 +98,7 @@ struct V{@builtin(position) p:vec4<f32>};
             identityCopyBuffer=device.createBuffer({label:'Somata Bézier Sweep identity copy',size:32,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(identityCopyBuffer,0,new Float32Array([1,0,1,0,0,1,1,0]));identityCopyBind=device.createBindGroup({layout:copyLayout,entries:[{binding:0,resource:{buffer:identityCopyBuffer}}]});
             ready=true;lastError='';try{requestMainCanvasRender?.();}catch(_){}return true;
         }catch(err){ready=false;lastError=String(err?.message||err);stats.failures++;return false;}})();initializing=task;try{return await task;}finally{if(initializing===task)initializing=null;}}
-    function resetReusableResources(){for(const rec of uniformPairPool){try{rec.haloBuffer?.destroy?.();}catch(_){}try{rec.coreBuffer?.destroy?.();}catch(_){}}uniformPairPool=[];cubicBindCache=new WeakMap();copyBindCache=new WeakMap();}
+    function resetReusableResources(){clearSpectralBuffers();for(const rec of uniformPairPool){try{rec.haloBuffer?.destroy?.();}catch(_){}try{rec.coreBuffer?.destroy?.();}catch(_){}}uniformPairPool=[];cubicBindCache=new WeakMap();copyBindCache=new WeakMap();}
     function makeUniformPair(){const haloBuffer=device.createBuffer({label:'Somata Bézier Sweep halo uniforms pooled',size:112,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}),coreBuffer=device.createBuffer({label:'Somata Bézier Sweep core uniforms pooled',size:112,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}),rec={generation,inUse:true,haloBuffer,coreBuffer,haloData:new Float32Array(28),coreData:new Float32Array(28),haloBind:device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer:haloBuffer}}]}),coreBind:device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer:coreBuffer}}]})};uniformPairPool.push(rec);stats.uniformPoolBuilds++;return rec;}
     function acquireUniformPair(){for(const rec of uniformPairPool)if(!rec.inUse&&rec.generation===generation){rec.inUse=true;stats.uniformPoolReuses++;return rec;}return makeUniformPair();}
     function releaseUniformPair(rec){if(rec&&rec.generation===generation)rec.inUse=false;}
@@ -86,13 +107,44 @@ struct V{@builtin(position) p:vec4<f32>};
     function ensureSize(){if(!ready||!device)return false;const w=Math.max(1,mainCanvas.width|0),h=Math.max(1,mainCanvas.height|0);if(w===width&&h===height&&scratchTexture)return true;try{scratchTexture?.destroy?.();}catch(_){}width=w;height=h;canvas.width=w;canvas.height=h;context.configure({device,format,alphaMode:'premultiplied'});scratchTexture=device.createTexture({label:'Somata Bézier Sweep scratch',size:[w,h,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});scratchView=scratchTexture.createView();compositeBind=device.createBindGroup({layout:compositeLayout,entries:[{binding:0,resource:scratchView}]});targetViews=new WeakMap();return true;}
     function targetView(texture){let v=targetViews.get(texture);if(!v){v=texture.createView();targetViews.set(texture,v);}return v;}
     function resources(prepared,ctx,cfg,lineWidth,visual,alpha,copies,alphas,frameCtx,footprint,layer){
-        const external=prepared?.gpuCubicBuffer&&prepared?.gpuCubicCount>0;if(!(prepared?.cubicCount>0)&&!external)return null;const tr=ctx?.getTransform?.();if(!tr)return null;let cubicBuffer=null,ownsCubic=false;
-        if(external){cubicBuffer=prepared.gpuCubicBuffer;prepared.cubicCount=prepared.gpuCubicCount;}else{if(!prepared?.cubicData)return null;cubicBuffer=device.createBuffer({label:'Somata Bézier Sweep cubic data',size:Math.max(32,Math.ceil(prepared.cubicData.byteLength/16)*16),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(cubicBuffer,0,prepared.cubicData.buffer,prepared.cubicData.byteOffset,prepared.cubicData.byteLength);ownsCubic=true;}
+        const external=prepared?.gpuCubicBuffer&&prepared?.gpuCubicCount>0;if(!(prepared?.cubicCount>0)&&!external)return null;const tr=ctx?.getTransform?.();if(!tr)return null;let cubicBuffer=null,ownsCubic=false,spectralRec=null;
+        if(external){cubicBuffer=prepared.gpuCubicBuffer;prepared.cubicCount=prepared.gpuCubicCount;}
+        else{
+            if(!prepared?.cubicData)return null;
+            const data=prepared.cubicData,size=Math.max(32,Math.ceil(data.byteLength/16)*16);
+            if(prepared.spectral===true&&prepared.spectralResident===true&&size<=MAX_SPECTRAL_BYTES){
+                spectralRec=spectralBufferCache.get(data)||null;
+                if(!spectralRec){
+                    cubicBuffer=device.createBuffer({label:'Somata Spectral Sweep resident cubic data',size,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+                    device.queue.writeBuffer(cubicBuffer,0,data.buffer,data.byteOffset,data.byteLength);
+                    spectralRec={buffer:cubicBuffer,size,users:1};stats.spectralResidentUploads++;spectralBufferCache.set(data,spectralRec);spectralBufferBytes+=size;trimSpectralBuffers();
+                }else{
+                    // Move to the end of the Map: least recently used items are evicted first.
+                    spectralBufferCache.delete(data);spectralBufferCache.set(data,spectralRec);stats.spectralResidentHits++;
+                    cubicBuffer=spectralRec.buffer;
+                    spectralRec.users++;
+                }
+            }else{
+                cubicBuffer=device.createBuffer({label:'Somata Bézier Sweep cubic data',size,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+                device.queue.writeBuffer(cubicBuffer,0,data.buffer,data.byteOffset,data.byteLength);ownsCubic=true;
+            }
+        }
         const cubicBind=cachedBufferBind(cubicBindCache,cubicLayout,cubicBuffer,'cubicBindCacheHits');
-        let copyBind=null,copyCount=1;if(Array.isArray(copies)&&copies.length){const rec=WebGPUCorridorCopyStore.acquire(device,generation,frameCtx,copies,alphas,'sweep',footprint,layer);if(!rec?.buffer||!rec.k){if(ownsCubic)try{cubicBuffer.destroy();}catch(_){}return null;}copyCount=rec.k;copyBind=cachedBufferBind(copyBindCache,copyLayout,rec.buffer,'copyBindCacheHits');stats.corridorFrames++;stats.copies+=copyCount;}
-        const sx=Math.hypot(Number(tr.a)||0,Number(tr.b)||0),sy=Math.hypot(Number(tr.c)||0,Number(tr.d)||0),scale=Math.sqrt(Math.max(1e-12,sx*sy)),rgb=GPUColorCache.rgb(cfg?.color||'#ffffff'),baseAlpha=Math.max(0,Math.min(1,Number(alpha)||0)),coreOpacity=Math.max(0,Math.min(1,Number.isFinite(Number(visual?.opacity))?Number(visual.opacity):1)),brightness=Math.max(0,Number(visual?.brightness)||0),coreColorGain=1,fullWidth=Math.max(.15,Math.abs(Number(lineWidth)||.15)*scale),halfWidth=fullWidth*.5,gr=Math.max(0,Number(visual?.glowSize)||0)*scale,haloAlpha=gr>.001&&Number(visual?.strength)>.001?Math.max(0,Math.min(32,baseAlpha*.22*Number(visual.strength)*brightness)):0,coreAlpha=baseAlpha*coreOpacity,softness=Math.max(0,Math.min(1.5,Number(visual?.softness)||0)),uniformPair=acquireUniformPair();
-        const writeUniform=(isCore)=>{const f=isCore?uniformPair.coreData:uniformPair.haloData;f.fill(0);f[0]=width;f[1]=height;f[2]=prepared.cubicCount;f[3]=copyCount;f[4]=tr.a;f[5]=tr.c;f[6]=tr.e;f[8]=tr.b;f[9]=tr.d;f[10]=tr.f;f[12]=halfWidth;f[13]=isCore?0:gr;f[14]=isCore?coreAlpha:haloAlpha;f[15]=softness;f[16]=rgb[0];f[17]=rgb[1];f[18]=rgb[2];f[19]=isCore?coreColorGain:1;f[20]=Number(prepared.centerX)||0;f[21]=Number(prepared.centerY)||0;f[22]=Math.max(0,Math.min(1,Number(prepared.spectralProgress)||0));f[23]=Math.max(.000001,Math.min(Math.PI*2,Number(prepared.sectorSpanAngle)||Math.PI/4));f[24]=prepared.spectral===true?1:0;f[25]=Number(prepared.spectralDirection)<0?-1:1;const buffer=isCore?uniformPair.coreBuffer:uniformPair.haloBuffer;device.queue.writeBuffer(buffer,0,f);return{buffer,bind:isCore?uniformPair.coreBind:uniformPair.haloBind};};
-        const halo=writeUniform(false),core=writeUniform(true);let released=false;return{cubicBuffer,cubicBind,copyBind,copyCount,halo,core,instances:prepared.cubicCount*SUBDIV*copyCount,destroy(){if(released)return;released=true;if(ownsCubic)try{cubicBuffer?.destroy?.();}catch(_){}releaseUniformPair(uniformPair);}};
+        let copyBind=null,copyCount=1;if(Array.isArray(copies)&&copies.length){const rec=WebGPUCorridorCopyStore.acquire(device,generation,frameCtx,copies,alphas,'sweep',footprint,layer);if(!rec?.buffer||!rec.k){if(ownsCubic)try{cubicBuffer.destroy();}catch(_){}if(spectralRec){spectralRec.users--;trimSpectralBuffers();}return null;}copyCount=rec.k;copyBind=cachedBufferBind(copyBindCache,copyLayout,rec.buffer,'copyBindCacheHits');stats.corridorFrames++;stats.copies+=copyCount;}
+        const sx=Math.hypot(Number(tr.a)||0,Number(tr.b)||0),sy=Math.hypot(Number(tr.c)||0,Number(tr.d)||0),scale=Math.sqrt(Math.max(1e-12,sx*sy)),rgb=GPUColorCache.rgb(cfg?.color||'#ffffff'),baseAlpha=Math.max(0,Math.min(1,Number(alpha)||0)),coreOpacity=Math.max(0,Math.min(1,Number.isFinite(Number(visual?.opacity))?Number(visual.opacity):1)),brightness=Math.max(0,Number(visual?.brightness)||0),coreColorGain=1,fullWidth=Math.max(.15,Math.abs(Number(lineWidth)||.15)*scale),halfWidth=fullWidth*.5,gr=Math.max(0,Number(visual?.glowSize)||0)*scale,haloAlpha=gr>.001&&Number(visual?.strength)>.001?Math.max(0,Math.min(32,baseAlpha*.22*Number(visual.strength)*brightness)):0,coreAlpha=baseAlpha*coreOpacity,softness=Math.max(0,Number(visual?.softness)||0),uniformPair=acquireUniformPair();
+        const writeUniform=(isCore)=>{const f=isCore?uniformPair.coreData:uniformPair.haloData;f.fill(0);f[0]=width;f[1]=height;f[2]=prepared.cubicCount;f[3]=copyCount;f[4]=tr.a;f[5]=tr.c;f[6]=tr.e;f[8]=tr.b;f[9]=tr.d;f[10]=tr.f;f[12]=halfWidth;f[13]=isCore?0:gr;f[14]=isCore?coreAlpha:haloAlpha;f[15]=softness;f[16]=rgb[0];f[17]=rgb[1];f[18]=rgb[2];f[19]=isCore?coreColorGain:1;f[20]=Number(prepared.centerX)||0;f[21]=Number(prepared.centerY)||0;
+            // Compute sector boundary unit vectors once, not once per shaded pixel.
+            if(prepared.spectral===true){
+                const tau=Math.PI*2,progress=Math.max(0,Math.min(1,Number(prepared.spectralProgress)||0)),head=progress*tau;
+                const span=Math.max(.000001,Math.min(tau,Number(prepared.sectorSpanAngle)||Math.PI/4));
+                const tail=Math.max(0,head-span),arc=head-tail,dir=Number(prepared.spectralDirection)<0?-1:1;
+                const origin=Number(prepared.spectralStartAngle)||0,start=origin+dir*tail,end=origin+dir*head;
+                f[22]=Math.cos(start);f[23]=Math.sin(start);f[24]=1;
+                f[25]=head<=.000001?0:dir*(arc>=tau-.000001?3:(arc>Math.PI?2:1));
+                f[26]=Math.cos(end);f[27]=Math.sin(end);
+            }else{f[24]=0;f[25]=1;}
+            const buffer=isCore?uniformPair.coreBuffer:uniformPair.haloBuffer;device.queue.writeBuffer(buffer,0,f);return{buffer,bind:isCore?uniformPair.coreBind:uniformPair.haloBind};};
+        const halo=writeUniform(false),core=writeUniform(true);let released=false;return{cubicBuffer,cubicBind,copyBind,copyCount,halo,core,instances:prepared.cubicCount*SUBDIV*copyCount,destroy(){if(released)return;released=true;if(ownsCubic)try{cubicBuffer?.destroy?.();}catch(_){}if(spectralRec){spectralRec.users=Math.max(0,spectralRec.users-1);trimSpectralBuffers();}releaseUniformPair(uniformPair);}};
     }
     function encodeScratch(encoder,res,kind){const core=kind==='core',pass=encoder.beginRenderPass({colorAttachments:[{view:scratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});pass.setPipeline(res.copyBind?(core?coreCorridorPipeline:haloCorridorPipeline):(core?corePipeline:haloPipeline));pass.setBindGroup(0,core?res.core.bind:res.halo.bind);pass.setBindGroup(1,res.cubicBind);pass.setBindGroup(2,res.copyBind||identityCopyBind);pass.draw(4,res.instances);pass.end();}
     function encodeComposite(encoder,target,kind,cfg,loadOp='load'){const mode=kind==='core'?(sweepCoreBlendMode(cfg)):sweepGlowBlendMode(cfg),pass=encoder.beginRenderPass({colorAttachments:[{view:target,clearValue:{r:0,g:0,b:0,a:0},loadOp,storeOp:'store'}]});pass.setPipeline(compositePipelines[mode]||compositePipelines.normal||compositeOverPipeline);pass.setBindGroup(0,compositeBind);pass.draw(3);pass.end();}

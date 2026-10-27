@@ -536,6 +536,20 @@
             white-space:nowrap;
         }
 
+        #wholeCurveSplineRow {
+            cursor:pointer;
+            margin-top:6px;
+            gap:9px;
+            font-size:12px;
+            color:var(--text-main, #cbd5e1);
+        }
+        #wholeCurveSplineRow input[type="checkbox"] {
+            flex:0 0 auto;
+            width:16px;
+            height:16px;
+            accent-color:#ed4899;
+        }
+        #wholeCurveSplineRow:has(input:disabled) { opacity:.65; }
         .profile-mode-transition-row {
             margin-top:6px;
         }
@@ -1178,6 +1192,10 @@
         .spiral-settings-row { display:grid; grid-template-columns:minmax(0,1fr) 82px; gap:8px; align-items:center; min-width:0; }
         .spiral-settings-row > span { font-size:10px; color:var(--text-muted); min-width:0; }
         .spiral-settings-row input[type="number"] { width:82px !important; min-width:0; text-align:right; }
+        /* Morph-capable geometry control: the same cyan framed vocabulary as routed parameters. */
+        #spiralOrderControl.spiral-order-morphable { border:1px solid rgba(34,211,238,.65); border-radius:6px; padding:5px 7px; background:rgba(8,145,178,.09); box-shadow:inset 2px 0 0 rgba(34,211,238,.72); }
+        #spiralOrderControl.spiral-order-morphable:focus-within { border-color:#22d3ee; box-shadow:0 0 0 2px rgba(34,211,238,.2),inset 2px 0 0 #67e8f9; }
+        #spiralOrderControl.spiral-order-morphable input { border:1px solid rgba(34,211,238,.48)!important; background:rgba(15,23,42,.8); }
         .spiral-fill-type-row { grid-template-columns:minmax(0,1fr) 118px; }
         .spiral-fill-type-row select { width:118px; max-width:118px; min-width:0; font-size:10px; }
         .spiral-fill-type-row.hidden { display:none !important; }
@@ -6926,10 +6944,6 @@ body.ui-easy #settingsSidebar .easy-advanced-row{position:relative}
 .random-settings-panel .orange-routing-rows{overflow-x:auto;overscroll-behavior-x:contain}
 
 /* 7.11.12 — Audio subsettings use the same compact nesting vocabulary as Blue/Orange. */
-.audio-param-subsettings { margin:2px 2px 5px 14px; border-left:1px solid rgba(148,163,184,.34); padding-left:8px; }
-.audio-param-subsettings > summary { cursor:pointer; color:#94a3b8; font-size:9px; line-height:20px; user-select:none; }
-.audio-param-subsettings .audio-param-child { font-size:9px; padding-left:9px; }
-.audio-param-subsettings .audio-param-child:disabled { color:#64748b; cursor:not-allowed; opacity:.75; }
 .audio-param-menu .audio-param-option:disabled { color:#64748b; cursor:not-allowed; opacity:.68; }
 
 /* 7.11.14: Orbit is a regular, non-interactive text label in both editors. */
@@ -7168,8 +7182,7 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
 #fileSettingsBlock > input[hidden] {
     display: none !important;
 }
-#audioRoutingPreset[hidden] { display: none !important; }
-#audioRoutingPresetBar { justify-content: flex-end; }
+/* The audio routing preset selector is intentionally visible (restored from 7.11.16). */
 
 /* Somata 9.1: clean geometry (no Morphing sidebar), long N slider
    bracketed with −/+ and visible multiplier arrow buttons. */
@@ -7258,3 +7271,193 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
 #geometrySettingsGroup .geometry-radius-rotation > .control-row { width: 100%; min-width: 0; }
 #geometrySettingsGroup .geometry-radius-rotation .lamp-slider-mult { width: 100%; min-width: 0; }
 #geometrySettingsGroup .geometry-radius-rotation #paramRotation { width: 100%; }
+
+/* v9.2 — three contour families and one shared two-position choice. */
+.contour-family-toggle { display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:4px; }
+.contour-family-toggle button { min-width:0;font-size:10px;white-space:normal; }
+.contour-variant-toggle { display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:4px; }
+.rounding-extension-guide {display:flex;align-items:center;gap:7px;margin-top:7px;font-size:10px;}
+#btnSidebarMirror {font-size:24px;line-height:1;color:#93c5fd;}
+#btnSidebarMirror.active {color:#e0f2fe; background:rgba(56,189,248,.19);box-shadow:inset 0 0 0 1px rgba(56,189,248,.65),0 0 12px rgba(14,165,233,.25);}
+#somataMirrorCanvas {position:absolute;inset:0;width:100%;height:100%;display:none;pointer-events:none;z-index:8;transform:translateZ(0);}
+
+/* v9.2.1 — finite geometry animation: three compact horizontal rows. */
+#geometrySettingsGroup #testMorphControls {
+    box-sizing:border-box; width:100%; min-width:0; padding:6px;
+    display:grid; grid-template-columns:minmax(0,1fr); gap:4px;
+    border-radius:7px;
+}
+#geometrySettingsGroup #testMorphControls .test-morph-row {
+    display:grid; grid-template-columns:minmax(0,1fr) minmax(118px,55%);
+    align-items:center; column-gap:8px; min-width:0;
+    min-height:27px; margin:0!important; padding:0!important;
+}
+#geometrySettingsGroup #testMorphControls .test-morph-row.hidden {display:none!important;}
+#geometrySettingsGroup #testMorphControls .test-morph-row > label {
+    display:block; width:auto; min-width:0; padding:0; margin:0;
+    font-size:10.5px; line-height:1.15; font-weight:500;
+    white-space:normal; overflow-wrap:normal;
+}
+#geometrySettingsGroup #testMorphControls .test-morph-row > select,
+#geometrySettingsGroup #testMorphControls .test-morph-row input[type=number] {
+    display:block; box-sizing:border-box; width:100%; min-width:0; max-width:100%;
+    height:27px; min-height:0; margin:0; padding:2px 23px 2px 7px;
+    font-size:10.5px; line-height:1.1;
+}
+#geometrySettingsGroup #testMorphControls .test-morph-row > select {text-overflow:ellipsis;}
+#geometrySettingsGroup #testMorphControls .test-morph-duration {
+    display:flex; min-width:0; justify-content:flex-end; align-items:center; gap:5px;
+}
+#geometrySettingsGroup #testMorphControls .test-morph-duration input[type=number] {
+    width:78px; flex:0 1 78px; text-align:center; padding:2px 5px;
+}
+#geometrySettingsGroup #testMorphControls .test-morph-duration span {
+    flex:0 0 auto; font-size:10.5px; color:var(--text-muted);
+}
+@media(max-width:360px){
+    #geometrySettingsGroup #testMorphControls .test-morph-row {grid-template-columns:minmax(0,1fr) minmax(112px,52%);column-gap:4px;}
+    #geometrySettingsGroup #testMorphControls .test-morph-row > label {font-size:10px;}
+    #geometrySettingsGroup #testMorphControls .test-morph-row > select {font-size:10px;}
+}
+
+/* 9.2.4 — single-row two-position rounding mode control. */
+.rounding-mode-row{display:flex;align-items:center;justify-content:space-between;gap:7px;margin-top:7px}
+.rounding-mode-row #paramRoundingMode{display:none!important}
+.rounding-mode-toggle{display:grid;grid-template-columns:1fr 1fr;gap:2px;min-width:178px;border:1px solid rgba(148,163,184,.4);border-radius:6px;padding:2px}
+.rounding-mode-btn{padding:4px 6px;font:inherit;font-size:10px;line-height:1.2;border-radius:4px;background:transparent;color:inherit;border:0;cursor:pointer}
+.rounding-mode-btn.active{background:#2563eb;color:#fff}
+
+/* 9.2.8: Spiral and polygon sliding selectors have separate carriers. */
+.morph-spiral-slide-label {display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0;}
+.morph-spiral-slide-label select {max-width:160px;}
+
+/* 9.2.14: one editor for spiral counts/order, shared with Blue Morph binding. */
+.morph-spiral-row-primary { display:none !important; }
+#morphProfileBindings .morph-special-config-row[data-morph-special="spiralLayers"] .morph-spiral-compact-range {
+    display:inline-flex;align-items:center;gap:3px;min-width:0;white-space:nowrap;
+}
+#morphProfileBindings .morph-special-config-row[data-morph-special="spiralLayers"] .morph-spiral-compact-range > span:first-child {
+    font-size:10px;color:var(--text-muted);margin-right:2px;
+}
+#morphProfileBindings .morph-special-config-row[data-morph-special="spiralLayers"] .morph-route-inline-control {
+    width:42px !important;min-width:35px !important;max-width:48px !important;padding:2px 3px !important;
+}
+#morphProfileBindings .morph-special-config-row[data-morph-special="spiralLayers"] .morph-special-config-name {flex:0 0 auto;}
+
+/* 9.2.22: two lightning colors in one compact header row. */
+.lightning-color-row .lightning-color-pair{display:inline-flex;align-items:center;gap:10px;margin-left:auto}.lightning-color-row input[type=color]{width:42px;height:29px;padding:2px;flex:none}
+
+/* 9.2.22 — Lightning: all dropdowns, numeric fields and colors first, then sliders by group. */
+.lightning-v922-layout{gap:9px}
+.lightning-v922-layout .lightning-text-settings{display:grid;gap:6px;padding:5px 4px}
+.lightning-v922-layout .lightning-text-settings .control-row{margin:0;min-width:0}
+.lightning-v922-layout .lightning-text-settings .control-row>select{max-width:62%;min-width:0}
+.lightning-v922-layout .lightning-text-settings .control-row>input[type=number]{width:72px;margin-left:auto}
+.lightning-v922-layout .lightning-slider-block{gap:7px}
+.lightning-v922-layout .lightning-slider-block .row-inputs{min-width:0;width:100%}
+.lightning-v922-layout .lightning-slider-block .row-inputs input[type=range]{flex:1;min-width:0}
+.lightning-v922-layout .lightning-slider-block .row-inputs input[type=number]{flex:0 0 58px}
+
+/* 9.2.24 — compact lightning: frequency first, compact controls, no General block. */
+.lightning-v924-layout{display:flex;flex-direction:column;gap:8px}
+.lightning-v924-layout .lightning-rate-top{padding:4px 2px 5px;border-bottom:1px solid rgba(147,197,253,.18)}
+.lightning-v924-layout .lightning-rate-top>.control-row{margin:0}
+.lightning-v924-layout .lightning-text-settings{display:flex;flex-direction:column;gap:7px;padding:3px 2px}
+.lightning-v924-layout .lightning-top-pair,.lightning-v924-layout .lightning-colors-micro{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;align-items:end}
+.lightning-v924-layout .lightning-top-pair>label,.lightning-v924-layout .lightning-colors-micro>label{min-width:0;display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--text-muted)}
+.lightning-v924-layout .lightning-top-pair select{width:100%;min-width:0;font-size:12px;max-width:100%}
+.lightning-v924-layout .lightning-color-pair{display:flex;gap:6px;align-items:center}
+.lightning-v924-layout .lightning-color-pair input[type=color]{width:40px;min-width:0;height:29px;padding:2px}
+.lightning-v924-layout .lightning-micro-compact input[type=number]{width:76px;max-width:100%;height:29px}
+.lightning-v924-layout .lightning-duration-top{padding:4px 2px 9px;margin:0;border-bottom:1px solid rgba(147,197,253,.18)}
+.lightning-v924-layout .lightning-duration-top .row-inputs,.lightning-v924-layout .lightning-slider-block .row-inputs{min-width:0;width:100%}
+.lightning-v924-layout .lightning-duration-top input[type=range],.lightning-v924-layout .lightning-slider-block input[type=range]{flex:1;min-width:0}
+.lightning-v924-layout .lightning-duration-top input[type=number],.lightning-v924-layout .lightning-slider-block .row-inputs input[type=number]{flex:0 0 58px}
+.lightning-v924-layout .lightning-slider-block{gap:7px}
+
+/* Numeric lightning multiplier: use the original compact log-stepping editor, not a dropdown. */
+#sweepLightningRateMultiplier,#sweepLightningDurationMultiplier{
+  box-sizing:border-box;width:72px!important;min-width:60px;max-width:80px;
+  flex:0 0 72px;font-size:11px;font-variant-numeric:tabular-nums;
+}
+
+/* Spiral Morph: one line wherever it fits, no discarded numeric controls.
+   Narrow dialogs wrap whole control groups instead of clipping or overlapping. */
+#morphProfileBindings .morph-route-row[data-morph-special="spiralLayers"],
+#morphProfileBindings .morph-route-row[data-morph-special="spiralOrder"]{
+  display:flex!important;align-items:center!important;flex-wrap:wrap!important;
+  gap:4px 7px!important;width:100%!important;min-width:0!important;
+  max-width:100%!important;height:auto!important;padding:5px 8px!important;
+  overflow:visible!important;
+}
+#morphProfileBindings .morph-route-row[data-morph-special="spiralLayers"] > .morph-special-config-name,
+#morphProfileBindings .morph-route-row[data-morph-special="spiralOrder"] > .morph-special-config-name{
+  flex:0 0 auto;min-width:130px!important;white-space:nowrap!important;font-size:11px!important;
+}
+#morphProfileBindings .morph-route-row[data-morph-special="spiralLayers"] > .morph-binding-remove,
+#morphProfileBindings .morph-route-row[data-morph-special="spiralOrder"] > .morph-binding-remove{
+  flex:0 0 26px!important;margin:0 0 0 auto!important;
+}
+#morphProfileBindings .morph-spiral-compact-controls{
+  display:flex;flex:1 1 390px;flex-wrap:wrap;align-items:center;
+  gap:4px 7px;min-width:0;width:auto;overflow:visible;
+}
+#morphProfileBindings .morph-spiral-compact-controls .morph-spiral-compact-range{
+  width:auto!important;max-width:none!important;flex:0 0 auto!important;gap:3px!important;
+}
+#morphProfileBindings .morph-spiral-compact-controls .morph-spiral-compact-range > span:first-child{
+  min-width:0!important;max-width:none!important;flex:0 0 auto!important;
+  margin-right:1px;font-size:10px!important;
+}
+#morphProfileBindings .morph-spiral-compact-controls .morph-route-inline-control{
+  width:43px!important;min-width:43px!important;max-width:43px!important;
+  flex:0 0 43px!important;padding:0!important;
+}
+#morphProfileBindings .morph-spiral-compact-controls .morph-route-inline-number{
+  width:100%!important;min-width:0!important;max-width:100%!important;
+  height:23px!important;font-size:11px!important;padding:1px 3px!important;
+}
+#morphProfileBindings .morph-spiral-compact-controls .morph-route-layer-coverage{
+  flex:0 0 auto;white-space:nowrap;margin-left:0;
+}
+.lightning-v924-layout .lightning-top-pair > label:only-child{grid-column:1/-1;}
+
+/* Spiral Morph specials use the same ordinary binding picker instead of a
+   larger bold special-row title. Preserve the compact shared numeric editor. */
+#morphProfileBindings .morph-route-row[data-morph-special="spiralLayers"] > .morph-spiral-picker,
+#morphProfileBindings .morph-route-row[data-morph-special="spiralOrder"] > .morph-spiral-picker{
+  flex:0 1 205px!important;min-width:130px!important;max-width:205px!important;
+  width:auto!important;margin:0!important;
+}
+#morphProfileBindings .morph-route-row[data-morph-special="spiralLayers"] > .morph-spiral-picker .audio-param-picker-button,
+#morphProfileBindings .morph-route-row[data-morph-special="spiralOrder"] > .morph-spiral-picker .audio-param-picker-button{
+  font-size:9px!important;font-weight:650!important;color:#e2e8f0!important;
+  min-height:25px;height:25px;padding:2px 6px;
+}
+#morphProfileBindings .morph-spiral-picker > .audio-param-picker-button {cursor:pointer}
+
+/* 10.4.19: same compact spiral special-row anatomy in Blue and Orange. */
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-special-config-row:is([data-morph-special="spiralLayers"],[data-morph-special="spiralOrder"],[data-orange-special="spiralLayers"],[data-orange-special="spiralOrder"]){
+ display:flex!important;align-items:center!important;flex-wrap:wrap!important;gap:4px 7px!important;
+ width:100%!important;min-width:0!important;height:auto!important;overflow:visible!important;
+ padding:5px 8px!important;box-sizing:border-box;
+}
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-special-config-row .morph-spiral-compact-controls{
+ display:flex;flex:1 1 250px;flex-wrap:wrap;gap:4px 7px;align-items:center;min-width:0;width:auto;overflow:visible;
+}
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-special-config-row .morph-spiral-compact-range{
+ display:inline-flex;align-items:center;gap:3px;min-width:0;max-width:none;flex:0 0 auto;white-space:nowrap;
+}
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-special-config-row .morph-spiral-compact-range .morph-route-inline-number{
+ box-sizing:border-box;width:43px!important;min-width:43px!important;max-width:43px!important;height:23px!important;
+ padding:1px 3px!important;font-size:11px!important;
+}
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-special-config-row > .morph-binding-remove{
+ margin:0 0 0 auto!important;flex:0 0 26px!important;
+}
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-special-config-row > .morph-spiral-picker{
+ flex:0 1 205px!important;min-width:130px!important;max-width:205px!important;width:auto!important;
+}
+:is(#morphProfileBindings,#orangeMorphBindings) .morph-special-config-row > .morph-spiral-picker .audio-param-picker-button{
+ font-size:9px!important;font-weight:650!important;color:#e2e8f0!important;min-height:25px;height:25px;padding:2px 6px;
+}

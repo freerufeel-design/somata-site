@@ -40,14 +40,11 @@ const SomataFrameContourService=(()=>{
         for(const p of src){const x=Number(p?.x),y=Number(p?.y);if(!Number.isFinite(x)||!Number.isFinite(y))return null;const q={x,y};if(Number.isFinite(Number(p?.widthScale)))q.widthScale=Number(p.widthScale);if(p?.__profileCorner===true)q.__profileCorner=true;if(p?.__profileKeyCorner===true)q.__profileKeyCorner=true;if(!out.length||!samePoint(out[out.length-1],q))out.push(q);}
         return out.length>=2?out:null;
     }
-    function reverseCopy(points){const out=new Array(points.length);for(let i=0,n=points.length;i<n;i++)out[i]=points[n-1-i];return out;}
-    function appendChain(a,b){for(let i=1;i<b.length;i++)a.push(b[i]);}
-    function prependChain(a,b){const add=b.slice(0,-1);a.unshift(...add);}
-
-    // Converts raw stroke subpaths into connected topology.  Importantly this may join
-    // across stroke-command boundaries, but ONLY when endpoints are the same point.
-    // That is how separately-stroked Bezier polygon sides become one contour without
-    // inventing geometry between unrelated paths.
+    // A stroke can contain thousands of separately recorded Bezier sides. Keep
+    // connected pieces in endpoint order and flatten only once: prepending into
+    // an ever-growing array repeatedly copied every point already assembled.
+    // Each piece skips the endpoint shared with its neighbour, exactly as the
+    // former appendChain/prependChain helpers did.
     function buildScreenPaths(stroke){
         const closed=[],open=[];
         for(const contour of stroke?.contours||[]){
@@ -55,21 +52,89 @@ const SomataFrameContourService=(()=>{
             if(contour.closed===true){if(pts.length>2&&samePoint(pts[0],pts[pts.length-1]))pts.pop();closed.push({points:pts,closed:true,source:[contour]});}
             else open.push({points:pts,closed:false,source:[contour],used:false});
         }
-        const joined=[];
-        for(let i=0;i<open.length;i++){
-            if(open[i].used)continue;open[i].used=true;const chain=open[i].points.slice(),source=open[i].source.slice();
-            let changed=true;
-            while(changed){changed=false;
-                for(let j=0;j<open.length;j++){
-                    const q=open[j];if(q.used)continue;const p=q.points;if(!p?.length)continue;
-                    const head=chain[0],tail=chain[chain.length-1],first=p[0],last=p[p.length-1];
-                    if(samePoint(tail,first)){appendChain(chain,p);q.used=true;source.push(...q.source);stats.joins++;changed=true;break;}
-                    if(samePoint(tail,last)){appendChain(chain,reverseCopy(p));q.used=true;source.push(...q.source);stats.joins++;changed=true;break;}
-                    if(samePoint(head,last)){prependChain(chain,p);q.used=true;source.unshift(...q.source);stats.joins++;changed=true;break;}
-                    if(samePoint(head,first)){prependChain(chain,reverseCopy(p));q.used=true;source.unshift(...q.source);stats.joins++;changed=true;break;}
+        // Large stroke recordings used to re-scan every previously joined side
+        // after each merge. Index both endpoints in JOIN_EPS-sized neighbourhoods
+        // while preserving the original lowest-index, four-orientation priority.
+        // Unusually large coordinates use the reference linear search to avoid
+        // floating-point bucket ambiguity.
+        const grid=JOIN_EPS*2;
+        const indexable=open.length>=48&&open.every(rec=>{
+            const a=rec.points[0],b=rec.points[rec.points.length-1];
+            return Number.isFinite(a.x)&&Number.isFinite(a.y)&&Number.isFinite(b.x)&&Number.isFinite(b.y)&&
+                Math.abs(a.x)<1e9&&Math.abs(a.y)<1e9&&Math.abs(b.x)<1e9&&Math.abs(b.y)<1e9;
+        });
+        const endpointIndex=indexable?new Map():null;
+        if(endpointIndex){
+            for(let j=0;j<open.length;j++){
+                const p=open[j].points;
+                for(const pt of [p[0],p[p.length-1]]){
+                    const key=`${Math.floor(pt.x/grid)},${Math.floor(pt.y/grid)}`;
+                    let ids=endpointIndex.get(key);
+                    if(!ids){ids=[];endpointIndex.set(key,ids);}
+                    ids.push(j);
                 }
             }
-            let isClosed=chain.length>=3&&samePoint(chain[0],chain[chain.length-1]);if(isClosed)chain.pop();
+        }
+        function findNextJoin(head,tail){
+            let best=open.length;
+            for(let end=0;end<2;end++){
+                const pt=end===0?tail:head,x=Math.floor(pt.x/grid),y=Math.floor(pt.y/grid);
+                for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
+                    const ids=endpointIndex.get(`${x+dx},${y+dy}`);
+                    if(!ids)continue;
+                    for(const j of ids){
+                        if(j>=best||open[j].used)continue;
+                        const p=open[j].points,first=p[0],last=p[p.length-1];
+                        if(samePoint(tail,first)||samePoint(tail,last)||samePoint(head,last)||samePoint(head,first))best=j;
+                    }
+                }
+            }
+            return best===open.length?-1:best;
+        }
+        const joined=[];
+        for(let i=0;i<open.length;i++){
+            if(open[i].used)continue;
+            open[i].used=true;
+            const initial=open[i].points;
+            const frontParts=[],backParts=[],frontSources=[],backSources=[];
+            let head=initial[0],tail=initial[initial.length-1],pointCount=initial.length;
+            let changed=true;
+            while(changed){changed=false;
+                const next=endpointIndex?findNextJoin(head,tail):-1;
+                if(endpointIndex&&next<0)break;
+                const searchStart=endpointIndex?next:0,searchEnd=endpointIndex?next+1:open.length;
+                for(let j=searchStart;j<searchEnd;j++){
+                    const q=open[j];if(q.used)continue;const p=q.points;if(!p?.length)continue;
+                    const first=p[0],last=p[p.length-1];
+                    if(samePoint(tail,first)){
+                        backParts.push({points:p,start:1,step:1,count:p.length-1});
+                        backSources.push(q.source);tail=last;
+                    }else if(samePoint(tail,last)){
+                        backParts.push({points:p,start:p.length-2,step:-1,count:p.length-1});
+                        backSources.push(q.source);tail=first;
+                    }else if(samePoint(head,last)){
+                        frontParts.push({points:p,start:0,step:1,count:p.length-1});
+                        frontSources.push(q.source);head=first;
+                    }else if(samePoint(head,first)){
+                        frontParts.push({points:p,start:p.length-1,step:-1,count:p.length-1});
+                        frontSources.push(q.source);head=last;
+                    }else continue;
+                    q.used=true;pointCount+=p.length-1;stats.joins++;changed=true;break;
+                }
+            }
+            // Flatten once, preserving the exact ordering of both the points and
+            // the source commands (including head-first and tail-last reversals).
+            const chain=new Array(pointCount),source=[];
+            let write=0;
+            function appendPart(part){
+                const {points,start,step,count}=part;
+                for(let k=0,index=start;k<count;k++,index+=step)chain[write++]=points[index];
+            }
+            for(let k=frontParts.length-1;k>=0;k--){appendPart(frontParts[k]);source.push(...frontSources[k]);}
+            for(let k=0;k<initial.length;k++)chain[write++]=initial[k];
+            source.push(...open[i].source);
+            for(let k=0;k<backParts.length;k++){appendPart(backParts[k]);source.push(...backSources[k]);}
+            const isClosed=chain.length>=3&&samePoint(chain[0],chain[chain.length-1]);if(isClosed)chain.pop();
             joined.push({points:chain,closed:isClosed,source});if(isClosed)stats.closed++;else stats.open++;
         }
         for(const p of closed){joined.push(p);stats.closed++;}

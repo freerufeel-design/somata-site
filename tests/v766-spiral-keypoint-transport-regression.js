@@ -89,14 +89,13 @@ async function main(){
     assert(Math.abs(m.minimalTurn.mid.delta-(Math.PI*2*2/m.minimalTurn.mid.N))<1e-9,'constant-step mode does not derive winding from fixed step/current N');
 
     assert(m.topology.cpu.carrierMapped&&m.topology.cpu.exact&&m.topology.cpu.arc===0&&m.topology.cpu.presence,'Topology is not exact retained carrier transport');
-    assert(m.topology.fm.metric==='cartesian-start-end-keypoints','Topology does not report Cartesian keypoint transport');
-    assert(m.topology.startMidError<1e-7&&m.topology.endMidError<1e-7,`Topology keypoints are not linear: ${m.topology.startMidError}, ${m.topology.endMidError}`);
-    assert(m.topology.pathStartError<1e-6&&m.topology.pathEndError<1e-5,`profile mapping does not land on Topology keypoints: ${m.topology.pathStartError}, ${m.topology.pathEndError}`);
+    assert(m.topology.fm.metric==='phase-circle-clone-merge','Removed Spiral Topology was not safely migrated to phase-circle');
+    assert(m.topology.pathStartError<1e-6&&m.topology.pathEndError<1e-5,`migrated phase-circle path misses its carrier endpoints: ${m.topology.pathStartError}, ${m.topology.pathEndError}`);
     assert(m.profileInvariant.anchorError<1e-8&&m.profileInvariant.endError<1e-8&&m.profileInvariant.deltaError<1e-10&&m.profileInvariant.NError<1e-10&&m.profileInvariant.stepError<1e-10,'carrier keypoint motion depends on the line profile');
 
     assert(m.torn.circular.exact&&m.torn.circular.arc===0,'Torn circle transport reintroduced arc resampling');
     assert(m.torn.topology.exact&&m.torn.topology.arc===0,'Torn Topology transport reintroduced arc resampling');
-    assert(m.torn.circular.metric==='profile-mode'&&m.torn.circular.cart===0,'Torn circle mode does not follow ordinary profile/polygon circular transport');
+    assert(m.torn.circular.metric==='least-turn-polar'&&m.torn.circular.cart===0,'Torn circle mode does not follow ordinary profile/polygon circular transport');
     assert(m.torn.topology.metric==='cartesian'&&m.torn.topology.cart>0,'Torn Topology mode does not follow ordinary profile/polygon Cartesian transport');
     assert(m.torn.circular.periodic>0&&m.torn.topology.periodic>0,'Torn removed periodic seam metadata from matched spiral rails');
     assert(String(out.contract).includes('7.7.9')&&String(out.contract).includes('no arc resampling'),'renderer contract does not advertise 7.6.6 Spiral semantics');

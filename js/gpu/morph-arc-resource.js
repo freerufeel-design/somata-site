@@ -230,11 +230,20 @@ function getStaticSpiralBezierResource(layerIndex,sharedDevice=null,sharedGenera
         const smooth=layer?.profileMode==='spline'&&path?.spiralProfileSplineBaked!==true;
         let cubics=[];try{
             const cloneCubics=(src)=>(src||[]).map(q=>({...q,p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}}));
-            if(Array.isArray(path?._bezierSegments)&&path._bezierSegments.length)cubics=cloneCubics(path._bezierSegments);
-            else if(Array.isArray(pts?._spiroRetainedCubics)&&pts._spiroRetainedCubics.length)cubics=cloneCubics(pts._spiroRetainedCubics);
-            else if(typeof __spiroBuildSpiralBezierSegments==='function')cubics=__spiroBuildSpiralBezierSegments(pts,round,path?.cornerFlags||[],smooth)||[];
-            if(cubics.length&&typeof __spiroFinalizePeriodicSpiralBezierCarrier==='function')cubics=__spiroFinalizePeriodicSpiralBezierCarrier(cubics,pts);
-            if(cubics.length&&roundBase>.001&&typeof __spiroRepairRoundedSpiralBezierJoins==='function')cubics=__spiroRepairRoundedSpiralBezierJoins(cubics);
+            // 10.4.19.4: these retained cubics are the already finalized visible
+            // rail.  Re-running periodic closure and rounded-tangent repair here
+            // changes the finished spline only when Morph hands off to static GPU.
+            // This was a second (unrequested) rounding pass at the phase boundary.
+            const retained=Array.isArray(path?._bezierSegments)&&path._bezierSegments.length&&
+                path?.spiralRetainedProfileCarrier===true;
+            if(retained)cubics=cloneCubics(path._bezierSegments);
+            else{
+                if(Array.isArray(path?._bezierSegments)&&path._bezierSegments.length)cubics=cloneCubics(path._bezierSegments);
+                else if(Array.isArray(pts?._spiroRetainedCubics)&&pts._spiroRetainedCubics.length)cubics=cloneCubics(pts._spiroRetainedCubics);
+                else if(typeof __spiroBuildSpiralBezierSegments==='function')cubics=__spiroBuildSpiralBezierSegments(pts,round,path?.cornerFlags||[],smooth)||[];
+                if(cubics.length&&typeof __spiroFinalizePeriodicSpiralBezierCarrier==='function')cubics=__spiroFinalizePeriodicSpiralBezierCarrier(cubics,pts);
+                if(cubics.length&&roundBase>.001&&typeof __spiroRepairRoundedSpiralBezierJoins==='function')cubics=__spiroRepairRoundedSpiralBezierJoins(cubics);
+            }
         }catch(_){cubics=[];}
         if(!cubics.length)continue;paths.push({path,cubics,closed:path?.closed===true,periodic:Boolean(layer?.spiralClosed!==false&&path?.spiralContinuityProtected===true)});cubicCount+=cubics.length;
     }

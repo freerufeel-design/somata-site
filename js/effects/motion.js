@@ -76,19 +76,29 @@ window.__spiroRegisterModule?.('js/effects/motion');
             return Number(motionRuntime.layerRotationRad.get(String(layer?.id||'')))||0;
         }
         function getSpiralMorphTunnelPhaseRadians(copy,layer){
-            if(!state.tunnel?.active||runtimeState?.morph?.active!==true||!layer)return 0;
-            const phaseMode=typeof spiralMorphUsesCorridorPhase==='function'&&spiralMorphUsesCorridorPhase();
-            if(!phaseMode||typeof isSpiralLayer!=='function'||!isSpiralLayer(layer))return 0;
-            // 7.6.7: use the exact continuous-N carrier delta that the retained Spiral
-            // renderer uses for this Morph frame.  Falling back to the presentation layer's
-            // rounded N re-opens Corridor seams during constant-step clone/merge.
+            if(!state.tunnel?.active||!layer||typeof isSpiralLayer!=='function'||!isSpiralLayer(layer))return 0;
+            const morphActive=runtimeState?.morph?.active===true;
+            // Torn morph deliberately retains unconstrained least-turn paths. All
+            // continuous modes use the SAME Corridor phase for every renderer.
+            if(morphActive&&typeof spiralMorphUsesCorridorPhase==='function'&&!spiralMorphUsesCorridorPhase())return 0;
+            // During morph use continuous (unrounded) N/K of the actual carrier.
+            // During the final/static frame use the target's N/K, rather than
+            // suddenly setting the copy phase to zero when morph.active changes.
+            // This shared resolver is used by Base, Glow, Fill, Sweep and Corridor.
             let delta=NaN;
-            try{delta=Number(window.__spiroCurrentSpiralMorphCorridorDelta?.(layer));}catch(_){delta=NaN;}
+            if(morphActive){
+                try{delta=Number(window.__spiroCurrentSpiralMorphCorridorDelta?.(layer));}catch(_){delta=NaN;}
+            }
             if(!Number.isFinite(delta)){
                 const n=Math.max(2,Number(layer.N)||4);
                 const step=typeof getEffectiveSpiralStep==='function'?Number(getEffectiveSpiralStep(layer)):(Number(layer.spiralStep)||Number(layer.K)||1);
                 const order=typeof getEffectiveSpiralOrder==='function'?Number(getEffectiveSpiralOrder(layer)):(Number(layer.spiralOrder)||1);
-                delta=((Math.PI*2*step)/n)*(order<0?-1:1);
+                // 9.2.17: the carrier phase depends on the SIGN of the spiral
+                // order, not its fractional magnitude.  Multiplying by order
+                // moved Corridor copies to different angles than the carrier
+                // and caused a snap on the first static frame.
+                const direction=order < -1e-8 ? -1 : 1;
+                delta=(Math.PI*2*step/n)*direction;
             }
             const copyId=Number.isFinite(Number(copy?.copyId))?Number(copy.copyId):Math.round(Number(copy?.position)||0);
             return copyId*delta;
@@ -330,6 +340,10 @@ window.__spiroRegisterModule?.('js/effects/motion');
             let cached = layerGeometrySignatureCache.get(layer);
             const geometryVersion = typeof getLayerVersions==='function' ? (Number(getLayerVersions(layer).geometry)||0) : 0;
             const N = Number(layer.N) || 0;
+            // Fractional Spiral N changes the actual rail angle while the
+            // discrete topology N remains unchanged; it belongs in cache keys.
+            const angularN = layer.spiralEnabled===true&&Number.isFinite(Number(layer.__spiralAnimatedN))
+                ? Number(layer.__spiralAnimatedN) : N;
             const K = Number(layer.K) || 0;
             const customSuborbits = layer.customSuborbits ?? '';
             const chaosStar = layer.chaosStar === true ? 1 : 0;
@@ -338,6 +352,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
             const chaosClosures = Math.max(1, Math.round(Number(layer.chaosClosures) || 1));
             const chaosSeed = Number(layer.chaosSeed) >>> 0;
             const closedLoop = layer.closedLoop === false ? 0 : 1;
+            const extendedMode = layer.extendedProfileEnabled === true ? (layer.extendedProfileMode === 'repeat' ? 2 : 1) : 0;
             const lineJoinType = layer.lineJoinType || '';
             const roundingMode = layer.roundingMode === 'monoradius' ? 'monoradius' : 'standard';
             const radius = getEffectiveLayerRadius(layer, 0);
@@ -351,7 +366,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
             const splineMix = Number(layer.profileSplineMix) || 0;
             const spiralEnabled = isSpiralLayer(layer) ? 1 : 0;
             const spiralOrder = getEffectiveSpiralOrder(layer);
-            const spiralTangential = layer.spiralTangential === true ? 1 : 0;
+            const spiralTangential = Math.abs(spiralOrder)<=1e-8 ? 0 : (Number.isFinite(layer.__spiralTangentialMix) ? Math.max(0,Math.min(1,layer.__spiralTangentialMix)) : (layer.spiralTangential === true ? 1 : 0));
             const spiralRoundSeams = layer.spiralRoundSeams !== false ? 1 : 0;
             const spiralClosed = layer.spiralClosed !== false ? 1 : 0;
             const spiralStep = spiralEnabled ? getEffectiveSpiralStep(layer) : 0;
@@ -366,10 +381,10 @@ window.__spiroRegisterModule?.('js/effects/motion');
                 }
             }
             const primitivesChanged = !cached || cached.geometryVersion !== geometryVersion ||
-                cached.N !== N || cached.K !== K || cached.customSuborbits !== customSuborbits ||
+                cached.N !== N || cached.angularN !== angularN || cached.K !== K || cached.customSuborbits !== customSuborbits ||
                 cached.chaosStar !== chaosStar || cached.chaosStepMinus !== chaosStepMinus || cached.chaosStepPlus !== chaosStepPlus ||
                 cached.chaosClosures !== chaosClosures || cached.chaosSeed !== chaosSeed ||
-                cached.closedLoop !== closedLoop || cached.lineJoinType !== lineJoinType || cached.roundingMode !== roundingMode ||
+                cached.closedLoop !== closedLoop || cached.extendedMode !== extendedMode || cached.lineJoinType !== lineJoinType || cached.roundingMode !== roundingMode ||
                 cached.radius !== radius || cached.radiusMultiplier !== radiusMultiplier || cached.rotation !== rotation || cached.profileMode !== profileMode || cached.splineRenderMode !== splineRenderMode ||
                 cached.preSampledSpline !== preSampledSpline ||
                 cached.configuredSplinePoints !== configuredSplinePoints ||
@@ -389,9 +404,9 @@ window.__spiroRegisterModule?.('js/effects/motion');
                 }
                 nodeSig = parts;
             }
-            const signature = `${N}|${K}|${customSuborbits}|ch:${chaosStar},${chaosStepMinus},${chaosStepPlus},${chaosClosures},${chaosSeed}|${closedLoop}|${lineJoinType}|roundMode:${roundingMode}|${radius}|rm:${radiusMultiplier}|${rotation}|${profileMode}|${splineRenderMode}|${preSampledSpline}|${configuredSplinePoints}|${splineSegments}|${splineMix}|${spiralEnabled}|${spiralOrder}|${spiralTangential}|${spiralRoundSeams}|${spiralClosed}|${spiralStep}|${spiralStepLinked}|${spiralStepRatio}|sr:${spiralRounding}|${nodeSig}`;
+            const signature = `${N}|an:${angularN}|${K}|${customSuborbits}|ch:${chaosStar},${chaosStepMinus},${chaosStepPlus},${chaosClosures},${chaosSeed}|${closedLoop}|extended:${extendedMode}|${lineJoinType}|roundMode:${roundingMode}|${radius}|rm:${radiusMultiplier}|${rotation}|${profileMode}|${splineRenderMode}|${preSampledSpline}|${configuredSplinePoints}|${splineSegments}|${splineMix}|${spiralEnabled}|${spiralOrder}|${spiralTangential}|${spiralRoundSeams}|${spiralClosed}|${spiralStep}|${spiralStepLinked}|${spiralStepRatio}|sr:${spiralRounding}|${nodeSig}`;
             cached = {
-                geometryVersion, N, K, customSuborbits, chaosStar, chaosStepMinus, chaosStepPlus, chaosClosures, chaosSeed, closedLoop, lineJoinType, roundingMode, radius, radiusMultiplier, rotation, profileMode, splineRenderMode, preSampledSpline,
+                geometryVersion, N, angularN, K, customSuborbits, chaosStar, chaosStepMinus, chaosStepPlus, chaosClosures, chaosSeed, closedLoop, extendedMode, lineJoinType, roundingMode, radius, radiusMultiplier, rotation, profileMode, splineRenderMode, preSampledSpline,
                 configuredSplinePoints, splineSegments, splineMix, spiralEnabled, spiralOrder, spiralTangential, spiralRoundSeams, spiralClosed, spiralStep, spiralStepLinked, spiralStepRatio, spiralRounding, nodes, nodeRefs: nodes.slice(), nodeSig, signature
             };
             layerGeometrySignatureCache.set(layer, cached);
@@ -425,13 +440,15 @@ window.__spiroRegisterModule?.('js/effects/motion');
         }
         function applyMonoradiusRoundingCompensation(paths,layer,roundingValue){
             if(layer?.roundingMode!=='monoradius'||!(Number(roundingValue)>0)||!Array.isArray(paths)||!paths.length)return {paths,targetRadius:maxRadiusForPathList(paths),scale:1};
-            const targetRadius=maxRadiusForPathList(paths);
+            // The radius control defines the outer circle, not the unrounded
+            // profile's sampled envelope. A rounded star must never shrink it.
+            const targetRadius=getEffectiveLayerRadius(layer,220);
             if(!(targetRadius>1e-7)||typeof buildLampRenderedAttachmentPathsUncached!=='function'||typeof getRoundingStrength!=='function')return {paths,targetRadius,scale:1};
             let rendered;
             try{rendered=buildLampRenderedAttachmentPathsUncached(paths,layer,null,getRoundingStrength(roundingValue));}catch(_){return {paths,targetRadius,scale:1};}
             const roundedRadius=maxRadiusForPathList(rendered);
             if(!(roundedRadius>1e-7))return {paths,targetRadius,scale:1};
-            const scale=Math.max(.25,Math.min(4,targetRadius/roundedRadius));
+            const scale=Math.max(1e-8,Math.min(1e8,targetRadius/roundedRadius));
             if(Math.abs(scale-1)<1e-7)return {paths,targetRadius,scale:1};
             const scaled=paths.map(path=>({...path,points:(path?.points||[]).map(pt=>({...pt,x:(Number(pt?.x)||0)*scale,y:(Number(pt?.y)||0)*scale}))}));
             return {paths:scaled,targetRadius,scale};
@@ -490,7 +507,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
                     cached.path2ds = cached.paths.map(path => {
                         if (!path.points || path.points.length < 2) return null;
                         const p = new Path2D();
-                        if (useSmoothSplinePath(layer, roundingFrac, path)) splinePathForDraw(p, path.points, path.closed, roundingFrac, path.cornerFlags || [], path.bridgeRoundFlags || []);
+                        if (useSmoothSplinePath(layer, roundingFrac, path)) splinePathForDraw(p,path.points,path.closed,roundingFrac,path.cornerFlags || [],path.bridgeRoundFlags || [],layer.wholeCurveSpline===true);
                         else roundPolylineForDraw(p, path.points, path.closed, roundingFrac, path.cornerFlags || []);
                         return p;
                     });

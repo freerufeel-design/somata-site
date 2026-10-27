@@ -85,14 +85,12 @@ async function main(){
         const el=document.getElementById('paramK');el.value='5';el.dispatchEvent(new Event('input',{bubbles:true}));
       }));
       cases.push(await runCase('spiral closed -> open must not normalize order/profile',null,async()=>{
-        document.querySelector('[data-contour-mode="spiral-open"]').click();
+        __somataSelectContourMode('spiral-open');
       }));
-      cases.push(await runCase('unlink spiral step must not copy the step value',async(active)=>{
-        active.spiralStepLinked=true;active.spiralStep=active.K;
-        state.layers[1].spiralStepLinked=true;state.layers[1].spiralStep=8.25;
-        state.layers[2].spiralStepLinked=true;state.layers[2].spiralStep=10.5;
-      },async()=>{
-        const el=document.getElementById('paramSpiralStepLinked');el.checked=false;el.dispatchEvent(new Event('change',{bubbles:true}));
+      // Independent Spiral-step UI was retired in 9.2.15. Verify the live
+      // authored Spiral order field instead of dereferencing a removed checkbox.
+      cases.push(await runCase('spiral order broadcasts only authored order',null,async()=>{
+        const el=document.getElementById('paramSpiralOrder');el.value='4';el.dispatchEvent(new Event('change',{bubbles:true}));
       }));
       cases.push(await runCase('spiral tangential toggle is one-path broadcast',null,async()=>{
         const el=document.getElementById('paramSpiralTangential');el.checked=true;el.dispatchEvent(new Event('change',{bubbles:true}));

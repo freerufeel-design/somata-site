@@ -29,13 +29,13 @@ const assert=(ok,msg)=>{if(!ok)throw Error(msg)};
    if(!menu){document.querySelector('#orangeMorphRoutingGroups .audio-route-group-btn[data-orange-group="Геометрия"]')?.click();menu=document.querySelector('.audio-route-group-menu[data-orange-routing-group-menu="1"]:not(.hidden)');}
    menu?.querySelector('[data-parameter-id="geometry.chaos"]')?.click();
    const chaosDisabled=state.randomOptions.chaosStar!==true;
-   // Audio popup must expose the exact nested settings and allow real numeric sub-route creation.
+   // Audio popup must show real numeric child parameters directly, without nested settings.
    if(document.getElementById('audioRoutingPanel')?.classList.contains('hidden'))document.getElementById('btnAudioRouting')?.click();await sleep(40);
    state.audioReactive.routingTarget='master';renderAudioRoutingPanel();
    document.getElementById('audioGroupLamps')?.click();await sleep(10);
-   const nest=document.querySelector('#audioGroupLampsMenu .audio-param-subsettings[data-parent-parameter="lamps.radius"]');
-   const button=nest?.querySelector('[data-child-parameter="lamps.radiusMultiplier"]');
-   const nestedFound=!!button&&!button.disabled;
+   const audioMenu=document.getElementById('audioGroupLampsMenu');
+   const button=audioMenu?.querySelector(':scope > .audio-param-option[data-parameter-id="lamps.radiusMultiplier"]');
+   const nestedFound=!!button&&!button.disabled&&!audioMenu.querySelector('details,summary,.audio-param-subsettings');
    button?.click();await sleep(10);
    const childAdded=(state.audioReactive?.routes?.master||[]).some(x=>x.param==='lamps.radiusMultiplier');
    // Numeric Orbit audio routing touches only the per-frame layer, not saved Orange/Blue settings.
@@ -60,6 +60,6 @@ const assert=(ok,msg)=>{if(!ok)throw Error(msg)};
  assert(out.orangeStayed===100,'audio changed Orange independent preset: '+JSON.stringify(out));
  assert(JSON.stringify(out.factoryBlueOrbit)==='[null,null]','factory reset retained opt-in Blue orbit range: '+JSON.stringify(out));
  assert(!uncaughtExceptions(h.events).length,'uncaught '+uncaughtExceptions(h.events).join(' | '));
- console.log('7.11.12 SPECIAL VALUES + AUDIO NESTED: PASS',JSON.stringify(out));
+ console.log('7.11.12 SPECIAL VALUES + AUDIO FLAT: PASS',JSON.stringify(out));
  }finally{await h.close();}
-})().catch(err=>{console.error('7.11.12 SPECIAL VALUES + AUDIO NESTED: FAIL',err.stack||err);process.exit(1)});
+})().catch(err=>{console.error('7.11.12 SPECIAL VALUES + AUDIO FLAT: FAIL',err.stack||err);process.exit(1)});

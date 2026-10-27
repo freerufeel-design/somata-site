@@ -35,7 +35,7 @@ const check=(v,msg)=>{if(!v)throw Error(msg)};
   }
   check(uncaughtExceptions(h.events).length===0,'uncaught Chromium exception');
   const s=await h.call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
-  if(s?.result?.data)fs.writeFileSync(path.resolve(__dirname,'../../../prism-8201-capture.png'),Buffer.from(s.result.data,'base64'));
+  if(s?.result?.data && process.env.SOMATA_SAVE_TEST_ARTIFACTS==='1')fs.writeFileSync(path.resolve(__dirname,'../../../prism-8201-capture.png'),Buffer.from(s.result.data,'base64'));
   console.log('8.20.1 PRISM TEST PASS');
  }finally{await h.close()}
 })().catch(e=>{console.error('8.20.1 PRISM TEST FAIL',e.stack||e);process.exitCode=1});

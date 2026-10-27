@@ -181,11 +181,23 @@ function getGpuOnlyCorridorMaster(frameCtx,allowHiddenGraffitiCarrier=false){
     return getTunnelMasterStrokeCommands(frameCtx,allowHiddenGraffitiCarrier);
 }
 function encodeGpuOnlyCorridorLayerRole(frameCtx,role,extra={},clearScene=false,allowHiddenGraffitiCarrier=false){
-    if(!canUseGpuOnlyCorridorLayerScene(frameCtx,allowHiddenGraffitiCarrier))return null;const master=getGpuOnlyCorridorMaster(frameCtx,allowHiddenGraffitiCarrier);if(!master?.length)return null;
-    const copies=frameCtx.visibleInstances?.copies||[];if(!copies.length)return{handled:true,commandBuffer:null};
+    const trace=(reason,details={})=>{if(role==='base')frameCtx._corridorBaseGpuTrace={reason,...details};};
+    if(!canUseGpuOnlyCorridorLayerScene(frameCtx,allowHiddenGraffitiCarrier)){
+        trace('layer-scene-ineligible',{resident:Boolean(getResidentGpuLayerScene(frameCtx)?.texture),externalReady:WebGPUStrokeRenderer?.canUseExternalLayerScene?.(frameCtx.frameId)===true});
+        return null;
+    }
+    const master=getGpuOnlyCorridorMaster(frameCtx,allowHiddenGraffitiCarrier);
+    if(!master?.length){trace('no-master-commands');return null;}
+    const copies=frameCtx.visibleInstances?.copies||[];
+    if(!copies.length){trace('no-visible-copies');return{handled:true,commandBuffer:null};}
     const opt=buildCorridorGPUOptions(frameCtx,{...extra,copyCacheVariant:`layer-scene-shared-${frameCtx.geometryPlan?.dynamic===true?'morph':'static'}`,weightForCopy:null,deferComposite:true,dynamicSegments:frameCtx.geometryPlan?.dynamic===true,layerSceneRole:role,layerSceneClear:clearScene,forceResidentCopyPayload:true});
-    return WebGPUStrokeRenderer.renderCorridor(master,copies,null,opt);
+    try{
+        const result=WebGPUStrokeRenderer.renderCorridor(master,copies,null,opt);
+        trace(result?.handled&&result.commandBuffer?'committed':'encoder-declined',{masterCount:master.length,copyCount:copies.length,rendererError:result?.handled?null:String(WebGPUStrokeRenderer?.status?.()?.lastError||'')});
+        return result;
+    }catch(err){trace('encoder-exception',{error:String(err?.message||err)});return null;}
 }
+
 
 function describeBaseGpuFallback(frameCtx,batch,forceCanvasBase=false){
     if(forceCanvasBase)return'Base policy forced Canvas';

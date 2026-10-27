@@ -38,7 +38,7 @@ const assert=(x,msg)=>{if(!x)throw Error(msg)};
   assert(after.up.mult==='2'&&after.up.eff.includes('8'),'Multiplier up must produce 4 × 2 = 8 '+JSON.stringify(after));
   assert(after.down.mult==='1'&&after.down.eff.includes('4'),'Multiplier down must restore 4 × 1 = 4 '+JSON.stringify(after));
   const screenshot=await h.call('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
-  fs.writeFileSync('/mnt/data/Somata_9.1_N_buttons_preview.png',Buffer.from(screenshot.result.data,'base64'));
+  if(process.env.SOMATA_SAVE_TEST_ARTIFACTS==='1')fs.writeFileSync('/mnt/data/Somata_9.1_N_buttons_preview.png',Buffer.from(screenshot.result.data,'base64'));
   assert(uncaughtExceptions(h.events).length===0,'uncaught browser error: '+uncaughtExceptions(h.events));
   console.log('PASS v911: N steppers and Morph cleanup',JSON.stringify({init,after}));
  }finally{await h.close()}

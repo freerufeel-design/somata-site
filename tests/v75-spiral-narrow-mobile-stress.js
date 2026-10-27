@@ -25,7 +25,7 @@ async function main(){
       await sleep(150);
       const mode=i%3===0?'spiral-closed':(i%3===1?'spiral-open':'spiral-closed');
       const r=await h.evaluate(`(async()=>{
-        const btn=document.querySelector('[data-contour-mode=${JSON.stringify(mode)}]');btn?.click();
+        __somataSelectContourMode(${JSON.stringify(mode)});
         const l=state.layers.find(x=>x.id===${JSON.stringify(setup.id)});
         l.web.inside=true;l.web.outsideStraight=true;l.web.outsideArc=true;l.showWeb=true;l.showLamps=true;l.sweep.enabled=true;l.particles.enabled=true;state.tunnel.active=true;invalidateLayerGeometry(l,'orientation-cycle');
         requestMainCanvasRender();await new Promise(r=>setTimeout(r,70));

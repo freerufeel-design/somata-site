@@ -239,5 +239,9 @@ window.__spiroRegisterModule?.('js/core/palette');
             return Math.max(0,Math.min(MAX_ROUNDING_PERCENT,Number.isFinite(v)?v:0));
         }
         function getRoundingStrength(value) { return clampRoundingPercent(value)/100; }
+        // Continuous first derivative at both ends. Used only for rounding
+        // values during transitions; the main morph timeline stays unchanged.
+        function easeMorphRounding(t){const u=Math.max(0,Math.min(1,Number(t)||0));return u*u*(3-2*u);}
+        function interpolateMorphRounding(a,b,t){const u=easeMorphRounding(t);return (Number(a)||0)+((Number(b)||0)-(Number(a)||0))*u;}
         function getExtraRoundingStrength(value) { return Math.max(0,Math.min(1,getRoundingStrength(value)-1)); }
 

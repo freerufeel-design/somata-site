@@ -9,13 +9,27 @@ function deferTransientBaseBatchMiss(frameCtx,reason){
        !transientReason.startsWith('GPU Corridor Base unavailable:'))return false;
     const key=String(frameCtx?.layer?.id||frameCtx?.layerIndex||'layer'),fid=Math.max(0,Number(frameCtx?.frameId||frameCtx?.frame?.id)||0);
     let rec=somataBaseBatchMisses.get(key);if(!rec||fid>rec.frameId+2)rec={count:0,frameId:fid};rec.count++;rec.frameId=fid;somataBaseBatchMisses.set(key,rec);
-    try{WebGPUStrokeRenderer?.warmup?.();}catch(_){}
-    if(state.tunnel?.active===true)try{GeometryGPURenderer?.warmup?.();}catch(_){}
-    try{requestMainCanvasRender?.();}catch(_){}
+    if(somataBaseBatchMisses.size>64)somataBaseBatchMisses.delete(somataBaseBatchMisses.keys().next().value);
+    const now=typeof performance!=='undefined'?performance.now():Date.now();
+    // Renderer warmup is idempotent, but repaint requests from every layer and
+    // pass can create a self-sustaining task storm while WebGPU initializes.
+    if(!Number.isFinite(rec.lastWarmup)||now-rec.lastWarmup>=160){
+        rec.lastWarmup=now;
+        try{WebGPUStrokeRenderer?.warmup?.();}catch(_){}
+        if(state.tunnel?.active===true)try{GeometryGPURenderer?.warmup?.();}catch(_){}
+    }
+    if(!Number.isFinite(rec.lastRepaint)||now-rec.lastRepaint>=180){
+        rec.lastRepaint=now;try{requestMainCanvasRender?.();}catch(_){}
+    }
     if(rec.count<=2){renderBackendTelemetry.mark('geometry','gpu',`Base batch deferred ${rec.count}/2`);return true;}
     return false;
 }
 function clearTransientBaseBatchMiss(frameCtx){const key=String(frameCtx?.layer?.id||frameCtx?.layerIndex||'layer');somataBaseBatchMisses.delete(key);}
+function noteSuccessfulBaseGpuFrame(frameCtx){
+    clearTransientBaseBatchMiss(frameCtx);
+    if(state.tunnel?.active===true)SomataRenderDiagnostics?.noteRecovery?.('geometry','base',frameCtx);
+}
+
 
 function renderLayerBaseGeometryPass(frameCtx) {
     mainCtx.globalAlpha = 1;mainCtx.shadowBlur = 0;
@@ -37,7 +51,7 @@ function renderLayerBaseGeometryPass(frameCtx) {
         if(command&&SomataLayerSceneService.queue(frameCtx,somataEffectPhase('geometry',20),command,'base-layer-scene')){
             batch.commandBuffer=null;batch.submitted=true;
             SomataLayerSceneService.markDeferred(frameCtx,{mainSceneEmpty:false});
-            if(batch.roles?.has?.('base'))frameCtx._baseStrokeCommitted=true;
+            if(batch.roles?.has?.('base')){frameCtx._baseStrokeCommitted=true;noteSuccessfulBaseGpuFrame(frameCtx);}
             renderBackendTelemetry.mark('geometry','gpu','Line/Base appended above resident Web');
             SomataFillPassService.markSceneCommitted(frameCtx,batch,fillPlan,'web-root-layer-scene');
             renderLayerGeometryCirclesPass(frameCtx);return;
@@ -47,7 +61,7 @@ function renderLayerBaseGeometryPass(frameCtx) {
     if(!forceCanvasBase&&!forceCanvasFill&&batch?.sceneCombined&&!needsOutOfSceneFill){
         if(canDeferLayerSceneForFrame(frameCtx,batch)&&WebGPUStrokeRenderer.deferLayerScene(batch,frameCtx.frameId)){
             SomataLayerSceneService.markDeferred(frameCtx,{mainSceneEmpty:strictSpiralGpu?frameCtx.frame.gpuMainCanvasHasContent!==true:false});
-            if(batch.roles?.has?.('base'))frameCtx._baseStrokeCommitted=true;
+            if(batch.roles?.has?.('base')){frameCtx._baseStrokeCommitted=true;noteSuccessfulBaseGpuFrame(frameCtx);}
             if(strictSpiralGpu)somataSpiralSceneDiag.base.stage='internal-batch-deferred';
             renderBackendTelemetry.mark('geometry','gpu','deferred WebGPU Layer Scene');
             SomataFillPassService.markSceneCommitted(frameCtx,batch,fillPlan,'layer-scene-deferred');
@@ -59,6 +73,7 @@ function renderLayerBaseGeometryPass(frameCtx) {
 
         if(WebGPUStrokeRenderer.getFrameSceneTexture?.(frameCtx.frameId)){WebGPUStrokeRenderer.presentFrameSceneToMain?.(frameCtx.frameId,mainCtx,true);SomataLayerSceneService.markPresented(frameCtx);}
         if(WebGPUStrokeRenderer.compositeLayerScene(batch,mainCtx)){
+            if(batch.roles?.has?.('base'))noteSuccessfulBaseGpuFrame(frameCtx);
             SomataFillPassService.markSceneCommitted(frameCtx,batch,fillPlan,'layer-scene-composite');
             renderLayerGeometryCirclesPass(frameCtx);return;
         }
@@ -93,6 +108,18 @@ function renderLayerBaseGeometryPass(frameCtx) {
         return;
     }
 
+    // During Corridor transitions a layer can legitimately have zero visible copies.
+    // This is a successful empty Base, not a GPU submission failure. Do not infer
+    // emptiness from an absent visibleInstances record (which may signal a bug).
+    if(state.tunnel?.active===true&&Array.isArray(frameCtx.visibleInstances?.copies)&&
+       frameCtx.visibleInstances.copies.length===0&&!isPathFxBaseReplacementActive(frameCtx)){
+        frameCtx._baseStrokeCommitted=true;
+        clearTransientBaseBatchMiss(frameCtx);
+        renderBackendTelemetry.mark('geometry','gpu','Corridor has no visible copies; Base is correctly empty');
+        renderLayerGeometryCirclesPass(frameCtx);
+        return;
+    }
+
     const residentBeforeCorridorBase=getResidentGpuLayerScene(frameCtx);
     if(!strictSpiralGpu&&(!fillHandled||Boolean(residentBeforeCorridorBase?.texture))&&frameCtx.lineProfileStrokeOnly!==true&&canUseGpuOnlyCorridorLayerScene(frameCtx,false)){
         const sceneAlreadyActive=Boolean(residentBeforeCorridorBase?.texture);
@@ -101,7 +128,7 @@ function renderLayerBaseGeometryPass(frameCtx) {
             let accepted=false;
             if(sceneAlreadyActive)accepted=SomataLayerSceneService.queue(frameCtx,somataEffectPhase('geometry',20),rec.commandBuffer,'corridor-base');
             else accepted=SomataLayerSceneService.queueAsRoot(frameCtx,somataEffectPhase('geometry',20),rec.commandBuffer,'corridor-base');
-            if(accepted){SomataLayerSceneService.markDeferred(frameCtx,{mainSceneEmpty:false});frameCtx._corridorLayerSceneActive=true;frameCtx._baseStrokeCommitted=true;renderBackendTelemetry.mark('geometry','gpu','GPU Corridor Layer Scene');renderLayerGeometryCirclesPass(frameCtx);return;}
+            if(accepted){SomataLayerSceneService.markDeferred(frameCtx,{mainSceneEmpty:false});frameCtx._corridorLayerSceneActive=true;frameCtx._baseStrokeCommitted=true;noteSuccessfulBaseGpuFrame(frameCtx);renderBackendTelemetry.mark('geometry','gpu','GPU Corridor Layer Scene');renderLayerGeometryCirclesPass(frameCtx);return;}
         }
         if(sceneAlreadyActive){if(strictSpiralGpu){somataGpuContractError('CORRIDOR_BASE_GPU_ENCODE_FAILED',frameCtx,{role:'base'});try{WebGPUStrokeRenderer.clearDeferredLayerScene?.();}catch(_){}SomataLayerSceneService.resetDeferred(frameCtx,{clearQueues:true});frameCtx._corridorLayerSceneActive=false;return;}materializeDeferredLayerScene(frameCtx);frameCtx._corridorLayerSceneActive=false;}
     }
@@ -109,7 +136,7 @@ function renderLayerBaseGeometryPass(frameCtx) {
 
     if(canKeepGpuSceneOverCanvasFill&&batch?.roles?.has?.('base')&&WebGPUStrokeRenderer.deferLayerScene(batch,frameCtx.frameId)){
         SomataLayerSceneService.markDeferred(frameCtx,{mainSceneEmpty:false});
-        frameCtx._baseStrokeCommitted=true;
+        frameCtx._baseStrokeCommitted=true;noteSuccessfulBaseGpuFrame(frameCtx);
         renderBackendTelemetry.mark('geometry','gpu','deferred WebGPU base to finalGpuCanvas');
         renderLayerGeometryCirclesPass(frameCtx);
         return;
@@ -133,12 +160,28 @@ function renderLayerBaseGeometryPass(frameCtx) {
                 const why=describeBaseGpuFallback(frameCtx,batch,forceCanvasBase);
                 if(!deferTransientBaseBatchMiss(frameCtx,why)){
                     renderBackendTelemetry.mark('geometry','gpu',`GPU base unavailable: ${why}`);
-                    somataGpuDiagnosticError('geometry','base',why,frameCtx,{fallback:'gpu-current-frame-repaint',recovered:true,transientBatchMisses:somataBaseBatchMisses.get(String(frameCtx?.layer?.id||frameCtx?.layerIndex||'layer'))?.count||0});
+                    const serviceStatus=SomataGeometryRoleService.status();
+                    let strokeStatus=null,gpuStatus=null;
+                    try{strokeStatus=WebGPUStrokeRenderer?.status?.()||null;}catch(_){}
+                    try{gpuStatus=GeometryGPURenderer?.status?.()||null;}catch(_){}
+                    somataGpuDiagnosticError('geometry','base',why,frameCtx,{
+                        fallback:'gpu-current-frame-repaint',recovered:false,recoveryPending:true,
+                        transientBatchMisses:somataBaseBatchMisses.get(String(frameCtx?.layer?.id||frameCtx?.layerIndex||'layer'))?.count||0,
+                        strokeBatch:state.tunnel?.active===true?null:(()=>{const rec=SomataStrokeBatchService.status?.().lastFailure;return rec?.frameId===Number(frameCtx?.frameId)&&rec?.layerId===String(frameCtx?.layer?.id||'')?rec:null;})(),
+                        layerScene:SomataLayerSceneService.status?.().lastReason||null,
+                        corridor:state.tunnel?.active===true?{
+                            layerScene:frameCtx._corridorBaseGpuTrace||null,
+                            perCopy:frameCtx._corridorPerCopyGpuTrace||null,
+                            roleFailure:serviceStatus?.lastFailure?.frameId===Number(frameCtx?.frameId)&&serviceStatus?.lastFailure?.layerId===frameCtx?.layer?.id?serviceStatus.lastFailure:null,
+                            stroke:{available:strokeStatus?.available,initializing:strokeStatus?.initializing,lost:strokeStatus?.lost,lastError:strokeStatus?.lastError},
+                            geometry:{active:gpuStatus?.active,lastError:gpuStatus?.webgpu?.lastError}
+                        }:null
+                    });
                     try{requestMainCanvasRender?.();}catch(_){}
                 }
             }
         }else{
-            clearTransientBaseBatchMiss(frameCtx);
+            noteSuccessfulBaseGpuFrame(frameCtx);
             renderBackendTelemetry.mark('geometry','gpu',`geometry role: ${baseResult.backend}`);
             frameCtx._baseStrokeCommitted=true;
         }

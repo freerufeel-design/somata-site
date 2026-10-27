@@ -180,12 +180,22 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
     function ensureSize(w,h){if(!warmup())return false;w=Math.max(1,w|0);h=Math.max(1,h|0);if(width!==w||height!==h||canvas.width!==w||canvas.height!==h){width=w;height=h;canvas.width=w;canvas.height=h;context.configure({device,format,alphaMode:'premultiplied'});}return true;}
     function beginOverlayFrame(fid,w,h,active){frameId=Number(fid)||0;queue.length=0;frameActive=active===true;if(!canvas)return false;if(!frameActive){canvas.style.display='none';return false;}const ok=ensureSize(w,h);canvas.style.display='none';return ok;}
     function hex(style){const s=String(style||'').trim();const m=/^#([0-9a-f]{6})$/i.exec(s);if(m){const n=parseInt(m[1],16);return[(n>>16&255)/255,(n>>8&255)/255,(n&255)/255,1];}try{return GPUColorCache.rgba(style||'#fff');}catch(_){return[1,1,1,1];}}
+    const PARTICLE_EFFECT_PALETTES=Object.freeze({
+        stardust:['#ffffff','#f8fafc','#e0f2fe','#ffffff'],
+        flame:['#ffffff','#ffe066','#ff8a1f','#ff2d0a'],
+        laser:['#fff7c2','#f9a8d4','#a7f3d0','#ffffff'],
+        feather:['#ffffff','#f8fafc','#e2e8f0','#ffffff'],
+        eye:['#38bdf8','#22d3ee','#60a5fa','#ffffff'],
+        plasma:['#f0abfc','#c084fc','#8b5cf6','#6d28d9']
+    });
+    const PARTICLE_MODE_IDS=Object.freeze({flow:0,cornerFade:1,spiralZ:2});
+    const PARTICLE_STYLE_IDS=Object.freeze({stardust:0,flame:1,laser:2,feather:3,eye:4,plasma:5});
     function effectColors(cfg,layer,lineColorOverride=null){
         if(cfg.colorMode==='line'){const c=hex(lineColorOverride||layer?.strokeColor||'#fff');return[c,c,c,c];}
         if(cfg.colorMode==='palette'){
             let colors=[];try{colors=getPlaylistPaletteColors(cfg.paletteKey)||[];}catch(_){}if(colors.length){const out=[];for(let i=0;i<4;i++)out.push(hex(colors[Math.floor(i*Math.max(1,colors.length-1)/3)]||colors[0]));return out;}
         }
-        const map={stardust:['#ffffff','#f8fafc','#e0f2fe','#ffffff'],flame:['#ffffff','#ffe066','#ff8a1f','#ff2d0a'],laser:['#fff7c2','#f9a8d4','#a7f3d0','#ffffff'],feather:['#ffffff','#f8fafc','#e2e8f0','#ffffff'],eye:['#38bdf8','#22d3ee','#60a5fa','#ffffff'],plasma:['#f0abfc','#c084fc','#8b5cf6','#6d28d9']};return(map[cfg.style]||map.stardust).map(hex);
+        return(PARTICLE_EFFECT_PALETTES[cfg.style]||PARTICLE_EFFECT_PALETTES.stardust).map(hex);
     }
     function segmentResource(table){
         if(!(table?.gpuSegmentData instanceof Float32Array)||!(table.segmentCount>0))return null;let rec=segmentResources.get(table),need=Math.max(32,Math.ceil(table.segmentCount*8*4/16)*16);
@@ -317,8 +327,8 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
             speed:Math.max(0,cfg.speedPercent*cfg.speedMultiplier/100),
             sizePx:cfg.sizePx*px,
             opacity:(cfg.opacity/100)*alpha,
-            mode:{flow:0,cornerFade:1,spiralZ:2}[cfg.mode]??0,
-            style:{stardust:0,flame:1,laser:2,feather:3,eye:4,plasma:5}[cfg.style]??0,
+            mode:PARTICLE_MODE_IDS[cfg.mode]??0,
+            style:PARTICLE_STYLE_IDS[cfg.style]??0,
             spiralRadius:cfg.spiralRadiusPx*cfg.spiralRadiusMultiplier*px,
             twinkle:cfg.twinkle/100,
             scatter:Math.min(280,(cfg.scatter/100)*cfg.scatterMultiplier*Math.max(10,cfg.sizePx*8)*px),
@@ -330,20 +340,27 @@ fn main(@builtin(global_invocation_id) gid:vec3<u32>){
         const cfg=normalizeParticleConfig(liveParticleLayer(frameCtx)?.particles);if(!cfg?.enabled)return null;
         return Object.freeze(particleVisualScalars(cfg,frameCtx,Math.max(.1,Number(frameCtx?.frame?.dpr)||1),1));
     }
-    function prepareLayerItem(frameCtx,ctx,requireOverlay=false,copyDesc=null,sharedRec=null){
-        const cfg=normalizeParticleConfig(liveParticleLayer(frameCtx)?.particles);if((requireOverlay&&!frameActive)||!ready||!cfg.enabled||frameCtx?.layer?.visible===false){stats.skipped++;return null;}const rec=sharedRec||gpuParticleSource(frameCtx);if(!rec)return null;
+    function prepareLayerItem(frameCtx,ctx,requireOverlay=false,copyDesc=null,sharedRec=null,prepared=null){
+        const cfg=prepared?.cfg||normalizeParticleConfig(liveParticleLayer(frameCtx)?.particles);if((requireOverlay&&!frameActive)||!ready||!cfg.enabled||frameCtx?.layer?.visible===false){stats.skipped++;return null;}const rec=sharedRec||gpuParticleSource(frameCtx);if(!rec)return null;
         ctx.save();try{if(copyDesc?.copy){applyMotionTunnelLag(ctx,copyDesc.copy,frameCtx.layer);const copyScale=Number(copyDesc.copy.scale);ctx.scale(Number.isFinite(copyScale)?copyScale:1,Number.isFinite(copyScale)?copyScale:1);}applyLayerFrameEffectTransform(ctx,frameCtx);}catch(_){}const tr=ctx.getTransform();ctx.restore();
         const lineColor=copyDesc?.copy&&cfg.colorMode==='line'&&typeof getTunnelCopyColor==='function'?getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor||frameCtx.layer?.strokeColor||'#ffffff',copyDesc.copy,frameCtx.tunnelPaletteProfile):null;
-        const colors=effectColors(cfg,frameCtx.layer,lineColor),baseKey=frameCtx.layer?.id||`layer-${frameCtx.layerIndex}`,key=copyDesc?.copy?`${baseKey}|corridor:${copyDesc.index}`:baseKey,ur=uniformResource(key),u=ur.staging;u.fill(0);stats.uniformAllocationsAvoided++;
-        const viewportW=Math.max(1,Number(mainCanvas?.width)||width||1),viewportH=Math.max(1,Number(mainCanvas?.height)||height||1),dpr=Math.max(.1,Number(frameCtx?.frame?.dpr)||1),copyAlpha=Math.max(0,Math.min(1,Number(copyDesc?.alpha??1)||0)),visual=particleVisualScalars(cfg,frameCtx,dpr,copyAlpha);
+        const colors=prepared?.colors||effectColors(cfg,frameCtx.layer,lineColor),baseKey=frameCtx.layer?.id||`layer-${frameCtx.layerIndex}`,key=copyDesc?.copy?`${baseKey}|corridor:${copyDesc.index}`:baseKey,ur=uniformResource(key),u=ur.staging;u.fill(0);stats.uniformAllocationsAvoided++;
+        const viewportW=Math.max(1,Number(mainCanvas?.width)||width||1),viewportH=Math.max(1,Number(mainCanvas?.height)||height||1),dpr=Math.max(.1,Number(frameCtx?.frame?.dpr)||1),copyAlpha=Math.max(0,Math.min(1,Number(copyDesc?.alpha??1)||0)),visual=prepared?.visual||particleVisualScalars(cfg,frameCtx,dpr,copyAlpha);
         u[0]=viewportW;u[1]=viewportH;u[2]=rec.count;u[3]=visual.density;u[4]=Number(tr.a)||1;u[5]=Number(tr.c)||0;u[6]=Number(tr.e)||0;u[8]=Number(tr.b)||0;u[9]=Number(tr.d)||1;u[10]=Number(tr.f)||0;
-        u[12]=(Number(frameCtx?.frame?.now)||performance.now())/1000;u[13]=visual.sizePx;u[14]=visual.speed;u[15]=visual.opacity;u[16]=visual.mode;u[17]=visual.style;u[18]=visual.spiralRadius;u[19]=visual.twinkle;
+        u[12]=(Number(frameCtx?.frame?.now)||performance.now())/1000;u[13]=visual.sizePx;u[14]=visual.speed;u[15]=prepared?visual.opacity*copyAlpha:visual.opacity;u[16]=visual.mode;u[17]=visual.style;u[18]=visual.spiralRadius;u[19]=visual.twinkle;
         for(let i=0;i<4;i++)u.set(colors[i]||colors[0],[20,24,28,32][i]);u[37]=visual.scatter;u[38]=visual.sizeVariation;u[39]=rec.greenMorph?1:0;u[40]=visual.spiralTurns;u[41]=Math.max(1,Number(rec.bezierSubdiv)||1);u[42]=rec.exactBezierArc===true&&rec.cubicBuffer?1:0;
         device.queue.writeBuffer(ur.buffer,0,u);const identity=rec.identity||rec;let bind=ur.bindBySegment?.get(identity);if(!bind){bind=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:ur.buffer}},{binding:1,resource:{buffer:rec.buffer}},{binding:2,resource:{buffer:rec.metaBuffer}},{binding:3,resource:{buffer:rec.cubicBuffer||dummyCubicBuffer}}]});ur.bindBySegment?.set(identity,bind);stats.bindBuilds++;}else stats.bindReuses++;const count=u[3]|0,bundle=particleBundle(ur,identity,bind,count);
         return{bind,bundle,count,greenRec:rec.greenMorph?rec:null,morphArcTable:rec.morphArcTable||null,rec,copyIndex:copyDesc?.index??-1};
     }
     function prepareLayerItems(frameCtx,ctx,requireOverlay=false){
-        const cfg=normalizeParticleConfig(liveParticleLayer(frameCtx)?.particles);if((requireOverlay&&!frameActive)||!ready||!cfg.enabled||frameCtx?.layer?.visible===false){stats.skipped++;return[];}const rec=gpuParticleSource(frameCtx);if(!rec)return[];const items=[];for(const desc of particleCopyDescriptors(frameCtx)){const item=prepareLayerItem(frameCtx,ctx,requireOverlay,desc,rec);if(item)items.push(item);}return items;
+        const cfg=normalizeParticleConfig(liveParticleLayer(frameCtx)?.particles);if((requireOverlay&&!frameActive)||!ready||!cfg.enabled||frameCtx?.layer?.visible===false){stats.skipped++;return[];}const rec=gpuParticleSource(frameCtx);if(!rec)return[];
+        const descriptors=particleCopyDescriptors(frameCtx);if(!descriptors.length)return[];
+        // A Corridor copy changes its transform, alpha, and possibly its line color,
+        // but not the layer's normalized settings or other visual scalars.
+        const dpr=Math.max(.1,Number(frameCtx?.frame?.dpr)||1);
+        const prepared={cfg,visual:particleVisualScalars(cfg,frameCtx,dpr,1),
+            colors:cfg.colorMode==='line'?null:effectColors(cfg,frameCtx.layer)};
+        const items=[];for(const desc of descriptors){const item=prepareLayerItem(frameCtx,ctx,requireOverlay,desc,rec,prepared);if(item)items.push(item);}return items;
     }
     function queueLayer(frameCtx,ctx){
         const items=prepareLayerItems(frameCtx,ctx,true);if(!items.length)return false;for(const item of items)queue.push(item);const rec=items[0].rec;lastDecision.reason=items.length>1?'queued-corridor':(rec.greenMorph?'queued-green-gpu-arc':(rec.morphArc?'queued-gpu-morph-arc':'queued'));lastDecision.layerIndex=frameCtx.layerIndex;return true;

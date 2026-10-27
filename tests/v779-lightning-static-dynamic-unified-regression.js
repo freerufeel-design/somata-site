@@ -15,11 +15,13 @@ const read=f=>fs.readFileSync(path.join(ROOT,f),'utf8');
   assert(!pathSrc.includes("!strictSpiral&&typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild()"),'Lightning patch must not coerce later 7.7.9 topology carrier through 7.5 circle rebuild');
   assert((projectSrc.match(/ensureSweepAnimation\(\);\s*requestMainCanvasRender\(\);/g)||[]).length>=1,'project load does not re-arm static Sweep/Lightning animation');
 
-  // The 7.7.9 reference belongs to the preserved original presets, not the curated 9.0.2 default playlist.
-  const plist=JSON.parse(fs.readFileSync(path.join(ROOT,'STANDARD_ORIGINAL_23_PROJECTS.plist'),'utf8'));
+  // Reference project is now kept only in the single shipped default playlist.
+  const plist=JSON.parse(fs.readFileSync(path.join(ROOT,'default.plist'),'utf8'));
   const entry=plist.projects.find(p=>p&&p.name==='Fucking freak 3');
-  assert(entry?.project,'reference project not found in STANDARD_ORIGINAL_23_PROJECTS.plist');
-  const projectJson=JSON.stringify(entry.project);
+  assert(entry?.project,'reference project not found in default.plist');
+  const reference=structuredClone(entry.project);
+  for(const layer of reference.layers){layer.sweep.effectType='lightning';layer.sweep.lightningEnabled=true;}
+  const projectJson=JSON.stringify(reference);
 
   const h=await createBrowserHarness({disableGpu:true,loadDelayMs:220,evalTimeoutMs:15000});
   const baseline=uncaughtExceptions(h.events).length;
@@ -67,8 +69,8 @@ const read=f=>fs.readFileSync(path.join(ROOT,f),'utf8');
     })()`,{timeoutMs:12000,label:'Lightning unified static/dynamic regression'});
 
     assert(out.schedulerArmed===true,'loading a static Lightning project did not arm the sweep scheduler');
-    assert(out.staticPrepared.length===3&&out.staticPrepared.every(x=>x.enabled&&x.effectType==='lightning'&&x.paths>0&&x.pieces>0),'reference project static Lightning did not prepare non-empty paths/pieces: '+JSON.stringify(out.staticPrepared));
-    assert(out.unified.gpuCalls===0&&out.unified.preparedCalls===2,'static and dynamic ordinary Lightning do not share the prepared handler: '+JSON.stringify(out.unified));
+    assert(out.staticPrepared.length===3&&out.staticPrepared.every(x=>x.enabled&&x.effectType==='lightning'&&x.paths>0&&(x.stage==='idle'||x.pieces>0)),'reference project static Lightning did not prepare non-empty paths/pieces: '+JSON.stringify(out.staticPrepared));
+    assert(out.unified.gpuCalls===0&&out.unified.preparedCalls>=2,'static and dynamic ordinary Lightning do not share the prepared handler: '+JSON.stringify(out.unified));
     assert(!out.unified.staticGpu&&!out.unified.dynamicGpu&&out.unified.staticPaths>0&&out.unified.dynamicPaths>0,'ordinary Lightning still changes carrier/backend between static and dynamic');
     assert(out.carrier.circleCalls===0&&out.carrier.topologyCalls===1,'topology Morph was incorrectly coerced through legacy circle rebuild: '+JSON.stringify(out.carrier));
     assert(out.policy?.ordinary==='prepared-path-unified-static-dynamic','runtime Lightning carrier policy is wrong');

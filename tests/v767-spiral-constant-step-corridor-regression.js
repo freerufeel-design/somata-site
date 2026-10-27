@@ -7,7 +7,7 @@ async function main(){
   try{
     const out=await h.evaluate(`(()=>{
       const mk=(id,{N=12,step=2,rotation=0,radius=235,glow=18}={})=>{
-        const l=createLayer(id);Object.assign(l,{visible:true,lineVisible:true,N,K:1,radius,radiusMultiplier:1,rotation,rounding:0,lineJoinType:'sharp',profileMode:'segments',closedLoop:false,
+        const l=createLayer(id);Object.assign(l,{visible:true,lineVisible:true,N,K:step,radius,radiusMultiplier:1,rotation,rounding:0,lineJoinType:'sharp',profileMode:'segments',closedLoop:false,
           profileNodes:[{x:0,y:0},{x:.18,y:.31},{x:.52,y:-.22},{x:1,y:0}],spiralEnabled:true,spiralOrder:1,spiralStep:step,spiralStepLinked:false,
           spiralTangential:true,spiralClosed:true,spiralRoundSeams:false,customSuborbits:null,chaosStar:false,glow,strokeWidth:2,strokeColor:'#ff0077',opacity:100,fill:false});
         setPreSampledSplineLayer?.(l,false);return l;
@@ -23,7 +23,7 @@ async function main(){
       const samples=[];
       for(const t of [0,.125,.37,.5,.73,.91,1]){
         runtimeState.morph.geometryT=t;runtimeState.morph.progress=t;runtimeState.morph.geometryBlend=t;
-        // This deliberately mirrors the live resolved layer in 7.6.6: N is still canonical/source.
+        // The source K is now the authoritative spiral step (9.2.14+).
         const frame={...src,id:src.id,glow:src.glow};
         const plan=__somataSpiralCarrierMorphPlan(0,t),paths=plan?.paths||[],frames=plan?.carrierFrames||[];
         const c0={copyId:0,position:0,scale:1},c1={copyId:1,position:1,scale:q};

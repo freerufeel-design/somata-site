@@ -169,14 +169,13 @@ function flattenMorphPlanForGpu(plan){
         }
         const localSegments=rec.closed?rec.n:Math.max(0,rec.n-1);
         let sourceLen=0,targetLen=0;
-        for(let si=0;si<localSegments;si++){
-            const sj=si*3,sn=((si+1)%rec.n)*3;
-            sourceLen+=Math.hypot(rec.srcXYZ[sn]-rec.srcXYZ[sj],rec.srcXYZ[sn+1]-rec.srcXYZ[sj+1]);
-            targetLen+=Math.hypot(rec.dstXYZ[sn]-rec.dstXYZ[sj],rec.dstXYZ[sn+1]-rec.dstXYZ[sj+1]);
-        }
-        endpointPathLengths[pathWrite*2]=sourceLen;endpointPathLengths[pathWrite*2+1]=targetLen;
+        // Segment lengths and metadata refer to the same ordered segment walk.
+        // Keep their arithmetic and accumulation order unchanged in one pass.
         for(let si=0;si<localSegments;si++){
             const next=(si+1)%rec.n,mo=segmentWrite*4;
+            const sj=si*3,sn=next*3;
+            sourceLen+=Math.hypot(rec.srcXYZ[sn]-rec.srcXYZ[sj],rec.srcXYZ[sn+1]-rec.srcXYZ[sj+1]);
+            targetLen+=Math.hypot(rec.dstXYZ[sn]-rec.dstXYZ[sj],rec.dstXYZ[sn+1]-rec.dstXYZ[sj+1]);
 
             const keyStart=Boolean(sourceCornerFlags?.[si]===true||targetCornerFlags?.[si]===true);
             const keyEnd=Boolean(sourceCornerFlags?.[next]===true||targetCornerFlags?.[next]===true);
@@ -184,6 +183,7 @@ function flattenMorphPlanForGpu(plan){
             segmentMeta[mo]=start+si;segmentMeta[mo+1]=start+next;segmentMeta[mo+2]=pathWrite;segmentMeta[mo+3]=packed;
             pathIndexData[segmentWrite]=packed;segmentWrite++;
         }
+        endpointPathLengths[pathWrite*2]=sourceLen;endpointPathLengths[pathWrite*2+1]=targetLen;
         const ro=pathWrite*4;
         pathRanges[ro]=start;pathRanges[ro+1]=rec.n;pathRanges[ro+2]=rec.closed?1:0;pathRanges[ro+3]=pathWrite;
         pathSegmentRanges[ro]=segmentStart;pathSegmentRanges[ro+1]=localSegments;pathSegmentRanges[ro+2]=start;pathSegmentRanges[ro+3]=rec.n;

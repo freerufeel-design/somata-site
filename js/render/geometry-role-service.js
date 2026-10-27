@@ -8,7 +8,7 @@ const SomataGeometryRoleService=(()=>{
     const adapters=[];
     // Native priority depends only on adapter registration, never on the frame.
     let nativeOrder=[];
-    const stats={renders:0,glow:0,glowBase:0,base:0,misses:0,registrations:0,lastBackend:'none',lastReason:''};
+    const stats={renders:0,glow:0,glowBase:0,base:0,misses:0,registrations:0,lastBackend:'none',lastReason:'',lastFailure:null,exceptions:0};
     function register(name,api={},priority=0){
         const key=String(name||'').trim();if(!key||!api||typeof api!=='object')throw new Error('Geometry role adapter requires name/api');
         const rec={name:key,api,priority:Number(priority)||0,nativePriority:Number(api.nativePriority??priority)||0};
@@ -24,8 +24,12 @@ const SomataGeometryRoleService=(()=>{
     function eligibleRec(rec,frameCtx,role='base'){if(!rec||!allowed(rec,frameCtx)||!matches(rec,frameCtx))return false;try{return rec.api.eligible?.(frameCtx,role)===true;}catch(_){return false;}}
     function note(rec,kind){stats.renders++;stats[kind]=(stats[kind]||0)+1;stats.lastBackend=rec?.name||'none';stats.lastReason='';}
     function renderVia(method,kind,frameCtx,ctx2d,opts={}){
+        stats.lastFailure=null;
         for(const rec of adapters){if(!allowed(rec,frameCtx)||!matches(rec,frameCtx))continue;const fn=rec.api?.[method];if(typeof fn!=='function')continue;
-            try{const out=fn(frameCtx,ctx2d,opts);if(out===true){note(rec,kind);return{handled:true,backend:rec.name,baseCommitted:method==='renderGlowBase'};}if(out?.handled===true){note(rec,kind);return{backend:rec.name,...out};}}catch(_){ }
+            try{const out=fn(frameCtx,ctx2d,opts);if(out===true){note(rec,kind);return{handled:true,backend:rec.name,baseCommitted:method==='renderGlowBase'};}if(out?.handled===true){note(rec,kind);return{backend:rec.name,...out};}}catch(err){
+                stats.exceptions++;
+                stats.lastFailure={backend:rec.name,role:kind,error:String(err?.message||err),layerId:frameCtx?.layer?.id||null,frameId:Number(frameCtx?.frameId)||0};
+            }
         }
         stats.misses++;stats.lastBackend='none';stats.lastReason=`no-geometry-backend-for-${kind}`;return{handled:false,backend:'none',baseCommitted:false};
     }

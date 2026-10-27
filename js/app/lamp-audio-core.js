@@ -2022,7 +2022,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 if(morphInfo){
                     drawMorphPathQuality(sampler,pts,Boolean(path.closed),morphInfo.roundingFrac,morphInfo.profileMode,morphInfo.splineBlend,morphInfo.continuousProfileBlend,morphInfo.splineRenderMode,path.cornerFlags||[],path.bridgeRoundFlags||[]);
                 }else if(useSmoothSplinePath(layer,round,path)){
-                    splinePathForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[]);
+                    splinePathForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true);
                 }else{
                     roundPolylineForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[]);
                 }
@@ -2038,7 +2038,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(value==='chaotic')return 'symmetric';
             return fallback;
         }
-        function normalizeLightningPrecisionValue(value) { return value==='simple'?'simple':'exact'; }
+        function normalizeLightningPrecisionValue(value) { return 'exact'; } // Single full-precision Lightning mode.
         function isHighPrecisionLightning(cfg) { return normalizeLightningPrecisionValue(cfg?.lightningPrecision)==='exact'; }
 
         function exactLightningLerp(a,b,t){return{x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t};}
@@ -2252,7 +2252,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 }else if(morphInfo){
                     drawMorphPathQuality(recorder,pts,Boolean(path.closed),morphInfo.roundingFrac,morphInfo.profileMode,morphInfo.splineBlend,morphInfo.continuousProfileBlend,morphInfo.splineRenderMode,path.cornerFlags||[],path.bridgeRoundFlags||[]);
                 }else if(useSmoothSplinePath(layer,round,path)){
-                    splinePathForDraw(recorder,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[]);
+                    splinePathForDraw(recorder,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true);
                 }else{
                     roundPolylineForDraw(recorder,pts,Boolean(path.closed),round,path.cornerFlags||[]);
                 }
@@ -2292,8 +2292,22 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         function appendWrappedExactRailCubics(rail,start,length,out){
             if(!rail?.total||!(length>0))return;const total=rail.total;let a=Number(start)||0,remain=Math.min(Math.max(0,Number(length)||0),total);while(a<0)a+=total;while(a>=total)a-=total;while(remain>1e-8){const take=Math.min(remain,total-a);appendExactRailRangeCubics(rail,a,take,out);remain-=take;a=0;}
         }
+        // Spectral sweep rotates a mask over an unchanged curve. Cache its Bézier controls
+        // and Path2D; only the angular uniforms change each frame. Dynamic source contours
+        // are explicitly excluded, so morphing geometry is never shown one frame late.
+        const spectralStaticContourCache=new WeakMap();
         function buildBezierGlintPrepared(frameCtx,exactPaths,cfg,phase,now,layerIndex=-1){
-            const type=effectiveGlintType(cfg),spectral=type==='spectral',cubics=[];let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,allExact=true;
+            const type=effectiveGlintType(cfg),spectral=type==='spectral';
+            const cacheable=spectral&&Array.isArray(exactPaths)&&exactPaths._frameGeometryId==null;
+            if(cacheable){
+                const saved=spectralStaticContourCache.get(exactPaths);
+                if(saved){
+                    const sectorDeg=Math.max(1,Math.min(360,audioApplyNumeric('sweep.spectralSector',Number.isFinite(Number(cfg?.spectralSectorDegrees))?Number(cfg.spectralSectorDegrees):45,layerIndex)));
+                    const speedDeg=Math.max(-720,Math.min(720,audioApplyNumeric('sweep.spectralSpeed',Number.isFinite(Number(cfg?.spectralAngularSpeed))?Number(cfg.spectralAngularSpeed):90,layerIndex)));
+                    return {...saved,spectralProgress:Math.max(0,Math.min(1,Number(phase)||0)),spectralDirection:(cfg?.direction==='backward'?-1:1)*(speedDeg<0?-1:1),sectorSpanAngle:sectorDeg*Math.PI/180,sectorDegrees:sectorDeg,angularSpeed:speedDeg};
+                }
+            }
+            const cubics=[];let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity,allExact=true;
             const rails=[];for(const path of exactPaths||[]){for(const p of path?.points||[]){const x=Number(p?.x),y=Number(p?.y);if(Number.isFinite(x)&&Number.isFinite(y)){minX=Math.min(minX,x);minY=Math.min(minY,y);maxX=Math.max(maxX,x);maxY=Math.max(maxY,y);}}const rail=path?._exactLightningRail;if(rail?.total>0)rails.push({rail,path});else if((path?.points?.length||0)>1){allExact=false;if(spectral){const pts=path.points,n=path.closed?pts.length:pts.length-1;for(let i=0;i<n;i++){const a=pts[i],b=pts[(i+1)%pts.length],seg={type:'L',p0:a,p1:b,breakBefore:i===0};const c=glintSegmentToCubic(seg,i===0);if(c)cubics.push(c);}}}}
             if(!spectral&&!allExact)return null;
             if(!Number.isFinite(minX)){minX=minY=-1;maxX=maxY=1;}
@@ -2315,7 +2329,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const spectralAudioPrefix='sweep',sectorDeg=Math.max(1,Math.min(360,audioApplyNumeric(`${spectralAudioPrefix}.spectralSector`,Number.isFinite(Number(cfg?.spectralSectorDegrees))?Number(cfg.spectralSectorDegrees):45,layerIndex))),speedDeg=Math.max(-720,Math.min(720,audioApplyNumeric(`${spectralAudioPrefix}.spectralSpeed`,Number.isFinite(Number(cfg?.spectralAngularSpeed))?Number(cfg.spectralAngularSpeed):90,layerIndex)));
             const cx=(minX+maxX)*.5,cy=(minY+maxY)*.5,progress=Math.max(0,Math.min(1,Number(phase)||0)),baseDir=cfg?.direction==='backward'?-1:1,speedDir=speedDeg<0?-1:1,direction=baseDir*speedDir,first=cubics[0]?.p0,startAngle=first?Math.atan2(first.y-cy,first.x-cx):0;
 
-            return{bezierGlint:true,glintType:type,spectral,spectralCycleLocked:spectral===true,spectralProgress:progress,spectralDirection:direction,spectralStartAngle:startAngle,cubicData:data,cubicBreaks,cubicCount:cubics.length,path2d,centerX:cx,centerY:cy,sectorSpanAngle:sectorDeg*Math.PI/180,sectorDegrees:sectorDeg,angularSpeed:speedDeg,maskRadius:Math.max(10000,Math.hypot(maxX-minX,maxY-minY)*8+1000)};
+            const prepared={bezierGlint:true,glintType:type,spectral,spectralCycleLocked:spectral===true,spectralProgress:progress,spectralDirection:direction,spectralStartAngle:startAngle,cubicData:data,cubicBreaks,cubicCount:cubics.length,path2d,centerX:cx,centerY:cy,sectorSpanAngle:sectorDeg*Math.PI/180,sectorDegrees:sectorDeg,angularSpeed:speedDeg,maskRadius:Math.max(10000,Math.hypot(maxX-minX,maxY-minY)*8+1000),spectralResident:cacheable};
+            if(cacheable)spectralStaticContourCache.set(exactPaths,prepared);
+            return prepared;
         }
 
 
@@ -2412,10 +2428,11 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const glowMult=Math.max(0,Number.isFinite(Number(cfg.lightningGlowMultiplier))?Number(cfg.lightningGlowMultiplier):1);
             const intensityBase=Math.max(0,audioApplyNumeric('lightning.intensity',Number.isFinite(Number(cfg.lightningGlowIntensity))?Number(cfg.lightningGlowIntensity):100,layerIndex)/100);
             const intensityMult=Math.max(0,Number.isFinite(Number(cfg.lightningGlowIntensityMultiplier))?Number(cfg.lightningGlowIntensityMultiplier):1);
-            const brightness=Math.max(0,Math.min(8,audioApplyNumeric('lightning.brightness',Number.isFinite(Number(cfg.lightningBrightness))?Number(cfg.lightningBrightness):100,layerIndex)/100));
-            const softnessBase=Math.max(0,Math.min(150,audioApplyNumeric('lightning.softness',Number.isFinite(Number(cfg.lightningSoftness))?Number(cfg.lightningSoftness):100,layerIndex)));
+            // The former independent brightness control is retired: only the intensity-based 'Яркость' remains.
+            const brightness=1;
+            const softnessBase=Math.max(0,audioApplyNumeric('lightning.softness',Number.isFinite(Number(cfg.lightningSoftness))?Number(cfg.lightningSoftness):100,layerIndex));
             const softnessMult=Math.max(0,Number.isFinite(Number(cfg.lightningSoftnessMultiplier))?Number(cfg.lightningSoftnessMultiplier):1);
-            return{glowSize:glowBase*glowMult,strength:Math.min(32,intensityBase*intensityMult),brightness,softness:Math.max(0,Math.min(1.5,(softnessBase*softnessMult)/100)),linked:false,multiplier:1};
+            return{glowSize:glowBase*glowMult,strength:Math.min(32,intensityBase*intensityMult),brightness,softness:Math.max(0,(softnessBase*softnessMult)/100),linked:false,multiplier:1};
         }
 
         function getSweepMotionPhase(now=performance.now(),cfg=currentSweepConfig()){
@@ -2431,13 +2448,22 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const rawPct=audioApplyNumeric('lightning.rate',Number.isFinite(Number(cfg.lightningRatePercent))?Number(cfg.lightningRatePercent):100,layerIndex);
             const pct=Math.max(0,Math.min(100,Number.isFinite(Number(rawPct))?Number(rawPct):100));
             const rawMult=Number(cfg.lightningRateMultiplier);
-            const mult=Number.isFinite(rawMult)?Math.max(0,rawMult):1;
+            // UI multiplier controls the strike INTERVAL, not the Hz frequency.
+            const intervalMultiplier=Number.isFinite(rawMult)&&rawMult>0?rawMult:1;
 
-            return (pct/100)*mult;
+            return (pct/100)/intervalMultiplier;
         }
 
         const lightningClockRuntimeByLayer=new Map();
         const lightningSharedClockRuntime={phase:0,lastUpdate:0,cycleCount:0,rateConfig:null};
+        // Legacy fractional multipliers are displayed exactly; a numeric input replaces the binary selector.
+        function setLightningBinarySelectValue(input,value){
+            const n=Number(value);
+            input.value=String(Number.isFinite(n)&&n>0?n:1);
+        }
+        function formatLightningMultiplier(value){
+            const n=Number(value);return Number.isFinite(n)&&n>0?String(Number(n.toPrecision(8))):'1';
+        }
         function lightningRateSyncEnabled(){return state.lightningRateSync!==false;}
         function normalizeLightningRatePercent(value){const v=Number(value);return Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}
         function normalizeLightningRateMultiplier(value){const v=Number(value);return Number.isFinite(v)?Math.max(0,v):8;}
@@ -2546,9 +2572,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         }
         function getLightningEffectiveCycleRateHz(cfg=currentSweepConfig(),layerIndex=-1){
             const source=getLightningTriggerSource(cfg);
-            if(source==='glint')return Math.abs(getSweepTargetVelocity(cfg));
-            if(source==='morph')return 1/Math.max(.1,getTapMorphIntervalSec(state.morph.intervalSec,'full'));
-            if(source==='orange')return 1/Math.max(.1,getTapMorphIntervalSec(state.minimalMorph.intervalSec,'minimal'));
+            if(source==='glint')return Math.abs(getSweepTargetVelocity(cfg))*getLightningRateFactor(cfg,layerIndex);
+            if(source==='morph')return getLightningRateFactor(cfg,layerIndex)/Math.max(.1,getTapMorphIntervalSec(state.morph.intervalSec,'full'));
+            if(source==='orange')return getLightningRateFactor(cfg,layerIndex)/Math.max(.1,getTapMorphIntervalSec(state.minimalMorph.intervalSec,'minimal'));
             if(source==='off')return 0;
             return lightningRateSyncEnabled()?getSynchronizedLightningCycleRateHz(cfg):getLightningCycleRateHz(cfg,layerIndex);
         }
@@ -2594,8 +2620,14 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 const authored=state.layers?.[layerIndex],owner=authored?getLayerSweepConfig(authored):cfg;
                 if(source!=='glint')lightningSourceCycleTracker.delete(owner);
                 const p=getLightningTriggerPhase(now,cfg,layerIndex,source);
-                if(cfg){cfg.lightningPhase=p.phase;cfg.lightningLastUpdate=now;cfg.lightningCycleCount=p.cycle;}
-                return p.phase;
+                // Keep the source cycle as the phase origin but apply the user's
+                // interval multiplier within it. An interval of 0.5 produces two
+                // lightning strikes per source cycle rather than silently doing nothing.
+                const rate=getLightningRateFactor(cfg,layerIndex);
+                const scaled=rate>0&&p.phase<1?Math.max(0,(p.cycle+p.phase)*rate):null;
+                const phase=scaled===null?1:scaled-Math.floor(scaled);
+                if(cfg){cfg.lightningPhase=phase;cfg.lightningLastUpdate=now;cfg.lightningCycleCount=scaled===null?p.cycle:Math.floor(scaled);}
+                return phase;
             }
             {const authored=state.layers?.[layerIndex],owner=authored?getLayerSweepConfig(authored):cfg;lightningSourceCycleTracker.delete(owner);}
             if(lightningRateSyncEnabled()){
@@ -2616,6 +2648,40 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             return path;
         }
 
+        // Lightning colors an already prepared profile. Its 1px arc-length sampling is
+        // useful for selecting the strike, but uploading every collinear sample as a
+        // separate GPU quad wastes both CPU time and GPU bandwidth. Simplify ONLY the
+        // strike copy, never the authoritative contour or the base stroke. Preserve
+        // the endpoints and all bends within a sub-pixel error bound.
+        const lightningSimplifyStack=[];
+        const lightningSimplifyMarks=[];
+        const lightningSimplifyOutput=[];
+        function simplifyLightningStrokePieces(pieces,precision='exact'){
+            if(!Array.isArray(pieces))return pieces;
+            const tolerance=precision==='exact'?.075:.18,eps2=tolerance*tolerance;
+            for(const pts of pieces){
+                if(!Array.isArray(pts)||pts.length<3)continue;
+                const n=pts.length,marks=lightningSimplifyMarks,stack=lightningSimplifyStack,out=lightningSimplifyOutput;
+                marks.length=n;marks.fill(false);marks[0]=true;marks[n-1]=true;
+                stack.length=0;stack.push(0,n-1);
+                while(stack.length){
+                    const end=stack.pop(),start=stack.pop(),a=pts[start],b=pts[end];
+                    const ax=Number(a?.x)||0,ay=Number(a?.y)||0,bx=Number(b?.x)||0,by=Number(b?.y)||0;
+                    const dx=bx-ax,dy=by-ay,len2=dx*dx+dy*dy;
+                    let greatest=eps2,index=-1;
+                    for(let i=start+1;i<end;i++){
+                        const p=pts[i],px=(Number(p?.x)||0)-ax,py=(Number(p?.y)||0)-ay;
+                        const t=len2>1e-15?Math.max(0,Math.min(1,(px*dx+py*dy)/len2)):0;
+                        const ex=px-t*dx,ey=py-t*dy,dist2=ex*ex+ey*ey;
+                        if(dist2>greatest){greatest=dist2;index=i;}
+                    }
+                    if(index>=0){marks[index]=true;stack.push(start,index,index,end);}
+                }
+                out.length=0;for(let i=0;i<n;i++)if(marks[i])out.push(pts[i]);
+                if(out.length<n){pts.length=out.length;for(let i=0;i<out.length;i++)pts[i]=out[i];}
+            }
+            return pieces;
+        }
         const lightningPreparedCache=new WeakMap();
         let lightningPreparedFrame=null;
         function getPreparedLightningFrame(paths,layer,now,cfg=currentSweepConfig(layer),layerIndex=-1){
@@ -2630,7 +2696,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 const scratch=getLightningDynamicScratch(layer);
                 const visible=(paths?.__somataFrameContour===true||paths?._lightningRenderedRail===true)?paths:prepareWebVisiblePaths(paths,layer);
                 const exact=paths?._exactLightningSplineRail===true?exactLightningSelection(visible,layer,cfg,layerIndex):null;
-                const pieces=exact?.pieces||getLightningModePieces(visible,layer,scratch,cfg,layerIndex);
+                const pieces=simplifyLightningStrokePieces(exact?.pieces||getLightningModePieces(visible,layer,scratch,cfg,layerIndex),normalizeLightningPrecisionValue(cfg.lightningPrecision));
                 const data=scratch.data;
                 data.now=now;data.paths=paths;data.layer=layer;data.signature=signature;data.visible=visible;data.pieces=pieces;data.exactRanges=exact?.ranges||null;
                 data.strikePath=exact?.strikePath||lightningPiecesPath(pieces);data._insideClipPath=undefined;data._outsideClipPath=undefined;
@@ -2642,7 +2708,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(cached&&cached.layer===layer&&cached.signature===signature){cached.now=now;lightningPreparedFrame=cached;return cached;}
             const visible=(paths?.__somataFrameContour===true||paths?._lightningRenderedRail===true)?paths:prepareWebVisiblePaths(paths,layer);
             const exact=paths?._exactLightningSplineRail===true?exactLightningSelection(visible,layer,cfg,layerIndex):null;
-            const pieces=exact?.pieces||getLightningModePieces(visible,layer,null,cfg,layerIndex);
+            const pieces=simplifyLightningStrokePieces(exact?.pieces||getLightningModePieces(visible,layer,null,cfg,layerIndex),normalizeLightningPrecisionValue(cfg.lightningPrecision));
             const data={now,paths,layer,signature,visible,pieces,exactRanges:exact?.ranges||null,strikePath:exact?.strikePath||lightningPiecesPath(pieces)};
             lightningPreparedCache.set(paths,data);lightningPreparedFrame=data;return data;
         }
@@ -2655,14 +2721,16 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             for(let i=Math.max(0,Math.floor(k)-5);i<=Math.min(n-1,Math.ceil(k)+5);i++){const p=evalPulse(i);if(!p)continue;const parity=i&1;if(!best[parity]||p.intensity>best[parity].intensity)best[parity]=p;}
             if(best[0])target.push(best[0]);if(best[1])target.push(best[1]);return target;
         }
+        // Single strike envelope. The multiplier changes the duration, not the number of GPU passes.
+        function lightningStrikeDurationMs(cfg,layerIndex=-1){
+            const base=audioApplyNumeric('lightning.duration',Number(cfg.lightningDurationMs)||480,layerIndex);
+            const multiplier=Number(cfg.lightningDurationMultiplier);
+            return Math.max(1,Math.min(30000,Math.max(0,Number(base)||0)*(Number.isFinite(multiplier)&&multiplier>0?multiplier:1)));
+        }
         function lightningActiveCycleFraction(cfg,layerIndex=-1){
             const hz=Math.max(.000001,getLightningEffectiveCycleRateHz(cfg,layerIndex));
-            const cycleMs=1000/hz,strikeMs=Math.max(30,Math.min(700,audioApplyNumeric('lightning.duration',Number(cfg.lightningDurationMs)||120,layerIndex)));
-            const afterMs=cfg.lightningAfterglow!==false?Math.max(0,Math.min(900,audioApplyNumeric('lightning.afterglowMs',Number(cfg.lightningAfterglowMs)||280,layerIndex))):0;
-            let strikeFrac=Math.max(.025,Math.min(.34,strikeMs/cycleMs));
-            let afterFrac=Math.max(0,Math.min(.34,afterMs/cycleMs));
-            if(strikeFrac+afterFrac>.68){const k=.68/(strikeFrac+afterFrac);strikeFrac*=k;afterFrac*=k;}
-            return strikeFrac+afterFrac;
+            const cycleMs=1000/hz;
+            return Math.max(.002,Math.min(.94,lightningStrikeDurationMs(cfg,layerIndex)/cycleMs));
         }
         function prepareLightningVectorFrame(layer,phase,prepared,layerIndex=-1,cfg=currentSweepConfig(layer)){
             const gpuArcResident=prepared?.gpuArcResident===true;
@@ -2671,19 +2739,15 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const idx=Number.isInteger(layerIndex)?layerIndex:-1;
             const baseW=Math.max(.5,audioApplyNumeric('layer.strokeWidth',Number(layer?.strokeWidth)||1.5,idx)*getLayerStrokeWidthMultiplier(layer));
             const widthPct=Math.max(1,Math.min(100,audioApplyNumeric('lightning.width',Number(cfg.lightningWidthPercent)||64,idx)));
-            const boltW=Math.max(.2,baseW*widthPct/100),strikeVis=getLightningVisualSettings(cfg,idx);
+            const widthMult=Math.max(0,Number.isFinite(Number(cfg.lightningWidthMultiplier))?Number(cfg.lightningWidthMultiplier):1);
+            const boltW=Math.max(.2,baseW*widthPct/100*widthMult),strikeVis=getLightningVisualSettings(cfg,idx);
             const glow=strikeVis.glowSize,glowIntensity=Math.min(32,strikeVis.strength),brightness=Math.max(0,strikeVis.brightness),softness=strikeVis.softness;
             const lineOpacity=Math.max(0,Math.min(1,audioApplyNumeric('lightning.lineOpacity',Number.isFinite(Number(cfg.lightningLineOpacity))?Number(cfg.lightningLineOpacity):100,idx)/100));
             const velocity=Math.max(.000001,getLightningEffectiveCycleRateHz(cfg,idx));
             const cycleMs=1000/velocity;
-            const strikeMs=Math.max(30,Math.min(700,audioApplyNumeric('lightning.duration',Number(cfg.lightningDurationMs)||120,idx)));
-            const afterEnabled=cfg.lightningAfterglow!==false;
-            const afterMs=afterEnabled?Math.max(0,Math.min(900,audioApplyNumeric('lightning.afterglowMs',Number(cfg.lightningAfterglowMs)||280,idx))):0;
-            let strikeFrac=Math.max(.025,Math.min(.34,strikeMs/cycleMs));
-            let afterFrac=Math.max(0,Math.min(.34,afterMs/cycleMs));
-            if(strikeFrac+afterFrac>.68){const k=.68/(strikeFrac+afterFrac);strikeFrac*=k;afterFrac*=k;}
-            // No precharge: the flash is the actual Lightning strike. Remaining time is idle.
-            const strikeEnd=strikeFrac,afterEnd=strikeEnd+afterFrac;
+            const strikeFrac=Math.max(.002,Math.min(.94,lightningStrikeDurationMs(cfg,idx)/cycleMs));
+            // No precharge or trailing afterglow; only the visible strike uses GPU time.
+            const strikeEnd=strikeFrac;
             const out={
                 prepared,phase,cfg,baseW,boltW,glow,glowIntensity,brightness,softness,lineOpacity,smoothLighting:cfg.lightningSmoothLighting===true,precisionHigh:isHighPrecisionLightning(cfg),
                 primary:cfg.lightningColor||'#ffffff',secondary:cfg.lightningSecondaryColor||'#7dd3fc',
@@ -2694,13 +2758,14 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(phase<strikeEnd){
                 const t=Math.max(0,Math.min(1,phase/Math.max(1e-6,strikeFrac)));
                 const attack=lightningSmooth01(Math.min(1,t/.16)),release=lightningSmooth01(Math.min(1,(1-t)/.24));
-                out.stage='strike';out.intensity=Math.max(0,Math.min(1,attack*(.26+.84*release)));return out;
+                const count=Math.max(0,Math.round(audioApplyNumeric('lightning.microStrikes',Number(cfg.lightningMicroStrikes)||0,idx)));
+                // Microstrikes modulate the same stroke, rather than creating N duplicate GPU strokes.
+                collectLightningMicroPulses(t,count,out.microPulses);
+                let peak=null;
+                for(const pulse of out.microPulses)if(!peak||pulse.intensity>peak.intensity)peak=pulse;
+                out.microIndex=peak?peak.index:-1;
+                out.stage='strike';out.intensity=Math.max(0,Math.min(1,attack*(.26+.84*release)+Number(peak?.intensity||0)*.45));return out;
             }
-            if(afterFrac<=.0001||phase>=afterEnd)return out;
-            const t=Math.max(0,Math.min(1,(phase-strikeEnd)/afterFrac));
-            out.stage='after';out.intensity=.26*(1-lightningSmooth01(t));
-            const count=Math.max(0,Math.round(audioApplyNumeric('lightning.microStrikes',Number(cfg.lightningMicroStrikes)||0,idx)));
-            collectLightningMicroPulses(t,count,out.microPulses);
             return out;
         }
 
@@ -2814,10 +2879,10 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(!suppressBase&&frame.showBase)SweepGPURenderer.queueStroke(ctx,pieces,Math.max(.15,frame.baseW),layer?.strokeColor||'#ffffff',a*frame.lineOpacity,0,0,0);
             const micro=microIndex>=0,outerColor=micro&&microIndex%2===0?frame.primary:frame.secondary,innerColor=micro&&microIndex%2===0?frame.secondary:frame.primary;
             const outerW=frame.precisionHigh?Math.max(frame.boltW+.22,frame.boltW*1.18):Math.max(frame.boltW+.7,frame.boltW*1.9),bright=Math.max(0,frame.brightness||0);
-            const haloA=a*.82*frame.glowIntensity*bright,glowR=lightningVisualGlowRadius(frame.glow);
+            const coreA=a*Math.max(0,Math.min(1,frame.glowIntensity)),haloA=a*.82*frame.glowIntensity*bright,glowR=lightningVisualGlowRadius(frame.glow);
+            // Both passes read the same GPU segment: color changes, not geometry.
             SweepGPURenderer.queueStroke(ctx,pieces,outerW,outerColor,0,glowR,haloA*(frame.smoothLighting?.34:.27),frame.softness);
-            SweepGPURenderer.queueStroke(ctx,pieces,outerW,outerColor,a*.34,0,0,0);
-            SweepGPURenderer.queueStroke(ctx,pieces,frame.boltW,lightningBrightCoreColor(innerColor),a,0,0,0);
+            SweepGPURenderer.queueStroke(ctx,pieces,frame.boltW,lightningBrightCoreColor(innerColor),coreA,0,0,0);
             return true;
         }
         function queueMovingSweepGlowWebGL(ctx,paths,layer,alpha=1,now=performance.now(),frameData=null){
@@ -2829,8 +2894,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 if(!prepared?.visible?.length||!prepared?.pieces?.length)return true;
                 const lightningPhase=frameData?frameData.lightningPhase:getLightningMotionPhase(now,cfg,layerIndex),frame=frameData?.lightningVector||prepareLightningVectorFrame(layer,lightningPhase,prepared,layerIndex,cfg);
                 if(!frame||frame.stage==='idle')return true;
-                queueLightningStrikeWebGL(ctx,prepared.pieces,layer,alpha,frame,frame.intensity,-1,false);
-                if(frame.stage==='after')for(const pulse of frame.microPulses)queueLightningStrikeWebGL(ctx,prepared.pieces,layer,alpha,frame,pulse.intensity,pulse.index,false);
+                queueLightningStrikeWebGL(ctx,prepared.pieces,layer,alpha,frame,frame.intensity,Number.isInteger(frame.microIndex)?frame.microIndex:-1,false);
                 return true;
             }
             const phase=frameData?frameData.phase:getSweepMotionPhase(now,cfg),prepared=frameData?.prepared||getPreparedSweepFrame(paths,layer,phase,now,cfg,layerIndex),pieces=prepared?.pieces;
@@ -2937,7 +3001,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const closeProfile=plan.srcClosed===plan.dstClosed?plan.srcClosed:(closurePlan.closureMix>=.5?plan.dstClosed:plan.srcClosed);
             const sourceRounding=Math.max(0,Math.min(MAX_ROUNDING_PERCENT,Number(src.rounding)||0));
             const targetRounding=Math.max(0,Math.min(MAX_ROUNDING_PERCENT,Number(dst.rounding)||0));
-            const currentRoundingFrac=Math.max(0,Math.min(2,(sourceRounding+(targetRounding-sourceRounding)*geometryT)/100));
+            const currentRoundingFrac=Math.max(0,Math.min(2,interpolateMorphRounding(sourceRounding,targetRounding,geometryT)/100));
             const result=frameGeometryRuntime.active?getFrameOutputPool(circleFrameOutputPools,layerIndex):[];
             const resultPathPool=frameGeometryRuntime.active?(result._pathPool||(result._pathPool=[])):null;
             let resultPathWrite=0;
@@ -2998,7 +3062,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const closeProfile=plan.srcClosed===plan.dstClosed?plan.srcClosed:(closurePlan.closureMix>=.5?plan.dstClosed:plan.srcClosed);
             const sourceRounding=Math.max(0,Math.min(MAX_ROUNDING_PERCENT,Number(src.rounding)||0));
             const targetRounding=Math.max(0,Math.min(MAX_ROUNDING_PERCENT,Number(dst.rounding)||0));
-            const currentRoundingFrac=Math.max(0,Math.min(2,(sourceRounding+(targetRounding-sourceRounding)*geometryT)/100));
+            const currentRoundingFrac=Math.max(0,Math.min(2,interpolateMorphRounding(sourceRounding,targetRounding,geometryT)/100));
             const result=frameGeometryRuntime.active ? getFrameOutputPool(circleFrameOutputPools,layerIndex) : [];
             const resultPathPool=frameGeometryRuntime.active ? (result._pathPool || (result._pathPool=[])) : null;
             let resultPathWrite=0;
@@ -3571,7 +3635,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 // reintroducing a second visual rail that can drift away from Line.
                 data.visualPaths=sharedContour?(sharedWebView.visualPaths||paths):buildExactWebContourPaths(frameCtx);
                 const branches=getWebBranchFlags(cfg);data.insideEnabled=branches.inside;data.outsideStraightEnabled=branches.outsideStraight;data.outsideArcEnabled=branches.outsideArc;
-                data.region=branches.inside?(branches.outsideArc?'combined':'inside'):(branches.outsideArc?'outside':'inside');
+                data.region=branches.inside?((branches.outsideStraight||branches.outsideArc)?'combined':'inside'):((branches.outsideStraight||branches.outsideArc)?'outside':'inside');
                 data.placementMode=['corners','selfIntersection','selfIntersectionCorridor'].includes(cfg.placementMode)?cfg.placementMode:'corners';
                 data.oscillating=cfg.oscillating===true;
                 data.oscillationStrength=Math.max(0,Math.min(100,Number.isFinite(Number(cfg.oscillationStrength))?Number(cfg.oscillationStrength):10));
@@ -3674,7 +3738,10 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const pathTarget=canCache?new Path2D():ctx;if(!canCache)ctx.beginPath();
             for(let ci=0;ci<corners.length;ci++){
                 const c=corners[ci];
-                const wantsConcave=branch==='outsideStraight';if(wantsConcave?c.concave!==true:c.concave===true)continue;
+                // Outside-straight threads span the exterior recess of a CONCAVE notch.
+                // Convex tips must never sprout exterior rails: the other two Web modes
+                // continue to use convex corners as before.
+                if(branch==='outsideStraight' ? c.concave!==true : c.concave===true)continue;
                 const metric=prepared?.cornerMetrics?.[ci]||null,visualPathIndex=Number.isInteger(metric?.pathIndex)?metric.pathIndex:c.pathIndex;
                 const visualPath=prepared?.visualPaths?.[visualPathIndex]||paths?.[visualPathIndex],closed=visualPath?.closed===true;
                 const table=prepared?.visualPathTables?.[visualPathIndex]||(visualPath?.points?.length>2?buildPathLengthTable([visualPath]):null),useContour=Boolean(table?.total>4);
@@ -4034,9 +4101,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const le=document.getElementById('showLightning');if(le)le.checked=state.masterLayerEdit===true?everyLayerMatches(l=>getLayerLightningEnabled(l)):c.lightningEnabled===true;
             const et=document.getElementById('sweepEffectType');if(et)et.value=c.effectType;
             const trigger=document.getElementById('sweepLightningTriggerMode');if(trigger)trigger.value=c.lightningTriggerMode||'morph';
-            c.coreBlendMode=normalizeSweepBlendMode(c.coreBlendMode);c.glowBlendMode=normalizeSweepBlendMode(c.glowBlendMode);const cbm=document.getElementById('sweepCoreBlendMode');if(cbm)cbm.value=c.coreBlendMode;const gbm=document.getElementById('sweepGlowBlendMode');if(gbm)gbm.value=c.glowBlendMode;const lcbm=document.getElementById('sweepLightningCoreBlendMode');if(lcbm)lcbm.value=c.coreBlendMode;const lgbm=document.getElementById('sweepLightningGlowBlendMode');if(lgbm)lgbm.value=c.glowBlendMode;
+            c.coreBlendMode=normalizeSweepBlendMode(c.coreBlendMode);c.glowBlendMode=normalizeSweepBlendMode(c.glowBlendMode);const cbm=document.getElementById('sweepCoreBlendMode');if(cbm)cbm.value=c.coreBlendMode;const gbm=document.getElementById('sweepGlowBlendMode');if(gbm)gbm.value=c.glowBlendMode;const lightningBlend=document.getElementById('sweepLightningBlendMode');if(lightningBlend)lightningBlend.value=normalizeLightningLampBlendMode(c.lightningBlendMode);
             document.getElementById('sweepGlintSettings')?.classList.remove('hidden');document.getElementById('sweepLightningSettings')?.classList.remove('hidden');
-            const title=document.getElementById('sweepGlintSectionTitle');if(title)title.textContent='Проблеск';const fm=document.getElementById('sweepFlashMode');if(fm)fm.value=c.flashMode;c.profileShape=c.profileShape==='line'?'line':'current';const ps=document.getElementById('sweepProfileShape');if(ps)ps.value=c.profileShape;
+            const title=document.getElementById('sweepGlintSectionTitle');if(title)title.textContent='Проблеск';const fm=document.getElementById('sweepFlashMode');if(fm)fm.value=c.flashMode;c.profileShape='current';
             document.getElementById('sweepMovingSettings')?.classList.toggle('hidden',spectral);document.getElementById('sweepSpectralSettings')?.classList.toggle('hidden',!spectral);document.getElementById('sweepGlintPrecisionRow')?.classList.toggle('hidden',spectral);document.getElementById('sweepStandaloneMotionSettings')?.classList.toggle('hidden',spectral);
             const gp=document.getElementById('sweepGlintPrecision');if(gp)gp.value=c.flashType;const m=document.getElementById('sweepMode');if(m)m.value=c.mode;document.getElementById('sweepEveryNRow')?.classList.toggle('hidden',c.mode!=='everyNth');
             const n=document.getElementById('sweepEveryN');if(n)n.value=String(Math.max(2,Math.min(24,Math.round(Number(c.everyN)||2))));const nt=document.getElementById('sweepEveryNText');if(nt)nt.textContent=n?.value||'2';const d=document.getElementById('sweepDirection');if(d)d.value=c.direction||'forward';
@@ -4048,16 +4115,17 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             c.brightness=Math.max(0,Math.min(200,Number.isFinite(Number(c.brightness))?Number(c.brightness):100));c.glow=Math.max(0,Number.isFinite(Number(c.glow))?Number(c.glow):18);c.glowMultiplier=Math.max(0,Number.isFinite(Number(c.glowMultiplier))?Number(c.glowMultiplier):1);if(c.glow>50){const q=compactSweepPixelValue(c.glow,c.glowMultiplier,50);c.glow=q.base;c.glowMultiplier=q.multiplier;}c.glowIntensity=Math.max(0,Math.min(200,Number.isFinite(Number(c.glowIntensity))?Number(c.glowIntensity):100));c.glowIntensityMultiplier=Math.max(0,Number.isFinite(Number(c.glowIntensityMultiplier))?Number(c.glowIntensityMultiplier):1);c.softness=Math.max(0,Math.min(150,Number.isFinite(Number(c.softness))?Number(c.softness):100));c.softnessMultiplier=Math.max(0,Number.isFinite(Number(c.softnessMultiplier))?Number(c.softnessMultiplier):1);
             const sb=document.getElementById('sweepBrightness');if(sb)sb.value=String(c.brightness);const sbt=document.getElementById('sweepBrightnessText');if(sbt)sbt.textContent=`${Math.round(c.brightness)}%`;const sgl=document.getElementById('sweepGlow');if(sgl)sgl.value=String(c.glow);const sglm=document.getElementById('sweepGlowMultiplier');if(sglm)sglm.value=String(c.glowMultiplier);const sglt=document.getElementById('sweepGlowText');if(sglt)sglt.textContent=`${Math.round(c.glow*10)/10} px × ${Number(c.glowMultiplier).toFixed(c.glowMultiplier%1?1:0)}`;const sgi=document.getElementById('sweepGlowIntensity');if(sgi)sgi.value=String(c.glowIntensity);const sgim=document.getElementById('sweepGlowIntensityMultiplier');if(sgim)sgim.value=String(c.glowIntensityMultiplier);const sgit=document.getElementById('sweepGlowIntensityText');if(sgit)sgit.textContent=`${Math.round(c.glowIntensity)}% × ${Number(c.glowIntensityMultiplier).toFixed(c.glowIntensityMultiplier%1?1:0)}`;const ss=document.getElementById('sweepSoftness');if(ss)ss.value=String(c.softness);const ssm=document.getElementById('sweepSoftnessMultiplier');if(ssm)ssm.value=String(c.softnessMultiplier);const sst=document.getElementById('sweepSoftnessText');if(sst)sst.textContent=`${Math.round(c.softness)}% × ${Number(c.softnessMultiplier).toFixed(c.softnessMultiplier%1?1:0)}`;
             {
-                c.lightningProfileShape=c.lightningProfileShape==='line'?'line':'current';const lps=document.getElementById('sweepLightningProfileShape');if(lps)lps.value=c.lightningProfileShape;c.lightningBehavior=normalizeLightningBehaviorValue(c.lightningBehavior,'symmetric');c.lightningPrecision=normalizeLightningPrecisionValue(c.lightningPrecision);const lbeh=document.getElementById('sweepLightningBehavior');if(lbeh)lbeh.value=c.lightningBehavior;const lprec=document.getElementById('sweepLightningPrecision');if(lprec)lprec.value=c.lightningPrecision;c.lightningMode=['perSegment','everyNth','across','perPath','whole'].includes(c.lightningMode)?c.lightningMode:'perPath';c.lightningEveryN=Math.max(2,Math.min(24,Math.round(Number(c.lightningEveryN)||2)));c.lightningRandomPosition=c.lightningRandomPosition===true;const lm=document.getElementById('sweepLightningMode');if(lm)lm.value=c.lightningMode;document.getElementById('sweepLightningEveryNRow')?.classList.toggle('hidden',c.lightningMode!=='everyNth');const lne=document.getElementById('sweepLightningEveryN');if(lne)lne.value=String(c.lightningEveryN);const lnet=document.getElementById('sweepLightningEveryNText');if(lnet)lnet.textContent=String(c.lightningEveryN);const lrpos=document.getElementById('sweepLightningRandomPosition');if(lrpos)lrpos.checked=c.lightningRandomPosition;
+                delete c.lightningProfileShape;c.lightningBehavior=normalizeLightningBehaviorValue(c.lightningBehavior,'symmetric');c.lightningPrecision=normalizeLightningPrecisionValue(c.lightningPrecision);const lbeh=document.getElementById('sweepLightningBehavior');if(lbeh)lbeh.value=c.lightningBehavior;c.lightningMode='perPath';c.lightningEveryN=Math.max(2,Math.min(24,Math.round(Number(c.lightningEveryN)||2)));c.lightningRandomPosition=false;const lm=document.getElementById('sweepLightningMode');if(lm)lm.value=c.lightningMode;document.getElementById('sweepLightningEveryNRow')?.classList.toggle('hidden',c.lightningMode!=='everyNth');const lne=document.getElementById('sweepLightningEveryN');if(lne)lne.value=String(c.lightningEveryN);const lnet=document.getElementById('sweepLightningEveryNText');if(lnet)lnet.textContent=String(c.lightningEveryN);const lrpos=document.getElementById('sweepLightningRandomPosition');if(lrpos)lrpos.checked=c.lightningRandomPosition;
                 const lcol=document.getElementById('sweepLightningColor');if(lcol)lcol.value=/^#[0-9a-f]{6}$/i.test(c.lightningColor||'')?c.lightningColor:'#ffffff';const lscol=document.getElementById('sweepLightningSecondaryColor');if(lscol)lscol.value=/^#[0-9a-f]{6}$/i.test(c.lightningSecondaryColor||'')?c.lightningSecondaryColor:'#7dd3fc';c.lightningSegmentPercent=Math.max(1,Math.min(100,Number.isFinite(Number(c.lightningSegmentPercent))?Number(c.lightningSegmentPercent):100));const lseg=document.getElementById('sweepLightningSegmentPercent');if(lseg)lseg.value=String(c.lightningSegmentPercent);const lsegt=document.getElementById('sweepLightningSegmentText');if(lsegt)lsegt.textContent=`${Math.round(c.lightningSegmentPercent)}%`;
-                c.lightningRatePercent=Math.max(0,Math.min(100,Number.isFinite(Number(c.lightningRatePercent))?Number(c.lightningRatePercent):100));c.lightningRateMultiplier=Math.max(0,Number.isFinite(Number(c.lightningRateMultiplier))?Number(c.lightningRateMultiplier):1);const lrs=document.getElementById('sweepLightningRateSync');if(lrs)lrs.checked=lightningRateSyncEnabled();const lrpct=document.getElementById('sweepLightningRatePercent');if(lrpct)lrpct.value=String(c.lightningRatePercent);const lrm=document.getElementById('sweepLightningRateMultiplier');if(lrm)lrm.value=String(c.lightningRateMultiplier);const lrt=document.getElementById('sweepLightningRateText');if(lrt){const source=getLightningTriggerSource(c),hz=getLightningEffectiveCycleRateHz(c,state.layers.indexOf(effectLayer)),tag=source==='glint'?' · оборот проблеска':source==='morph'?' · цикл Blue':source==='orange'?' · цикл Orange':source==='off'?' · проблеск выключен':(lightningRateSyncEnabled()?' · синхр.':'');lrt.textContent=source==='timer'?(hz>0?`${Math.round(c.lightningRatePercent)}% × ${c.lightningRateMultiplier.toFixed(c.lightningRateMultiplier%1?1:0)} · ${(1/hz).toFixed((1/hz)<10?2:1)} с${tag}`:`Таймер выключен`):(hz>0?`${(1/hz).toFixed((1/hz)<10?2:1)} с${tag}`:tag.trim());}
-                c.lightningDurationMs=Math.max(30,Math.min(700,Number(c.lightningDurationMs)||480));const ldur=document.getElementById('sweepLightningDuration');if(ldur)ldur.value=String(c.lightningDurationMs);const ldurt=document.getElementById('sweepLightningDurationText');if(ldurt)ldurt.textContent=`${Math.round(c.lightningDurationMs)} ms`;c.lightningWidthPercent=Math.max(1,Math.min(100,Number(c.lightningWidthPercent)||64));const lw=document.getElementById('sweepLightningWidthPercent');if(lw)lw.value=String(c.lightningWidthPercent);const lwt=document.getElementById('sweepLightningWidthText');if(lwt)lwt.textContent=`${Math.round(c.lightningWidthPercent)}%`;
-                c.lightningBrightness=Math.max(0,Math.min(400,Number.isFinite(Number(c.lightningBrightness))?Number(c.lightningBrightness):100));c.lightningGlow=Math.max(0,Number.isFinite(Number(c.lightningGlow))?Number(c.lightningGlow):16);c.lightningGlowMultiplier=Math.max(0,Number.isFinite(Number(c.lightningGlowMultiplier))?Number(c.lightningGlowMultiplier):1);if(c.lightningGlow>50){const q=compactSweepPixelValue(c.lightningGlow,c.lightningGlowMultiplier,50);c.lightningGlow=q.base;c.lightningGlowMultiplier=q.multiplier;}c.lightningGlowIntensity=Math.max(0,Math.min(400,Number.isFinite(Number(c.lightningGlowIntensity))?Number(c.lightningGlowIntensity):100));c.lightningGlowIntensityMultiplier=Math.max(0,Number.isFinite(Number(c.lightningGlowIntensityMultiplier))?Number(c.lightningGlowIntensityMultiplier):1);c.lightningSoftness=Math.max(0,Math.min(150,Number.isFinite(Number(c.lightningSoftness))?Number(c.lightningSoftness):100));c.lightningSoftnessMultiplier=Math.max(0,Number.isFinite(Number(c.lightningSoftnessMultiplier))?Number(c.lightningSoftnessMultiplier):1);
-                let db=c.lightningBrightness,di=c.lightningGlowIntensity*c.lightningGlowIntensityMultiplier,dg=c.lightningGlow*c.lightningGlowMultiplier,ds=c.lightningSoftness*c.lightningSoftnessMultiplier;
-                const dgCompact=compactSweepPixelValue(dg,1,50),diBase=Math.min(400,di),diMult=diBase>0?di/diBase:1,dsBase=Math.min(150,ds),dsMult=dsBase>0?ds/dsBase:1,lbright=document.getElementById('sweepLightningBrightness'),lgi=document.getElementById('sweepLightningGlowIntensity'),lgim=document.getElementById('sweepLightningGlowIntensityMultiplier'),lg=document.getElementById('sweepLightningGlow'),lgm=document.getElementById('sweepLightningGlowMultiplier'),lsoft=document.getElementById('sweepLightningSoftness'),lsoftm=document.getElementById('sweepLightningSoftnessMultiplier');if(lbright)lbright.value=String(Math.min(400,db));if(lgi)lgi.value=String(diBase);if(lgim)lgim.value=String(diMult);if(lg)lg.value=String(dgCompact.base);if(lgm)lgm.value=String(dgCompact.multiplier);if(lsoft)lsoft.value=String(dsBase);if(lsoftm)lsoftm.value=String(dsMult);
-                const lbt=document.getElementById('sweepLightningBrightnessText');if(lbt)lbt.textContent=`${Math.round(db)}%`;const lgit=document.getElementById('sweepLightningGlowIntensityText');if(lgit)lgit.textContent=`${Math.round(di)}%`;const lgt=document.getElementById('sweepLightningGlowText');if(lgt)lgt.textContent=`${Math.round(dg*10)/10} px`;const lst=document.getElementById('sweepLightningSoftnessText');if(lst)lst.textContent=`${Math.round(ds)}%`;
+                c.lightningRatePercent=Math.max(0,Math.min(100,Number.isFinite(Number(c.lightningRatePercent))?Number(c.lightningRatePercent):100));c.lightningRateMultiplier=(Number(c.lightningRateMultiplier)>0&&Number.isFinite(Number(c.lightningRateMultiplier)))?Number(c.lightningRateMultiplier):1;const lrs=document.getElementById('sweepLightningRateSync');if(lrs)lrs.checked=lightningRateSyncEnabled();const lrpct=document.getElementById('sweepLightningRatePercent');if(lrpct)lrpct.value=String(c.lightningRatePercent);const lrm=document.getElementById('sweepLightningRateMultiplier');if(lrm)setLightningBinarySelectValue(lrm,c.lightningRateMultiplier);const lrt=document.getElementById('sweepLightningRateText');if(lrt){const source=getLightningTriggerSource(c),hz=getLightningEffectiveCycleRateHz(c,state.layers.indexOf(effectLayer)),tag=source==='glint'?' · управляет проблеск':source==='morph'?' · цикл Blue × частота':source==='orange'?' · цикл Orange × частота':source==='off'?' · источник-проблеск выключен':(lightningRateSyncEnabled()?' · синхр.':'');lrt.textContent=source==='timer'?(hz>0?`${Math.round(c.lightningRatePercent)}% × ${formatLightningMultiplier(c.lightningRateMultiplier)} интервала · ${(1/hz).toFixed((1/hz)<10?2:1)} с${tag}`:`Таймер выключен`):(hz>0?`${(1/hz).toFixed((1/hz)<10?2:1)} с${tag}`:tag.trim());}
+                c.lightningDurationMs=Math.max(30,Math.min(700,Number(c.lightningDurationMs)||480));const ldur=document.getElementById('sweepLightningDuration');if(ldur)ldur.value=String(c.lightningDurationMs);c.lightningDurationMultiplier=(Number(c.lightningDurationMultiplier)>0&&Number.isFinite(Number(c.lightningDurationMultiplier)))?Number(c.lightningDurationMultiplier):1;const ldm=document.getElementById('sweepLightningDurationMultiplier');if(ldm)setLightningBinarySelectValue(ldm,c.lightningDurationMultiplier);const ldurt=document.getElementById('sweepLightningDurationText');if(ldurt)ldurt.textContent=`${Math.round(c.lightningDurationMs)} ms × ${formatLightningMultiplier(c.lightningDurationMultiplier)}`;c.lightningWidthPercent=Math.max(1,Math.min(100,Number(c.lightningWidthPercent)||64));const lw=document.getElementById('sweepLightningWidthPercent');if(lw)lw.value=String(c.lightningWidthPercent);c.lightningWidthMultiplier=Math.max(0,Number.isFinite(Number(c.lightningWidthMultiplier))?Number(c.lightningWidthMultiplier):1);const lwm=document.getElementById('sweepLightningWidthMultiplier');if(lwm)lwm.value=String(c.lightningWidthMultiplier);const lwt=document.getElementById('sweepLightningWidthText');if(lwt)lwt.textContent=`${Math.round(c.lightningWidthPercent)}% × ${Number(c.lightningWidthMultiplier.toFixed(4))}`;
+                c.lightningBrightness=Math.max(0,Math.min(400,Number.isFinite(Number(c.lightningBrightness))?Number(c.lightningBrightness):100));c.lightningGlow=Math.max(0,Number.isFinite(Number(c.lightningGlow))?Number(c.lightningGlow):16);c.lightningGlowMultiplier=Math.max(0,Number.isFinite(Number(c.lightningGlowMultiplier))?Number(c.lightningGlowMultiplier):1);if(c.lightningGlow>50){const q=compactSweepPixelValue(c.lightningGlow,c.lightningGlowMultiplier,50);c.lightningGlow=q.base;c.lightningGlowMultiplier=q.multiplier;}c.lightningGlowIntensity=Math.max(0,Math.min(400,Number.isFinite(Number(c.lightningGlowIntensity))?Number(c.lightningGlowIntensity):100));c.lightningGlowIntensityMultiplier=Math.max(0,Number.isFinite(Number(c.lightningGlowIntensityMultiplier))?Number(c.lightningGlowIntensityMultiplier):1);c.lightningSoftness=Math.max(0,Number.isFinite(Number(c.lightningSoftness))?Number(c.lightningSoftness):100);c.lightningSoftnessMultiplier=Math.max(0,Number.isFinite(Number(c.lightningSoftnessMultiplier))?Number(c.lightningSoftnessMultiplier):1);
+                let di=c.lightningGlowIntensity*c.lightningGlowIntensityMultiplier,dg=c.lightningGlow*c.lightningGlowMultiplier,ds=c.lightningSoftness*c.lightningSoftnessMultiplier;
+                const dgCompact=compactSweepPixelValue(dg,1,50),diBase=Math.min(400,di),diMult=diBase>0?di/diBase:1,dsBase=Math.min(150,ds),dsMult=dsBase>0?ds/dsBase:1,lgi=document.getElementById('sweepLightningGlowIntensity'),lgim=document.getElementById('sweepLightningGlowIntensityMultiplier'),lg=document.getElementById('sweepLightningGlow'),lgm=document.getElementById('sweepLightningGlowMultiplier'),lsoft=document.getElementById('sweepLightningSoftness'),lsoftm=document.getElementById('sweepLightningSoftnessMultiplier');if(lgi)lgi.value=String(diBase);if(lgim)lgim.value=String(diMult);if(lg)lg.value=String(dgCompact.base);if(lgm)lgm.value=String(dgCompact.multiplier);if(lsoft)lsoft.value=String(dsBase);if(lsoftm)lsoftm.value=String(dsMult);
+                const lgit=document.getElementById('sweepLightningGlowIntensityText');if(lgit)lgit.textContent=`${Math.round(di)}%`;const lgt=document.getElementById('sweepLightningGlowText');if(lgt)lgt.textContent=`${Math.round(dg*10)/10} px`;const lst=document.getElementById('sweepLightningSoftnessText');if(lst)lst.textContent=`${Math.round(ds)}%`;
                 c.lightningSmoothLighting=true;const lsl=document.getElementById('sweepLightningShowLines');if(lsl)lsl.checked=c.lightningShowLines!==false;const llo=document.getElementById('sweepLightningLineOpacity');if(llo){c.lightningLineOpacity=Math.max(0,Math.min(100,Number.isFinite(Number(c.lightningLineOpacity))?Number(c.lightningLineOpacity):100));llo.value=String(c.lightningLineOpacity);const lineOn=getLayerLineVisible(effectLayer);llo.style.opacity=lineOn?'.45':'1';llo.title=lineOn?'Обычная линия уже видима — дополнительная основа не рисуется':'Прозрачность локальной основы под ударом';}const llot=document.getElementById('sweepLightningLineOpacityText');if(llot)llot.textContent=`${Math.round(c.lightningLineOpacity)}%`;
-                const lag=document.getElementById('sweepLightningAfterglow');if(lag)lag.checked=c.lightningAfterglow!==false;const lam=document.getElementById('sweepLightningAfterglowMs');if(lam){c.lightningAfterglowMs=Math.max(0,Math.min(900,Number(c.lightningAfterglowMs)||280));lam.value=String(c.lightningAfterglowMs);lam.disabled=c.lightningAfterglow===false;}const lamt=document.getElementById('sweepLightningAfterglowText');if(lamt)lamt.textContent=`${Math.round(c.lightningAfterglowMs)} ms`;const lmicro=document.getElementById('sweepLightningMicroStrikes');if(lmicro){c.lightningMicroStrikes=Math.max(0,Math.round(Number(c.lightningMicroStrikes)||0));lmicro.value=String(c.lightningMicroStrikes);lmicro.disabled=c.lightningAfterglow===false;}const lmicrot=document.getElementById('sweepLightningMicroText');if(lmicrot)lmicrot.textContent=String(c.lightningMicroStrikes);
+                c.lightningAfterglow=false;c.lightningAfterglowMs=0;const lmicro=document.getElementById('sweepLightningMicroStrikes');if(lmicro){c.lightningMicroStrikes=Math.max(0,Math.round(Number(c.lightningMicroStrikes)||0));lmicro.value=String(c.lightningMicroStrikes);}
+
             }
             normalizeSweepConfig(c);if(c.enabled===true)ensureSweepAnimation();
         }

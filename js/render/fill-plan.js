@@ -19,13 +19,50 @@ var FillMeshPreparer = (() => {
         return Math.abs(Number(a?.x) - Number(b?.x)) <= EPS && Math.abs(Number(a?.y) - Number(b?.y)) <= EPS;
     }
 
+    // All dynamic Fill carriers use the same amortized buffer growth policy.
+    // Preserve each caller's original minimum capacity and Float32 layout.
+    function ensureFanFloatStorage(entry, floatCount, minimumCapacity) {
+        if (!entry.storage || entry.capacityFloats < floatCount) {
+            let capacity = Math.max(minimumCapacity, entry.capacityFloats || 0);
+            while (capacity < floatCount) capacity = Math.ceil(capacity * 1.6);
+            entry.capacityFloats = capacity;
+            entry.storage = new Float32Array(capacity);
+        }
+        return entry.storage;
+    }
+
+    // One Float32 fan emitter for Static Fill, FrameContour, Line and Spiral.
+    // Callers still determine their own contours, anchor and buffer lifetime.
+    // Incoming contours have already been validated/normalized to finite XYs.
+    function appendFanContour(points, out, offset, anchorX, anchorY) {
+        let o=offset;
+        for(let i=0;i<points.length;i++){
+            const a=points[i],b=points[(i+1)%points.length];
+            const ax=Number(a.x),ay=Number(a.y),bx=Number(b.x),by=Number(b.y);
+            if(Math.abs(ax-bx)<=EPS&&Math.abs(ay-by)<=EPS)continue;
+            out[o++]=anchorX;out[o++]=anchorY;out[o++]=ax;out[o++]=ay;out[o++]=bx;out[o++]=by;
+        }
+        return o;
+    }
+    function appendFanContours(contours,out,anchorX,anchorY){
+        let o=0;
+        for(const points of contours)o=appendFanContour(points,out,o,anchorX,anchorY);
+        return o;
+    }
+
     function cleanContourPoints(points) {
         if (!Array.isArray(points) || points.length < 3) return null;
         const out = [];
+        let lastX, lastY;
         for (let i = 0; i < points.length; i++) {
             const p = points[i], x = Number(p?.x), y = Number(p?.y);
             if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-            if (!out.length || !samePoint(out[out.length - 1], p)) out.push(p);
+            // Reuse validated numeric coordinates for the adjacent-point test.
+            // Keep the original point objects and the same EPS boundary rule.
+            if (!out.length || Math.abs(lastX - x) > EPS || Math.abs(lastY - y) > EPS) {
+                out.push(p);
+                lastX = x; lastY = y;
+            }
         }
         if (out.length > 2 && samePoint(out[0], out[out.length - 1])) out.pop();
         return out.length >= 3 ? out : null;
@@ -38,7 +75,7 @@ var FillMeshPreparer = (() => {
         const sampler = createLampRenderedPathSampler();
         const rounding = getRoundingStrength(layer?.rounding);
         if (useSmoothSplinePath(layer, rounding, path)) {
-            splinePathForDraw(sampler, path.points, true, rounding, path.cornerFlags || [], path.bridgeRoundFlags || []);
+            splinePathForDraw(sampler, path.points, true, rounding, path.cornerFlags || [], path.bridgeRoundFlags || [], layer?.wholeCurveSpline===true);
         } else {
             roundPolylineForDraw(sampler, path.points, true, rounding, path.cornerFlags || []);
         }
@@ -52,24 +89,42 @@ var FillMeshPreparer = (() => {
             const out=[];
             const evalCubic=(seg,t)=>{const q=1-t,p0=seg.p0,c1=seg.c1,c2=seg.c2,p3=seg.p3;return{x:q*q*q*p0.x+3*q*q*t*c1.x+3*q*t*t*c2.x+t*t*t*p3.x,y:q*q*q*p0.y+3*q*q*t*c1.y+3*q*t*t*c2.y+t*t*t*p3.y};};
             const subdiv=8;
-            for(let si=0;si<cubics.length;si++){const seg=cubics[si];if(!seg?.p0||!seg?.p3)continue;for(let j=0;j<subdiv;j++){if(si>0&&j===0)continue;out.push(evalCubic(seg,j/subdiv));}if(si===cubics.length-1)out.push(evalCubic(seg,1));}
+            for(let si=0;si<cubics.length;si++){const seg=cubics[si];if(!seg?.p0||!seg?.p3)continue;for(let j=0;j<subdiv;j++){out.push(evalCubic(seg,j/subdiv));}if(si===cubics.length-1)out.push(evalCubic(seg,1));}
             return cleanContourPoints(out.length>=2?out:path?.points||[]);
         }
-        const pts=(path?.points||[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y))).map(p=>({x:Number(p.x),y:Number(p.y)}));
+        // Filter and normalize in one pass: non-Bezier Spiral Fill can contain
+        // thousands of points, and a separate filter array has no consumers.
+        const pts=[];
+        for(const p of path?.points||[]){
+            if(!p)continue;
+            const x=Number(p.x),y=Number(p.y);
+            if(Number.isFinite(x)&&Number.isFinite(y))pts.push({x,y});
+        }
         return pts.length>=2?pts:null;
     }
 
+    function isSpiralBandPath(path) {
+        return path?.closed !== true && Array.isArray(path?.points) && path.points.length >= 2;
+    }
+    function spiralBandFillEnabled(layer) {
+        return isSpiralLayer(layer) && layer?.spiralClosed !== false && layer?.spiralFillEnabled === true;
+    }
     function getSpiralBandPaths(drawData, layer) {
-        if(!isSpiralLayer(layer)||layer?.spiralClosed===false||layer?.spiralFillEnabled!==true)return null;
-        const paths=(drawData?.paths||[]).filter(p=>p?.closed!==true&&Array.isArray(p?.points)&&p.points.length>=2);
+        if (!spiralBandFillEnabled(layer)) return null;
+        const paths=(drawData?.paths||[]).filter(isSpiralBandPath);
         if(paths.length<2||paths.length%2!==0)return null;
-        const sorted=paths.slice().sort((a,b)=>{const ai=Number(a?.spiralBranchIndex),bi=Number(b?.spiralBranchIndex);if(Number.isFinite(ai)&&Number.isFinite(bi))return ai-bi;return (Number(a?.orbitIndex)||0)-(Number(b?.orbitIndex)||0);});
-        return sorted;
+        // Only the contour builder needs branch order, not the topology check.
+        paths.sort((a,b)=>{const ai=Number(a?.spiralBranchIndex),bi=Number(b?.spiralBranchIndex);if(Number.isFinite(ai)&&Number.isFinite(bi))return ai-bi;return (Number(a?.orbitIndex)||0)-(Number(b?.orbitIndex)||0);});
+        return paths;
     }
 
     function hasSpiralBandTopology(drawData, layer) {
-        const paths=getSpiralBandPaths(drawData,layer);
-        return Boolean(paths&&paths.length>=2&&paths.length%2===0);
+        if (!spiralBandFillEnabled(layer)) return false;
+        const paths = drawData?.paths;
+        if (!Array.isArray(paths)) return false;
+        let eligible = 0;
+        for (const path of paths) if (isSpiralBandPath(path)) eligible++;
+        return eligible >= 2 && eligible % 2 === 0;
     }
 
     function buildSpiralBandContours(drawData, layer) {
@@ -106,9 +161,8 @@ var FillMeshPreparer = (() => {
         for(const raw of bands){const pts=cleanContourPoints(raw);if(!pts||pts.length<3)return null;cleanBands.push(pts);totalPoints+=pts.length;totalEdges+=pts.length;for(const q of pts){const x=Number(q.x),y=Number(q.y);if(x<minX)minX=x;if(x>maxX)maxX=x;if(y<minY)minY=y;if(y>maxY)maxY=y;}}
         if(!totalEdges||!Number.isFinite(minX)||!Number.isFinite(minY)||!Number.isFinite(maxX)||!Number.isFinite(maxY))return null;
         let entry=spiralInterwindingCache.get(layer);if(!entry){entry={capacityFloats:0,storage:null,mesh:{dynamic:true,dynamicScreenSpace:false,revision:0,frameId:-1,fanData:null,fanFloatCount:0,fanTriangleCount:0,complete:false,nativeComplete:false,records:[]}};spiralInterwindingCache.set(layer,entry);}
-        const need=totalEdges*6;if(!entry.storage||entry.capacityFloats<need){let cap=Math.max(384,entry.capacityFloats||0);while(cap<need)cap=Math.ceil(cap*1.6);entry.capacityFloats=cap;entry.storage=new Float32Array(cap);}
-        const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1,out=entry.storage;let o=0;
-        for(const pts of cleanBands)for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];if(samePoint(a,b))continue;out[o++]=anchorX;out[o++]=anchorY;out[o++]=Number(a.x);out[o++]=Number(a.y);out[o++]=Number(b.x);out[o++]=Number(b.y);}
+        ensureFanFloatStorage(entry,totalEdges*6,384);
+        const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1,out=entry.storage;const o=appendFanContours(cleanBands,out,anchorX,anchorY);
         const mesh=entry.mesh;mesh.fanData=entry.storage;mesh.fanFloatCount=o;mesh.fanTriangleCount=Math.floor(o/6);mesh.complete=mesh.fanTriangleCount>0;mesh.nativeComplete=mesh.complete;mesh.frameId=Number(frameCtx?.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;mesh.anchor={x:anchorX,y:anchorY};mesh.totalVertices=totalPoints;mesh.totalTriangles=mesh.fanTriangleCount;mesh.spiralBandCount=cleanBands.length;mesh.spiralBandFill=true;mesh.semantic=semantic;Object.assign(mesh,flags);frameCtx._fillMeshShadow=mesh;return mesh;
     }
     function prepareInterwindingCorridor(frameCtx,auxPaths=null){
@@ -116,7 +170,7 @@ var FillMeshPreparer = (() => {
         if(!layer?.fill||layer?.spiralFillEnabled!==true||layer?.spiralFillType!=='interwinding'||layer?.spiralClosed===false||!isSpiralLayer(layer)||state?.tunnel?.active!==true)return null;
         let paths;
         if(Array.isArray(auxPaths)&&auxPaths.length){
-            paths=auxPaths.filter(p=>Array.isArray(p?.points)&&p.points.length>=2&&Number(p?.alpha??1)>.00001).slice();
+            paths=auxPaths.filter(p=>Array.isArray(p?.points)&&p.points.length>=2&&Number(p?.alpha??1)>.00001);
             const phase=(p,i)=>Number.isFinite(Number(p?.branchPhase))?((Number(p.branchPhase)%1)+1)%1:(Number.isFinite(Number(p?.spiralBranchIndex))?Number(p.spiralBranchIndex):i)/Math.max(1,paths.length);
             paths.forEach((p,i)=>p.__interwindSort=phase(p,i));paths.sort((a,b)=>(Number(a.__interwindSort)||0)-(Number(b.__interwindSort)||0));
         }else{
@@ -126,7 +180,13 @@ var FillMeshPreparer = (() => {
         const samples=paths.map(sampleSpiralBranchPath);if(samples.some(p=>!p||p.length<2))return null;
         const sourceCopies=Array.isArray(frameCtx?.visibleInstances?.copies)?frameCtx.visibleInstances.copies:[];
         const sourceAlphas=frameCtx?.visibleInstances?.fillAlphas||frameCtx?.visibleInstances?.alphas||[];
-        const copies=sourceCopies.map((copy,i)=>({copy,alpha:Number(sourceAlphas[i]??1)})).filter(r=>r.alpha>.0005&&Number(r.copy?.scale)>0).sort((a,b)=>Number(b.copy.scale)-Number(a.copy.scale));
+        // Reject invisible/invalid copies before allocating per-copy records.
+        const copies=[];
+        for(let i=0;i<sourceCopies.length;i++){
+            const copy=sourceCopies[i],alpha=Number(sourceAlphas[i]??1);
+            if(alpha>.0005&&Number(copy?.scale)>0)copies.push({copy,alpha});
+        }
+        copies.sort((a,b)=>Number(b.copy.scale)-Number(a.copy.scale));
         if(!copies.length)return null;
         const n=paths.length,TWO=Math.PI*2;
         const transforms=copies.map(r=>{
@@ -202,14 +262,8 @@ var FillMeshPreparer = (() => {
                 const points = rec.points;
                 rec.fanOffset = o / 2;
                 rec.fanTriangleOffset = fanTriangleCount;
-                for (let i = 0; i < points.length; i++) {
-                    const a = points[i], b = points[(i + 1) % points.length];
-                    if (samePoint(a, b)) continue;
-                    fanData[o++] = anchor.x; fanData[o++] = anchor.y;
-                    fanData[o++] = Number(a.x); fanData[o++] = Number(a.y);
-                    fanData[o++] = Number(b.x); fanData[o++] = Number(b.y);
-                    fanTriangleCount++;
-                }
+                o=appendFanContour(points,fanData,o,anchor.x,anchor.y);
+                fanTriangleCount=o/6;
                 rec.fanTriangleCount = fanTriangleCount - rec.fanTriangleOffset;
                 rec.points = null; // release object rail; GPU plan is the canonical fill representation.
             }
@@ -277,7 +331,7 @@ var FillMeshPreparer = (() => {
         const dstN=Math.max(2,Math.round(Number(targetLayer?.N)||auxPaths.length));
         // Alternating bands are unambiguous through Morph only while both endpoint branch counts are even.
         if((srcN&1)!==0||(dstN&1)!==0)return null;
-        const paths=auxPaths.filter(p=>Array.isArray(p?.points)&&p.points.length>=2&&Number(p?.alpha??1)>.00001).slice();
+        const paths=auxPaths.filter(p=>Array.isArray(p?.points)&&p.points.length>=2&&Number(p?.alpha??1)>.00001);
         if(paths.length<2||paths.length%2!==0)return null;
         const phaseKey=(p,idx)=>{
             if(Number.isFinite(Number(p?.branchPhase)))return ((Number(p.branchPhase)%1)+1)%1;
@@ -305,9 +359,8 @@ var FillMeshPreparer = (() => {
         if(!totalEdges||!Number.isFinite(minX)||!Number.isFinite(minY)||!Number.isFinite(maxX)||!Number.isFinite(maxY))return null;
         let entry=spiralMorphCache.get(layer);
         if(!entry){entry={capacityFloats:0,storage:null,mesh:{dynamic:true,dynamicScreenSpace:false,spiralBandFill:true,revision:0,frameId:-1,fanData:null,fanFloatCount:0,fanTriangleCount:0,complete:false,nativeComplete:false,records:[],semantic:'dynamic retained Spiral alternating branch-pair Fill'}};spiralMorphCache.set(layer,entry);}
-        const need=totalEdges*6;if(!entry.storage||entry.capacityFloats<need){let cap=Math.max(192,entry.capacityFloats||0);while(cap<need)cap=Math.ceil(cap*1.6);entry.capacityFloats=cap;entry.storage=new Float32Array(cap);}
-        const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1,out=entry.storage;let o=0;
-        for(const pts of bands)for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];if(samePoint(a,b))continue;out[o++]=anchorX;out[o++]=anchorY;out[o++]=Number(a.x);out[o++]=Number(a.y);out[o++]=Number(b.x);out[o++]=Number(b.y);}
+        ensureFanFloatStorage(entry,totalEdges*6,192);
+        const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1,out=entry.storage;const o=appendFanContours(bands,out,anchorX,anchorY);
         const mesh=entry.mesh;mesh.fanData=entry.storage;mesh.fanFloatCount=o;mesh.fanTriangleCount=Math.floor(o/6);mesh.complete=mesh.fanTriangleCount>0;mesh.nativeComplete=mesh.complete;mesh.frameId=Number(frameCtx?.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;mesh.anchor={x:anchorX,y:anchorY};mesh.totalVertices=totalPoints;mesh.totalTriangles=mesh.fanTriangleCount;mesh.spiralBandCount=bands.length;
         frameCtx._fillMeshShadow=mesh;return mesh;
     }
@@ -393,9 +446,8 @@ var FillMeshPreparer = (() => {
         if(!totalEdges||!Number.isFinite(minX)||!Number.isFinite(minY)||!Number.isFinite(maxX)||!Number.isFinite(maxY)){
             mesh.fanFloatCount=0;mesh.fanTriangleCount=0;mesh.complete=false;mesh.nativeComplete=false;mesh.totalTriangles=0;mesh.revision=(mesh.revision+1)>>>0||1;entry.record=record;entry.frameId=fid;frameCtx._fillMeshShadow=mesh;return mesh;
         }
-        const need=totalEdges*6;if(!entry.storage||entry.capacityFloats<need){let cap=Math.max(96,entry.capacityFloats||0);while(cap<need)cap=Math.ceil(cap*1.6);entry.capacityFloats=cap;entry.storage=new Float32Array(cap);}
-        const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1,out=entry.storage;let o=0;
-        for(const pts of contours)for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];if(samePoint(a,b))continue;out[o++]=anchorX;out[o++]=anchorY;out[o++]=Number(a.x);out[o++]=Number(a.y);out[o++]=Number(b.x);out[o++]=Number(b.y);}
+        ensureFanFloatStorage(entry,totalEdges*6,96);
+        const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1,out=entry.storage;const o=appendFanContours(contours,out,anchorX,anchorY);
         mesh.fanData=entry.storage;mesh.fanFloatCount=o;mesh.fanTriangleCount=Math.floor(o/6);mesh.complete=mesh.fanTriangleCount>0;mesh.nativeComplete=mesh.complete;mesh.revision=(mesh.revision+1)>>>0||1;mesh.anchor={x:anchorX,y:anchorY};mesh.totalTriangles=mesh.fanTriangleCount;
         entry.record=record;entry.frameId=fid;frameCtx._fillMeshShadow=mesh;dynamicBuilds++;dynamicSourcePoints+=totalPoints;dynamicEdges+=mesh.fanTriangleCount;dynamicFanBytes+=o*4;return mesh;
     }
@@ -432,20 +484,9 @@ var FillMeshPreparer = (() => {
             mesh.frameId=Number(frameCtx.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;
             entry.frameId=mesh.frameId;entry.commands=commands;entry.dynamic=isDynamic;frameCtx._fillMeshShadow=mesh;return mesh;
         }
-        const need=totalEdges*6;
-        if(!entry.storage||entry.capacityFloats<need){
-            let cap=Math.max(96,entry.capacityFloats||0);while(cap<need)cap=Math.ceil(cap*1.6);
-            entry.capacityFloats=cap;entry.storage=new Float32Array(cap);
-        }
+        ensureFanFloatStorage(entry,totalEdges*6,96);
         const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1;
-        const out=entry.storage;let o=0;
-        for(const pts of contours){
-            for(let i=0;i<pts.length;i++){
-                const a=pts[i],b=pts[(i+1)%pts.length],ax=Number(a.x),ay=Number(a.y),bx=Number(b.x),by=Number(b.y);
-                if(Math.abs(ax-bx)<=EPS&&Math.abs(ay-by)<=EPS)continue;
-                out[o++]=anchorX;out[o++]=anchorY;out[o++]=ax;out[o++]=ay;out[o++]=bx;out[o++]=by;
-            }
-        }
+        const out=entry.storage,o=appendFanContours(contours,out,anchorX,anchorY);
         mesh.fanData=entry.storage;mesh.fanFloatCount=o;mesh.fanTriangleCount=Math.floor(o/6);
         mesh.complete=mesh.fanTriangleCount>0;mesh.nativeComplete=mesh.complete;
         mesh.frameId=Number(frameCtx.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;

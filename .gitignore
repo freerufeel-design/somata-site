@@ -1,0 +1,12 @@
+# Do not commit locally generated diagnostic/test files.
+*.log
+*.tmp
+*.bak
+*.swp
+*.orig
+*.rej
+quick_exit.txt
+*-preview.png
+*capture*.png
+__pycache__/
+.DS_Store

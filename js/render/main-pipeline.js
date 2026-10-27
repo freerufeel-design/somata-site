@@ -17,6 +17,7 @@ function prepareMainRenderFrame(renderFrame) {
     const mainContainer = mainContainerEl;
     const { w, h, dpr } = ensureMainCanvasSize(mainContainer);
     renderFrame.w=w; renderFrame.h=h; renderFrame.dpr=dpr;
+    try{window.SomataMirror?.begin?.(renderFrame);}catch(_){}
     const gpuBackendAllowed=(typeof somataGpuBackendAllowed!=='function'||somataGpuBackendAllowed());
     // renderRuntime.frame is deliberately reused.  Deferred Layer Scene commands are not:
     // a Fill/Web command from frame N must never survive into frame N+1 just because frame N
@@ -228,11 +229,30 @@ function prepareMainLayerTransformAndStyle(frameCtx, renderFrame) {
     frameCtx.tunnelFillPaletteProfile=tunnelColorShiftIsActive() ? resolveTunnelPaletteProfile(frameCtx.tunnelBaseFillColor,layer,layerIndex,'fill') : null;
 }
 
+function spiralCorridorCopiesForLayer(copies,layer){
+    // Corridor's spacing must be raised to the Spiral's radial order for ALL
+    // GPU effects, never only in the specialised stroke renderer. The original
+    // shared copy array is immutable from this layer's perspective.
+    if(state.tunnel?.active!==true||layer?.spiralEnabled!==true||!Array.isArray(copies))return copies;
+    const exponent=Math.max(.000001,Math.abs(Number(getEffectiveSpiralOrder?.(layer))||1));
+    if(Math.abs(exponent-1)<1e-8)return copies;
+    const scaled=copies.map(copy=>{
+        const scale=Math.max(1e-12,Math.abs(Number(copy?.scale)||1));
+        const step=Math.max(1.000000001,Number(copy?.stepRatio)||1);
+        return{...copy,scale:Math.pow(scale,exponent),stepRatio:Math.pow(step,exponent)};
+    });
+    for(const key of Object.keys(copies))if(!/^\d+$/.test(key))scaled[key]=copies[key];
+    if(Number(scaled._stepRatio)>1)scaled._stepRatio=Math.pow(scaled._stepRatio,exponent);
+    if(Number(scaled._logStepRatio)>0)scaled._logStepRatio*=exponent;
+    return scaled;
+}
 function prepareMainLayerInstances(frameCtx, renderFrame) {
     const layerIndex = frameCtx.layerIndex;
     const layer = frameCtx.layer;
+    const baseCopies=spiralCorridorCopiesForLayer(renderFrame.tunnelCopies,layer);
+    const tunnelCopies=window.__somataCorridorCopiesForLayer?.(baseCopies,layer,frameCtx.now)||baseCopies;
     frameCtx.visibleInstances = prepareTunnelVisibleInstances(
-        renderFrame.tunnelCopies, frameCtx.layerExtent, frameCtx.audioScale, renderFrame.viewportOuterRadius, state.zoom, layer?.id || layerIndex, frameCtx.now
+        tunnelCopies, frameCtx.layerExtent, frameCtx.audioScale, renderFrame.viewportOuterRadius, state.zoom, layer?.id || layerIndex, frameCtx.now
     );
     const metrics=frameCtx.instanceMetrics;metrics.length=frameCtx.visibleInstances.copies.length;
     const metricZoom=Math.max(.001,Number(state.zoom)||1),metricCombined=Math.abs(Number(frameCtx.combinedScale)||1);
@@ -371,6 +391,7 @@ function prepareMainLayerFrame(renderFrame, layerIndex) {
     if (!SomataMorphProviderService.resolveFrameSource(frameCtx, renderFrame)) return null;
     prepareMainLayerMorphState(frameCtx, renderFrame);
     try{window.SomataTestMorph?.applyFrame?.(frameCtx,renderFrame.now);}catch(error){console.warn('[Somata Test Morph] skipped',error);}
+    try{window.__somataApplyCorridorEntranceLayer?.(frameCtx,renderFrame.now);}catch(error){console.warn('[Somata Corridor Entrance] skipped',error);}
     prepareMainLayerTransformAndStyle(frameCtx, renderFrame);
     prepareMainLayerGeometry(frameCtx);
     prepareMainLayerInstances(frameCtx, renderFrame);
@@ -650,6 +671,7 @@ function renderMainLayer(renderFrame, layerIndex) {
     try{frameCtx=typeof runSpiroIsolatedLayerPreparation==='function'?runSpiroIsolatedLayerPreparation(renderFrame,layerIndex,()=>prepareMainLayerFrame(renderFrame,layerIndex)):prepareMainLayerFrame(renderFrame,layerIndex);}
     finally{renderPassProfiler.end('layerPrepare',__pt);if(diagnostic)diagnostic.prepareMs=performance.now()-started;}
     if(frameCtx){
+        try{window.SomataMirror?.captureLayer?.(frameCtx);}catch(_){}
         if(diagnostic){diagnostic.kind=String(frameCtx.geometryPlan?.kind||'unknown');frameCtx._slowFrameLayerTiming=diagnostic;}
         if(SomataGeometryPolicy.isStrict(frameCtx)&&renderFrame)renderFrame.strictSpiralGpuPresentRequired=true;
         const drawStarted=performance.now();
@@ -770,6 +792,7 @@ function finishMainRenderFrame(renderStartedAt,renderFrame){
             try{requestMainCanvasRender?.();}catch(_){}
         }
     }else if(renderFrame){renderBackendTelemetry.mark('final','gpu','final WebGPU composite');renderFrame.gpuLayerSceneDeferred=false;renderFrame.gpuLampsDeferred=false;renderFrame.gpuFinalVignetteDeferred=false;renderFrame.gpuMainSceneEmpty=false;}
+    try{window.SomataMirror?.present?.(renderFrame,presented);}catch(err){console.warn('[Somata Mirror] overlay skipped',err);}
     if(framePhases)framePhases.presentationRescueMs=performance.now()-phaseAt;
     phaseAt=performance.now();
     try{SomataFeatureLifecycle?.end?.(renderFrame,somataGpuBackendAllowed());}catch(err){spiroPassIsolationNoteFailure?.('featureLifecycleEnd',err,{frameId:renderFrame?.id,layerIndex:-1});}

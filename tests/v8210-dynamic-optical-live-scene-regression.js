@@ -12,7 +12,7 @@ assert.match(part,/renderPerf\.rendering=false;\s*\/\/[\s\S]*?SomataAmbientPrism
  'A finished main GPU frame notifies optics AFTER its present and after releasing render guard');
 assert(!part.includes('animationScheduler.invalidate()'),'do not start a second render loop');
 const html=read('index.html');
-const releaseVersion=html.match(/<title>Somata (9\.\d+\.\d+)<\/title>/)?.[1];
+const releaseVersion=html.match(/<title>Somata (\d+\.\d+\.\d+)<\/title>/)?.[1];
 assert(releaseVersion,'release version missing from HTML title');
 for(const asset of ['js/render/main-pipeline.js','js/app/ambient-prism.js'])
  assert(html.includes(asset+'?v='+releaseVersion),'asset cache-busting differs from release: '+asset);

@@ -13,14 +13,14 @@ async function main(){
       document.getElementById('showWeb').checked=true;document.getElementById('showWeb').dispatchEvent(new Event('change',{bubbles:true}));
       const samples={};
       for(const topology of ['closed','spiral-closed','spiral-open']){
-        document.querySelector('[data-contour-mode="'+topology+'"]').click();await new Promise(r=>setTimeout(r,35));
+        __somataSelectContourMode(topology);await new Promise(r=>setTimeout(r,35));
         setCheck('webInside',true);setCheck('webOutsideStraight',false);setCheck('webOutsideArc',false);samples[topology+'-inside']=branch('inside',1200);
         setCheck('webInside',false);setCheck('webOutsideStraight',true);setCheck('webOutsideArc',false);samples[topology+'-outsideStraight']=branch('outsideStraight',1210);
         setCheck('webInside',false);setCheck('webOutsideStraight',false);setCheck('webOutsideArc',true);samples[topology+'-outsideArc']=branch('outsideArc',1220);
       }
       setCheck('webInside',true);setCheck('webOutsideStraight',true);setCheck('webOutsideArc',true);
       const morphBtn=document.getElementById('btnMorph');if(runtimeState.morph.active)morphBtn.click();morphBtn.click();await new Promise(r=>setTimeout(r,90));
-      const morph=[];for(const topology of ['spiral-closed','spiral-open','closed']){document.querySelector('[data-contour-mode="'+topology+'"]').click();await new Promise(r=>setTimeout(r,45));morph.push({topology,inside:branch('inside',performance.now()),straight:branch('outsideStraight',performance.now()+1),arc:branch('outsideArc',performance.now()+2),progress:Number(runtimeState.morph.progress)||0});}
+      const morph=[];for(const topology of ['spiral-closed','spiral-open','closed']){__somataSelectContourMode(topology);await new Promise(r=>setTimeout(r,45));morph.push({topology,inside:branch('inside',performance.now()),straight:branch('outsideStraight',performance.now()+1),arc:branch('outsideArc',performance.now()+2),progress:Number(runtimeState.morph.progress)||0});}
       if(runtimeState.morph.active)morphBtn.click();await new Promise(r=>setTimeout(r,30));
       return{samples,morph,inFrame:animationScheduler.stats().inFrame};
     })()`);

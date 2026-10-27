@@ -11,7 +11,7 @@ const LAYER_PROPERTY_DEPENDENCIES = (() => {
     add('geometry', [
         'N','K','customSuborbits','chaosStar','chaosStepMinus','chaosStepPlus','chaosClosures','chaosSeed',
         'closedLoop','lineJoinType','radius','radiusMultiplier','rounding','profileMode','splineRenderMode',
-        'profileNodes','profileSplineSegments','profileSplineMix','spiralEnabled','spiralOrder','spiralTangential',
+        'profileNodes','profileSplineSegments','profileSplineMix','spiralEnabled','spiralOrder','spiralZeroTransitionMode','spiralTangential',
         'spiralRoundSeams','spiralClosed','spiralStep','spiralStepLinked','spiralRounding','geometryCircles'
     ]);
     add('transform', [

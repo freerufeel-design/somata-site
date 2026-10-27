@@ -1,0 +1,86 @@
+'use strict';
+const fs=require('node:fs');const path=require('node:path');const assert=require('node:assert/strict');
+const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness');
+(async()=>{
+ const h=await createBrowserHarness({disableGpu:true,loadDelayMs:350,evalTimeoutMs:12000});
+ try{
+   const css=fs.readFileSync(path.resolve(__dirname,'../styles/app.css'),'utf8');
+   await h.evaluate(`(()=>{const x=document.createElement('style');x.textContent=${JSON.stringify(css)};document.head.append(x);})()`);
+   const result=await h.evaluate(`(()=>{
+      const check=(x,msg)=>{if(!x)throw new Error(msg);};
+      const layer=state.layers[0];state.sidebarMode='shape';state.activeLayerId=layer.id;syncSidebarInputs();
+      const sub=document.querySelector('#suborbitsContainer'),chaos=document.querySelector('.chaos-star-toggle-row');
+      check(chaos.previousElementSibling===sub,'Chaos Star did not move immediately below suborbits');
+      check(document.querySelectorAll('[data-contour-family]').length===3,'not three contour families');
+      check(document.querySelectorAll('[data-contour-variant]').length===2,'not two shared variants');
+      const original=getCachedLayerDrawData(layer).paths;
+      document.querySelector('[data-contour-family=extended]').click();
+      check(getContourMode(layer)==='extended-linear','linear extended selection');
+      const linear=getCachedLayerDrawData(layer).paths;
+      check(linear.length>=4 && linear.every(p=>p.closed===false),'linear extended open rays');
+      check(linear.every(p=>p.points.length===2),'linear extended should be lines');
+      check(linear[0].points.some(p=>Math.hypot(p.x,p.y)>2*layer.radius),'linear does not go beyond radius');
+      document.querySelector('[data-contour-variant=second]').click();
+      check(getContourMode(layer)==='extended-profile','repeat extended selection');
+      layer.profileNodes=[{x:0,y:0},{x:.35,y:.25},{x:1,y:0}];invalidateLayerGeometry(layer,'test-v920');
+      const repeat=getCachedLayerDrawData(layer).paths;
+      check(repeat.length>=4&&repeat[0].points.length>10,'repeated profile not constructed');
+      check(repeat.every(p=>p.points.every(q=>Number.isFinite(q.x)&&Number.isFinite(q.y))),'nonfinite extended paths');
+      document.querySelector('[data-contour-family=spiral]').click();
+      check(getContourMode(layer)==='spiral-open','shared second toggle not retained for spiral');
+      document.querySelector('[data-contour-variant=first]').click();
+      check(getContourMode(layer)==='spiral-closed','spiral closed');
+      document.querySelector('[data-contour-family=polygon]').click();
+      check(getContourMode(layer)==='closed','polygon closed');
+      const guide=document.querySelector('#paramShowRoundingGuides');
+      check(getComputedStyle(guide.closest('label')).display!=='none','construction guide hidden');
+      guide.checked=true;guide.dispatchEvent(new Event('change',{bubbles:true}));
+      check(state.roundingGuidesOverlayEnabled===true&&!state.showRoundingGuides,'guide has broken GPU-path compatibility');
+      const mirrorBtn=document.getElementById('btnSidebarMirror');mirrorBtn.click();
+      check(state.mirrorMode===true&&mirrorBtn.getAttribute('aria-pressed')==='true','mirror toggle');
+      check(state.sidebarMode==='shape','mirror should not change active toolbar tab');
+      const mirror=SomataMirror;check(typeof mirror?.setSource==='function','missing future media source contract');
+      const a=document.createElement('canvas');a.width=48;a.height=48;const ac=a.getContext('2d');ac.fillStyle='red';ac.fillRect(0,0,48,48);
+      mirror.setSource(a);
+      mirror.begin({id:154,w:320,h:240,dpr:1});
+      mirror.captureLayer({layer,layerIndex:0,staticDrawData:getCachedLayerDrawData(layer),frame:{motionPanX:0,motionPanY:0,motionRotationRad:0},combinedScale:1,combinedRotationRad:0});
+      mirror.present({w:320,h:240,dpr:1},false);
+      const mask=mirror.getMask();
+      check(mask.layers.length===1&&mask.layers[0].segments.length>=4,'mirror mask absent');
+      check(document.getElementById('somataMirrorCanvas').style.display==='block','mirror overlay hidden');
+      const l2={...layer,id:'test-layer-2',N:6,extendedProfileEnabled:true,extendedProfileMode:'repeat'};
+      mirror.begin({id:155,w:320,h:240,dpr:1});
+      for(const [i,l] of [layer,l2].entries())mirror.captureLayer({layer:l,layerIndex:i,staticDrawData:getCachedLayerDrawData(l),frame:{},combinedScale:1,combinedRotationRad:0});
+      mirror.present({w:320,h:240,dpr:1},false);
+      check(mirror.getMask().layers.length===2,'multi-layer kaleidoscope not captured');
+      // Actual pixel-level reflection: a horizontal geometry edge at Y=120
+      // must reflect a red upper half into a previously blue lower half.
+      const halves=document.createElement('canvas');halves.width=320;halves.height=240;
+      const hc=halves.getContext('2d');hc.fillStyle='#ff0000';hc.fillRect(0,0,320,120);
+      hc.fillStyle='#0000ff';hc.fillRect(0,120,320,120);
+      mirror.setSource(halves);
+      mirror.begin({id:156,w:320,h:240,dpr:1});
+      mirror.captureLayer({layer,layerIndex:0,staticDrawData:{paths:[{closed:false,points:[{x:-110,y:0},{x:110,y:0}]}]},frame:{},combinedScale:1,combinedRotationRad:0});
+      mirror.present({w:320,h:240,dpr:1},false);
+      const mirrorPixel=document.getElementById('somataMirrorCanvas').getContext('2d').getImageData(160,175,1,1).data;
+      check(mirrorPixel[0]>180&&mirrorPixel[2]<60,'optical reflection did not replace blue pixel with reflected red pixel: '+Array.from(mirrorPixel));
+      const circles=SomataGeometryCircles.compute([{points:[{x:120,y:0},{x:0,y:120},{x:-120,y:0},{x:0,y:-120}],closed:true,cornerFlags:[1,1,1,1]}],{circumscribed:true,inscribed:true,median:true,keyPoints:true});
+      check(circles.length===4&&circles.every(x=>Number.isFinite(x.r)&&x.r>0),'circle geometry regression');
+      // New independent controls and extended topology must round-trip a project.
+      setContourMode(layer,'extended-profile');state.roundingGuidesOverlayEnabled=true;
+      const saved=buildProjectData();
+      check(saved.layers[0].extendedProfileEnabled===true&&saved.layers[0].extendedProfileMode==='repeat','extended mode not serialized');
+      check(saved.settings.mirrorMode===true&&saved.settings.showRoundingGuides===true,'mirror/guides not serialized');
+      setContourMode(layer,'closed');state.mirrorMode=false;state.roundingGuidesOverlayEnabled=false;
+      applyLoadedProject(saved,{applyProjectDefaultModes:false});
+      check(getContourMode(state.layers[0])==='extended-profile'&&state.mirrorMode===true&&state.roundingGuidesOverlayEnabled===true,'extended/mirror/guides project loading regression');
+      mirrorBtn.click();guide.checked=false;guide.dispatchEvent(new Event('change',{bubbles:true}));
+      mirror.present({w:320,h:240,dpr:1},false);
+      check(document.getElementById('somataMirrorCanvas').style.display==='none','mirror overlay should hide');
+      return{families:['polygon','spiral','extended'],variants:2,originalPaths:original.length,linearPaths:linear.length,repeatPoints:repeat[0].points.length,mirrorSegments:mask.layers[0].segments.length,circleCount:circles.length,roundingGuidesGpuNeutral:true,reflectedPixel:mirrorPixel[0]};
+   })()`);
+   const exceptions=uncaughtExceptions(h.events);
+   assert.equal(exceptions.length,0,'uncaught browser exceptions: '+exceptions.join('; '));
+   console.log('PASS Somata 9.2 contour/rounding/mirror/circles',JSON.stringify(result));
+ }finally{await h.close();}
+})().catch(e=>{console.error('FAIL Somata 9.2 contour/mirror',e.stack||e);process.exit(1)});

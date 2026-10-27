@@ -132,10 +132,9 @@ async function main(){
     for(const c of [phaseCircleFade,minimalTurnFade]){assert(c.status?.strictContinuous===true&&c.status?.keepsContinuity===true&&c.status?.retainedBezierRail===true,`${c.type} must stay on a strict retained rail even in outer Fade mode`);assert(c.plan?.presenceBoth===true&&c.plan?.continuousTopology===true,`${c.type} Fade mode broke retained continuity`);}
     assert(multiplierCase?.multiplier===4&&multiplierCase.min===8&&multiplierCase.max===16,'Morph N multiplier did not snap 5—19 to the valid ×4 range 8—16');
     assert(multiplierCase.targetNs.length>0&&multiplierCase.targetNs.every(n=>n%4===0&&n>=8&&n<=16),'Morph generated an N outside the ×4 grid');
-    assert(topological.status?.unrestrictedParameters===true&&!topological.status?.locksN&&!topological.status?.locksK,'topological mode still reports blocked Spiral parameters');
-    assert(topological.target.N!==topological.source.N&&topological.target.K!==topological.source.K,'topological mode did not change N/K');
-    assert(Math.sign(topological.target.order)===-1&&Math.sign(topological.source.order)===1,'topological mode still blocks Spiral order direction changes');
-    assert(topological.plan?.continuousTopology&&topological.plan?.presenceBoth&&topological.plan?.interpolationMetric==='cartesian-keypoints','topological mode is not retained continuous keypoint-Cartesian transport');
+    // Legacy projects authored with removed Spiral Topology must migrate safely.
+    assert(topological.status?.type==='phaseCircle'&&!topological.status?.unrestrictedParameters,'obsolete Spiral Topology was not migrated to phase-circle');
+    assert(topological.plan?.continuousTopology&&topological.plan?.presenceBoth,'legacy Topology migration did not preserve a retained path');
     assert(phaseCircleTopology.target.N!==phaseCircleTopology.source.N&&phaseCircleTopology.target.K!==phaseCircleTopology.source.K,'topological Spiral morph did not change N/K');
     assert(phaseCircleTopology.plan.mergeSplit>0&&phaseCircleTopology.plan.continuousTopology&&phaseCircleTopology.plan.presenceBoth,'topological Spiral N/K change is not a no-fade merge/split');
     assert(torn.target.N!==torn.source.N&&torn.target.K!==torn.source.K,'torn mode did not exercise topology change');
@@ -151,10 +150,10 @@ async function main(){
       assert(p.maxFrameStepNorm<0.12,`${type} shape morph frame displacement is too abrupt (${p.maxFrameStepNorm})`);
     }
     assert(shapeStress.phaseCircle.mergeSplit>0,'phase-circle shape + topology stress did not exercise Spiral merge/split');
-    assert(shapeStress.topology.mergeSplit>0&&shapeStress.topology.interpolationMetric==='cartesian-keypoints','topological shape + N/K/order stress did not exercise retained keypoint-Cartesian merge/split');
+    assert(shapeStress.topology?.finite&&shapeStress.topology?.presenceBoth,'legacy Topology stress did not migrate to retained Spiral transport');
     assert(shapeStress.torn&&shapeStress.torn.finite,'torn shape morph did not produce a finite plan');
     assert(shapeStress.torn.exactSubdivisionOnly&&shapeStress.torn.arcEqualizedRecords===0,'torn shape stress reintroduced arc resampling');
-    assert(centerShade?.spec?.enabled===false&&centerShade.spec.mode==='copy-alpha'&&centerShade.inside===1&&centerShade.feather===1&&centerShade.outside===1,'Spiral still owns a radial geometry-space center mask instead of Corridor copy alpha');
+    assert(centerShade?.spec?.enabled===true&&centerShade.spec.mode==='spiral-soft-radial-plus-copy-alpha'&&centerShade.inside>=0&&centerShade.inside<centerShade.feather&&centerShade.feather<centerShade.outside&&centerShade.outside===1,'Spiral center gradient must be continuous while retaining Corridor copy alpha');
     assert(outerAnchor&&outerAnchor.index===1&&outerAnchor.id==='spiral-outer-test'&&outerAnchor.radius===320&&outerAnchor.participants===2,'rotation compensation is not anchored to the outermost visible Spiral layer');
 
     const exc=uncaughtExceptions(h.events).slice(baseline);

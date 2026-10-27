@@ -3,8 +3,7 @@ window.__spiroRegisterModule?.('js/render/geometry-circles-pass');
 // Geometry-circle overlay is a self-contained geometry feature. It consumes prepared
 // geometry and emits its own GPU commands; changing Spiral/Morph/Base orchestration does
 // not alter the circle fitting or overlay contract.
-function distanceOriginToSegment(a,b){
-    const ax=Number(a?.x)||0,ay=Number(a?.y)||0,bx=Number(b?.x)||0,by=Number(b?.y)||0;
+function distanceOriginToSegmentXY(ax,ay,bx,by){
     const dx=bx-ax,dy=by-ay,den=dx*dx+dy*dy;
     if(den<=1e-12)return Math.hypot(ax,ay);
     const t=Math.max(0,Math.min(1,-(ax*dx+ay*dy)/den));
@@ -32,19 +31,35 @@ function fitCircleThroughKeyPoints(points){
     if(!sol)return null;const [cx,cy,c]=sol,r2=cx*cx+cy*cy+c;if(!(r2>1e-9))return null;return{x:cx,y:cy,r:Math.sqrt(r2)};
 }
 function computeLayerGeometryCircles(paths,cfg){
-    const all=[],keys=[];let outer=0,inner=Infinity;
+    // Keep only the points needed by the optional fitting control. A basic
+    // radius overlay must not allocate an O(profile size) array each frame.
+    const fitKeys=cfg?.keyPoints===true;
+    const all=fitKeys?[]:null,keys=fitKeys?[]:null;
+    let outer=0,inner=Infinity,minPointRadius=Infinity,pointCount=0;
     for(const path of paths||[]){
         const pts=path?.points||[],flags=path?.cornerFlags||[];if(!pts.length)continue;
-        for(let i=0;i<pts.length;i++){const p=pts[i],r=Math.hypot(Number(p?.x)||0,Number(p?.y)||0);outer=Math.max(outer,r);all.push(p);if(flags[i])keys.push(p);}
-        for(let i=0;i<pts.length-1;i++)inner=Math.min(inner,distanceOriginToSegment(pts[i],pts[i+1]));
-        if(path.closed&&pts.length>1)inner=Math.min(inner,distanceOriginToSegment(pts[pts.length-1],pts[0]));
+        let firstX=0,firstY=0,previousX=0,previousY=0;
+        pointCount+=pts.length;
+        for(let i=0;i<pts.length;i++){
+            const p=pts[i],x=Number(p?.x)||0,y=Number(p?.y)||0,r=Math.hypot(x,y);
+            outer=Math.max(outer,r);
+            minPointRadius=Math.min(minPointRadius,r);
+            if(fitKeys){all.push(p);if(flags[i])keys.push(p);}
+            if(i===0){firstX=x;firstY=y;}
+            else inner=Math.min(inner,distanceOriginToSegmentXY(previousX,previousY,x,y));
+            previousX=x;previousY=y;
+        }
+        if(path.closed&&pts.length>1)inner=Math.min(inner,distanceOriginToSegmentXY(previousX,previousY,firstX,firstY));
     }
-    if(!all.length)return[];if(!Number.isFinite(inner))inner=Math.min(...all.map(p=>Math.hypot(Number(p?.x)||0,Number(p?.y)||0)));
+    if(!pointCount)return[];
+    // Also handles single-point profiles without Math.min(...a huge array),
+    // which can exceed the JavaScript engine's maximum argument count.
+    if(!Number.isFinite(inner))inner=minPointRadius;
     const out=[];
     if(cfg.circumscribed===true&&outer>0)out.push({kind:'circumscribed',x:0,y:0,r:outer});
     if(cfg.inscribed===true&&inner>0)out.push({kind:'inscribed',x:0,y:0,r:inner});
     if(cfg.median===true&&outer>0&&inner>0)out.push({kind:'median',x:0,y:0,r:(outer+inner)/2});
-    if(cfg.keyPoints===true){
+    if(fitKeys){
         const source=keys.length>=3?keys:all;const fitted=fitCircleThroughKeyPoints(source);if(fitted)out.push({kind:'keyPoints',...fitted});
     }
     return out;
@@ -62,6 +77,7 @@ function buildGeometryCircleGPUCommands(frameCtx,circles){
             rec.globalAlpha=Math.max(0,Math.min(1,frameCtx.baseAlpha*alpha));
             rec.strokeStyle=getTunnelCopyColor(layer.strokeColor||'#ffffff',copy,frameCtx.tunnelPaletteProfile);rec.fillStyle='transparent';
             rec.lineWidth=Math.max(.5,Number(frameCtx.strokeWidth)||1.5)/Math.max(.001,Math.abs(Number(frameCtx.combinedScale)||1));
+            rec.lineCap=frameCtx.lineCap||'round';rec.lineJoin=frameCtx.lineJoin||'round';
             for(const c of circles){if(!(c.r>0))continue;rec.beginPath();rec.arc(c.x,c.y,c.r,0,Math.PI*2);rec.stroke();}
             rec.restore();
         }
@@ -80,13 +96,19 @@ function renderLayerGeometryCirclesPass(frameCtx){
 
     if(frameCtx.frame?.gpuLayerSceneDeferred&&commands?.length){
         const scene=SomataLayerSceneService.resident(frameCtx);
-        const rec=scene?.texture?WebGPUStrokeRenderer.encodeGeometryCirclesToLayerScene?.(scene.texture,commands):null;
+        const rec=scene?.texture?WebGPUStrokeRenderer.encodeGeometryCirclesToLayerScene?.(scene.texture,commands,{radiusPx:Math.max(0,(Number(frameCtx.glow)||0)*.55*(Number(frameCtx.frame?.dpr)||1)),alphaScale:Math.max(0,Number(frameCtx.effectsPlan?.glow?.compositeAlpha)||0)}):null;
         if(rec?.handled){if(rec.commandBuffer)SomataLayerSceneService.queue(frameCtx,somataEffectPhase('geometry',28),rec.commandBuffer,'geometry-circles');renderBackendTelemetry.mark('geometryCircles','gpu','resident Layer Scene');return;}
         if(SomataGeometryPolicy.isStrict(frameCtx)){renderBackendTelemetry.mark('geometryCircles','gpu','strict Spiral geometry circles GPU unavailable');renderBackendTelemetry.mark('geometry','gpu','strict Spiral geometry circles GPU unavailable');somataGpuContractError('SPIRAL_GEOMETRY_CIRCLES_GPU_UNAVAILABLE',frameCtx,{stage:'layer-scene'});try{requestMainCanvasRender?.();}catch(_){}return;}
         if(!materializeDeferredLayerScene(frameCtx))return;
     }
     if(SomataGeometryPolicy.isStrict(frameCtx)){renderBackendTelemetry.mark('geometryCircles','gpu','strict Spiral geometry circles missing resident Layer Scene');renderBackendTelemetry.mark('geometry','gpu','strict Spiral geometry circles missing resident Layer Scene');somataGpuContractError('SPIRAL_GEOMETRY_CIRCLES_NO_SCENE',frameCtx,{stage:'resident-scene'});try{requestMainCanvasRender?.();}catch(_){}return;}
-    if(commands&&GeometryGPURenderer.render(commands,mainCtx)){renderBackendTelemetry.mark('geometryCircles','gpu','Geometry GPU renderer');return;}
+    if(commands){
+        const fx=frameCtx.effectsPlan?.glow;
+        if(fx?.enabled===true&&LineEffectsGPURenderer.isAvailable()){
+            LineEffectsGPURenderer.render(commands,mainCtx,{mode:'glow',radiusPx:Math.max(.5,(Number(fx.amount)||0)*.55*(Number(frameCtx.frame?.dpr)||1)),alphaScale:Math.max(0,Number(fx.compositeAlpha)||0),composite:'source-over'});
+        }
+        if(GeometryGPURenderer.render(commands,mainCtx)){renderBackendTelemetry.mark('geometryCircles','gpu','Geometry GPU renderer + matching halo');return;}
+    }
     somataGpuDiagnosticError('geometry-circles','render','GPU geometry circles unavailable; pass skipped',frameCtx,{fallback:'skip-geometry-circles',recovered:true});
     try{requestMainCanvasRender?.();}catch(_){}
 

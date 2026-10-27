@@ -8,9 +8,7 @@ const assert=(x,s)=>{if(!x)throw Error(s)};
   const correct=m=>m.showFps===true&&m.showPresets===false&&m.showProjects===true&&m.showMorphs===false&&m.showProfiles===false&&m.pauseOnSpace===false;
   assert(correct(playlist.menuSettings),'default playlist visibility');
   assert(playlist.projects.length===22&&playlist.projects.every(p=>{const m=p.project.settings.menuSettings;return m.showPresets===false&&m.showProjects===true&&m.showMorphs===false&&typeof m.showProfiles==='boolean'}),'original project-specific visibility fixtures');
-  const copy=JSON.parse(fs.readFileSync(path.join(root,'COSMIC_ODYSSEY_10.plist'),'utf8'));
-  assert(correct(copy.menuSettings)&&copy.projects.length===10&&copy.projects.every(p=>correct(p.project.settings.menuSettings)),'standalone COSMIC playlist visibility');
-  assert(JSON.parse(fs.readFileSync(path.join(root,'STANDARD_ORIGINAL_23_PROJECTS.plist'),'utf8')).projects.length===23,'standard projects lost');
+  assert(fs.readdirSync(root).filter(f=>f.toLowerCase().endsWith('.plist')).join(',')==='default.plist','only default.plist may be packaged');
   const fill=fs.readFileSync(path.join(root,'js/render/fill-pass.js'),'utf8');
   const retry=fill.slice(fill.indexOf('    function resolve(frameCtx,batch,plan,'));
   assert(!retry.includes('requestMainCanvasRender?.()'),'failed GPU-only Fill must never self-invalidate render loop');
@@ -46,6 +44,6 @@ const assert=(x,s)=>{if(!x)throw Error(s)};
     assert(data.bridge&&data.errorBridge,'GPU warnings and errors must reach on-screen FPS console');
     assert(data.autoShow===false,'error console must respect user selected auto-show preference');
     assert(!uncaughtExceptions(h.events).length,'uncaught browser exceptions');
-    console.log('PASS v910 settings, 10 playlists, GPU Fill backoff and FPS diagnostic bridge',JSON.stringify(data));
+    console.log('PASS v910 settings, single default playlist, GPU Fill backoff and FPS diagnostic bridge',JSON.stringify(data));
   }finally{await h.close()}
 })().catch(e=>{console.error('FAIL v904',e.stack||e);process.exit(1)});

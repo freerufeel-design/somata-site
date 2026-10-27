@@ -29,7 +29,7 @@ fn blurredAlpha(uv0:vec2<f32>)->f32{
     let taps=clamp(i32(ceil(r*0.5)),12,${BLUR_MAX_TAPS});
     for(var i:i32=-${BLUR_MAX_TAPS};i<=${BLUR_MAX_TAPS};i=i+1){
         if(abs(i)>taps){continue;}
-        let q=f32(i)/f32(taps);let soft=u._pad.x;var zScale=select(2.45,mix(3.35,1.25,min(1.0,max(0.0,soft))),soft>=0.0);if(soft>1.0){zScale=mix(zScale,0.92,min(1.0,(soft-1.0)*2.0));}let z=q*zScale;let w=exp(-0.5*z*z);
+        let q=f32(i)/f32(taps);let soft=u._pad.x;var zScale=select(2.45,mix(3.35,1.25,min(1.0,max(0.0,soft))),soft>=0.0);if(soft>1.0){zScale=0.92/sqrt(1.0+max(0.0,soft-1.0)*0.18);}let z=q*zScale;let w=exp(-0.5*z*z);
         let uv=clamp(uv0+u.dir*u.invSize*(r*q),vec2<f32>(0.0),vec2<f32>(1.0));
         sum+=textureSampleLevel(srcTex,srcSamp,uv,0.0).a*w;wsum+=w;
     }
@@ -74,7 +74,7 @@ fn blurredAlpha(uv0:vec2<f32>)->f32{
         if(!encoder||!slot?.mask||!slot?.scratch||!targetTexture||!warmup())return false;
         try{
             const radius=Math.max(.5,Number(opts.radiusPx)||.5),alpha=Math.max(0,Math.min(1,Number(opts.alphaScale)||0)),color=opts.color||[1,1,1,1];
-            const softness=Number.isFinite(Number(opts.softness))?Math.max(0,Math.min(1.5,Number(opts.softness))):-1;
+            const softness=Number.isFinite(Number(opts.softness))?Math.max(0,Number(opts.softness)):-1;
             const widthPx=Math.max(.5,Number(opts.widthPx)||1.5),densityGain=Math.max(1,Math.min(8,1+radius/Math.max(3,widthPx*3.2)));
             writeUniform(slot.uniformH,slot.w,slot.h,1,0,radius,1,[1,1,1,1],softness,1);writeUniform(slot.uniformV,slot.w,slot.h,0,1,radius,alpha,color,softness,densityGain);
             const hbg=device.createBindGroup({layout:bindLayout,entries:[{binding:0,resource:slot.mask.createView()},{binding:1,resource:sampler},{binding:2,resource:{buffer:slot.uniformH}}]});

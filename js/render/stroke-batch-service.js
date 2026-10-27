@@ -4,7 +4,8 @@ window.__spiroRegisterModule?.('js/render/stroke-batch-service');
 // while Base/Glow/Outline own their role specs through FeatureHost capabilities.
 // Adding an effect therefore does not require adding another branch to main-pipeline.js.
 const SomataStrokeBatchService=(()=>{
-    const stats={prepares:0,batches:0,nativeGeometrySkips:0,sharedCarrierBatches:0,roleSpecs:0,lastRoles:[]};
+    const stats={prepares:0,batches:0,nativeGeometrySkips:0,sharedCarrierBatches:0,roleSpecs:0,lastRoles:[],lastFailure:null};
+    function fail(reason,frameCtx,extra={}){stats.lastFailure={reason,frameId:Number(frameCtx?.frameId)||0,layerId:String(frameCtx?.layer?.id||''),...extra};return null;}
     function roleSpecs(frameCtx){
         const rows=SomataFeatureHost?.queryAll?.('strokeBatchSpec',frameCtx,frameCtx?.effectsPlan||{})||[],out=[];
         for(const row of rows){const value=row?.value;if(Array.isArray(value))for(const spec of value)if(spec&&typeof spec==='object')out.push(spec);}
@@ -21,7 +22,7 @@ const SomataStrokeBatchService=(()=>{
         frameCtx._webgpuStrokeBatch=null;frameCtx._webgpuFillPrepared=null;frameCtx._nativeFillMeshCandidate=null;frameCtx._topologyMorphGpuNative=false;
         const strictSpiralBatch=SomataGeometryPolicy.isStrict(frameCtx);
         const pathFxNeeded=(SomataFeatureHost?.queryAll?.('strokeBatchDemand',frameCtx,frameCtx?.effectsPlan||{})||[]).some(r=>r?.value===true);
-        if(!frameCtx?.prepared||state.showRoundingGuides||frameCtx.geometryPlan?.kind==='lightning'||(!frameCtx.lineDisplayEnabled&&!pathFxNeeded))return null;
+        if(!frameCtx?.prepared||state.showRoundingGuides||frameCtx.geometryPlan?.kind==='lightning'||(!frameCtx.lineDisplayEnabled&&!pathFxNeeded))return fail('stroke-batch-policy-skip',frameCtx,{prepared:Boolean(frameCtx?.prepared),lineVisible:Boolean(frameCtx?.lineDisplayEnabled),kind:frameCtx?.geometryPlan?.kind});
 
         const hiddenGraffitiCarrier=frameCtx.lineProfileStrokeOnly===true&&frameCtx.lineProfileApplication==='graffiti';
         const hiddenGraffitiMorphCarrier=frameCtx.morphFrameActive===true&&hiddenGraffitiCarrier;
@@ -34,9 +35,9 @@ const SomataStrokeBatchService=(()=>{
         if(nativeGeometry==='spiral'){frameCtx._spiralBezierMorphGpuNative=true;stats.nativeGeometrySkips++;return null;}
         if(nativeGeometry==='topology'){frameCtx._topologyMorphGpuNative=true;stats.nativeGeometrySkips++;return null;}
         if(nativeGeometry==='green'){stats.nativeGeometrySkips++;return null;}
-        if(state.tunnel?.active===true)return null;
-        WebGPUStrokeRenderer.warmup();if(!WebGPUStrokeRenderer.isReady())return null;
-        const commands=sharedAuthority?sharedRecord.commands:getFrameGLStrokeCommands(frameCtx,hiddenGraffitiCarrier);if(!commands?.length)return null;
+        if(state.tunnel?.active===true)return fail('corridor-owns-base',frameCtx);
+        WebGPUStrokeRenderer.warmup();if(!WebGPUStrokeRenderer.isReady())return fail('webgpu-stroke-not-ready',frameCtx,{renderer:(()=>{const st=WebGPUStrokeRenderer.status?.()||{};return{available:st.available,initializing:st.initializing,lost:st.lost,lastError:st.lastError,hubError:st.hub?.lastError};})()});
+        const commands=sharedAuthority?sharedRecord.commands:getFrameGLStrokeCommands(frameCtx,hiddenGraffitiCarrier);if(!commands?.length)return fail('no-stroke-commands',frameCtx,{sharedAuthority});
         if(sharedAuthority)stats.sharedCarrierBatches++;
         const specs=roleSpecs(frameCtx);stats.roleSpecs+=specs.length;stats.lastRoles=specs.map(s=>s.role);
 
@@ -51,7 +52,11 @@ const SomataStrokeBatchService=(()=>{
         const fill=orderedFill?{contract:getLayerGeometryContract(frameCtx),prepared:frameCtx._webgpuFillPrepared||null,nativeCandidate:Boolean(frameCtx._nativeFillMeshCandidate),sceneFillMask:null,sceneNativeFill:null,fillStyle:getLayerGeometryContract(frameCtx)?.fillStyle||null}:SomataFillPassService.prepareBatchAttachment(frameCtx,strictSpiralBatch),sceneFlags=sceneOptions(frameCtx);
         const residentScene=SomataLayerSceneService.resident(frameCtx);
         const sceneOpt={uniformKey:String(frameCtx.layer?.id||`layer-${frameCtx.layerIndex}`),fillMask:orderedFill?null:(fill?.sceneFillMask||null),fillStyle:fill?.fillStyle||null,nativeFillMesh:orderedFill?null:(fill?.sceneNativeFill||null),nativeFillFrameCtx:(!orderedFill&&fill?.sceneNativeFill)?frameCtx:null,...sceneFlags,preserveExistingScene:Boolean(residentScene?.texture)};
-        const batch=WebGPUStrokeRenderer.renderLayerBatch(commands,specs,sceneOpt);if(batch?.roles?.size>=1){frameCtx._webgpuStrokeBatch=batch;stats.batches++;}return frameCtx._webgpuStrokeBatch;
+        if(!specs.length)return fail('no-stroke-role-specifications',frameCtx,{commandCount:commands.length});
+        const batch=WebGPUStrokeRenderer.renderLayerBatch(commands,specs,sceneOpt);
+        if(batch?.roles?.size>=1){frameCtx._webgpuStrokeBatch=batch;stats.batches++;stats.lastFailure=null;}
+        else fail('stroke-batch-encode-failed',frameCtx,{commandCount:commands.length,specs:specs.map(s=>s.role),rendererError:String(WebGPUStrokeRenderer.status?.()?.lastError||'')});
+        return frameCtx._webgpuStrokeBatch;
     }
     function status(){return{...stats,lastRoles:stats.lastRoles.slice(),contract:'Somata 7.8: when FrameContour exists, the visible ordinary Line batch consumes the exact same command carrier; native topology/green bypass is disabled for that frame.'};}
     return{prepare,status};

@@ -18,10 +18,49 @@ function buildFrameWebSceneStencilGeometry(frameCtx,effect){
     for(const pts of transformed){if(!pts)continue;for(let i=0;i<pts.length;i++){const a=pts[i],b=pts[(i+1)%pts.length];vertices[o++]=anchorX;vertices[o++]=anchorY;vertices[o++]=a.x;vertices[o++]=a.y;vertices[o++]=b.x;vertices[o++]=b.y;}}
     return prepared._gpuSceneStencilGeometry={supported:true,vertices:o===vertices.length?vertices:vertices.slice(0,o)};
 }
+// GPU and Canvas Corridor cross-links must share corner admission and copy transforms.
+// Do not cache these objects between frames: live Web settings and motion may change.
+function collectWebCorridorLinkCorners(data, includePathIndex=false){
+    const corners=data?.corners||[], metrics=data?.cornerMetrics;
+    const allowConcave=data?.outsideStraightEnabled===true;
+    const allowConvex=data?.insideEnabled===true||data?.outsideArcEnabled===true;
+    const selected=[];
+    for(let i=0;i<corners.length;i++){
+        const c=corners[i],m=metrics?.[i];
+        if((c?.concave===true?!allowConcave:!allowConvex))continue;
+        selected.push(m?(includePathIndex
+            ?{...c,x:m.x,y:m.y,visualPathIndex:m.pathIndex}
+            :{...c,x:m.x,y:m.y}):c);
+    }
+    return selected;
+}
+function prepareWebCorridorCopyTransforms(frameCtx,copies){
+    const transforms=[];
+    for(let i=0;i<copies.length;i++){
+        mainCtx.save();
+        try{
+            applyMotionTunnelLag(mainCtx,copies[i],frameCtx.layer);
+            mainCtx.scale(copies[i].scale,copies[i].scale);
+            applyLayerFrameEffectTransform(mainCtx,frameCtx);
+            transforms.push(mainCtx.getTransform());
+        }finally{mainCtx.restore();}
+    }
+    return transforms;
+}
+// Neighbor opacity is independent of the corner; compute it only once per copy pair.
+function prepareWebCorridorLinkAlphas(alphas,copyCount){
+    const pairs=[];
+    for(let i=0;i<copyCount-1;i++){
+        const a=Math.max(0,Math.min(1,Number(alphas[i]??1)));
+        const b=Math.max(0,Math.min(1,Number(alphas[i+1]??1)));
+        pairs.push(Math.min(a,b)*.42);
+    }
+    return pairs;
+}
 function queueWebCorridorCrossLinks(frameCtx,effect,sceneTexture,phase=somataEffectPhase('web',.4)){
-    const data=effect?.frameData,cfg=data?.cfg||frameCtx?.layer?.web;if(effect?.tunnelActive!==true||cfg?.placementMode!=='selfIntersectionCorridor')return true;const flags={inside:data?.insideEnabled===true,outsideStraight:data?.outsideStraightEnabled===true,outsideArc:data?.outsideArcEnabled===true};const corners=(data?.corners||[]).map((c,i)=>{const m=data?.cornerMetrics?.[i];return m?{...c,x:m.x,y:m.y,visualPathIndex:m.pathIndex}:c;}).filter(c=>c?.concave===true?flags.outsideStraight:(flags.inside||flags.outsideArc));const copies=frameCtx.visibleInstances?.copies||[],alphas=frameCtx.visibleInstances?.alphas||[];if(!corners.length||copies.length<2)return true;
-    const transforms=[];for(let i=0;i<copies.length;i++){mainCtx.save();try{applyMotionTunnelLag(mainCtx,copies[i],frameCtx.layer);mainCtx.scale(copies[i].scale,copies[i].scale);applyLayerFrameEffectTransform(mainCtx,frameCtx);transforms.push(mainCtx.getTransform());}finally{mainCtx.restore();}}
-    mainCtx.save();try{mainCtx.setTransform(1,0,0,1,0,0);const rec=createGeometryGLRecordingContext(mainCtx),width=Math.max(.03,Number(data?.renderWidth||data?.width)||.6),color=data?.color||'#ffffff';rec.lineWidth=width;rec.strokeStyle=color;rec.lineCap='round';rec.lineJoin='round';const limit=Math.min(64,corners.length);for(let ci=0;ci<limit;ci++){const c=corners[ci],x=Number(c.x)||0,y=Number(c.y)||0;for(let i=0;i<transforms.length-1;i++){const a=Math.max(0,Math.min(1,Number(alphas[i]??1))),b=Math.max(0,Math.min(1,Number(alphas[i+1]??1))),aa=Math.min(a,b)*.42;if(aa<=.002)continue;const m0=transforms[i],m1=transforms[i+1];rec.globalAlpha=aa;rec.beginPath();rec.moveTo(m0.a*x+m0.c*y+m0.e,m0.b*x+m0.d*y+m0.f);rec.lineTo(m1.a*x+m1.c*y+m1.e,m1.b*x+m1.d*y+m1.f);rec.stroke();}}if(rec.unsupported||!rec.commands?.length)return true;const halo=Math.max(.1,Math.min(6,width*2.4)*(Number(frameCtx.frame?.dpr)||1)),out=WebGPUWebThreadSceneRenderer.encodeToLayerScene(sceneTexture,rec.commands,{supported:true,vertices:null},halo,1,frameCtx,'inside');if(!out?.handled)return false;if(out.commandBuffer)SomataLayerSceneService.queue(frameCtx,phase,out.commandBuffer,'web-corridor-crosslinks');webGpuCorridorStats.crossLinkFrames++;return true;}finally{mainCtx.restore();}
+    const data=effect?.frameData,cfg=data?.cfg||frameCtx?.layer?.web;if(effect?.tunnelActive!==true||cfg?.placementMode!=='selfIntersectionCorridor')return true;const corners=collectWebCorridorLinkCorners(data,true);const copies=frameCtx.visibleInstances?.copies||[],alphas=frameCtx.visibleInstances?.alphas||[];if(!corners.length||copies.length<2)return true;
+    const transforms=prepareWebCorridorCopyTransforms(frameCtx,copies),linkAlphas=prepareWebCorridorLinkAlphas(alphas,transforms.length);
+    mainCtx.save();try{mainCtx.setTransform(1,0,0,1,0,0);const rec=createGeometryGLRecordingContext(mainCtx),width=Math.max(.03,Number(data?.renderWidth||data?.width)||.6),color=data?.color||'#ffffff';rec.lineWidth=width;rec.strokeStyle=color;rec.lineCap='round';rec.lineJoin='round';const limit=Math.min(64,corners.length);for(let ci=0;ci<limit;ci++){const c=corners[ci],x=Number(c.x)||0,y=Number(c.y)||0;for(let i=0;i<transforms.length-1;i++){const aa=linkAlphas[i];if(aa<=.002)continue;const m0=transforms[i],m1=transforms[i+1];rec.globalAlpha=aa;rec.beginPath();rec.moveTo(m0.a*x+m0.c*y+m0.e,m0.b*x+m0.d*y+m0.f);rec.lineTo(m1.a*x+m1.c*y+m1.e,m1.b*x+m1.d*y+m1.f);rec.stroke();}}if(rec.unsupported||!rec.commands?.length)return true;const halo=Math.max(.1,Math.min(6,width*2.4)*(Number(frameCtx.frame?.dpr)||1)),out=WebGPUWebThreadSceneRenderer.encodeToLayerScene(sceneTexture,rec.commands,{supported:true,vertices:null},halo,1,frameCtx,'inside');if(!out?.handled)return false;if(out.commandBuffer)SomataLayerSceneService.queue(frameCtx,phase,out.commandBuffer,'web-corridor-crosslinks');webGpuCorridorStats.crossLinkFrames++;return true;}finally{mainCtx.restore();}
 }
 // 7.8.3 bugfix: ordinary Web keeps the exact current FrameContour as its source,
 // but restores the resilient 7.3.20 presentation ladder.  A WebGPU scene/renderer
@@ -29,12 +68,11 @@ function queueWebCorridorCrossLinks(frameCtx,effect,sceneTexture,phase=somataEff
 // deliberately excluded: its retained Bézier rail remains GPU-only and exact.
 function renderWebCorridorCrossLinksFallback(frameCtx,effect){
     const data=effect?.frameData,cfg=data?.cfg||frameCtx?.layer?.web;if(effect?.tunnelActive!==true||cfg?.placementMode!=='selfIntersectionCorridor')return false;
-    const branchFlags={inside:data?.insideEnabled===true,outsideStraight:data?.outsideStraightEnabled===true,outsideArc:data?.outsideArcEnabled===true};
-    const corners=(data?.corners||[]).map((c,i)=>{const m=data?.cornerMetrics?.[i];return m?{...c,x:m.x,y:m.y}:c;}).filter(c=>c?.concave===true?branchFlags.outsideStraight:(branchFlags.inside||branchFlags.outsideArc));if(!corners.length)return false;
+    const corners=collectWebCorridorLinkCorners(data);if(!corners.length)return false;
     const copies=frameCtx.visibleInstances?.copies||[],alphas=frameCtx.visibleInstances?.alphas||[];if(copies.length<2)return false;
-    const transforms=[];for(let i=0;i<copies.length;i++){mainCtx.save();try{applyMotionTunnelLag(mainCtx,copies[i],frameCtx.layer);mainCtx.scale(copies[i].scale,copies[i].scale);applyLayerFrameEffectTransform(mainCtx,frameCtx);transforms.push(mainCtx.getTransform());}finally{mainCtx.restore();}}
+    const transforms=prepareWebCorridorCopyTransforms(frameCtx,copies),linkAlphas=prepareWebCorridorLinkAlphas(alphas,transforms.length);
     const dpr=Math.max(1,Number(frameCtx.frame?.dpr)||1),width=Math.max(.03,Number(data?.renderWidth||data?.width)||.6)*dpr,color=data?.color||'#ffffff';
-    const draw=(ctx)=>{ctx.lineWidth=width;ctx.strokeStyle=color;ctx.lineCap='round';ctx.lineJoin='round';const limit=Math.min(64,corners.length);for(let ci=0;ci<limit;ci++){const c=corners[ci];for(let i=0;i<transforms.length-1;i++){const a=Math.max(0,Math.min(1,Number(alphas[i]??1))),b=Math.max(0,Math.min(1,Number(alphas[i+1]??1))),aa=Math.min(a,b)*.42;if(aa<=.002)continue;const m0=transforms[i],m1=transforms[i+1],x=Number(c.x)||0,y=Number(c.y)||0,x0=m0.a*x+m0.c*y+m0.e,y0=m0.b*x+m0.d*y+m0.f,x1=m1.a*x+m1.c*y+m1.e,y1=m1.b*x+m1.d*y+m1.f;ctx.globalAlpha=aa;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();}}};
+    const draw=(ctx)=>{ctx.lineWidth=width;ctx.strokeStyle=color;ctx.lineCap='round';ctx.lineJoin='round';const limit=Math.min(64,corners.length);for(let ci=0;ci<limit;ci++){const c=corners[ci];for(let i=0;i<transforms.length-1;i++){const aa=linkAlphas[i];if(aa<=.002)continue;const m0=transforms[i],m1=transforms[i+1],x=Number(c.x)||0,y=Number(c.y)||0,x0=m0.a*x+m0.c*y+m0.e,y0=m0.b*x+m0.d*y+m0.f,x1=m1.a*x+m1.c*y+m1.e,y1=m1.b*x+m1.d*y+m1.f;ctx.globalAlpha=aa;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();}}};
     mainCtx.save();mainCtx.setTransform(1,0,0,1,0,0);try{if(typeof GeometryGPURenderer!=='undefined'&&GeometryGPURenderer.isAvailable?.()){const rec=createGeometryGLRecordingContext(mainCtx);try{draw(rec);}catch(_){return false;}if(!rec.unsupported&&rec.commands?.length&&GeometryGPURenderer.render(rec.commands,mainCtx)){GeometryGPURenderer.composite?.(mainCtx);return true;}}draw(mainCtx);return true;}finally{mainCtx.restore();}
 }
 function renderOrdinaryWebFallback(frameCtx,effect,reason='gpu-web-unavailable'){
@@ -68,6 +106,14 @@ function renderOrdinaryWebFallback(frameCtx,effect,reason='gpu-web-unavailable')
 function renderLayerWebPass(frameCtx){
     if(frameCtx)frameCtx._webPassHandled=false;
     const effect=frameCtx.effectsPlan?.web;if(!effect?.enabled)return;const {baseAlpha,visibleInstances}=frameCtx,strict=SomataGeometryPolicy.isStrict(frameCtx);
+    // A convex-only figure has no exterior concave notch. This is an intentional
+    // empty Web, not a failed GPU submission: do not request endless retry frames.
+    const webData=effect.frameData;
+    if(webData?.gpuMorphWebNative!==true&&Array.isArray(webData?.corners)){
+        const activeBranches=getPreparedWebBranches(webData);
+        const eligible=webData.corners.some(c=>activeBranches.some(branch=>branch==='outsideStraight'?c?.concave===true:c?.concave!==true));
+        if(!eligible){frameCtx._webPassHandled=true;webGpuCorridorStats.lastBackend='no-geometry';webGpuCorridorStats.lastReason='No eligible corners for the selected Web branches';return;}
+    }
     const ordinaryOrdered=state.tunnel?.active!==true&&!strict,fillContract=ordinaryOrdered?getLayerGeometryContract(frameCtx):null;
     if(fillContract?.fillRequested===true&&frameCtx._fillBelowWebResolved!==true){webGpuCorridorStats.lastBackend='gpu-wait';webGpuCorridorStats.lastReason='Fill ordering pass has not resolved yet';try{requestMainCanvasRender?.();}catch(_){}return;}
     const scene=SomataLayerSceneService.ensure(frameCtx,'web-effect');

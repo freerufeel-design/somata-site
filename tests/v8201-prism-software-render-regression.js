@@ -51,5 +51,5 @@ for(const [i,name] of ['lens','sphere','cube','skull','dodecahedron','cross'].en
 }
 const saved=path.resolve(__dirname,'../prism-8.20.1-preview.png');
 previews.toBuffer('png').then(buf=>{
- fs.writeFileSync(saved,buf);console.log('PASS',JSON.stringify(result));console.log('preview:',saved);
+ if(process.env.SOMATA_SAVE_TEST_ARTIFACTS==='1')fs.writeFileSync(saved,buf);console.log('PASS',JSON.stringify(result));
 }).catch(e=>{console.error(e);process.exitCode=1});

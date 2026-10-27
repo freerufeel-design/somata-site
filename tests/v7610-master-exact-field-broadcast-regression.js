@@ -21,7 +21,7 @@ async function main(){
         ['stroke width','paramStrokeWidth',6],['stroke multiplier','paramStrokeWidthMultiplier',1.8],['glow','paramGlow',27],['glow multiplier','paramGlowMultiplier',2.2],
         ['glow intensity','paramGlowIntensity',130],['glow intensity multiplier','paramGlowIntensityMultiplier',1.9],['opacity','paramOpacity',67],
         ['fill enabled','paramEnableFill',true,'change'],['fill match','paramFillMatchStroke',true,'change',ls=>{for(const l of ls){l.fill=true;l.fillMatchStroke=false;}}],['fill opacity','paramFillOpacity',44,'input',ls=>{for(const l of ls){l.fill=true;l.fillMatchStroke=false;}}],['fill RGB','paramFillColor','#22aaff','input',ls=>{for(const l of ls){l.fill=true;l.fillMatchStroke=false;}}],
-        ['N','paramN',18],['K','paramK',4],['spiral step','paramSpiralStep',6.25,'change'],['spiral link','paramSpiralStepLinked',true,'change'],
+        ['N','paramN',18],['K','paramK',4],['spiral order','paramSpiralOrder',3,'input'],
         ['spiral tangential','paramSpiralTangential',true,'change'],['spiral seams','paramSpiralRoundSeams',false,'change',ls=>{ls[0].spiralRoundSeams=true;}],
         ['spiral fill','paramSpiralFillEnabled',true,'change'],['web width','webWidth',3.3],['web spacing','webSpacing',24],['sweep glow','sweepGlow',34],['particle size','particleSize',11]
       ])cases.push(await run(...spec));

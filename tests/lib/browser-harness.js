@@ -40,6 +40,23 @@ async function createBrowserHarness({disableGpu=true,loadDelayMs=300,evalTimeout
     const scripts=scriptsFromIndex();
     for(const rel of scripts){const code=read(rel)+`\n//# sourceURL=${rel}`;await evaluate(code,{returnByValue:false,timeoutMs:10000,label:`load ${rel}`});}
     await evaluate(`document.dispatchEvent(new Event('DOMContentLoaded'));window.dispatchEvent(new Event('load'));`,{label:'bootstrap events'});await sleep(loadDelayMs);
+    // Test-only adapter for historical topology names: ALWAYS clicks current UI
+    // controls (family + variant), rather than mutating layer state directly.
+    await evaluate(`window.__somataSelectContourMode=function(mode){
+      const family=mode.startsWith('spiral-')?'spiral':mode.startsWith('extended-')?'extended':'polygon';
+      const variant=mode.endsWith('-open')||mode==='open'?'second':'first';
+      const a=document.querySelector('[data-contour-family="'+family+'"]');
+      const b=document.querySelector('[data-contour-variant="'+variant+'"]');
+      if(!a||!b)throw new Error('missing live contour controls: '+mode);
+      a.click();b.click();
+      // Order 0 is intentionally an ordinary polygon. Tests requesting a
+      // visible Spiral must also use the genuine Order control to set a coil.
+      if(family==='spiral'){
+        const order=document.getElementById('paramSpiralOrder');
+        if(order&&Math.abs(Number(order.value)||0)<1e-8){order.value='1';order.dispatchEvent(new Event('change',{bubbles:true}));}
+      }
+      return a;
+    };`,{label:'install test-only real UI topology adapter'});
     return{proc,ws,events,call,evaluate,close,scripts,assert,sleep,ROOT};
   }catch(err){await close();throw err;}
 }

@@ -20,10 +20,10 @@ async function main(){
       L.N=11;invalidateLayerGeometry(L,'test-spiral-fill-odd');const oddDraw=getCachedLayerDrawData(L);const oddBands=FillMeshPreparer.buildSpiralBandContours(oddDraw,L);
       L.N=12;L.spiralClosed=false;invalidateLayerGeometry(L,'test-spiral-fill-open');const openDraw=getCachedLayerDrawData(L);const openBands=FillMeshPreparer.buildSpiralBandContours(openDraw,L);
       L.spiralClosed=true;invalidateLayerGeometry(L,'test-spiral-fill-restore');
-      document.querySelector('[data-contour-mode="spiral-open"]')?.click();syncSidebarInputs();const tangentOpenEnabled=document.getElementById('paramSpiralTangential')?.disabled!==true;
+      __somataSelectContourMode('spiral-open');syncSidebarInputs();const tangentOpenEnabled=document.getElementById('paramSpiralTangential')?.disabled!==true;
       L.spiralTangential=false;invalidateLayerGeometry(L,'test-open-tangent-off');const tanOff=getCachedLayerDrawData(L);const tanOffSig=(tanOff.paths||[]).flatMap(p=>p.points||[]).reduce((a,p)=>a+Math.abs(Number(p.x)||0)*.17+Math.abs(Number(p.y)||0)*.31,0);
       L.spiralTangential=true;invalidateLayerGeometry(L,'test-open-tangent-on');const tanOn=getCachedLayerDrawData(L);const tanOnSig=(tanOn.paths||[]).flatMap(p=>p.points||[]).reduce((a,p)=>a+Math.abs(Number(p.x)||0)*.17+Math.abs(Number(p.y)||0)*.31,0);
-      document.querySelector('[data-contour-mode="spiral-closed"]')?.click();L.spiralClosed=true;invalidateLayerGeometry(L,'test-spiral-fill-restore2');
+      __somataSelectContourMode('spiral-closed');L.spiralClosed=true;invalidateLayerGeometry(L,'test-spiral-fill-restore2');
       const freshLayer=createLayer(),fillUiDefault=freshLayer.spiralFillEnabled===false,fillTypeDefault=freshLayer.spiralFillType==='interwinding',fillCheckbox=Boolean(document.getElementById('paramSpiralFillEnabled')),fillType=Boolean(document.getElementById('paramSpiralFillType'));
 
       state.morph.profileModeTransition='phase';runtimeState.morph.active=false;runtimeState.morph.transitionMs=5000;

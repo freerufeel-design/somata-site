@@ -45,7 +45,7 @@ function gpuMorphArcLightningIneligibleReason(frameCtx,cfg,requireReady=true){
     if(!frameCtx||cfg?.enabled!==true||cfg?.effectType!=='lightning')return'not-lightning';
     const mode=['perSegment','everyNth','across','perPath','whole'].includes(cfg.lightningMode)?cfg.lightningMode:'perPath';
     if(mode==='across')return'across-needs-geometric-x-band';
-    const behavior=normalizeLightningBehaviorValue(cfg.lightningBehavior,'inside');
+    const behavior=lightningEffectiveClipBehavior(frameCtx,cfg);
     if(state.tunnel?.active===true&&behavior!=='symmetric')return'clipped-corridor-needs-per-copy-stencil';
     if(cfg.lightningShowLines!==false&&getLayerLineVisible(frameCtx.layer)===false)return'hidden-base-line-required';
     if(typeof gpuMorphArcIneligibleReason==='function'){const reason=gpuMorphArcIneligibleReason(frameCtx);if(reason)return reason;}
@@ -105,13 +105,20 @@ window.__spiroSweepGpuArcBridgeStatus=()=>({...sweepGpuArcBridgeStats,contract:'
 
 
 const somataSweepPhase=()=>somataEffectPhase('sweep'),somataSweepCorePhase=()=>somataEffectPhase('sweep',1);
-function sweepProfileMode(cfg){const value=cfg?.effectType==='lightning'?cfg?.lightningProfileShape:cfg?.profileShape;return value==='line'?'line':'current';}
+function lightningEffectiveClipBehavior(frameCtx,cfg,paths){const requested=normalizeLightningBehaviorValue(cfg?.lightningBehavior,'symmetric');if(requested==='symmetric')return requested;const source=Array.isArray(paths)?paths:(getLayerFrameAuthoritativePaths(frameCtx)||[]);return source.some(path=>path?.closed===true&&(path?.points?.length||0)>=3)?requested:'symmetric';}
+function sweepProfileMode(){return 'current';}
+const somataSweepRetryState={lastRepaint:-Infinity,lastStage:'',skipped:0};
 function reportSweepGpuIssue(frameCtx,stage,reason,extra=null){
     try{renderBackendTelemetry.mark('sweep','gpu',`GPU pass skipped: ${stage}`);}catch(_){}
-    if(typeof somataGpuDiagnosticError==='function')somataGpuDiagnosticError('sweep',stage,reason,frameCtx,{fallback:'skip-sweep-pass',recovered:true,...(extra||{})});
-    else console.error('[Somata 7.5 GPU][sweep]',stage,reason,{frameId:frameCtx?.frameId,layerIndex:frameCtx?.layerIndex,...(extra||{})});
-    try{requestMainCanvasRender?.();}catch(_){}
+    somataSweepRetryState.skipped++;somataSweepRetryState.lastStage=stage;
+    // Missing Layer Scene is upstream GPU initialization/recovery, not a
+    // successful Sweep recovery. Don't report it as recovered prematurely.
+    if(typeof somataGpuDiagnosticError==='function')somataGpuDiagnosticError('sweep',stage,reason,frameCtx,{fallback:'skip-sweep-pass',recovered:false,recoveryPending:true,...(extra||{})});
+    else console.error('[Somata GPU][sweep]',stage,reason,{frameId:frameCtx?.frameId,layerIndex:frameCtx?.layerIndex,...(extra||{})});
+    const now=typeof performance!=='undefined'?performance.now():Date.now();
+    if(now-somataSweepRetryState.lastRepaint>=200){somataSweepRetryState.lastRepaint=now;try{requestMainCanvasRender?.();}catch(_){}}
 }
+window.__somataSweepRetryStatus=()=>({...somataSweepRetryState});
 function renderLayerSweepInstance(frameCtx,effectOverride=null){
     const effect=effectOverride||frameCtx.effectsPlan?.sweep;
     if(!effect?.enabled)return;
@@ -133,10 +140,10 @@ function renderLayerSweepInstance(frameCtx,effectOverride=null){
     }
 
     let scene=SomataLayerSceneService.ensure(frameCtx,'sweep-effect');
-    if(!scene?.texture)return reportSweepGpuIssue(frameCtx,'layer-scene-not-ready','GPU Layer Scene is not ready; Sweep is skipped for this frame and will retry on the next repaint',{effectType:cfg.effectType,fallback:'transparent-gpu-layer-scene-retry'});
+    if(!scene?.texture)return reportSweepGpuIssue(frameCtx,'layer-scene-not-ready','GPU Layer Scene is not ready; Sweep is skipped until the GPU scene becomes available',{effectType:cfg.effectType,fallback:'transparent-gpu-layer-scene-retry',layerSceneReason:SomataLayerSceneService.status?.().lastReason||'unavailable'});
 
     if(effect.frameData?.gpuMorphArcLightning===true){
-        const behavior=normalizeLightningBehaviorValue(cfg.lightningBehavior,'inside');
+        const behavior=lightningEffectiveClipBehavior(frameCtx,cfg,effect.frameData?.prepared?.visible||effect.paths);
         mainCtx.save();let rec=null;try{
             applyLayerFrameEffectTransform(mainCtx,frameCtx);
             rec=effect.tunnelActive
@@ -151,7 +158,7 @@ function renderLayerSweepInstance(frameCtx,effectOverride=null){
 
     if(cfg.effectType==='lightning'){
         if(!SweepGPURenderer.canEncodeToLayerScene?.())return reportSweepGpuIssue(frameCtx,'lightning-renderer-not-ready','GPU Lightning renderer is not ready');
-        const behavior=normalizeLightningBehaviorValue(cfg.lightningBehavior,'inside'),stage=effect.frameData?.lightningVector?.stage||'',joinMode='max';
+        const behavior=lightningEffectiveClipBehavior(frameCtx,cfg,effect.frameData?.prepared?.visible||effect.paths),stage=effect.frameData?.lightningVector?.stage||'',joinMode='max';
         if(behavior==='symmetric'){
             const dynamic=frameCtx.geometryPlan?.dynamic===true;
             if(!SweepGPURenderer.beginBatch(joinMode,dynamic?null:frameCtx.layer,dynamic))return reportSweepGpuIssue(frameCtx,'lightning-batch-begin','GPU Lightning batch could not start');

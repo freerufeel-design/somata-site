@@ -886,7 +886,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             if(closed) ctx.closePath();
         }
 
-        function splinePathForDraw(ctx, rawPoints, closed = false, roundingFrac = 0, cornerFlags = [], bridgeRoundFlags = []) {
+        function splinePathForDraw(ctx, rawPoints, closed = false, roundingFrac = 0, cornerFlags = [], bridgeRoundFlags = [], wholeCurveSpline = false) {
             let points=(rawPoints||[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y)));
             if(points.length<2) return;
             const round=Math.max(0,Math.min(2,Number(roundingFrac)||0));
@@ -903,7 +903,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 ctx.moveTo(points[0].x,points[0].y);ctx.lineTo(points[1].x,points[1].y);if(closed)ctx.closePath();return;
             }
 
-            const runs=collectEdgeLocalSplineRuns(points,Boolean(closed),flags);
+            const runs=wholeCurveSpline===true || rawPoints?._spiroWholeCurveSpline===true
+                ? [] : collectEdgeLocalSplineRuns(points,Boolean(closed),flags);
             if(!runs.length){
                 const roundedPoints=round>0.001
                     ? transformSplineKnotsForRounding(points,Boolean(closed),round,flags)
@@ -1229,6 +1230,11 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 period=[...period,q];
             }
 
+            for(const p of period)p.__spiralExplicitBridge=true;
+            // The "Round seams" checkbox enables only connector-corner fillets.
+            // Their strength always equals the authored vertex rounding;
+            // 0% remains a perfectly sharp bridge. Never impose a minimum.
+            // Fillets are baked into endpoint curves before Morph begins.
             if(!roundSeams){
                 for(const p of period){
                     delete p.__spiralClosureProtected;
@@ -1238,6 +1244,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 }
                 return period;
             }
+            // Round seams only permits the SAME rounding strength as vertices.
+            // At 0% the connecting bridge stays sharp even when checked.
             const amount=Math.max(0,Math.min(2,Number(roundingFrac)||0));
             if(amount<=0.001)return period;
 
@@ -1284,6 +1292,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 if(tangential)spiralUnifiedRoundingStats.tangentialRoundedKinks++;
             }
 
+            for(const p of period)p.__spiralExplicitBridge=true;
             return period;
         }
         window.__spiroSpiralUnifiedRoundingStatus=()=>({...spiralUnifiedRoundingStats,lastAngles:[...spiralUnifiedRoundingStats.lastAngles]});
@@ -1447,7 +1456,12 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             };
 
             if(state.fourierMode)return [];
-            drawSpiralSpaceCentripetalSpline(recorder,src,Math.max(0,Math.min(2,Number(roundingFrac)||0)));
+            // Whole-curve spline deliberately softens authored junctions. The
+            // default local spline preserves them, just like the static carrier.
+            const whole=points?._spiroWholeCurveSpline===true;
+            if(whole) drawSpiralSpaceCentripetalSpline(recorder,src,Math.max(0,Math.min(2,Number(roundingFrac)||0)));
+            else splinePathForDraw(recorder,src,false,Math.max(0,Math.min(2,Number(roundingFrac)||0)),
+                Array.isArray(cornerFlags)?cornerFlags:[],[],false);
             if(!segments.length)return [];
 
             const direct=segments.length===src.length-1;
@@ -1473,7 +1487,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         function finalizePeriodicSpiralBezierCarrier(segments, points) {
             const out=Array.isArray(segments)?segments:[];
             const src=Array.isArray(points)?points:[];
-            if(!out.length||!src.length||src[0]?.__spiralClosed!==true)return out;
+            if(!out.length||!src.length||src[0]?.__spiralClosed!==true||src[0]?.__spiralExplicitBridge===true)return out;
             const delta=Number(src[0]?.__spiralDelta),scale=Math.max(1e-6,Number(src[0]?.__spiralTargetScale)||1);
             if(!Number.isFinite(delta)||!Number.isFinite(scale))return out;
             const first=out[0],last=out[out.length-1];
@@ -1529,6 +1543,22 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             return out;
         }
 
+        // Linear fallback for the author-selectable segmented Spiral mode. Cubics are
+        // used only as GPU storage: both handles lie on the chord, so the visible
+        // geometry is an ordinary polyline (no spline smoothing or corner fillets).
+        function buildSegmentedSpiralLineCubics(points){
+            const src=(Array.isArray(points)?points:[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y)));
+            const out=[];
+            for(let i=0;i<src.length-1;i++){
+                const a=src[i],b=src[i+1],dx=b.x-a.x,dy=b.y-a.y;
+                out.push({p0:{x:a.x,y:a.y},c1:{x:a.x+dx/3,y:a.y+dy/3},
+                    c2:{x:a.x+2*dx/3,y:a.y+2*dy/3},p3:{x:b.x,y:b.y},
+                    widthScale0:Math.max(.02,Number(a.widthScale)||1),
+                    widthScale1:Math.max(.02,Number(b.widthScale)||1),
+                    __profileCorner0:true,__profileCorner1:true});
+            }
+            return out;
+        }
         function buildSpiralBezierSegments(points, roundingFrac = 0, cornerFlags = null, smoothSpline = false) {
 
             if(state.fourierMode!==true&&Array.isArray(points?._spiroRetainedCubics)&&points._spiroRetainedCubics.length){
@@ -1546,7 +1576,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 let mappedControlCount=0,hermiteCount=0;
                 for(let i=0;i<src.length-1;i++){
                     const a=src[i],b=src[i+1],ax=Number(a.x)||0,ay=Number(a.y)||0,bx=Number(b.x)||0,by=Number(b.y)||0,dx=bx-ax,dy=by-ay;
-                    const closureSpan=Boolean(a?.__spiralProfileFinalRound||b?.__spiralProfileFinalRound||a?.__spiralClosureProtected||b?.__spiralClosureProtected||a?.__spiralClosureFillet||b?.__spiralClosureFillet);
+                    const closureSpan=Boolean(a?.__spiralProfileFinalRound||b?.__spiralProfileFinalRound||a?.__spiralClosureProtected||b?.__spiralClosureProtected||a?.__spiralClosureFillet||b?.__spiralClosureFillet||a?.__spiralAutoCloseBridgeEnd||b?.__spiralAutoCloseBridgeEnd);
                     const mc1x=Number(a?.__spiralBezierC1X),mc1y=Number(a?.__spiralBezierC1Y),mc2x=Number(a?.__spiralBezierC2X),mc2y=Number(a?.__spiralBezierC2Y);
                     const direct=!closureSpan&&Number.isFinite(mc1x)&&Number.isFinite(mc1y)&&Number.isFinite(mc2x)&&Number.isFinite(mc2y);
                     let c1x=ax+dx/3,c1y=ay+dy/3,c2x=ax+dx*2/3,c2y=ay+dy*2/3;
@@ -1592,15 +1622,31 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         window.__spiroFinalizePeriodicSpiralBezierCarrier=finalizePeriodicSpiralBezierCarrier;
         window.__spiroRepairRoundedSpiralBezierJoins=repairRoundedSpiralBezierJoins;
 
+        // A temporary display-only carrier for the last animated spline frame,
+        // shared by Polygon and Spiral. Authored nodes remain unchanged. Both
+        // CPU geometry and the Spiral GPU cache resolve this bridge.
+        function resolveMorphCommittedSpiralSpline(layer){
+            if(runtimeState?.morph?.active!==true||layer?.profileMode!=='spline'||
+               isPreSampledSplineLayer(layer))return null;
+            const bridge=runtimeState.morph.splineCommitBridge?.get(layer);
+            if(!bridge||!Array.isArray(bridge.raw)||!Array.isArray(bridge.sampled)||
+               !Array.isArray(layer.profileNodes)||layer.profileNodes.length!==bridge.raw.length)return null;
+            if(!layer.profileNodes.every((p,j)=>
+                Math.abs((Number(p?.x)||0)-bridge.raw[j].x)<1e-9&&
+                Math.abs((Number(p?.y)||0)-bridge.raw[j].y)<1e-9))return null;
+            return bridge;
+        }
         function spiralProfileGeometrySignature(layer){
             if(!layer)return 'none';
             let h=2166136261>>>0;
             const mix=(v)=>{const text=String(v??'');for(let i=0;i<text.length;i++){h^=text.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}h^=124;h=Math.imul(h,16777619)>>>0;};
-            mix(layer.profileMode||'segments');mix(normalizeSplineRenderMode(layer.splineRenderMode));mix(layer.rounding??0);mix(layer.roundingMode||'standard');mix(layer.lineJoinType||'rounded');mix(typeof getConfiguredSplinePointCount==='function'?getConfiguredSplinePointCount():(state.morph?.splinePoints??12));
-            mix(layer.spiralEnabled===true?1:0);mix(layer.N??0);mix(layer.K??0);mix(layer.customSuborbits??'');mix(layer.spiralStep??'');mix(layer.spiralStepLinked===true?1:0);mix(layer.spiralOrder??'');
+            mix(layer.profileMode||'segments');mix(layer.wholeCurveSpline===true?1:0);mix(normalizeSplineRenderMode(layer.splineRenderMode));mix(layer.rounding??0);mix(layer.roundingMode||'standard');mix(layer.lineJoinType||'rounded');mix(typeof getConfiguredSplinePointCount==='function'?getConfiguredSplinePointCount():(state.morph?.splinePoints??12));
+            mix(layer.spiralEnabled===true?1:0);mix(layer.N??0);mix(layer.spiralEnabled===true?getSpiralAngularVertexCount(layer):'');mix(layer.K??0);mix(layer.customSuborbits??'');mix(layer.spiralStep??'');mix(layer.spiralStepLinked===true?1:0);mix(layer.spiralOrder??'');
             mix(Math.round((Number(layer.radius)||0)*1e6));mix(Math.round((Number(layer.radiusMultiplier)||1)*1e6));mix(Math.round((Number(layer.rotation)||0)*1e6));
-            mix(layer.spiralTangential===true?1:0);mix(layer.spiralRoundSeams!==false?1:0);mix(layer.spiralClosed!==false?1:0);mix(layer.closedLoop!==false?1:0);
-            const pts=Array.isArray(layer.profileNodes)?layer.profileNodes:[];mix(pts.length);
+            mix(layer.spiralTangential===true?1:0);mix(Number.isFinite(layer.__spiralTangentialMix)?layer.__spiralTangentialMix:0);mix(layer.spiralRoundSeams!==false?1:0);mix(layer.spiralClosed!==false?1:0);mix(layer.closedLoop!==false?1:0);
+            const bridge=resolveMorphCommittedSpiralSpline(layer);
+            const pts=bridge?.sampled||(Array.isArray(layer.profileNodes)?layer.profileNodes:[]);
+            mix(bridge?1:0);mix(pts.length);
             for(const q of pts){mix(Math.round((Number(q?.x)||0)*1e6));mix(Math.round((Number(q?.y)||0)*1e6));mix(q?.__profileCorner===true?1:0);mix(q?.__profileKeyCorner===true?1:0);mix(q?.kind||q?.type||'');}
             return `${pts.length}:${h.toString(16)}`;
         }
@@ -1617,7 +1663,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             const roundBase=Math.max(0,Math.min(2,Number(getRoundingStrength?.(layer?.rounding))||0));
             const geometryVersion=Math.max(0,Number((typeof getLayerVersions==='function'?getLayerVersions(layer)?.geometry:layer?._geometryVersion))||0);
             const profileSignature=spiralProfileGeometrySignature(layer);
-            const key=`gv:${geometryVersion}|ps:${profileSignature}|${layer?.profileMode||'segments'}|${normalizeSplineRenderMode(layer?.splineRenderMode)}|${roundBase.toFixed(5)}|fourier:${state.fourierMode?1:0}:${Math.round((Number(state.fourierStrength)||0)*100)/100}`;
+            const key=`gv:${geometryVersion}|ps:${profileSignature}|${layer?.profileMode||'segments'}|whole:${layer?.wholeCurveSpline===true?1:0}|${normalizeSplineRenderMode(layer?.splineRenderMode)}|${roundBase.toFixed(5)}|fourier:${state.fourierMode?1:0}:${Math.round((Number(state.fourierStrength)||0)*100)/100}`;
             if(!dynamic&&source&&typeof source==='object'){const hit=exactSpiralEffectRailCache.get(source);if(hit?.key===key)return hit.paths;}
             const out=source.map(path=>{
                 if(path?._exactSpiralEffectRail===true)return path;
@@ -1980,7 +2026,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                     if (!ctx.__suppressStroke) ctx.stroke(p2d);
                 } else {
                     ctx.beginPath();
-                    if (useSmoothSplinePath(layer, roundingFrac, path)) splinePathForDraw(ctx, path.points, path.closed, roundingFrac, path.cornerFlags || [], path.bridgeRoundFlags || []);
+                    if (useSmoothSplinePath(layer, roundingFrac, path)) splinePathForDraw(ctx, path.points, path.closed, roundingFrac, path.cornerFlags || [], path.bridgeRoundFlags || [], layer.wholeCurveSpline===true);
                     else roundPolylineForDraw(ctx, path.points, path.closed, roundingFrac, path.cornerFlags || []);
                     if (!ctx.__suppressFill && layer.fill && path.closed) fillCanvasGeometry(ctx,layer);
                     if (!ctx.__suppressStroke) ctx.stroke();
@@ -2068,13 +2114,16 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             if (!layer) return 0;
             const order = normalizeSpiralOrder(layer.spiralOrder, false);
 
-            if (layer.spiralEnabled === true && Math.abs(order) <= 1e-8) return 1;
+            // Spiral order is the count of external Corridor layers crossed by the
+            // spiral profile. Zero is the authored polygon, not an implicit K.
             return order;
         }
 
         function isSpiralLayer(layer) {
             if (!layer) return false;
-            return layer.spiralEnabled === true || Math.abs(getEffectiveSpiralOrder(layer)) > 1e-8;
+            // Keep the spiral family selection (spiralEnabled) for the editor,
+            // while order 0 uses the polygon geometry/rendering pipeline.
+            return Math.abs(getEffectiveSpiralOrder(layer)) > 1e-8;
         }
 
         function spiralDirection(order) {
@@ -2121,13 +2170,28 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             return Number.isFinite(n) ? n : 1;
         }
 
+        // A Spiral N-morph has a continuous angular denominator even though the
+        // number of drawable branches must remain an integer. Never derive a
+        // carrier angle from the rounded branch count during a transition.
+        function getSpiralAngularVertexCount(layer) {
+            const interpolated=Number(layer?.__spiralAnimatedN);
+            const authored=Number(layer?.N);
+            return Math.max(2,Number.isFinite(interpolated) ? interpolated : (Number.isFinite(authored) ? authored : 4));
+        }
+
         function getEffectiveSpiralStep(layer) {
-            if (!layer) return 1;
-            return normalizeSpiralStep(layer.spiralStepLinked !== false ? layer.K : layer.spiralStep, layer);
+            // 9.2.14: spiral angular step has one canonical owner: polygon K.
+            // Old spiralStep/spiralStepLinked values remain readable in saved projects
+            // but must never produce a second independent angular step.
+            // Animated K is a continuous interpolation of the same canonical K,
+            // not a user-editable second step. Preserve its fractional phase on GPU.
+            const k=Number(layer?.__spiralAnimatedK);
+            return normalizeSpiralStep(Number.isFinite(k)?k:(layer?.K ?? 1), layer);
         }
 
         function getContourMode(layer) {
-            if (isSpiralLayer(layer)) return layer?.spiralClosed === false ? 'spiral-open' : 'spiral-closed';
+            if (layer?.extendedProfileEnabled === true) return layer.extendedProfileMode === 'repeat' ? 'extended-profile' : 'extended-linear';
+            if (layer?.spiralEnabled === true || isSpiralLayer(layer)) return layer?.spiralClosed === false ? 'spiral-open' : 'spiral-closed';
             return layer?.closedLoop === false ? 'open' : 'closed';
         }
 
@@ -2142,14 +2206,25 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             if (!layer) return;
 
             if (mode === 'spiral') mode = layer.spiralClosed === false ? 'spiral-open' : 'spiral-closed';
+            if (mode === 'extended-linear' || mode === 'extended-profile') {
+                layer.extendedProfileEnabled = true;
+                layer.extendedProfileMode = mode === 'extended-profile' ? 'repeat' : 'linear';
+                layer.spiralEnabled = false;
+                layer.spiralOrder = 0;
+                layer.closedLoop = false;
+                return;
+            }
+            layer.extendedProfileEnabled = false;
 
             if (mode === 'spiral-closed' || mode === 'spiral-open') {
                 layer.spiralEnabled = true;
                 layer.spiralClosed = mode === 'spiral-closed';
 
-                layer.closedLoop = false;
+                layer.closedLoop = Math.abs(Number(layer.spiralOrder)||0) <= 1e-8 ? layer.spiralClosed !== false : false;
                 const order = normalizeSpiralOrder(layer.spiralOrder, false);
-                if (!Number.isFinite(Number(layer.spiralOrder)) || Math.abs(order) <= 1e-8) layer.spiralOrder = 1;
+                if (!Number.isFinite(Number(layer.spiralOrder)))
+                    layer.spiralOrder = 1;
+                // Do not substitute K for authored order, including order 0.
             } else {
                 layer.spiralEnabled = false;
                 layer.spiralOrder = 0;
@@ -2341,8 +2416,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             }
 
             const authoredFlags=segmentProfileCornerFlags(base);
-            const N=Math.max(2,Math.round(Number(layer?.N)||4));
-            const step=normalizeSpiralStep(layer?.spiralStep ?? layer?.K ?? 1,N);
+            const N=getSpiralAngularVertexCount(layer);
+            const step=getEffectiveSpiralStep(layer);
             const delta=Math.abs((Math.PI*2*step)/N);
             const maxAngularSpan=Math.PI/4; // <=45deg per cubic; still compact, but robust under live profile edits.
             const compact=[];
@@ -2505,7 +2580,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
 
         function getSpiralRenderSampleCount(layer, baseCount = 2) {
 
-            const N=Math.max(2,Math.round(Number(layer?.N)||4));
+            const N=getSpiralAngularVertexCount(layer);
             const step=Math.abs(getEffectiveSpiralStep(layer));
             const angularSpan=Math.abs((Math.PI*2*step)/N);
             const angularSamples=Math.ceil(angularSpan/(Math.PI/24))+1;
@@ -2518,10 +2593,27 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             return { x:(x*c - y*ss) * scale, y:(x*ss + y*c) * scale };
         }
 
+        // Render-only transition strength: the saved setting remains boolean.
+        // Both the authored polygonal and tangential carriers share endpoints;
+        // interpolate their positions AND derivatives, not their whole paths.
+        function getSpiralTangentialBlend(layer) {
+            if(!layer||Math.abs(getEffectiveSpiralOrder(layer))<=1e-8)return 0;
+            const v=layer.__spiralTangentialMix;
+            return Number.isFinite(v)?Math.max(0,Math.min(1,v)):(layer.spiralTangential===true?1:0);
+        }
         function evalSpiralBaseline(P, edgeIndex, u, targetScale, tangential, spiralStep = 1, polygonN = null, roundingFrac = 0, direction = 1) {
+            const blend=typeof tangential==='boolean'?(tangential?1:0):Math.max(0,Math.min(1,Number(tangential)||0));
+            if(blend>0&&blend<1){
+                const straight=evalSpiralBaseline(P,edgeIndex,u,targetScale,false,spiralStep,polygonN,roundingFrac,direction);
+                const curved=evalSpiralBaseline(P,edgeIndex,u,targetScale,true,spiralStep,polygonN,roundingFrac,direction);
+                return{x:straight.x+(curved.x-straight.x)*blend,y:straight.y+(curved.y-straight.y)*blend,
+                    tx:straight.tx+(curved.tx-straight.tx)*blend,ty:straight.ty+(curved.ty-straight.ty)*blend};
+            }
+            tangential=blend>=1;
+
             const nPts = P.length;
             const p1 = P[edgeIndex % nPts];
-            const N = Math.max(2, Math.round(Number(polygonN) || nPts));
+            const N = Math.max(2, Number(polygonN) || nPts);
             const step = normalizeSpiralStep(spiralStep, N);
 
             const rawDirection = Number(direction);
@@ -2641,7 +2733,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         function repairSpiralEdgePoints(points,rawPoints,P,edgeIndex,R,order,tangential,spiralStep,polygonN,spiralClosed){
             let v=validateSpiralEdgePoints(points);if(v.ok)return points;spiralEdgeIntegrityStats.lastReason=v.reason;v=validateSpiralEdgePoints(rawPoints);if(v.ok){spiralEdgeIntegrityStats.roundedFallbacks++;return rawPoints;}
             const safe=mapProfileOntoSpiralEdge([{x:0,y:0},{x:1,y:0}],P,edgeIndex,R,order,tangential,null,spiralStep,polygonN,spiralClosed,0);v=validateSpiralEdgePoints(safe);if(v.ok){spiralEdgeIntegrityStats.baselineFallbacks++;return safe;}
-            const N=Math.max(2,Math.round(Number(polygonN)||P.length)),step=normalizeSpiralStep(spiralStep,N),direction=spiralDirection(order),delta=((Math.PI*2*step)/N)*direction,targetScale=Math.pow(Math.max(1.0000001,getSpiralClosureRatio()),spiralRadialExponent(order));const p0=P[edgeIndex%P.length]||{x:0,y:0},p1=rotateSpiralPoint(p0,delta,targetScale);spiralEdgeIntegrityStats.hardRepairs++;
+            const N=Math.max(2,Number(polygonN)||P.length),step=normalizeSpiralStep(spiralStep,N),direction=spiralDirection(order),delta=((Math.PI*2*step)/N)*direction,targetScale=Math.pow(Math.max(1.0000001,getSpiralClosureRatio()),spiralRadialExponent(order));const p0=P[edgeIndex%P.length]||{x:0,y:0},p1=rotateSpiralPoint(p0,delta,targetScale);spiralEdgeIntegrityStats.hardRepairs++;
             return[{x:Number(p0.x)||0,y:Number(p0.y)||0,widthScale:1,ptIdx:0,__spiralDelta:delta,__spiralTargetScale:targetScale,__spiralClosed:spiralClosed!==false,__spiralTangential:tangential===true},{x:Number(p1.x)||0,y:Number(p1.y)||0,widthScale:targetScale,ptIdx:1,__spiralDelta:delta,__spiralTargetScale:targetScale,__spiralClosed:spiralClosed!==false,__spiralTangential:tangential===true}];
         }
         window.__spiroSpiralIntegrityStatus=()=>({...spiralEdgeIntegrityStats});
@@ -2649,7 +2741,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         function mapProfileOntoSpiralEdge(profilePts, P, edgeIndex, R, order, tangential = false, out = null, spiralStep = 1, polygonN = null, spiralClosed = true, roundingFrac = 0, directionOverride = null, exponentOverride = null) {
             const spiralOrder = normalizeSpiralOrder(order, false);
             if (!Array.isArray(profilePts) || profilePts.length < 2 || !Array.isArray(P) || P.length < 2) return [];
-            const N = Math.max(2, Math.round(Number(polygonN) || P.length));
+            const N = Math.max(2, Number(polygonN) || P.length);
             const step = normalizeSpiralStep(spiralStep, N);
             const authoredDirection = spiralDirection(spiralOrder);
 
@@ -2657,7 +2749,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             const hasExponentOverride=exponentOverride!==null&&exponentOverride!==undefined&&Number.isFinite(Number(exponentOverride));
             const direction = hasDirectionOverride
                 ? Math.max(-1,Math.min(1,Number(directionOverride)))
-                : authoredDirection;
+                : authoredDirection * Math.min(1,Math.abs(spiralOrder));
             const exponent = hasExponentOverride
                 ? Math.max(0,Number(exponentOverride))
                 : spiralRadialExponent(spiralOrder);
@@ -2677,7 +2769,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 const prof=profilePts[j] || {x:0,y:0},m=evalMapped(prof),p=points[j];
                 p.x=m.x;p.y=m.y;p.widthScale=m.widthScale;p.ptIdx=j;p.__profileCorner=prof.__profileCorner===true||prof.__profileKeyCorner===true;
 
-                p.__spiralBaseTx=m.baseTx;p.__spiralBaseTy=m.baseTy;p.__spiralDelta=delta;p.__spiralTargetScale=targetScale;p.__spiralClosed=spiralClosed!==false;p.__spiralTangential=tangential===true;
+                p.__spiralBaseTx=m.baseTx;p.__spiralBaseTy=m.baseTy;p.__spiralDelta=delta;p.__spiralTargetScale=targetScale;p.__spiralClosed=spiralClosed!==false;p.__spiralTangential=(Number(tangential)||0)>0;p.__spiralTangentialMix=typeof tangential==='boolean'?(tangential?1:0):Math.max(0,Math.min(1,Number(tangential)||0));
                 delete p.__spiralBezierInTx;delete p.__spiralBezierInTy;delete p.__spiralBezierOutTx;delete p.__spiralBezierOutTy;delete p.__spiralBezierC1X;delete p.__spiralBezierC1Y;delete p.__spiralBezierC2X;delete p.__spiralBezierC2Y;
             }
 
@@ -2715,7 +2807,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         // explicitly.  The authored line profile is therefore never morphed in
         // already-mapped screen space.
         function getSpiralCarrierSpec(layer, branchIndex = 0) {
-            const N=Math.max(2,Math.round(Number(layer?.N)||4));
+            const N=getSpiralAngularVertexCount(layer);
             const R=getEffectiveLayerRadius(layer,220);
             const rotation=((Number(layer?.rotation)||0)*Math.PI)/180;
             const bi=Number.isFinite(Number(branchIndex))?Number(branchIndex):0;
@@ -2729,7 +2821,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 anchor:{x:R*Math.cos(angle),y:R*Math.sin(angle)},
                 radius:R,N,step,order,direction,delta,targetScale,
                 logScale:Math.log(Math.max(1e-9,targetScale)),
-                tangential:layer?.spiralTangential===true,
+                tangential:getSpiralTangentialBlend(layer),
                 closed:layer?.spiralClosed!==false,
                 roundSeams:layer?.spiralRoundSeams!==false
             };
@@ -2749,7 +2841,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             // exactly the same mapping/Bezier-control implementation.
             const P=[a,{x:a.x,y:a.y}];
             return mapProfileOntoSpiralEdge(
-                profilePts,P,0,R,1,carrierSpec?.tangential===true,out,pseudoStep,pseudoN,
+                profilePts,P,0,R,1,carrierSpec?.tangential??0,out,pseudoStep,pseudoN,
                 carrierSpec?.closed!==false,Math.max(0,Number(carrierSpec?.roundingFrac)||0),
                 direction,exponent
             );
@@ -2797,19 +2889,21 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             if(carrierSpec?.preparedProfile===prepared)spiralCarrierProfilePrepStats.reuses++;
             const baseProfilePts=prepared.baseProfilePts,spiralRounding=prepared.spiralRounding,profileData=prepared.profileData,profilePts=prepared.profilePts;
             if(!Array.isArray(profilePts)||profilePts.length<2)return null;
-            const tangential=carrierSpec?.tangential===true;
+            const tangential=Math.max(0,Math.min(1,Number(carrierSpec?.tangential)||0));
             const spiralClosed=carrierSpec?.closed!==false;
-            const roundSeams=carrierSpec?.roundSeams!==false;
+            const roundSeams=spiralClosed && carrierSpec?.roundSeams!==false;
             const delta=Number(carrierSpec?.delta)||0;
             const targetScale=Math.max(1e-9,Number(carrierSpec?.targetScale)||1);
-            let mapped=mapProfileOntoSpiralCarrier(profilePts,anchor,R,{delta,targetScale,tangential,closed:spiralClosed,roundingFrac:0});
+            let mapped=mapProfileOntoSpiralCarrier(profilePts,anchor,R,{delta,targetScale,tangential,closed:false,roundingFrac:0});
             const rawMapped=mapped;
             if(layer.profileMode==='segments'&&spiralRounding>0.001)
                 mapped=applySpiralFinalSpaceProfileRounding(mapped,spiralRounding);
             let rawVisible=mapped,visible=mapped;
             if(spiralClosed){
+                // Same mapped profile as the open Spiral; only the authored bridge differs.
+                mapped=mapped.map(p=>({...p,__spiralClosed:true}));
                 rawVisible=buildClosedSpiralAutoCloseGeometry(mapped,0,false);
-                visible=(roundSeams&&spiralRounding>0.001)
+                visible=roundSeams
                     ? buildClosedSpiralAutoCloseGeometry(mapped,spiralRounding,true)
                     : rawVisible;
             }
@@ -2828,15 +2922,16 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 widthScale:Math.max(.02,Number(srcPoint?.widthScale)||1),
                 ptIdx:Number.isFinite(Number(srcPoint?.ptIdx))?Number(srcPoint.ptIdx):undefined,
                 __spiralDelta:delta,__spiralTargetScale:targetScale,
-                __spiralClosed:spiralClosed,__spiralTangential:tangential,
+                __spiralClosed:spiralClosed,__spiralTangential:tangential>0,__spiralTangentialMix:tangential,
                 __spiralRoundSeams:roundSeams
             }));
+            retainedPoints._spiroWholeCurveSpline = layer.profileMode==='spline' && layer.wholeCurveSpline===true;
             const bakedProfileRound=layer.profileMode==='segments'&&spiralRounding>0.001;
             const profileCornerFlags=layer.profileMode==='segments'?segmentProfileCornerFlags(profilePts):profilePts.map(()=>false);
-            const cornerFlags=retainedPoints.map((p,idx)=>bakedProfileRound?false:(Boolean(p.__profileCorner)||Boolean(profileCornerFlags[Number.isFinite(Number(p?.ptIdx))?Number(p.ptIdx):idx])));
+            const cornerFlags=retainedPoints.map((p,idx)=>bakedProfileRound?false:(Boolean(p.__profileCorner)||Boolean(profileCornerFlags[Number.isFinite(Number(p?.ptIdx))?Number(p.ptIdx):idx])||(layer.profileMode==='spline'&&layer.wholeCurveSpline!==true&&Boolean(profileData?.keyFlags?.[Number.isFinite(Number(p?.ptIdx))?Number(p.ptIdx):idx]))));
             const lampFlags=profileData?.keyFlags||profilePts.map(()=>false);
             const lampCornerFlags=retainedPoints.map((p,idx)=>Boolean(lampFlags[Number.isFinite(Number(p?.ptIdx))?Number(p.ptIdx):idx]));
-            let retainedCubics=state.fourierMode===true?[]:buildSpiralBezierSegments(retainedPoints,0,cornerFlags,false);
+            let retainedCubics=state.fourierMode===true?[]:buildSpiralBezierSegments(retainedPoints,0,cornerFlags,layer.profileMode==='spline'&&layer.wholeCurveSpline===true);
             if(bakedProfileRound&&retainedCubics?.length)retainedCubics=repairRoundedSpiralBezierJoins(retainedCubics);
             if(retainedCubics?.length){retainedPoints._spiroRetainedCubics=retainedCubics;retainedPoints._spiroRetainedProfileCarrier=true;}
             return {
@@ -2846,7 +2941,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 spiralProfileSpaceSplineBaked:profileData?.profileSpaceSplineBaked===true,
                 spiralPolygonProfileSplineCarrier:profileData?.polygonProfileSplineCarrier===true,
                 spiralProfileSourceCubicCount:Number(profileData?.profileSourceCubicCount)||0,
-                spiralContinuityProtected:spiralClosed===true,
+                spiralContinuityProtected:spiralClosed===true,spiralExplicitBridge:spiralClosed===true,
                 spiralBranchIndex:Number.isFinite(Number(carrierSpec?.branchIndex))?Number(carrierSpec.branchIndex):0,
                 orbitIndex:Number(carrierSpec?.orbitIndex)||0,
                 __carrierMapped:true,__carrierAnchor:{x:Number(anchor.x)||0,y:Number(anchor.y)||0},
@@ -2916,6 +3011,19 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         }
 
         function buildOrbitPolylines(layer) {
+            // The animated Blue Morph rail uses a paired, pre-sampled spline.
+            // During phase handoff the authored layer retains its compact profile
+            // nodes; a fallback/static Polygon or Spiral pass must display the
+            // exact same curve as the last animated frame.  This overlay is active
+            // only during playback, only for that authored layer, and only while
+            // the user has not edited its raw profile.  It does not change project
+            // data or the profile editor's control points.
+            const bridge=resolveMorphCommittedSpiralSpline(layer);
+            if(bridge){
+                const display={...layer,profileNodes:bridge.sampled};
+                setPreSampledSplineLayer(display,true);
+                return buildOrbitPolylines(display);
+            }
             const N = Math.max(2, Math.round(Number(layer.N) || 4));
             const K = Math.max(1, Math.min(Math.floor(N / 2), Math.round(Number(layer.K) || 1)));
             const R = getEffectiveLayerRadius(layer, 220);
@@ -2927,7 +3035,10 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 activeSuborbitsCount = Math.max(1, Math.min(Number(layer.customSuborbits) || 1, maxSuborbits));
             }
 
-            const stepAngle = (2 * Math.PI) / N;
+            // The integer N above controls topology; animated Spiral phase uses
+            // a fractional N so the individual coil angle morphs continuously.
+            const spiralAngularN=getSpiralAngularVertexCount(layer);
+            const stepAngle = (2 * Math.PI) / (isSpiralLayer(layer) ? spiralAngularN : N);
             const verticesPerOrbit = Math.max(2, N / maxSuborbits);
 
             const spiralEnabled = isSpiralLayer(layer);
@@ -2945,7 +3056,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                     ? layer.profileNodes.map(p=>({x:Number(p?.x)||0,y:Number(p?.y)||0}))
                     : getInterpolatedProfilePoints(layer));
             const spiralOrder = getEffectiveSpiralOrder(layer);
-            const spiralTangential = spiralEnabled && layer.spiralTangential === true;
+            const spiralTangential = spiralEnabled ? getSpiralTangentialBlend(layer) : 0;
             const spiralRoundSeams = spiralEnabled && layer.spiralRoundSeams !== false;
             const spiralClosed = layer.spiralClosed !== false;
             const spiralStep = getEffectiveSpiralStep(layer);
@@ -3002,6 +3113,38 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 }
                 if (P.length < 2) continue;
 
+                // v9.2: extended profile shares the same authored profile and anchor
+                // vertices as Polygon. All rails are open and extend far past the
+                // original edge; the repeated variant preserves profile shape.
+                if (layer.extendedProfileEnabled === true && !spiralEnabled) {
+                    const repetitions = 3;
+                    const repeat = layer.extendedProfileMode === 'repeat';
+                    for (let i = 0; i < P.length; i++) {
+                        const a=P[i],b=P[(i+1)%P.length];
+                        const dx=b.x-a.x,dy=b.y-a.y,L=Math.hypot(dx,dy);
+                        if (!(L>1e-6)) continue;
+                        const nx=-dy/L,ny=dx/L;
+                        const pts=[];
+                        if (repeat) {
+                            for(let n=-repetitions;n<=repetitions;n++) {
+                                for(let j=0;j<baseProfilePts.length;j++) {
+                                    if(n>-repetitions&&j===0)continue;
+                                    const p=baseProfilePts[j];
+                                    const u=n+(Number(p.x)||0),v=(Number(p.y)||0)*R*.5;
+                                    pts.push({x:a.x+u*dx+v*nx,y:a.y+u*dy+v*ny});
+                                }
+                            }
+                        } else {
+                            pts.push({x:a.x-repetitions*dx,y:a.y-repetitions*dy});
+                            pts.push({x:b.x+repetitions*dx,y:b.y+repetitions*dy});
+                        }
+                        if(pts.length>=2)paths.push({points:pts,closed:false,
+                            cornerFlags:pts.map((_,j)=>repeat&&j>0&&j<pts.length-1),
+                            extendedProfileRail:true,orbitIndex:sIdx,extendedEdgeIndex:i});
+                    }
+                    continue;
+                }
+
                 const smoothFlatSpline = isFlatProfile && !spiralEnabled && layer.profileMode === 'spline';
                 if (isFlatProfile && !spiralEnabled && !smoothFlatSpline) {
 
@@ -3024,24 +3167,26 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                     let pts = [];
                     if (spiralEnabled) {
 
-                        const mappedSpiralPts = mapProfileOntoSpiralEdge(profilePts, P, i, R, spiralOrder, spiralTangential, null, spiralStep, N, spiralClosed, 0);
+                        const mappedSpiralPts = mapProfileOntoSpiralEdge(profilePts, P, i, R, spiralOrder, spiralTangential, null, spiralStep, spiralAngularN, false, 0);
 
-                        const profileRoundedPts = layer.profileMode==='segments'
+                        let profileRoundedPts = layer.profileMode==='segments'
                             ? applySpiralFinalSpaceProfileRounding(mappedSpiralPts,spiralRounding)
                             : mappedSpiralPts;
 
                         let rawVisibleSpiralPts=spiralClosed?profileRoundedPts:mappedSpiralPts;
                         if(spiralClosed){
+                            // Mark topology without recomputing the open Spiral base points.
+                            profileRoundedPts=profileRoundedPts.map(p=>({...p,__spiralClosed:true}));
                             rawVisibleSpiralPts=buildClosedSpiralAutoCloseGeometry(profileRoundedPts,0,false);
 
-                            pts=(spiralRoundSeams&&spiralRounding>0.001)
+                            pts=spiralRoundSeams
                                 ? buildClosedSpiralAutoCloseGeometry(profileRoundedPts,spiralRounding,true)
                                 : rawVisibleSpiralPts;
                         }else pts=profileRoundedPts;
                         if(!spiralClosed && layer.profileMode==='segments' && pts.length>3 && spiralExtraRounding>0.001){
 
                         }
-                        pts=repairSpiralEdgePoints(pts,rawVisibleSpiralPts,P,i,R,spiralOrder,spiralTangential,spiralStep,N,spiralClosed);
+                        pts=repairSpiralEdgePoints(pts,rawVisibleSpiralPts,P,i,R,spiralOrder,spiralTangential,spiralStep,spiralAngularN,spiralClosed);
                     } else {
                         for (let j = 0; j < profLen; j++) {
                             const prof = profilePts[j];
@@ -3059,8 +3204,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                     for (let spiralEdgeIndex=0; spiralEdgeIndex<edges.length; spiralEdgeIndex++) {
                         const e=edges[spiralEdgeIndex];
                         if (e.length < 2) continue;
-                        const bakedProfileRound=layer.profileMode==='segments' && spiralRounding>0.001;
-                        const cornerFlags=e.map((p,idx)=>bakedProfileRound?false:(Boolean(p.__profileCorner)||interiorCorner(p.ptIdx)));
+                        const bakedProfileRound=layer.profileMode==='segments'&&spiralRounding>0.001;
+                        const cornerFlags=e.map((p,idx)=>bakedProfileRound?false:(Boolean(p.__profileCorner)||interiorCorner(p.ptIdx)||(layer.profileMode==='spline'&&layer.wholeCurveSpline!==true&&Boolean(spiralProfileData?.keyFlags?.[Number.isFinite(Number(p?.ptIdx))?Number(p.ptIdx):idx]))));
                         const lampCornerFlags=e.map((p,idx)=>Boolean(spiralLampCornerFlags?.[Number.isFinite(Number(p?.ptIdx))?Number(p.ptIdx):idx]));
 
                         const retainedPoints=e.map((srcPoint)=>({
@@ -3076,7 +3221,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                             __spiralRoundSeams:spiralRoundSeams===true
                         }));
 
-                        let retainedCubics=state.fourierMode===true?[]:buildSpiralBezierSegments(retainedPoints,0,cornerFlags,false);
+                        retainedPoints._spiroWholeCurveSpline = layer.profileMode==='spline' && layer.wholeCurveSpline===true;
+                        let retainedCubics=state.fourierMode===true?[]:buildSpiralBezierSegments(retainedPoints,0,cornerFlags,layer.profileMode==='spline'&&layer.wholeCurveSpline===true);
                         if(bakedProfileRound&&retainedCubics?.length)retainedCubics=repairRoundedSpiralBezierJoins(retainedCubics);
                         if(retainedCubics?.length){
                             retainedPoints._spiroRetainedCubics=retainedCubics;
@@ -3094,7 +3240,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                             spiralProfileSpaceSplineBaked:spiralProfileData?.profileSpaceSplineBaked===true,
                             spiralPolygonProfileSplineCarrier:spiralProfileData?.polygonProfileSplineCarrier===true,
                             spiralProfileSourceCubicCount:Number(spiralProfileData?.profileSourceCubicCount)||0,
-                            spiralContinuityProtected:spiralClosed===true,
+                            spiralContinuityProtected:spiralClosed===true,spiralExplicitBridge:spiralClosed===true,
                             spiralBranchIndex:Number.isFinite(Number(P[spiralEdgeIndex]?.polygonIndex))?Number(P[spiralEdgeIndex].polygonIndex):spiralEdgeIndex,
                             orbitIndex:sIdx
                         });
@@ -4088,10 +4234,17 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
                 return{a:a*cc+c*ss,b:b*cc+d*ss,c:a*(-ss)+c*cc,d:b*(-ss)+d*cc,e,f};
             }
             function fillSpiralCenterShade(frameCtx,targetCtx){
-                // 7.6.4: center emergence belongs to the Corridor copy alpha.  A
-                // screen/local-radius mask cuts every line that happens to cross the
-                // center and makes an inward Spiral pop when the mask boundary moves.
-                return null;
+                if(state?.tunnel?.active!==true||typeof isSpiralLayer!=='function'||!isSpiralLayer(frameCtx?.layer))return null;
+                // Match Spiral Glow/Base soft center gradient, without changing the
+                // Fill topology. Only Spiral uses this mask; polygon Fill remains on
+                // Corridor copy-alpha. Center shade = 0 disables the mask entirely.
+                const spiral=typeof WebGPUSpiralBezierMorphRenderer!=='undefined'?WebGPUSpiralBezierMorphRenderer:null;
+                const spec=spiral?.debugCenterShadeSpec?.(frameCtx);
+                if(spec?.enabled!==true)return null;
+                const t=targetCtx?.getTransform?.();if(!t)return null;
+                const screenScale=Math.sqrt(Math.max(1e-12,Math.abs(t.a*t.d-t.b*t.c)));
+                return{cx:Number(t.e)||0,cy:Number(t.f)||0,
+                    inner:spec.startRadius*screenScale,outer:spec.endRadius*screenScale};
             }
             function prepareUniformSlot(frameCtx,targetCtx,copyIndex=null,mesh=null){
                 const copies=frameCtx.visibleInstances?.copies||[],copy=copyIndex==null?null:copies[copyIndex];
@@ -6706,16 +6859,37 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
             function canEncodeGeometryCirclesToLayerScene(commands){
                 return Boolean(ready&&!lost&&commands?.length&&countCommandSegments(commands)>0&&circleCompositePipeline&&circleCompositeLayout&&circleSampler);
             }
-            function encodeGeometryCirclesToLayerScene(targetTexture,commands){
+            function encodeGeometryCirclesToLayerScene(targetTexture,commands,glowOpt=null){
                 if(!targetTexture||!canEncodeGeometryCirclesToLayerScene(commands)||!ensureSize(mainCanvas.width,mainCanvas.height)||!ensureLayerBatchSize(mainCanvas.width,mainCanvas.height))return{handled:false,commandBuffer:null};
                 try{
                     const count=countCommandSegments(commands);ensureCircleCapacity(count);let vb=null,k=0,blendKind='max';const resident=prepareLayerBatchGeometry(commands);
                     if(resident&&!resident.indexedMorph&&!resident.sharedJoin&&resident.buffer&&resident.k){vb=resident.buffer;k=resident.k;blendKind=resident.blendKind||'max';circleResidentBufferReuses++;}
                     else{const packed=packGeometryCommands(commands,circleData);if(!packed.k)return{handled:true,commandBuffer:null};k=packed.k;blendKind=packed.blendKind;vb=circleInstanceBuffers[circleCursor++%circleInstanceBuffers.length];device.queue.writeBuffer(vb,0,circleData.buffer,circleData.byteOffset,k*FLOATS_PER_INSTANCE*4);circleScratchUploadBytes+=k*FLOATS_PER_INSTANCE*4;circleFallbackPacks++;}
-                    if(!circleUniformBuffers.length||!circleScratchView||!circleCompositeBindGroup)return{handled:false,commandBuffer:null};const uslot=circleUniformCursor++%circleUniformBuffers.length,ub=circleUniformBuffers[uslot];fillStrokeUniformArray(circleUniformData,4,null);
-                    if(!circleUniformHasLast[uslot]||!sameF32Data(circleUniformData,circleUniformLastData[uslot],12)){device.queue.writeBuffer(ub,0,circleUniformData);circleUniformLastData[uslot].set(circleUniformData);circleUniformHasLast[uslot]=true;circleUniformUploads++;}else circleUniformUploadSkips++;
-                    const encoder=device.createCommandEncoder({label:'SpiroStar Geometry Circles MAX scratch + Layer Scene source-over'}),scratchPass=encoder.beginRenderPass({colorAttachments:[{view:circleScratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});scratchPass.setPipeline(blendKind==='max'?pipelineMax:pipelineOver);scratchPass.setBindGroup(0,circleUniformBindGroups[uslot]);scratchPass.setVertexBuffer(0,cornerBuffer);scratchPass.setVertexBuffer(1,vb);scratchPass.draw(6,k);scratchPass.end();
-                    const targetView=targetTexture===layerSceneTexture?(circleTargetViewReuses++,layerSceneView):targetTexture.createView(),compositePass=encoder.beginRenderPass({colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}]});if(circleCompositeBundle){compositePass.executeBundles(circleCompositeBundleList);renderBundleExecutes++;}else{compositePass.setPipeline(circleCompositePipeline);compositePass.setBindGroup(0,circleCompositeBindGroup);compositePass.draw(3);}compositePass.end();circleScratchFrames++;circleScratchDraws+=2;circleScratchSegments+=k;return{handled:true,commandBuffer:encoder.finish()};
+                    // The deferred frame may queue multiple per-layer glow+core passes
+                    // before any queue submit. Do not overwrite a uniform from a
+                    // previously encoded pass in the same frame.
+                    ensureCircleUniformRingCount(Math.max(128,desiredCircleRingCount()));
+                    if(!circleUniformBuffers.length||!circleScratchView||!circleCompositeBindGroup)return{handled:false,commandBuffer:null};
+                    const encoder=device.createCommandEncoder({label:'SpiroStar Geometry Circles Glow then Core'});
+                    const targetView=targetTexture===layerSceneTexture?(circleTargetViewReuses++,layerSceneView):targetTexture.createView();
+                    const paint=(mode,opt)=>{
+                        const uslot=circleUniformCursor++%circleUniformBuffers.length,ub=circleUniformBuffers[uslot];
+                        fillStrokeUniformArray(circleUniformData,mode,opt);
+                        if(!circleUniformHasLast[uslot]||!sameF32Data(circleUniformData,circleUniformLastData[uslot],12)){
+                            device.queue.writeBuffer(ub,0,circleUniformData);circleUniformLastData[uslot].set(circleUniformData);circleUniformHasLast[uslot]=true;circleUniformUploads++;
+                        }else circleUniformUploadSkips++;
+                        const scratch=encoder.beginRenderPass({colorAttachments:[{view:circleScratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
+                        scratch.setPipeline(blendKind==='max'?pipelineMax:pipelineOver);scratch.setBindGroup(0,circleUniformBindGroups[uslot]);scratch.setVertexBuffer(0,cornerBuffer);scratch.setVertexBuffer(1,vb);scratch.draw(6,k);scratch.end();
+                        const composite=encoder.beginRenderPass({colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}]});
+                        if(circleCompositeBundle){composite.executeBundles(circleCompositeBundleList);renderBundleExecutes++;}
+                        else{composite.setPipeline(circleCompositePipeline);composite.setBindGroup(0,circleCompositeBindGroup);composite.draw(3);}composite.end();
+                        circleScratchFrames++;circleScratchDraws+=2;
+                    };
+                    if(Number(glowOpt?.radiusPx)>0&&Number(glowOpt?.alphaScale)>0){
+                        // Same RGB and stroke geometry as the core; only optical radius differs.
+                        paint(0,{reuseStatic:true,effectParam:Number(glowOpt.radiusPx),baseLineWidth:1,alphaScale:Number(glowOpt.alphaScale)});
+                    }
+                    paint(4,null);circleScratchSegments+=k;return{handled:true,commandBuffer:encoder.finish()};
                 }catch(err){lastError=String(err?.message||err);circleScratchFallbacks++;return{handled:false,commandBuffer:null};}
             }
             function submitLayerBatchCommands(batch,extraCommands=null){
@@ -8100,8 +8274,10 @@ fn shade(v:VSOut,corePass:bool)->vec4<f32>{
     if(v.glowRadius>0.01){let q=edge/max(0.0001,v.glowRadius);let s=clamp(v.glowSoftness,0.0,1.5);let start=mix(0.84,0.02,min(1.0,s));glow=1.0-smoothstep(start,1.0,q);if(s>1.0){glow=pow(max(0.0,glow),mix(1.0,0.58,min(1.0,(s-1.0)*2.0)));}}
     let intensity=max(0.0,select(v.glowAlpha*glow,v.coreAlpha*core,corePass));let a=clamp(intensity,0.0,1.0);return vec4<f32>(v.color*a,a);
 }
-@fragment fn fsHalo(v:VSOut)->@location(0) vec4<f32>{if(v.kind>=0.5){discard;}let q=shade(v,false);if(q.a<0.00015){discard;}return q;}
-@fragment fn fsCore(v:VSOut)->@location(0) vec4<f32>{if(v.kind<0.5){discard;}let q=shade(v,true);if(q.a<0.00015){discard;}return q;}`;
+// One lightning segment can carry its halo AND its core. The two blending
+// stages stay independent, while CPU geometry traversal and GPU upload happen once.
+@fragment fn fsHalo(v:VSOut)->@location(0) vec4<f32>{if(v.glowAlpha<=0.0001){discard;}let q=shade(v,false);if(q.a<0.00015){discard;}return q;}
+@fragment fn fsCore(v:VSOut)->@location(0) vec4<f32>{if(v.coreAlpha<=0.0001){discard;}let q=shade(v,true);if(q.a<0.00015){discard;}return q;}`;
             function blend(kind){return kind==='max'?{color:{srcFactor:'one',dstFactor:'one',operation:'max'},alpha:{srcFactor:'one',dstFactor:'one',operation:'max'}}:{color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}};}
             async function initAsync(){
                 if(ready&&!lost)return true;if(initializing)return false;if(attempted&&!ready)return false;attempted=true;initializing=true;lastError='';
@@ -8193,7 +8369,10 @@ struct Vin{@location(0) p:vec2<f32>}; struct Vout{@builtin(position) p:vec4<f32>
                     const encoder=device.createCommandEncoder({label:'SpiroStar vector lightning -> Layer Scene'}),targetView=sceneTargetView(targetTexture);
                     const verts=clipGeometry?.vertices instanceof Float32Array?clipGeometry.vertices:null,floatCount=Math.max(0,Math.min(verts?.length||0,Number(clipGeometry?.floatCount)||verts?.length||0)),vertexCount=Math.floor(floatCount/2),clipped=(clipMode==='inside'||clipMode==='outside')&&vertexCount>=3&&sceneMaskPipeline&&sceneAddStencilPipeline&&sceneStencilView;let pass;
                     if(clipped){const maskBuffer=acquireSceneMaskBuffer(clipGeometry,vertexCount,sceneSlot);pass=encoder.beginRenderPass({colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}],depthStencilAttachment:{view:sceneStencilView,depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'discard',stencilClearValue:0,stencilLoadOp:'clear',stencilStoreOp:'store'}});pass.setPipeline(sceneMaskPipeline);pass.setBindGroup(0,bindGroup);pass.setVertexBuffer(0,maskBuffer);pass.draw(vertexCount);pass.end();sceneClippedFrames++;}
-                    const glowMode=sweepGlowBlendMode(cfg),coreMode=sweepCoreBlendMode(cfg),stage=(core)=>{pass=encoder.beginRenderPass({colorAttachments:[{view:sceneScratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});pass.setPipeline(core?(batchBlendMode==='max'?pipelineMaxCore:pipelineOverCore):(batchBlendMode==='max'?pipelineMaxHalo:pipelineOverHalo));pass.setBindGroup(0,bindGroup);pass.setVertexBuffer(0,cornerBuffer);pass.setVertexBuffer(1,ringBuffer);pass.draw(6,count);pass.end();const att={view:targetView,loadOp:'load',storeOp:'store'},desc={colorAttachments:[att]};if(clipped)desc.depthStencilAttachment={view:sceneStencilView,depthLoadOp:'load',depthStoreOp:'discard',stencilLoadOp:'load',stencilStoreOp:'discard'};pass=encoder.beginRenderPass(desc);if(clipped)pass.setStencilReference(clipMode==='inside'?1:0);const mode=core?coreMode:glowMode,pipelines=clipped?sceneBlendStencilPipelines:sceneBlendPipelines;pass.setPipeline(pipelines[mode]||pipelines.normal);pass.setBindGroup(0,core?sceneOverBindGroup:sceneAddBindGroup);pass.draw(3);pass.end();};stage(false);stage(true);
+                    const glowMode=sweepGlowBlendMode(cfg),coreMode=sweepCoreBlendMode(cfg),stage=(core)=>{pass=encoder.beginRenderPass({colorAttachments:[{view:sceneScratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});pass.setPipeline(core?(batchBlendMode==='max'?pipelineMaxCore:pipelineOverCore):(batchBlendMode==='max'?pipelineMaxHalo:pipelineOverHalo));pass.setBindGroup(0,bindGroup);pass.setVertexBuffer(0,cornerBuffer);pass.setVertexBuffer(1,ringBuffer);pass.draw(6,count);pass.end();const mode=core?sweepCoreBlendMode(cfg):sweepGlowBlendMode(cfg);
+                    if(SomataSweepLampBlend.encode(encoder,device,format,sceneScratchTexture,targetTexture,mode,
+                            {width,height,stencilView:clipped?sceneStencilView:null,stencilReference:clipMode==='inside'?1:0}))return;
+                    const att={view:targetView,loadOp:'load',storeOp:'store'},desc={colorAttachments:[att]};if(clipped)desc.depthStencilAttachment={view:sceneStencilView,depthLoadOp:'load',depthStoreOp:'discard',stencilLoadOp:'load',stencilStoreOp:'discard'};pass=encoder.beginRenderPass(desc);if(clipped)pass.setStencilReference(clipMode==='inside'?1:0);const pipelines=clipped?sceneBlendStencilPipelines:sceneBlendPipelines;pass.setPipeline(pipelines[mode]||pipelines.normal);pass.setBindGroup(0,core?sceneOverBindGroup:sceneAddBindGroup);pass.draw(3);pass.end();};stage(false);stage(true);
                     const n=count;count=0;sceneDirectFrames++;sceneDirectSegments+=n;return{handled:true,commandBuffer:encoder.finish()};
                 }catch(err){lastError=String(err?.message||err);count=0;return null;}
             }
@@ -8644,11 +8823,12 @@ fn markerSd(p:vec2<f32>)->f32{
         }
 
         function tryRenderBaseGeometryGPU(frameCtx){
+            const trace=(reason,detail={})=>{if(state.tunnel?.active===true)frameCtx._corridorPerCopyGpuTrace={reason,...detail};};
             if(!frameCtx?.lineDisplayEnabled||frameCtx.lineProfileStrokeOnly||state.showRoundingGuides)return false;
 
             if(frameCtx.geometryPlan?.kind==='lightning')return false;
 
-            if(!GeometryGPURenderer.isAvailable())return false;
+            if(!GeometryGPURenderer.isAvailable()){trace('gpu-renderer-unavailable');return false;}
 
             const tunnelMix=state.tunnel.active===true;
 
@@ -8671,16 +8851,20 @@ fn markerSd(p:vec2<f32>)->f32{
             if(master&&WebGPUStrokeRenderer.isReady()){
                 const copies=frameCtx.visibleInstances?.copies||[];
                 const instanced=GeometryGPURenderer.renderCorridor(master,copies,mainCtx,buildCorridorGPUOptions(frameCtx,{copyCacheVariant:frameCtx.geometryPlan?.dynamic===true?'base-morph':'base',weightForCopy:glWeight,deferComposite:true,dynamicSegments:frameCtx.geometryPlan?.dynamic===true}));
-                if(instanced){if(cpuWeight)frameCtx.drawLayerInstances(mainCtx,true,cpuWeight);GeometryGPURenderer.composite(mainCtx);return true;}
+                if(instanced){if(cpuWeight)frameCtx.drawLayerInstances(mainCtx,true,cpuWeight);GeometryGPURenderer.composite(mainCtx);trace('instanced-committed');return true;}
+                trace('instanced-declined',{masterCount:master.length,copyCount:copies.length,rendererError:String(WebGPUStrokeRenderer?.status?.()?.lastError||'')});
             }
 
             const rec=acquireReusableTunnelStrokeRecorder(frameCtx.effectLayerSource||frameCtx.sourceLayer||frameCtx.layer,true);
-            try{frameCtx.drawLayerInstances(rec,true,glWeight);}catch(_){return false;}
-            if(rec.unsupported)return false;
-            if(!rec.commands.length){if(cpuWeight)frameCtx.drawLayerInstances(mainCtx,true,cpuWeight);return true;}
-            if(!GeometryGPURenderer.render(rec.commands,mainCtx,true))return false;
+            try{frameCtx.drawLayerInstances(rec,true,glWeight);}catch(err){trace('per-copy-record-exception',{error:String(err?.message||err)});return false;}
+            if(rec.unsupported){trace('per-copy-record-unsupported');return false;}
+            if(!rec.commands.length){if(cpuWeight)frameCtx.drawLayerInstances(mainCtx,true,cpuWeight);trace('per-copy-empty');return true;}
+            if(!GeometryGPURenderer.render(rec.commands,mainCtx,true)){
+                trace('per-copy-gpu-declined',{commandCount:rec.commands.length,gpuActive:GeometryGPURenderer?.status?.()?.active||'none'});return false;
+            }
             if(cpuWeight)frameCtx.drawLayerInstances(mainCtx,true,cpuWeight);
             GeometryGPURenderer.composite(mainCtx);
+            trace('per-copy-committed');
             return true;
         }
 
@@ -8853,7 +9037,6 @@ fn markerSd(p:vec2<f32>)->f32{
             {key:'lightning.intensity',group:'Молния',label:'Интенсивность свечения',mode:'positiveFactor',span:1.8,min:0,max:400},
             {key:'lightning.softness',group:'Молния',label:'Мягкость',mode:'add',span:100,min:0,max:150},
             {key:'lightning.lineOpacity',group:'Молния',label:'Основа · прозрачность',mode:'add',span:100,min:0,max:100},
-            {key:'lightning.afterglowMs',group:'Молния',label:'Послесвечение · длительность',mode:'add',span:400,min:0,max:900},
             {key:'lightning.microStrikes',group:'Молния',label:'Микроудары',mode:'add',span:3,min:0,max:Infinity},
             {key:'tunnel.speed',group:'Коридор',label:'Скорость',mode:'add',span:1.2,min:0,max:20},
             {key:'tunnel.spacing',group:'Коридор',label:'Дистанция между фигурами',mode:'add',span:3.0,min:0.01,max:1000000},
@@ -8879,14 +9062,44 @@ fn markerSd(p:vec2<f32>)->f32{
             return r;
         }
         function ensureAudioLayerNativeBand(layer,idx=0){
-            const allowed=new Set(['low','lowMid','mid','midHigh','high']);
+            const available=getActiveAudioBandKeys();
             if(!layer)return routeBandForLayerIndex(idx);
-            if(!allowed.has(layer.audioNativeBand))layer.audioNativeBand=routeBandForLayerIndex(idx);
+            if(!available.includes(layer.audioNativeBand)){
+                layer.audioNativeBand=routeBandForLayerIndex(idx);
+                // A band automatically assigned to a newly created layer can follow
+                // future changes in the number of inputs without touching custom routes.
+                if(layer.audioNativeBandAuto!==false)layer.audioNativeBandAuto=true;
+            }
             return layer.audioNativeBand;
+        }
+        function synchronizeAutomaticLayerAudioBands(){
+            const available=getActiveAudioBandKeys();
+            const routes=state.audioReactive?.routes?.layers||{};
+            for(const [idx,layer] of (state.layers||[]).entries()){
+                const expected=routeBandForLayerIndex(idx),previous=layer.audioNativeBand;
+                if(layer.audioNativeBandAuto===true){
+                    if(previous!==expected){
+                        // Preserve individually edited bindings. Only replace bindings
+                        // still pointing to the layer's former automatic native band.
+                        for(const route of (Array.isArray(routes[layer.id])?routes[layer.id]:[])){
+                            if(route?.band===previous)route.band=expected;
+                        }
+                        layer.audioNativeBand=expected;
+                    }
+                }else if(!available.includes(previous)){
+                    // Legacy projects keep their per-route choices intact; only repair
+                    // the fallback band for NEW bindings on this layer.
+                    layer.audioNativeBand=expected;
+                }
+            }
         }
         function createDefaultAudioRoutesForLayerIndex(idx){
             if(state.audioReactive?.defaultRoutesEnabled===false)return [];
-            return createPresetRoutesForLayerIndex(idx,'geometryLamps');
+            const configured=state.audioReactive?.routingPreset;
+            // New automatic connections follow the visible preset. In Free mode,
+            // retain the historical default (geometry + lamps) for new layers.
+            const mode=['geometry','lamps','geometryLamps'].includes(configured)?configured:'geometryLamps';
+            return createPresetRoutesForLayerIndex(idx,mode);
         }
         const AUDIO_ROUTING_PRESETS = new Set(['free','geometry','lamps','geometryLamps']);
         const AUDIO_ROUTE_GROUP_SPECS = [
@@ -8912,7 +9125,10 @@ fn markerSd(p:vec2<f32>)->f32{
             ar.routingPreset=AUDIO_ROUTING_PRESETS.has(mode)?mode:'free';
             const sel=document.getElementById('audioRoutingPreset');if(sel)sel.value=ar.routingPreset;
         }
-        function routeBandForLayerIndex(idx){const order=['low','mid','high','lowMid','midHigh'];return order[Math.max(0,Number(idx)||0)%order.length];}
+        function routeBandForLayerIndex(idx){
+            const available=getActiveAudioBandKeys();
+            return available[Math.max(0,Math.floor(Number(idx)||0))%available.length];
+        }
         function createPresetRoutesForLayerIndex(idx,mode){
             const band=ensureAudioLayerNativeBand(state.layers?.[idx],idx);
             if(mode==='geometry')return [createAudioRoute(band,'layer.radius',100,1,true,false),createAudioRoute(band,'layer.rotation',100,1,false,false)];
@@ -8925,7 +9141,13 @@ fn markerSd(p:vec2<f32>)->f32{
             setAudioRoutingPresetMode(mode);
             if(mode==='free'){renderAudioRoutingPanel();return;}
             const routes=ensureAudioRoutingState();
-            state.layers.forEach((layer,idx)=>{routes.layers[layer.id]=createPresetRoutesForLayerIndex(idx,mode)||[];});
+            state.layers.forEach((layer,idx)=>{
+                // Explicitly applying a preset also repairs legacy projects where
+                // every layer had incorrectly inherited the same low band.
+                layer.audioNativeBand=routeBandForLayerIndex(idx);
+                layer.audioNativeBandAuto=true;
+                routes.layers[layer.id]=createPresetRoutesForLayerIndex(idx,mode)||[];
+            });
             renderAudioRoutingPanel();requestMainCanvasRender();
         }
         function allAudioRouteCollections(){const routes=ensureAudioRoutingState();return Object.values(routes.layers||{}).filter(Array.isArray);}
@@ -8988,7 +9210,10 @@ fn markerSd(p:vec2<f32>)->f32{
         function audioMasterParamsInUse(){
             const routes=ensureAudioRoutingState(),seen=new Set();
             for(const rows of Object.values(routes.layers||{}))for(const r of rows||[])if(r&&AUDIO_PARAM_BY_KEY.has(r.param))seen.add(r.param);
-            return [...AUDIO_PARAM_DEFS,...AUDIO_PARAM_COMPAT_DEFS].map(d=>d.key).filter((k,i,a)=>seen.has(k)&&a.indexOf(k)===i);
+            const ordered=[],unique=new Set();
+            for(const def of AUDIO_PARAM_DEFS)if(seen.has(def.key)&&!unique.has(def.key)){unique.add(def.key);ordered.push(def.key);}
+            for(const def of AUDIO_PARAM_COMPAT_DEFS)if(seen.has(def.key)&&!unique.has(def.key)){unique.add(def.key);ordered.push(def.key);}
+            return ordered;
         }
         function getAudioMasterRouteGain(param){
             const cfg=getAudioMasterRouteConfig(param,true);
@@ -9025,11 +9250,45 @@ fn markerSd(p:vec2<f32>)->f32{
             if(!ar.groupToggleMemory||typeof ar.groupToggleMemory!=='object'||Array.isArray(ar.groupToggleMemory))ar.groupToggleMemory={};
             if(!ar.layerSignalEnabled||typeof ar.layerSignalEnabled!=='object'||Array.isArray(ar.layerSignalEnabled))ar.layerSignalEnabled={};
             state.layers.forEach(layer=>{if(!Object.prototype.hasOwnProperty.call(ar.layerSignalEnabled,layer.id))ar.layerSignalEnabled[layer.id]=true;});
-            for(const id of Object.keys(ar.routes.layers))if(!state.layers.some(l=>l.id===id))delete ar.routes.layers[id];
-            for(const id of Object.keys(ar.layerSignalEnabled))if(!state.layers.some(l=>l.id===id))delete ar.layerSignalEnabled[id];
-            if(ar.routingTarget!=='master'&&!state.layers.some(l=>l.id===ar.routingTarget))ar.routingTarget='master';
+            // Validate all three layer-ID collections against the same current snapshot.
+            // Avoid an O(stale route count * layer count) scan every time routing is read.
+            const liveLayerIds=new Set(state.layers.map(layer=>layer.id));
+            for(const id of Object.keys(ar.routes.layers))if(!liveLayerIds.has(id))delete ar.routes.layers[id];
+            for(const id of Object.keys(ar.layerSignalEnabled))if(!liveLayerIds.has(id))delete ar.layerSignalEnabled[id];
+            if(ar.routingTarget!=='master'&&!liveLayerIds.has(ar.routingTarget))ar.routingTarget='master';
             if(!AUDIO_ROUTING_PRESETS.has(ar.routingPreset))ar.routingPreset='geometryLamps';
+            // A duplicated layer may already carry a valid (but outdated) native
+            // band. Reconcile automatic assignments by POSITION on every layer
+            // collection update, not only when the audio-input count changes.
+            // User-authored routes on other bands remain untouched.
+            synchronizeAutomaticLayerAudioBands();
             return ar.routes;
+        }
+        function initializeNewLayerAudioRouting(layer,sourceLayer=null){
+            if(!layer)return [];
+            const idx=(state.layers||[]).findIndex(x=>x?.id===layer.id);
+            if(idx<0)return [];
+            const expected=routeBandForLayerIndex(idx);
+            layer.audioNativeBand=expected;
+            layer.audioNativeBandAuto=true;
+            // Newly added layers must receive a native frequency immediately.
+            // Duplicates keep their parameter/strength choices, but copies of the
+            // source's automatic frequency are shifted to the new layer's band.
+            const ar=state.audioReactive||(state.audioReactive={});
+            const routes=ensureAudioRoutingState();
+            if(sourceLayer){
+                const sourceRoutes=routes.layers?.[sourceLayer.id];
+                if(ar.defaultRoutesEnabled===false){routes.layers[layer.id]=[];}
+                else if(Array.isArray(sourceRoutes)){
+                    const sourceBand=sourceLayer.audioNativeBand;
+                    routes.layers[layer.id]=sourceRoutes.map(row=>{
+                        const copy=normalizeAudioRoute({...row,id:null});
+                        if(sourceLayer.audioNativeBandAuto===true&&copy.band===sourceBand)copy.band=expected;
+                        return copy;
+                    });
+                }
+            }
+            return routes.layers[layer.id]||[];
         }
         function isAudioLayerSignalEnabled(layerOrIndex=-1){
             const ar=state.audioReactive||{};
@@ -9274,7 +9533,10 @@ fn markerSd(p:vec2<f32>)->f32{
             const add=(id,label,color,isLayer=false)=>{
                 const signalEnabled=!isLayer||isAudioLayerSignalEnabled(id);
                 const b=document.createElement('button');b.type='button';b.className='audio-routing-layer'+((state.audioReactive.routingTarget||'master')===id?' active':'')+(signalEnabled?'':' signal-disabled');
-                b.innerHTML=`<span class="audio-routing-layer-dot" style="color:${color};background:${color}"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span>`;
+                b.innerHTML='<span class="audio-routing-layer-dot"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>';
+                const safeColor=/^#[0-9a-f]{3,8}$/i.test(String(color||''))?color:'#94a3b8';
+                b.firstElementChild.style.color=safeColor;b.firstElementChild.style.backgroundColor=safeColor;
+                b.lastElementChild.textContent=String(label??'');
                 b.title=isLayer?(signalEnabled?'ЛКМ — открыть связи слоя · ПКМ — отключить слой от аудиосигнала':'ЛКМ — открыть связи слоя · ПКМ — снова подключить слой к аудиосигналу'):'Мастер аудиосвязей';
                 b.setAttribute('aria-pressed',signalEnabled?'true':'false');
                 if(isLayer){b.dataset.audioLayerId=id;b.dataset.audioLayerLabel=label;}
@@ -9290,9 +9552,44 @@ fn markerSd(p:vec2<f32>)->f32{
             if(!target)return;target.textContent='';const label=document.createElement('span');label.className='audio-routing-group-label';
             label.appendChild(createAudioRoutingGroupIcon(group,false));const name=document.createElement('span');name.className='audio-routing-group-name';name.textContent=group+(arrow?' ▾':'');label.appendChild(name);target.appendChild(label);
         }
+        // Audio shows one level of *routable* parameters. Matrix descendants with
+        // working audio adapters are independent options, never nested settings.
+        // Share this exact list between the group popups and the route picker.
+        function flatAudioParameterOptions(groupFilter=null){
+            const matrix=window.SomataParameterMatrix;
+            const roots=matrix?.all?.()||AUDIO_PARAM_DEFS;
+            const items=[],seen=new Set();
+            const append=(key,label,group)=>{
+                if(!key||seen.has(key)||!AUDIO_PARAM_BY_KEY.has(key))return;
+                seen.add(key);
+                items.push({key,label,group});
+            };
+            for(const def of roots){
+                const group=def.morph?.group||def.group;
+                if(groupFilter&&group!==groupFilter)continue;
+                const key=def.key||def.id;
+                append(key,def.label,group);
+                for(const child of matrix?.descendants?.(key)||[]){
+                    append(child.id,child.label||AUDIO_PARAM_BY_KEY.get(child.id)?.label,group);
+                }
+            }
+            return items;
+        }
         function buildAudioParamMenu(container,route,onPick){
             container.innerHTML='';const input=document.createElement('input');input.type='search';input.className='audio-param-search';input.placeholder='Поиск параметра…';container.appendChild(input);const body=document.createElement('div');container.appendChild(body);
-            const render=()=>{const q=input.value.trim().toLowerCase();body.innerHTML='';let last='';const masterTarget=(state.audioReactive.routingTarget||'master')==='master';for(const def of (window.SomataParameterMatrix?.all?.()||AUDIO_PARAM_DEFS)){if((def.morph?.group||def.group)==='Коридор'&&!masterTarget)continue;const hay=`${def.morph?.group||def.group} ${def.label} ${def.key||def.id}`.toLowerCase();if(q&&!hay.includes(q))continue;if((def.morph?.group||def.group)!==last){const t=document.createElement('div');t.className='audio-param-group-title';appendAudioGroupLabel(t,def.morph?.group||def.group,false);body.appendChild(t);last=def.morph?.group||def.group;}const key=def.key||def.id,unsupported=!!def.kind&&!def.audioSupported;const b=document.createElement('button');b.type='button';b.className='audio-param-option'+(route.param===key?' active':'');b.dataset.parameterId=def.id||key;b.textContent=def.label;b.disabled=unsupported;if(unsupported)b.title=def.reason;b.addEventListener('click',()=>{if(!unsupported)onPick(key);});body.appendChild(b);}};input.addEventListener('input',render);render();setTimeout(()=>input.focus(),0);
+            const render=()=>{
+                const q=input.value.trim().toLowerCase();body.innerHTML='';let last='';
+                const masterTarget=(state.audioReactive.routingTarget||'master')==='master';
+                for(const def of flatAudioParameterOptions()){
+                    if(def.group==='Коридор'&&!masterTarget)continue;
+                    const hay=`${def.group} ${def.label} ${def.key}`.toLowerCase();
+                    if(q&&!hay.includes(q))continue;
+                    if(def.group!==last){const t=document.createElement('div');t.className='audio-param-group-title';appendAudioGroupLabel(t,def.group,false);body.appendChild(t);last=def.group;}
+                    const b=document.createElement('button');b.type='button';b.className='audio-param-option'+(route.param===def.key?' active':'');b.dataset.parameterId=def.key;b.textContent=def.label;
+                    b.addEventListener('click',()=>onPick(def.key));body.appendChild(b);
+                }
+            };
+            input.addEventListener('input',render);render();setTimeout(()=>input.focus(),0);
         }
         function renderAudioMasterRouteControls(paramKeys){
             const box=document.getElementById('audioMasterRouteControls'),host=document.getElementById('audioMasterRouteControlRows');
@@ -9471,31 +9768,30 @@ fn markerSd(p:vec2<f32>)->f32{
             const defaultsCb=document.getElementById('audioDefaultRoutesEnabled');if(defaultsCb){defaultsCb.checked=state.audioReactive.defaultRoutesEnabled!==false;defaultsCb.addEventListener('change',()=>{state.audioReactive.defaultRoutesEnabled=defaultsCb.checked;});}
             for(const spec of AUDIO_ROUTE_GROUP_SPECS){
                 const b=document.getElementById(spec.button),m=document.getElementById(spec.menu);if(!b||!m)continue;
-                const available=(window.SomataParameterMatrix?.all?.()||AUDIO_PARAM_DEFS).filter(d=>(d.morph?.group||d.group)===spec.group),wrap=b.closest('.audio-route-group');if(wrap)wrap.classList.toggle('hidden',available.length===0);if(!available.length)continue;
+                const available=flatAudioParameterOptions(spec.group),wrap=b.closest('.audio-route-group');
+                if(wrap)wrap.classList.toggle('hidden',available.length===0);
+                if(!available.length)continue;
                 appendAudioGroupLabel(b,spec.group||spec.label,true);
-                const fill=()=>{m.innerHTML='';const target=(state.audioReactive.routingTarget||'master'),rows=getAudioRouteTargetRows();available.forEach(def=>{const key=def.key||def.id,unsupported=!!def.kind&&!def.audioSupported;const on=rows.some(r=>r?.param===key),x=document.createElement('button');x.type='button';x.className='audio-param-option'+(on?' active':'');x.dataset.parameterId=def.id||key;x.textContent=`${on?'✓ ':''}${def.label}`;if(unsupported){x.disabled=true;x.title=def.reason||'Для аудиосвязи требуется отдельный адаптер';}x.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();const liveTarget=(state.audioReactive.routingTarget||'master'),routes=ensureAudioRoutingState();if(spec.globalOnly===true&&liveTarget!=='master')return;const collection=liveTarget==='master'?routes.master:(routes.layers[liveTarget]||(routes.layers[liveTarget]=[]));const existing=collection.filter(r=>r?.param===key);if(existing.length){for(let i=collection.length-1;i>=0;i--)if(collection[i]?.param===key)collection.splice(i,1);}else if(liveTarget==='master')collection.push(createAudioRoute('combined',key,100,1,true,false));else addAudioRouteForTarget(key,{strength:100,multiplier:1,enabled:true,derivative:false,signalMode:'add'});markAudioRoutingFree();renderAudioRoutingPanel();fill();m.classList.remove('hidden');positionViewportPopup(m,b);requestMainCanvasRender();});m.appendChild(x);
-                const mat=window.SomataParameterMatrix;
-                const sub=mat?.subcontrols?.(def.id||key)||[];
-                if(sub.length){
-                    const nest=document.createElement('details');nest.className='audio-param-subsettings';nest.dataset.parentParameter=def.id||key;
-                    const caption=document.createElement('summary');caption.textContent='Поднастройки ('+sub.length+')';nest.appendChild(caption);
-                    const childMap=new Map((mat?.descendants?.(def.id||key)||[]).map(x=>[x.label,x.id]));
-                    for(const label of sub){
-                        const id=childMap.get(label),supported=!!id&&AUDIO_PARAM_BY_KEY.has(id);
-                        const child=document.createElement('button');child.type='button';child.className='audio-param-option audio-param-child';child.textContent=label;
-                        child.dataset.childParameter=id||'';child.disabled=!supported;
-                        if(!supported)child.title='Настройка доступна в Blue/Orange; для Audio требуется отдельный адаптер';
-                        child.addEventListener('click',ev=>{ev.preventDefault();ev.stopPropagation();
+                const fill=()=>{
+                    m.innerHTML='';const rows=getAudioRouteTargetRows();
+                    for(const def of available){
+                        const on=rows.some(r=>r?.param===def.key);
+                        const x=document.createElement('button');x.type='button';x.className='audio-param-option'+(on?' active':'');
+                        x.dataset.parameterId=def.key;x.textContent=`${on?'✓ ':''}${def.label}`;
+                        x.addEventListener('click',e=>{
+                            e.preventDefault();e.stopPropagation();
                             const target=state.audioReactive.routingTarget||'master',routes=ensureAudioRoutingState();
                             const collection=target==='master'?routes.master:(routes.layers[target]||(routes.layers[target]=[]));
-                            const pos=collection.findIndex(r=>r?.param===id);
-                            if(pos>=0)collection.splice(pos,1);else collection.push(createAudioRoute('combined',id,100,1,true,false));
-                            markAudioRoutingFree();renderAudioRoutingPanel();requestMainCanvasRender();
-                        });nest.appendChild(child);
+                            const existing=collection.filter(r=>r?.param===def.key);
+                            if(existing.length){for(let i=collection.length-1;i>=0;i--)if(collection[i]?.param===def.key)collection.splice(i,1);}
+                            else if(target==='master')collection.push(createAudioRoute('combined',def.key,100,1,true,false));
+                            else addAudioRouteForTarget(def.key,{strength:100,multiplier:1,enabled:true,derivative:false,signalMode:'add'});
+                            markAudioRoutingFree();renderAudioRoutingPanel();fill();m.classList.remove('hidden');positionViewportPopup(m,b);requestMainCanvasRender();
+                        });
+                        m.appendChild(x);
                     }
-                    m.appendChild(nest);
-                }
-                });};fill();
+                };
+                fill();
                 b.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.audio-route-group-menu').forEach(other=>{if(other!==m)other.classList.add('hidden');});m.classList.toggle('hidden');if(!m.classList.contains('hidden')){fill();positionViewportPopup(m,b);}});
                 b.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();document.querySelectorAll('.audio-route-group-menu').forEach(other=>other.classList.add('hidden'));toggleAudioRouteGroupWithMemory(spec);});
             }
@@ -9579,7 +9875,7 @@ fn markerSd(p:vec2<f32>)->f32{
                 splineBlend:morphSplineBlend(srcMode,dstMode,u),
                 continuousProfileBlend:isMixedSplineSegmentTransition(srcMode,dstMode),
                 splineRenderMode:layer?.splineRenderMode,
-                roundingFrac:(srcR+(dstR-srcR)*u)/100
+                roundingFrac:interpolateMorphRounding(srcR,dstR,u)/100
             };
         }
         function buildLampRenderedAttachmentPaths(paths, layer, morphInfo=null) {
@@ -9607,7 +9903,7 @@ fn markerSd(p:vec2<f32>)->f32{
                 if(morphInfo){
                     drawMorphPathQuality(sampler,pts,Boolean(path.closed),effectiveRound,morphInfo.profileMode,morphInfo.splineBlend,morphInfo.continuousProfileBlend,morphInfo.splineRenderMode,path.cornerFlags||[],path.bridgeRoundFlags||[]);
                 }else if(useSmoothSplinePath(layer,effectiveRound,path)){
-                    splinePathForDraw(sampler,pts,Boolean(path.closed),effectiveRound,path.cornerFlags||[],path.bridgeRoundFlags||[]);
+                    splinePathForDraw(sampler,pts,Boolean(path.closed),effectiveRound,path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true);
                 }else{
                     roundPolylineForDraw(sampler,pts,Boolean(path.closed),effectiveRound,path.cornerFlags||[]);
                 }

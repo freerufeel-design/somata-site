@@ -205,10 +205,25 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             }
             return ctx.auxiliaryPaths||[];
         }
+        // Apply the radius constraint to the final displayed rail, rather than
+        // to its corner knots. The Bézier/spline pass can otherwise shrink it
+        // again even after the input paths have been compensated.
+        function fitRoundedPathsToPrimaryCircle(paths,layer){
+            if(layer?.roundingMode!=='monoradius'||!(Number(layer?.rounding)>0)||!Array.isArray(paths))return paths;
+            const radius=getEffectiveLayerRadius(layer,220);
+            if(!(radius>1e-7))return paths;
+            let r2=0;
+            for(const path of paths)for(const pt of path?.points||[]){const x=Number(pt?.x)||0,y=Number(pt?.y)||0;r2=Math.max(r2,x*x+y*y);}
+            if(!(r2>1e-12))return paths;
+            const scale=radius/Math.sqrt(r2);
+            if(Math.abs(scale-1)<1e-6)return paths;
+            // Never mutate the original path carrier shared with Base/Fill.
+            return paths.map(path=>({...path,points:(path?.points||[]).map(pt=>({...pt,x:pt.x*scale,y:pt.y*scale}))}));
+        }
         function getLayerFrameRoundedPaths(ctx){
             if(!ctx)return[];
             if(!ctx.roundedPathsReady){
-                ctx.roundedPaths=prepareWebVisiblePaths(getLayerFrameAuxiliaryPaths(ctx),ctx.layer)||[];
+                ctx.roundedPaths=fitRoundedPathsToPrimaryCircle(prepareWebVisiblePaths(getLayerFrameAuxiliaryPaths(ctx),ctx.layer)||[],ctx.layer);
                 ctx.roundedPathsReady=true;
             }
             return ctx.roundedPaths||[];
@@ -690,8 +705,15 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             const result=frameGeometryRuntime.active?getFrameOutputPool(morphFrameOutputPools,layerIndex):[];
             if(typeof getMorphFrameInterpolationPlan==='function'&&typeof interpolateMorphFramePlan==='function'){
                 const plan=getMorphFrameInterpolationPlan(layerIndex,sourcePaths,targetPaths,'stableRounded');
-                interpolateMorphFramePlan(plan,tt,result,true);
+                // These are completed rounded endpoint rails. Their change of
+                // visible curvature obeys the existing Profile Mode timeline.
+                // Other geometric frame paths continue using the regular t.
+                const curveT=typeof profileModeTransitionProgress==='function'
+                    ?profileModeTransitionProgress(tt):tt;
+                interpolateMorphFramePlan(plan,curveT,result,true);
             }else{
+                const curveT=typeof profileModeTransitionProgress==='function'
+                    ?profileModeTransitionProgress(tt):tt;
                 const pairs=pairMorphPaths(sourcePaths,targetPaths);
                 const radial=Boolean(state.morph.options.byVertices||state.morph.options.bySteps||state.morph.monoOrbitTransforms);
                 const chaosCalm=state.morph.mode==='calm'&&isChaosCircleMorphPair(layerIndex);
@@ -705,7 +727,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                         let morphDst=dp;
                         if(pair.radialMerge||pair.radialSplit){
                             const sa=pathReferenceAngle(sp),da=pathReferenceAngle(dp);
-                            morphDst=rotateMorphPath(dp,signedAngleDelta(da,sa)*(1-tt));
+                            morphDst=rotateMorphPath(dp,signedAngleDelta(da,sa)*(1-curveT));
                         }
                         const morphDstPts=morphDst.points||[];
                         const n=Math.max(srcPts.length,morphDstPts.length);
@@ -717,10 +739,10 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                         for(let i=0;i<n;i++){
                             const si=i%srcPts.length,di=(i+referenceOffset)%morphDstPts.length,o=scratch[i];
                             if(useRadial){
-                                const a=srcPolar[si],b=dstPolar[di],rr=a.radius+(b.radius-a.radius)*tt,aa=interpolateMorphPolarAngle(a.angle,b.angle,tt);
+                                const a=srcPolar[si],b=dstPolar[di],rr=a.radius+(b.radius-a.radius)*curveT,aa=interpolateMorphPolarAngle(a.angle,b.angle,curveT);
                                 o.x=rr*Math.cos(aa);o.y=rr*Math.sin(aa);
                             }else{
-                                const a=srcPts[si],b=morphDstPts[di];o.x=a.x+(b.x-a.x)*tt;o.y=a.y+(b.y-a.y)*tt;
+                                const a=srcPts[si],b=morphDstPts[di];o.x=a.x+(b.x-a.x)*curveT;o.y=a.y+(b.y-a.y)*curveT;
                             }
                             o.widthScale=1;
                         }
@@ -733,6 +755,21 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                     }
                 }
                 result.length=write;
+            }
+            const frameLayer=runtimeState.morph.frameLayers?.[layerIndex]||state.layers?.[layerIndex];
+            if(frameLayer?.roundingMode==='monoradius'&&Number(frameLayer?.rounding)>0){
+                // These rails have already been rounded; source/destination
+                // interpolation must not contract their primary circle.
+                const src=runtimeState.morph.renderSourceLayers?.[layerIndex]||state.layers?.[layerIndex];
+                const dst=runtimeState.morph.renderTargetLayers?.[layerIndex]||src;
+                const radius=getEffectiveLayerRadius(src,220)+(getEffectiveLayerRadius(dst,220)-getEffectiveLayerRadius(src,220))*tt;
+                let r2=0;for(const path of result)for(const pt of path?.points||[]){const x=Number(pt.x)||0,y=Number(pt.y)||0;r2=Math.max(r2,x*x+y*y);}
+                if(r2>1e-12){const scale=radius/Math.sqrt(r2);if(Math.abs(scale-1)>1e-6){
+                    for(const path of result){
+                        // Endpoint rails may be cached. Copy before changing them.
+                        path.points=(path.points||[]).map(pt=>({...pt,x:pt.x*scale,y:pt.y*scale}));
+                    }
+                }}
             }
             if(frameGeometryRuntime.active){result._frameGeometryId=frameGeometryRuntime.frameId;frameGeometryRuntime.stats.morphBuilds++;setMorphFrameFastResult(layerIndex,tt,result,'stableRounded');}
             return result;

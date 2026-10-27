@@ -102,8 +102,6 @@ function resetLayerMorphProvider(provider,system) {
     return provider;
 }
 
-const blueAtomicRenderLayerPool=[];
-
 function buildBlueExactEndpointLayer(baseLayer,visual,profile){
     const snap={...(baseLayer||{}),...(visual||{})};
     const raw=Array.isArray(profile?.rawNodes)&&profile.rawNodes.length?profile.rawNodes:(Array.isArray(profile?.nodes)?profile.nodes:(baseLayer?.profileNodes||[]));
@@ -140,8 +138,6 @@ function resolveBlueMorphLayerProvider(frameCtx,renderFrame) {
     provider.targetGeometry=snap.targetGeometry[layerIndex]||null;
     provider.sourceProfileMode=snap.sourceProfiles?.[layerIndex]?.mode || snap.renderSourceLayers?.[layerIndex]?.profileMode || sourceLayer?.profileMode || 'segments';
     provider.targetProfileMode=snap.targetProfiles?.[layerIndex]?.mode || snap.renderTargetLayers?.[layerIndex]?.profileMode || provider.sourceProfileMode;
-    const exactSourceLayer=buildBlueExactEndpointLayer(sourceLayer,snap.sourceVisuals?.[layerIndex],snap.sourceProfiles?.[layerIndex]);
-    const exactTargetLayer=buildBlueExactEndpointLayer(sourceLayer,snap.targetVisuals?.[layerIndex],snap.targetProfiles?.[layerIndex]);
     const sourceChaos=(snap.renderSourceLayers?.[layerIndex]?.chaosStar===true)||(snap.sourceVisuals?.[layerIndex]?.chaosStar===true)||(sourceLayer?.chaosStar===true);
     const targetChaos=(snap.renderTargetLayers?.[layerIndex]?.chaosStar===true)||(snap.targetVisuals?.[layerIndex]?.chaosStar===true);
     const specialSpiralEndpoint=Boolean(snap.renderSourceLayers?.[layerIndex]?.spiralEnabled===true||snap.renderTargetLayers?.[layerIndex]?.spiralEnabled===true||sourceLayer?.spiralEnabled===true);
@@ -167,24 +163,29 @@ function resolveBlueMorphLayerProvider(frameCtx,renderFrame) {
         // Fade is a cross-fade of two exact static states. Do not rebuild either endpoint
         // through the Morph resampling pipeline: that changes spline tangents/corners.
         provider.kind='blue-fade';
-        provider.sourceLayer=exactSourceLayer;
-        provider.targetLayer=exactTargetLayer;
-        provider.sourceData=getCachedLayerDrawData(exactSourceLayer);
-        provider.targetData=getCachedLayerDrawData(exactTargetLayer);
     } else if (provider.geometryActive && provider.circleAngular && effectiveCircleMode &&
         (snap.options.byVertices || snap.options.bySteps || snap.options.byShape || snap.monoOrbitTransforms || specialSpiralExtraGeometry)) {
         provider.kind='blue-circle-slide';
-        provider.sourceLayer=exactSourceLayer;
-        provider.targetLayer=exactTargetLayer;
     } else if (provider.geometryActive && effectiveCircleMode && (sourceChaos || targetChaos)) provider.kind='blue-prepared';
     else if (provider.geometryActive && !specialSpiralEndpoint && !sourceChaos && !targetChaos) {
         // Polygon Morph invariant: move only the carrier vertices; rebuild the contour from
         // the same authored profile used by static rendering. No resampling of the finished path.
         provider.kind='blue-anchor-linear';
-        provider.sourceLayer=exactSourceLayer;
-        provider.targetLayer=exactTargetLayer;
     } else if (provider.geometryActive) provider.kind='blue-prepared';
     else provider.kind=provider.lightMorphEnabled?'light-static':'static';
+    // Exact endpoint layers are consumed only by fade, circle-slide and
+    // polygon-anchor providers. Building them for static/lightning/prepared
+    // frames used to clone two layers and every profile node per render pass.
+    if(provider.kind==='blue-fade'||provider.kind==='blue-circle-slide'||provider.kind==='blue-anchor-linear'){
+        const exactSourceLayer=buildBlueExactEndpointLayer(sourceLayer,snap.sourceVisuals?.[layerIndex],snap.sourceProfiles?.[layerIndex]);
+        const exactTargetLayer=buildBlueExactEndpointLayer(sourceLayer,snap.targetVisuals?.[layerIndex],snap.targetProfiles?.[layerIndex]);
+        provider.sourceLayer=exactSourceLayer;
+        provider.targetLayer=exactTargetLayer;
+        if(provider.kind==='blue-fade'){
+            provider.sourceData=getCachedLayerDrawData(exactSourceLayer);
+            provider.targetData=getCachedLayerDrawData(exactTargetLayer);
+        }
+    }
     provider.lightningColor=snap.lightningCycleColor;
     return provider;
 }

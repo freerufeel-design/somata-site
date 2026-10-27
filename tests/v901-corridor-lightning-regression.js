@@ -1,5 +1,5 @@
 'use strict';
-// Somata 9.0.1: real controls → live state → corridor positions and lightning strike preparation.
+// Corridor controls and strike-only Lightning: no precharge or afterglow tail.
 const fs=require('fs'),path=require('path'),assert=require('assert').strict;
 const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness');
 const src=f=>fs.readFileSync(path.join(__dirname,'..',f),'utf8');
@@ -33,15 +33,17 @@ const src=f=>fs.readFileSync(path.join(__dirname,'..',f),'utf8');
    const prepared={pieces:[[{x:0,y:0},{x:80,y:0}]],strikePath:null};
    const sampled=[...Array(101)].map((_,i)=>prepareLightningVectorFrame(L,i/100,prepared,0,s));
    const stages=sampled.map(x=>x?.stage);
-   const strike=stages.includes('strike'),after=stages.includes('after'),idle=stages.includes('idle'),noPreflash=!stages.includes('precharge');
+   const strike=stages.includes('strike'),noAfterglow=!stages.includes('after'),idle=stages.includes('idle'),noPreflash=!stages.includes('precharge');
+   const idleSilent=sampled.filter(x=>x?.stage==='idle').every(x=>x.intensity===0&&x.microPulses?.length===0);
+   const afterglowDisabled=s.lightningAfterglow===false&&s.lightningAfterglowMs===0;
    const strikeOnly=sampled.filter(x=>x?.stage==='strike').every(x=>x.prechargePieces===undefined&&x.prechargeAlpha===undefined);
    const beforeGlint=s.glow;
    const slider=document.getElementById('sweepLightningGlow');const before=s.lightningGlow;
    slider.value=String(Math.min(40,before+3));slider.dispatchEvent(new Event('input',{bubbles:true}));
    const independent=s.lightningGlow===Math.min(40,before+3)&&s.glow===beforeGlint&&slider.disabled===false;
-   return {monotonic,center,identity,scales,influence,originalParity:positions.every(i=>Math.abs(curve.position(i,n,90,1)-(n-1)*original(i/(n-1),1.62))<1e-9),inputLive,fractional,removed,removedRouting,strike,after,idle,noPreflash,strikeOnly,independent,stages:{strike:stages.filter(x=>x==='strike').length,after:stages.filter(x=>x==='after').length,idle:stages.filter(x=>x==='idle').length},activePlan:typeof prepareLayerFrameSweepData};
+   return {monotonic,center,identity,scales,influence,originalParity:positions.every(i=>Math.abs(curve.position(i,n,90,1)-(n-1)*original(i/(n-1),1.62))<1e-9),inputLive,fractional,removed,removedRouting,strike,noAfterglow,idle,noPreflash,strikeOnly,idleSilent,afterglowDisabled,independent,stages:{strike:stages.filter(x=>x==='strike').length,after:stages.filter(x=>x==='after').length,idle:stages.filter(x=>x==='idle').length},activePlan:typeof prepareLayerFrameSweepData};
   })()`,{timeoutMs:20000,label:'9.0.1 corridor real controls and lightning no preflash'});
-  for(const k of ['monotonic','center','identity','influence','originalParity','inputLive','fractional','removed','removedRouting','strike','after','idle','noPreflash','strikeOnly','independent'])assert.equal(r[k],true,`${k}: ${JSON.stringify(r)}`);
+  for(const k of ['monotonic','center','identity','influence','originalParity','inputLive','fractional','removed','removedRouting','strike','noAfterglow','idle','noPreflash','strikeOnly','idleSilent','afterglowDisabled','independent'])assert.equal(r[k],true,`${k}: ${JSON.stringify(r)}`);
   assert.deepEqual(uncaughtExceptions(h.events),[]);
   console.log('PASS v901-corridor-lightning-regression',JSON.stringify(r));
  } finally{await h.close()}
