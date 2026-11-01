@@ -8,7 +8,7 @@ const runtime=fs.readFileSync(path.join(ROOT,'js/app/ui-project-runtime.js'),'ut
 const assert=(x,m)=>{if(!x)throw Error(m)};
 assert(/const dynamicCorridorNative=[^;]+&&Boolean\(frameCtx\.drawLayerGeometry\)/.test(kernel),'Native dynamic corridor fill disabled');
 assert(!/const nativeGpuFillEligible=[^;]+!tunnelColorShiftIsActive/.test(kernel),'Native corridor fill still disabled by colour lag');
-assert(/getTunnelCopyColor\(fillColor,copy,frameCtx\.tunnelFillPaletteProfile\)/.test(gpu),'GPU mesh Fill must shift its own fill color for every Corridor copy');
+assert(/getTunnelCopyColor\(fillColor,copy,frameCtx\.tunnelFillPaletteProfile(?:,frameCtx\.layer)?\)/.test(gpu),'GPU mesh Fill must shift its own fill color for every Corridor copy');
 assert(/rgba\[3\].*frameCtx\.baseAlpha/.test(gpu),'GPU mesh Fill must retain source opacity');
 assert(/frameCtx\.tunnelFillPaletteProfile=/.test(pipeline),'Pipeline must resolve independent Fill palette');
 assert(/t\.paletteLagEnabled === true \|\|/.test(runtime),'Palette lag must work without cumulative hue rotation enabled');

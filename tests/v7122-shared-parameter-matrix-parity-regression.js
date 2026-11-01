@@ -33,6 +33,9 @@ const assert=(ok,msg)=>{if(!ok)throw new Error(msg)};
     const menu=m||b.closest('.audio-route-group')?.querySelector('.audio-route-group-menu');
     observed.audio.push(...[...(menu?.querySelectorAll('.audio-param-option')||[])].map(el=>el.dataset.parameterId).filter(Boolean));
    }
+   // New projects intentionally start with Orange orbits OFF (Blue owns the initial orbit route).
+   // Explicitly add this special row before exercising its 1–100% percentage controls.
+   setOrangeSpecialParameterEnabled('geometry.orbits',true);await sleep(25);
    const orbitInput=document.querySelector('#orangeMorphBindings [data-orange-setting="orbitCount"] input');
    const before=Number(orbitInput?.value);
    orbitInput.value='29';orbitInput.dispatchEvent(new Event('change',{bubbles:true}));

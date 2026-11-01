@@ -75,12 +75,18 @@ window.__spiroRegisterModule?.('js/effects/motion');
             const r=normalizeLayerMotionRotation(layer);if(!r.enabled)return 0;
             return Number(motionRuntime.layerRotationRad.get(String(layer?.id||'')))||0;
         }
+        // The first retained carrier anchor is the physical orientation marker.
+        // K/N changes the carrier's INTERNAL end-angle, but not this anchor.
+        // Canceling that end-angle (13.0.8) made the whole highlighted figure
+        // rotate backwards: the old analytic test incorrectly tracked its tip.
+        // Rotation here must use the same spatial figure number as highlighting.
         function getSpiralMorphTunnelPhaseRadians(copy,layer){
             if(!state.tunnel?.active||!layer||typeof isSpiralLayer!=='function'||!isSpiralLayer(layer))return 0;
             const morphActive=runtimeState?.morph?.active===true;
             // Torn morph deliberately retains unconstrained least-turn paths. All
             // continuous modes use the SAME Corridor phase for every renderer.
-            if(morphActive&&typeof spiralMorphUsesCorridorPhase==='function'&&!spiralMorphUsesCorridorPhase())return 0;
+            if(morphActive&&typeof spiralMorphUsesCorridorPhase==='function'&&!spiralMorphUsesCorridorPhase()&&
+               layer.__spiralLayerwiseAngleMix==null)return 0;
             // During morph use continuous (unrounded) N/K of the actual carrier.
             // During the final/static frame use the target's N/K, rather than
             // suddenly setting the copy phase to zero when morph.active changes.
@@ -101,7 +107,31 @@ window.__spiroRegisterModule?.('js/effects/motion');
                 delta=(Math.PI*2*step/n)*direction;
             }
             const copyId=Number.isFinite(Number(copy?.copyId))?Number(copy.copyId):Math.round(Number(copy?.position)||0);
-            return copyId*delta;
+            // The tunnel continually recycles copyId at integer travel-phase
+            // boundaries.  Highlighting follows position from the centre.
+            // Use THAT SAME position for the angular pivot, preserving exactly
+            // one carrier delta between neighboring Corridor figures.
+            const position=Number.isFinite(Number(copy?.position))?Number(copy.position):copyId;
+            const focusPos=typeof SomataCorridorFocus!=='undefined'
+                ?SomataCorridorFocus.focusPosition(layer)
+                :(-2+Math.max(0,Math.min(255,Math.round(Number(layer?.spiralRotationFocusFigure)||7)-1)));
+            const localMix=Number(layer?.__spiralLayerwiseAngleMix);
+            // Layerwise interpolation lives on each copy, not at the Corridor
+            // population level. The same angle reaches all visual effects.
+            if(Number.isFinite(localMix)&&layer?.__spiralLayerwiseAngleMix!=null){
+                const mix=Math.max(0,Math.min(1,localMix));
+                if(layer.__spiralLayerwiseRotationMode!=='active'){
+                    // Rotate each copy to its *equivalent* authored final pose
+                    // by the shortest arc (<= PI), not copyId full revolutions.
+                    // At t=0/1 this equals the static phase modulo 2*PI.
+                    const targetDelta=Number(layer.__spiralLayerwiseReferenceDelta);
+                    if(Number.isFinite(targetDelta)&&layer.__spiralLayerwiseReferenceDelta!=null)
+                        return window.SomataSpiralZeroTransition.shortestEquivalentAngle(
+                            (position-focusPos)*targetDelta)*mix;
+                }
+                delta*=mix;
+            }
+            return (position-focusPos)*delta;
         }
         function getMotionTunnelLagRadians(copy,layer){
             let angle=getSpiralMorphTunnelPhaseRadians(copy,layer);
@@ -355,6 +385,9 @@ window.__spiroRegisterModule?.('js/effects/motion');
             const extendedMode = layer.extendedProfileEnabled === true ? (layer.extendedProfileMode === 'repeat' ? 2 : 1) : 0;
             const lineJoinType = layer.lineJoinType || '';
             const roundingMode = layer.roundingMode === 'monoradius' ? 'monoradius' : 'standard';
+            const roundingShape = 'spline-plus';
+            const roundingMaxRadiusDrop=Number(layer.roundingMaxRadiusDrop??30);
+            const roundingSmoothSplines=layer.roundingSmoothSplines===true;
             const radius = getEffectiveLayerRadius(layer, 0);
             const radiusMultiplier = getLayerRadiusMultiplier(layer);
             const rotation = Number(layer.rotation) || 0;
@@ -384,7 +417,7 @@ window.__spiroRegisterModule?.('js/effects/motion');
                 cached.N !== N || cached.angularN !== angularN || cached.K !== K || cached.customSuborbits !== customSuborbits ||
                 cached.chaosStar !== chaosStar || cached.chaosStepMinus !== chaosStepMinus || cached.chaosStepPlus !== chaosStepPlus ||
                 cached.chaosClosures !== chaosClosures || cached.chaosSeed !== chaosSeed ||
-                cached.closedLoop !== closedLoop || cached.extendedMode !== extendedMode || cached.lineJoinType !== lineJoinType || cached.roundingMode !== roundingMode ||
+                cached.closedLoop !== closedLoop || cached.extendedMode !== extendedMode || cached.lineJoinType !== lineJoinType || cached.roundingMode !== roundingMode || cached.roundingShape !== roundingShape || cached.roundingMaxRadiusDrop!==roundingMaxRadiusDrop || cached.roundingSmoothSplines!==roundingSmoothSplines ||
                 cached.radius !== radius || cached.radiusMultiplier !== radiusMultiplier || cached.rotation !== rotation || cached.profileMode !== profileMode || cached.splineRenderMode !== splineRenderMode ||
                 cached.preSampledSpline !== preSampledSpline ||
                 cached.configuredSplinePoints !== configuredSplinePoints ||
@@ -404,9 +437,9 @@ window.__spiroRegisterModule?.('js/effects/motion');
                 }
                 nodeSig = parts;
             }
-            const signature = `${N}|an:${angularN}|${K}|${customSuborbits}|ch:${chaosStar},${chaosStepMinus},${chaosStepPlus},${chaosClosures},${chaosSeed}|${closedLoop}|extended:${extendedMode}|${lineJoinType}|roundMode:${roundingMode}|${radius}|rm:${radiusMultiplier}|${rotation}|${profileMode}|${splineRenderMode}|${preSampledSpline}|${configuredSplinePoints}|${splineSegments}|${splineMix}|${spiralEnabled}|${spiralOrder}|${spiralTangential}|${spiralRoundSeams}|${spiralClosed}|${spiralStep}|${spiralStepLinked}|${spiralStepRatio}|sr:${spiralRounding}|${nodeSig}`;
+            const signature = `${N}|an:${angularN}|${K}|${customSuborbits}|ch:${chaosStar},${chaosStepMinus},${chaosStepPlus},${chaosClosures},${chaosSeed}|${closedLoop}|extended:${extendedMode}|${lineJoinType}|roundMode:${roundingMode}|roundShape:${roundingShape}|drop:${roundingMaxRadiusDrop}|smooth:${roundingSmoothSplines?1:0}|${radius}|rm:${radiusMultiplier}|${rotation}|${profileMode}|${splineRenderMode}|${preSampledSpline}|${configuredSplinePoints}|${splineSegments}|${splineMix}|${spiralEnabled}|${spiralOrder}|${spiralTangential}|${spiralRoundSeams}|${spiralClosed}|${spiralStep}|${spiralStepLinked}|${layer.spiralStepLimiterEnabled!==false}|${layer.spiralStepLimiter??2}|${spiralStepRatio}|sr:${spiralRounding}|${nodeSig}`;
             cached = {
-                geometryVersion, N, angularN, K, customSuborbits, chaosStar, chaosStepMinus, chaosStepPlus, chaosClosures, chaosSeed, closedLoop, extendedMode, lineJoinType, roundingMode, radius, radiusMultiplier, rotation, profileMode, splineRenderMode, preSampledSpline,
+                geometryVersion, N, angularN, K, customSuborbits, chaosStar, chaosStepMinus, chaosStepPlus, chaosClosures, chaosSeed, closedLoop, extendedMode, lineJoinType, roundingMode, roundingShape, roundingMaxRadiusDrop, roundingSmoothSplines, radius, radiusMultiplier, rotation, profileMode, splineRenderMode, preSampledSpline,
                 configuredSplinePoints, splineSegments, splineMix, spiralEnabled, spiralOrder, spiralTangential, spiralRoundSeams, spiralClosed, spiralStep, spiralStepLinked, spiralStepRatio, spiralRounding, nodes, nodeRefs: nodes.slice(), nodeSig, signature
             };
             layerGeometrySignatureCache.set(layer, cached);
@@ -439,19 +472,43 @@ window.__spiroRegisterModule?.('js/effects/motion');
             return Math.sqrt(maxSq);
         }
         function applyMonoradiusRoundingCompensation(paths,layer,roundingValue){
-            if(layer?.roundingMode!=='monoradius'||!(Number(roundingValue)>0)||!Array.isArray(paths)||!paths.length)return {paths,targetRadius:maxRadiusForPathList(paths),scale:1};
-            // The radius control defines the outer circle, not the unrounded
-            // profile's sampled envelope. A rounded star must never shrink it.
+            if(layer?.roundingMode!=='monoradius'||!Array.isArray(paths)||!paths.length)return {paths,targetRadius:maxRadiusForPathList(paths),scale:1};
             const targetRadius=getEffectiveLayerRadius(layer,220);
             if(!(targetRadius>1e-7)||typeof buildLampRenderedAttachmentPathsUncached!=='function'||typeof getRoundingStrength!=='function')return {paths,targetRadius,scale:1};
-            let rendered;
-            try{rendered=buildLampRenderedAttachmentPathsUncached(paths,layer,null,getRoundingStrength(roundingValue));}catch(_){return {paths,targetRadius,scale:1};}
-            const roundedRadius=maxRadiusForPathList(rendered);
-            if(!(roundedRadius>1e-7))return {paths,targetRadius,scale:1};
-            const scale=Math.max(1e-8,Math.min(1e8,targetRadius/roundedRadius));
-            if(Math.abs(scale-1)<1e-7)return {paths,targetRadius,scale:1};
-            const scaled=paths.map(path=>({...path,points:(path?.points||[]).map(pt=>({...pt,x:(Number(pt?.x)||0)*scale,y:(Number(pt?.y)||0)*scale}))}));
-            return {paths:scaled,targetRadius,scale};
+            // A fixed physical base edge makes the new overlay non-homogeneous:
+            // re-evaluate the actual final curve after scaling, otherwise the
+            // previous one-shot ratio leaves up to 10% MonoRadius drift.
+            const makeScaled=scale=>Math.abs(scale-1)<1e-12?paths:paths.map(path=>({...path,points:(path?.points||[]).map(pt=>({...pt,x:(Number(pt?.x)||0)*scale,y:(Number(pt?.y)||0)*scale}))}));
+            let scale=1,previousScale=NaN,previousRadius=NaN;
+            try{
+                for(let k=0;k<9;k++){
+                    const probe=makeScaled(scale);
+                    const rendered=buildLampRenderedAttachmentPathsUncached(probe,layer,null,getRoundingStrength(roundingValue));
+                    const r=maxRadiusForPathList(rendered);
+                    if(!(r>1e-8))break;
+                    const error=targetRadius/r;
+                    if(!Number.isFinite(error))break;
+                    if(Math.abs(error-1)<1e-5)break;
+                    let next=scale*error;
+                    // 12.6.1: a long shoulder makes the rendered radius
+                    // nonhomogeneous under scale. Multiplying by target/r
+                    // can converge too slowly (nine steps were insufficient
+                    // on a three-corner profile). Use a bounded secant step
+                    // after the first two actual output-radius measurements.
+                    // Fall back to the old multiplicative step when the
+                    // radius response is degenerate or non-monotone.
+                    const dx=scale-previousScale,dy=r-previousRadius;
+                    if(Number.isFinite(dx)&&Number.isFinite(dy)&&Math.abs(dx)>1e-10&&
+                       dy/dx>1e-9){
+                        const candidate=scale+(targetRadius-r)*(dx/dy);
+                        if(Number.isFinite(candidate)&&candidate>0)
+                            next=Math.max(scale*.4,Math.min(scale*2.5,candidate));
+                    }
+                    previousScale=scale;previousRadius=r;
+                    scale=Math.max(1e-8,Math.min(1e8,next));
+                }
+            }catch(_){return {paths,targetRadius,scale:1};}
+            return {paths:makeScaled(scale),targetRadius,scale};
         }
 
         function buildLegacyLayerDrawData(layer) {
@@ -507,8 +564,8 @@ window.__spiroRegisterModule?.('js/effects/motion');
                     cached.path2ds = cached.paths.map(path => {
                         if (!path.points || path.points.length < 2) return null;
                         const p = new Path2D();
-                        if (useSmoothSplinePath(layer, roundingFrac, path)) splinePathForDraw(p,path.points,path.closed,roundingFrac,path.cornerFlags || [],path.bridgeRoundFlags || [],layer.wholeCurveSpline===true);
-                        else roundPolylineForDraw(p, path.points, path.closed, roundingFrac, path.cornerFlags || []);
+                        if (useSmoothSplinePath(layer, roundingFrac, path)) splinePathForDraw(p,path.points,path.closed,roundingFrac,path.cornerFlags || [],path.bridgeRoundFlags || [],layer.wholeCurveSpline===true,1,0,layer);
+                        else roundPolylineForDraw(p, path.points, path.closed, roundingFrac, path.cornerFlags || [],null,false,null,layer);
                         return p;
                     });
                     try {

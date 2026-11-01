@@ -41,14 +41,14 @@ const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness')
       Object.assign(layer,{N:4,K:1,spiralEnabled:true,spiralOrder:1,spiralClosed:true,spiralRoundSeams:true,
         rounding:40,profileMode:'spline',radius:220,spiralTangential:true,profileNodes:nodes});
       state.layers=[layer];state.activeLayerId=layer.id;syncSidebarInputs();
-      results.push({ui:!!input,defaultOff:input?.checked===false,defaultProp:layer.wholeCurveSpline===false});
+      results.push({uiRemoved:!input,defaultProp:layer.wholeCurveSpline===false});
       const spec={radius:220,delta:Math.PI/2,targetScale:1.24,tangential:1,
         closed:true,roundSeams:true,roundingFrac:.40,profileNodes:nodes};
       const build=()=>__spiroBuildSpiralCarrierPath(layer,{x:220,y:0},spec);
       const local=build();
-      input.checked=true;input.dispatchEvent(new Event('change',{bubbles:true}));
+      layer.wholeCurveSpline=true;
       const whole=build();
-      input.checked=false;input.dispatchEvent(new Event('change',{bubbles:true}));
+      layer.wholeCurveSpline=false;
       const localAgain=build();
       results.push({localCount:local._bezierSegments.length,wholeCount:whole._bezierSegments.length,
         localStable:JSON.stringify(flatten(local._bezierSegments))===JSON.stringify(flatten(localAgain._bezierSegments)),
@@ -78,11 +78,11 @@ const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness')
     return results;
   })()`,{label:'single whole-curve spline checkbox and consistent static / Morph rail'});
   assert(res[0].polygon&&res[0].curved&&res[0].changed&&res[0].localHasJunctionLine,'Polygon local vs full spline differ: '+JSON.stringify(res[0]));
-  assert(res[1].ui&&res[1].defaultOff&&res[1].defaultProp,'new checkbox missing or defaults incorrectly: '+JSON.stringify(res[1]));
+  assert(res[1].uiRemoved&&res[1].defaultProp,'obsolete checkbox was not removed or default behavior changed: '+JSON.stringify(res[1]));
   assert(res[2].storeFalse&&res[2].localStable,'turning checkbox off does not restore local spline: '+JSON.stringify(res[2]));
   assert(res[2].differingCurve>.05,'on/off must visibly change the built spline: '+JSON.stringify(res[2]));
   for(const x of res.slice(3))assert(x.start>0&&x.middle>0&&x.end>0&&x.finite&&x.change>.1&&x.staticStartDistance<4&&x.staticEndDistance<4,'Morph invalid: '+JSON.stringify(x));
   assert.deepEqual(uncaughtExceptions(h.events),[]);
-  console.log('PASS v10448: UI defaults off, local/whole curves differ, static toggle round-trip, both Morph modes finite');
+  console.log('PASS v10448: obsolete UI removed, saved whole-curve compatibility retained, both Morph modes finite');
  }finally{await h.close();}
 })().catch(e=>{console.error('FAIL v10448',e.stack||e);process.exitCode=1});

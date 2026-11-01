@@ -75,9 +75,9 @@ var FillMeshPreparer = (() => {
         const sampler = createLampRenderedPathSampler();
         const rounding = getRoundingStrength(layer?.rounding);
         if (useSmoothSplinePath(layer, rounding, path)) {
-            splinePathForDraw(sampler, path.points, true, rounding, path.cornerFlags || [], path.bridgeRoundFlags || [], layer?.wholeCurveSpline===true);
+            splinePathForDraw(sampler, path.points, true, rounding, path.cornerFlags || [], path.bridgeRoundFlags || [], layer?.wholeCurveSpline===true,1,0,layer);
         } else {
-            roundPolylineForDraw(sampler, path.points, true, rounding, path.cornerFlags || []);
+            roundPolylineForDraw(sampler, path.points, true, rounding, path.cornerFlags || [],null,false,null,layer);
         }
         return cleanContourPoints(sampler.points.length >= 3 ? sampler.points : path.points);
     }
@@ -165,6 +165,29 @@ var FillMeshPreparer = (() => {
         const span=Math.max(1,maxX-minX,maxY-minY),anchorX=minX-span*2-1,anchorY=minY-span*2-1,out=entry.storage;const o=appendFanContours(cleanBands,out,anchorX,anchorY);
         const mesh=entry.mesh;mesh.fanData=entry.storage;mesh.fanFloatCount=o;mesh.fanTriangleCount=Math.floor(o/6);mesh.complete=mesh.fanTriangleCount>0;mesh.nativeComplete=mesh.complete;mesh.frameId=Number(frameCtx?.frameId)||0;mesh.revision=(mesh.revision+1)>>>0||1;mesh.anchor={x:anchorX,y:anchorY};mesh.totalVertices=totalPoints;mesh.totalTriangles=mesh.fanTriangleCount;mesh.spiralBandCount=cleanBands.length;mesh.spiralBandFill=true;mesh.semantic=semantic;Object.assign(mesh,flags);frameCtx._fillMeshShadow=mesh;return mesh;
     }
+    // A winding's angular phase is cyclic: sorting by [0,1) moves the first
+    // branch whenever it crosses the artificial 0/1 boundary. Pairing the
+    // sorted list from index 0 then abruptly switches the Fill bands, although
+    // the actual Spiral rails never jump. Rotate the cyclic ordering back to
+    // the same *physical* first branch before choosing alternating pairs.
+    // Pair IDs come from the same retained GPU rail that Line uses; only the
+    // ordering of Fill consumers changes, not any geometry or morph clock.
+    function anchorCyclicSpiralFillBands(paths){
+        if(!Array.isArray(paths)||paths.length<2)return paths;
+        const identity=(p)=>{
+            for(const v of [p?.pairIndex,p?.sourceBranchIndex,p?.spiralBranchIndex,p?.targetBranchIndex]){
+                if(v!==null&&v!==undefined&&Number.isFinite(Number(v)))return Number(v);
+            }
+            return Infinity;
+        };
+        let anchor=0,best=identity(paths[0]);
+        for(let i=1;i<paths.length;i++){
+            const id=identity(paths[i]);
+            if(id<best){best=id;anchor=i;}
+        }
+        if(anchor>0){const head=paths.splice(0,anchor);paths.push(...head);}
+        return paths;
+    }
     function prepareInterwindingCorridor(frameCtx,auxPaths=null){
         const layer=frameCtx?.layer;
         if(!layer?.fill||layer?.spiralFillEnabled!==true||layer?.spiralFillType!=='interwinding'||layer?.spiralClosed===false||!isSpiralLayer(layer)||state?.tunnel?.active!==true)return null;
@@ -173,6 +196,7 @@ var FillMeshPreparer = (() => {
             paths=auxPaths.filter(p=>Array.isArray(p?.points)&&p.points.length>=2&&Number(p?.alpha??1)>.00001);
             const phase=(p,i)=>Number.isFinite(Number(p?.branchPhase))?((Number(p.branchPhase)%1)+1)%1:(Number.isFinite(Number(p?.spiralBranchIndex))?Number(p.spiralBranchIndex):i)/Math.max(1,paths.length);
             paths.forEach((p,i)=>p.__interwindSort=phase(p,i));paths.sort((a,b)=>(Number(a.__interwindSort)||0)-(Number(b.__interwindSort)||0));
+            anchorCyclicSpiralFillBands(paths);
         }else{
             const drawData=frameCtx?.geometryPlan?.sourceData||frameCtx?.staticDrawData;paths=getSpiralBandPaths(drawData,layer);
         }
@@ -213,6 +237,7 @@ var FillMeshPreparer = (() => {
         return [
             Math.max(0, Math.min(MAX_ROUNDING_PERCENT, Number(layer?.rounding) || 0)).toFixed(4),
             String(layer?.profileMode || 'segments'),
+            'spline-plus',
             normalizeSplineRenderMode(layer?.splineRenderMode),
             state.fourierMode ? 1 : 0
         ].join('|');
@@ -346,6 +371,7 @@ var FillMeshPreparer = (() => {
         };
         paths.forEach((p,i)=>{p.__fillSortKey=phaseKey(p,i);});
         paths.sort((a,b)=>(Number(a.__fillSortKey)||0)-(Number(b.__fillSortKey)||0));
+        anchorCyclicSpiralFillBands(paths);
 
         let totalEdges=0,totalPoints=0,minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
         const bands=[];

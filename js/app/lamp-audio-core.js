@@ -43,7 +43,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const serial=Math.max(0, Number(runtimeState.morph.lampCycleSerial) || 0);
             const now=lampVisualNow();
             const HANDOFF_MS=140;
-            const linearMode=['linear','ghost'].includes(getLampEvaluationConfig()?.morphMotionMode);
+            const inertiaCfg=getLampEvaluationConfig();
+            const instantTarget=(Number(inertiaCfg?.morphInertia)||0)<=-100;
+            const linearMode=['linear','ghost'].includes(inertiaCfg?.morphMotionMode);
             let rt=lampMotionRuntime.blueMorph.get(layerKey);
             if(!rt){
                 rt={serial:-1, assignments:new Map(), last:[], nextStable:0};
@@ -144,7 +146,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 }
                 const age=Math.max(0,now-(Number(stable.handoffAt)||0));
                 const profileArcAttached=p?.__lampVisualProfileAttached===true;
-                const u=(linearMode||profileArcAttached)?1:(stable.handoffAt?Math.max(0,Math.min(1,age/HANDOFF_MS)):1);
+                const u=(instantTarget||linearMode||profileArcAttached)?1:(stable.handoffAt?Math.max(0,Math.min(1,age/HANDOFF_MS)):1);
                 const ease=u*u*(3-2*u);
                 const targetX=Number(p?.x)||0,targetY=Number(p?.y)||0,sx=Number(stable.fromX)||0,sy=Number(stable.fromY)||0;
                 const x=u<1?sx+(targetX-sx)*ease:targetX,y=u<1?sy+(targetY-sy)*ease:targetY;
@@ -167,7 +169,17 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             }));
             return out;
         }
+        // FrameContour creates fresh immutable path objects every render frame.
+        // Many lamps sample the same rounded rail: calculate its arc table once
+        // rather than walking every segment once per lamp. Other dynamic path
+        // types retain the uncached behavior because their points may mutate.
+        const lampFrameContourLengthTables=new WeakMap();
         function lampPathTable(path) {
+            if(path?.__frameContour===true){
+                let table=lampFrameContourLengthTables.get(path);
+                if(!table){table=buildPathLengthTable([{points:path.points||[],closed:Boolean(path.closed)}]);lampFrameContourLengthTables.set(path,table);}
+                return table;
+            }
             return buildPathLengthTable([{points:path?.points||[],closed:Boolean(path?.closed)}]);
         }
         function lampPointAtFraction(path, fraction) {
@@ -379,10 +391,25 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             else c+=Math.sign(delta)*step;
             return closed?((c%1)+1)%1:Math.max(0,Math.min(1,c));
         }
+        // Signed phase inertia is a TIME WARP for lamp attachments, never the
+        // geometry/anchor morph. It is deterministic and independent of FPS.
+        function lampPhaseInertiaProgress(t,cfg=getLampEvaluationConfig()) {
+            const u=Math.max(0,Math.min(1,Number(t)||0));
+            const pct=Math.max(-100,Math.min(100,Number(cfg?.morphInertia)||0));
+            if(pct===0)return u;
+            if(pct<=-100)return 1; // endpoint follows moving target contour
+            if(pct>=100)return u>=1?1:0;
+            // Ease along the same owned arc interval: positive = accelerating
+            // (ease-in), negative = decelerating (ease-out). No hold-then-rush
+            // plateau for intermediate inertia and no frame-time dependency.
+            const abs=Math.abs(pct)/100;
+            const exponent=1+4*abs/(1-abs);
+            return pct>0 ? Math.pow(u,exponent) : 1-Math.pow(1-u,exponent);
+        }
         function lampDynamicResponseMs(cfg=getLampEvaluationConfig()) {
-            const inertia=Math.max(0,Math.min(100,Number(cfg?.morphInertia??50)))/100;
-
-            return 24 + inertia*inertia*664;
+            // Dynamic's physical chase is independent from the signed timing
+            // control used for all four lamp-morph modes.
+            return 190;
         }
         function advanceLampAttachmentFraction(current,target,path,dtMs,responseMs=190) {
 
@@ -514,7 +541,58 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             }
             return capLampPointList(out,maxPoints);
         }
-        function projectLampPointsToCurrentPolygon(points, paths, layer, pathsPreparedRounded=false, forceNearest=false) {
+        // Correspondence between semantic orbit paths (stable lamp identity) and
+        // independently assembled visible FrameContour paths.  Bézier subdivision
+        // and concatenation are allowed to reorder the latter, so the same numeric
+        // pathIndex cannot be assumed to mean the same line.  Compare a few points
+        // on each WHOLE source orbit (never the individual lamp, which could cross
+        // another line).  The result is computed once per lamp group / frame.
+        function mapLampSemanticPathsToVisible(semanticPaths,visiblePaths){
+            const source=Array.isArray(semanticPaths)?semanticPaths:[];
+            const visible=Array.isArray(visiblePaths)?visiblePaths:[];
+            const result=new Array(source.length).fill(-1);
+            if(!source.length||!visible.length)return result;
+            if(source.length===1&&visible.length===1){result[0]=0;return result;}
+            const samples=source.map(path=>{
+                const pts=path?.points||[];
+                if(!pts.length)return [];
+                const n=Math.min(7,pts.length),out=[];
+                for(let k=0;k<n;k++)out.push(pts[Math.round(k*(pts.length-1)/Math.max(1,n-1))]);
+                return out;
+            });
+            const costs=[];
+            for(let si=0;si<source.length;si++){
+                if(!samples[si].length)continue;
+                for(let vi=0;vi<visible.length;vi++){
+                    const path=visible[vi],pts=path?.points||[];
+                    if(pts.length<2)continue;
+                    const n=path.closed?pts.length:pts.length-1;
+                    let sum=0;
+                    for(const p of samples[si]){
+                        const x=Number(p.x)||0,y=Number(p.y)||0;
+                        let nearest=Infinity;
+                        for(let j=0;j<n;j++){
+                            const a=pts[j],b=pts[(j+1)%pts.length],dx=b.x-a.x,dy=b.y-a.y,den=dx*dx+dy*dy;
+                            const t=den>1e-12?Math.max(0,Math.min(1,((x-a.x)*dx+(y-a.y)*dy)/den)):0;
+                            const ex=a.x+dx*t-x,ey=a.y+dy*t-y,d=ex*ex+ey*ey;
+                            if(d<nearest)nearest=d;
+                            if(nearest<1e-14)break;
+                        }
+                        sum+=nearest;
+                    }
+                    // Stable numeric order is a tie-break, NOT an identity contract.
+                    costs.push({si,vi,score:sum/samples[si].length+(source[si]?.closed!==path.closed?1e-6:0)});
+                }
+            }
+            costs.sort((a,b)=>a.score-b.score||Math.abs(a.si-a.vi)-Math.abs(b.si-b.vi)||a.si-b.si||a.vi-b.vi);
+            const used=new Set();
+            for(const c of costs){if(result[c.si]<0&&!used.has(c.vi)){result[c.si]=c.vi;used.add(c.vi);}}
+            // One source line may be split into multiple drawn pieces.  In that
+            // case reuse its best candidate rather than snapping to another orbit.
+            for(let si=0;si<result.length;si++)if(result[si]<0){const best=costs.find(c=>c.si===si);if(best)result[si]=best.vi;}
+            return result;
+        }
+        function projectLampPointsToCurrentPolygon(points, paths, layer, pathsPreparedRounded=false, forceNearest=false, semanticPaths=null) {
             if(!points?.length || !paths?.length) return points||[];
             const circumferenceMode=forceNearest || getLampEvaluationConfig()?.positionMode==='circumference';
             const attach=circumferenceMode || isLampContourAttachmentEnabled();
@@ -524,28 +602,34 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const attachmentPaths=paths;
             const now=lampVisualNow(); cleanupLampRuntime(now);
             const layerKey=String(layer?.id||'layer');
+            const authoritativeVisualRail=attachmentPaths?.__somataFrameContour===true;
+            const semanticMap=authoritativeVisualRail&&Array.isArray(semanticPaths)&&semanticPaths.length
+                ? mapLampSemanticPathsToVisible(semanticPaths,attachmentPaths):null;
             return points.map((p,index)=>{
                 const pi=Number.isInteger(p?.pathIndex)?p.pathIndex:-1;
-                const path=(pi>=0&&attachmentPaths[pi])?attachmentPaths[pi]:null;
-                const authoritativeVisualRail=attachmentPaths?.__somataFrameContour===true;
+                const mapped=semanticMap&&pi>=0?semanticMap[pi]:pi;
+                const ownIndex=Number.isInteger(mapped)&&mapped>=0&&attachmentPaths[mapped]?.points?.length>1?mapped:-1;
+                const path=ownIndex>=0?attachmentPaths[ownIndex]:null;
 
                 // FrameContour segment subdivision is the actual visible profile subdivision,
                 // not the canonical topology segment numbering used to preserve lamp identity.
                 // Never reuse a frozen canonical render-segment parameter on it. Project the
                 // identity point onto the corresponding visible contour (or globally if needed).
-                if(authoritativeVisualRail&&runtimeState.morph?.active&&(state.morph.mode==='topology'||state.morph.mode==='calm')){
+                if(authoritativeVisualRail&&runtimeState.morph?.active){
                     // Topology identity and visual attachment are separate concerns.  The old
                     // nearest-point projection could jump to a different nearby branch of the
                     // spline from one frame to the next.  Once a lamp owns a profile path, keep
                     // an arc coordinate on that path and move along the rail itself.  Linear
                     // topology already publishes a continuous lampAttachFraction, so use it
                     // directly rather than solving nearest geometry again.
-                    let visualPath=path,visualPathIndex=pi;
-                    if(!visualPath){
-                        const hit=typeof nearestPointOnLampPathsWithIndex==='function'?nearestPointOnLampPathsWithIndex(p,attachmentPaths,null):null;
-                        if(Number.isInteger(hit?.pathIndex)&&hit.pathIndex>=0){visualPathIndex=hit.pathIndex;visualPath=attachmentPaths[visualPathIndex];}
-                    }
-                    if(!visualPath?.points?.length)return {...p,pathIndex:pi,vertexIndex:p?.vertexIndex};
+                    const visualPath=path,visualPathIndex=ownIndex;
+                    // A lamp with a semantic orbit may never jump to a globally
+                    // nearest *different* line at a crossing.  No false attachment
+                    // is preferable to snapping to the wrong orbit.
+                    if(!visualPath?.points?.length)return {...p,
+                        // A missing semantic rail must not paint its lamp at an
+                        // unattached Cartesian fallback, which looks like a teleport.
+                        lampLevel:0,pathIndex:pi,vertexIndex:p?.vertexIndex};
                     const identity=String(p?.lampId??`${visualPathIndex}:${Number.isInteger(p?.vertexIndex)?p.vertexIndex:index}`);
                     const key=`${layerKey}:profile-arc:${identity}`;
                     let rt=lampMotionRuntime.profileAttach.get(key);
@@ -558,16 +642,26 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                         const near=nearestLampFractionOnPathStable(p,visualPath,ref);
                         targetS=near.fraction;
                     }
-                    if(!rt){rt={pathIndex:visualPathIndex,s:targetS,targetS,last:now,lastSeen:now};lampMotionRuntime.profileAttach.set(key,rt);}
+                    if(!rt||rt.pathIndex!==visualPathIndex){rt={pathIndex:visualPathIndex,s:targetS,targetS,last:now,lastSeen:now};lampMotionRuntime.profileAttach.set(key,rt);}
                     const rawDt=Math.max(0,now-(rt.last||now)),dt=rawDt>1250?0:rawDt;rt.last=now;rt.lastSeen=now;rt.pathIndex=visualPathIndex;rt.targetS=targetS;
                     // A published topology attach fraction is already a continuous morph
                     // coordinate.  Corner/fallback points instead chase their target fraction
                     // with bounded arc motion so they cannot teleport across a crossing.
-                    rt.s=Number.isFinite(direct)?targetS:advanceLampPathFractionLinear(rt.s,targetS,visualPath,dt);
+                    rt.s=Number.isFinite(direct)||Math.abs(Number(getLampEvaluationConfig()?.morphInertia)||0)>=100||getLampEvaluationConfig()?.morphMotionMode==='linear'
+                        ? targetS:advanceLampPathFractionLinear(rt.s,targetS,visualPath,dt);
                     const q=lampPointAtFraction(visualPath,rt.s);
                     return q?{...p,...q,pathIndex:visualPathIndex,vertexIndex:p?.vertexIndex,lampContourFraction:rt.s,__lampVisualProfileAttached:true}:({...p,pathIndex:visualPathIndex,vertexIndex:p?.vertexIndex,__lampVisualProfileAttached:true});
                 }
 
+                // Linear attachment must never reselect the nearest segment.
+                // The same semantic path and phase-interpolated arc fraction
+                // determine the lamp coordinate for every contour family.
+                if(runtimeState.morph?.active && getLampEvaluationConfig()?.morphMotionMode==='linear' && path && Number.isFinite(Number(p?.lampAttachFraction))){
+                    const fraction=Number(p.lampAttachFraction);
+                    const q=lampPointAtFraction(path,fraction);
+                    if(q)return {...p,...q,pathIndex:pi,vertexIndex:p?.vertexIndex,
+                        lampContourFraction:fraction,__lampVisualProfileAttached:true};
+                }
                 if(runtimeState.morph?.active && getLampEvaluationConfig()?.morphMotionMode==='linear' && (state.morph.mode==='topology'||state.morph.mode==='calm') && p?.lampFixedSegmentBound===true && path){
                     const q=lampPointAtRenderSegmentParam(path,Number(p?.lampAttachRenderSegmentParam));
                     if(q)return {...p,...q,pathIndex:pi,vertexIndex:p?.vertexIndex};
@@ -576,6 +670,8 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 if(!path){
 
                     if(calm)return {...p,pathIndex:pi,vertexIndex:p?.vertexIndex,lampLevel:p?.lampLevel};
+                    if(runtimeState.morph?.active && getLampEvaluationConfig()?.morphMotionMode==='linear')
+                        return {...p,lampLevel:0,pathIndex:pi,vertexIndex:p?.vertexIndex};
                     const q=nearestPointOnLampPaths(p,attachmentPaths,0,false);
                     return {...p,...q,pathIndex:pi,vertexIndex:p?.vertexIndex};
                 }
@@ -589,14 +685,10 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
 
                 if(runtimeState.morph?.active && getLampEvaluationConfig()?.morphMotionMode==='linear' && (state.morph.mode==='topology'||state.morph.mode==='calm') && Number.isFinite(Number(p?.lampAttachFraction))){
                     const phase=Math.max(0,Math.min(1,Number(p?.lampAttachProgress ?? runtimeState.morph?.progress)||0));
-                    if(phase<=1e-8 && p?.lampAttachSourcePoint)
-                        return {...p,x:Number(p.lampAttachSourcePoint.x)||0,y:Number(p.lampAttachSourcePoint.y)||0,pathIndex:pi,vertexIndex:p?.vertexIndex};
                     const bound=nearestLampFractionOnPathSegmentBound(
                         p,path,Number(p.lampAttachFraction),Number(p?.lampAttachSegmentWindow)||.1
                     );
                     if(bound?.point){
-                        if(phase>=1-1e-8 && p?.lampAttachTargetPoint)
-                            return {...p,x:Number(p.lampAttachTargetPoint.x)||0,y:Number(p.lampAttachTargetPoint.y)||0,pathIndex:pi,vertexIndex:p?.vertexIndex};
                         return {...p,...bound.point,lampAttachFraction:bound.fraction,pathIndex:pi,vertexIndex:p?.vertexIndex};
                     }
                 }
@@ -668,7 +760,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const layer=state.layers[layerIndex];
             const currentPaths=preparedPaths || (typeof getCurrentMorphCpuPaths==='function'
                 ? getCurrentMorphCpuPaths(layerIndex,t,'arbitrary-lamps')
-                : ((state.morph.mode==='circleSlide')
+                : (((state.morph.mode==='circleSlide'||state.morph.mode==='topoCircle'))
                     ? (isChaosCircleMorphPair(layerIndex) ? buildCurrentChaosCircleMorphPaths(layerIndex,t) : buildCurrentCircleMorphPaths(layerIndex,t))
                     : buildCurrentMorphPaths(layerIndex,t)));
 
@@ -1069,7 +1161,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const u=Math.max(0,Math.min(1,Number(t)||0)),layerKey=String(base?.id||layerIndex),out=[];
             const makeKey=(p,pathIndex,keyIndex,side)=>({x:Number(p?.x)||0,y:Number(p?.y)||0,keyIndex,lampSeed:lampHash32(`${layerKey}:${side}:${pathIndex}:${keyIndex}`)});
 
-            if((state.morph.mode==='circleSlide')){
+            if(((state.morph.mode==='circleSlide'||state.morph.mode==='topoCircle'))){
                 const plan=isChaosCircleMorphPair(layerIndex)?getChaosCircleMorphPlan(src,dst,state.morph.slideType||'sector'):getCircleMorphPlan(src,dst,state.morph.slideType||'sector');
                 const rs=getEffectiveLayerRadius(src,220),rd=getEffectiveLayerRadius(dst,rs),R=rs+(rd-rs)*u;
                 for(let pathIndex=0;pathIndex<(plan?.pathPlans?.length||0);pathIndex++){
@@ -1089,7 +1181,16 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                         const targetPresent=pp.targetPathPresent!==false&&dstMap.present[i]===true;
                         const travel=u;
                         const presence=lampLinearSplitMergePresence(sourcePresent,targetPresent,{x,y},sp,tp,sourceKeys,targetKeys,travel,layerKey,`circle:${pathIndex}:${i}`);
-                        out.push({x,y,pathIndex,vertexIndex:i,lampPresence:presence,lampTravelProgress:travel,lampSourcePresent:sourcePresent,lampTargetPresent:targetPresent,lampId:`linear:key:${pathIndex}:${i}`,lampSeed:lampHash32(`${layerKey}:linear:key:${pathIndex}:${i}`)});
+                        const sourceFraction=si/Math.max(1,srcAngles.length||from.length);
+                        const targetFraction=ti/Math.max(1,dstAngles.length||to.length);
+                        let arcDelta=targetFraction-sourceFraction;
+                        arcDelta=((arcDelta+.5)%1+1)%1-.5;
+                        const arcFraction=((sourceFraction+arcDelta*u)%1+1)%1;
+                        out.push({x,y,pathIndex,vertexIndex:i,lampPresence:presence,lampTravelProgress:travel,
+                            lampSourcePresent:sourcePresent,lampTargetPresent:targetPresent,
+                            lampAttachFraction:arcFraction,lampAttachSourceFraction:sourceFraction,
+                            lampAttachTargetFraction:targetFraction,lampAttachProgress:u,
+                            lampId:`linear:key:${pathIndex}:${i}`,lampSeed:lampHash32(`${layerKey}:linear:key:${pathIndex}:${i}`)});
                     }
                 }
                 return capLampPointList(out,maxPoints);
@@ -1351,16 +1452,17 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 const pts=collectLinearGeometryLampPoints(layerIndex,t,maxPoints,rawPaths);
                 if(pts?.length)return pts;
             }
-            const circleMode=(state.morph.mode==='circleSlide');
+            const circleMode=((state.morph.mode==='circleSlide'||state.morph.mode==='topoCircle'));
             return circleMode
                 ? (isChaosCircleMorphPair(layerIndex)?collectChaosCircleVertexLampPoints(layerIndex,t,maxPoints):collectCircleVertexLampPoints(layerIndex,t,maxPoints))
                 : collectTopologyVertexLampPoints(layerIndex,t,maxPoints);
         }
         function collectMorphLampPoints(layerIndex, t, maxPoints=260, preparedPaths=null, preparedRoundedPaths=null) {
+            const motionT=lampPhaseInertiaProgress(t);
             let mode=getLampEvaluationConfig()?.positionMode||'key';
             if(mode==='circumference')mode='key'; // legacy project migration
             const base=state.layers[layerIndex];
-            const circleMode=(state.morph.mode==='circleSlide');
+            const circleMode=((state.morph.mode==='circleSlide'||state.morph.mode==='topoCircle'));
             const trueLinearTopology = getLampEvaluationConfig()?.morphMotionMode==='linear' && (state.morph.mode==='topology'||state.morph.mode==='calm');
             const rawPaths=preparedPaths || (trueLinearTopology
                 ? buildCurrentMorphPathsForLamps(layerIndex,t)
@@ -1387,18 +1489,18 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 // a teleport before blue identity handoff catches up.
                 if(authoritativeAttachment){
                     out=preserveBlueMorphLampIdentity(layerIndex,out);
-                    return attach?projectLampPointsToCurrentPolygon(out,attachmentPaths,base,true,forceNearest):out;
+                    return attach?projectLampPointsToCurrentPolygon(out,attachmentPaths,base,true,forceNearest,lampRawPaths):out;
                 }
-                if(attach)out=projectLampPointsToCurrentPolygon(out,attachmentPaths,base,true,forceNearest);
+                if(attach)out=projectLampPointsToCurrentPolygon(out,attachmentPaths,base,true,forceNearest,lampRawPaths);
                 return preserveBlueMorphLampIdentity(layerIndex,out);
             };
 
             if(getLampEvaluationConfig()?.morphMotionMode==='linear' && mode==='key'){
-                let exact=collectTrueLinearKeyLampPoints(layerIndex,t,maxPoints);
+                let exact=collectTrueLinearKeyLampPoints(layerIndex,motionT,maxPoints);
                 if(exact.length)return finalizeMorphLampPoints(exact,{forceNearest:circumferenceMode});
             }
             if(getLampEvaluationConfig()?.morphMotionMode==='ghost' && mode==='key' && rawPaths?.length){
-                let exact=collectLinearGeometryLampPoints(layerIndex,t,maxPoints,rawPaths);
+                let exact=collectLinearGeometryLampPoints(layerIndex,motionT,maxPoints,rawPaths);
                 if(exact.length)return finalizeMorphLampPoints(dedupeLampPoints(exact,maxPoints),{forceNearest:circumferenceMode});
             }
             if(['linear','ghost'].includes(getLampEvaluationConfig()?.morphMotionMode) && mode==='corners' && rawPaths?.length){
@@ -1414,11 +1516,11 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     const spiralSeamShared=state.tunnel?.active===true && base?.spiralClosed!==false;
                     for(let pathIndex=0;pathIndex<rawPaths.length;pathIndex++){const path=rawPaths[pathIndex],pts=path?.points||[];if(!pts.length)continue;all.push({...pts[0],pathIndex,vertexIndex:0});const flags=path.cornerFlags||[];for(let i=1;i<pts.length-1;i++)if(flags[i])all.push({...pts[i],pathIndex,vertexIndex:i});if(pts.length>1&&!spiralSeamShared)all.push({...pts[pts.length-1],pathIndex,vertexIndex:pts.length-1});}
                     const points=capLampPointList(dedupeLampPoints(all,Math.max(maxPoints,all.length)),maxPoints);
-                    return preserveBlueMorphLampIdentity(layerIndex, attach?projectLampPointsToCurrentPolygon(points,attachmentPaths,base,true,circumferenceMode):points);
+                    return preserveBlueMorphLampIdentity(layerIndex, attach?projectLampPointsToCurrentPolygon(points,attachmentPaths,base,true,circumferenceMode,lampRawPaths):points);
                 }
                 let pts=circleMode
-                    ? (isChaosCircleMorphPair(layerIndex) ? collectChaosCircleVertexLampPoints(layerIndex,t,maxPoints) : collectCircleVertexLampPoints(layerIndex,t,maxPoints))
-                    : collectTopologyVertexLampPoints(layerIndex,t,maxPoints);
+                    ? (isChaosCircleMorphPair(layerIndex) ? collectChaosCircleVertexLampPoints(layerIndex,motionT,maxPoints) : collectCircleVertexLampPoints(layerIndex,motionT,maxPoints))
+                    : collectTopologyVertexLampPoints(layerIndex,motionT,maxPoints);
                 if(pts.length){
                     if(getLampEvaluationConfig()?.calmMode===true && !attach)return preserveBlueMorphLampIdentity(layerIndex,pts);
                     return finalizeMorphLampPoints(pts,{forceNearest:circumferenceMode});
@@ -1998,7 +2100,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             if(source.every(path=>path?._stableRoundedSplineRail===true||path?._greenRenderedRail===true))return source;
             if(!dynamicSource&&round<=.001&&source.every(path=>!useSmoothSplinePath(layer,round,path)))return source;
             const staticCacheable=!dynamicSource&&!isSpiralLayer(layer);
-            const staticKey=staticCacheable?`${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode||'segments'}|r:${round.toFixed(5)}|tol:${glintTolerance.toFixed(2)}|fourier:${state.fourierMode?1:0}:${Math.round((Number(state.fourierStrength)||0)*100)/100}`:'';
+            const staticKey=staticCacheable?`${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode||'segments'}|shape:${layer?.roundingShape||'spline'}|r:${round.toFixed(5)}|tol:${glintTolerance.toFixed(2)}|fourier:${state.fourierMode?1:0}:${Math.round((Number(state.fourierStrength)||0)*100)/100}`:'';
             if(staticCacheable){const variants=persistentHighPrecisionGlintCache.get(source),hit=variants?.get(staticKey);if(hit)return hit;}
 
             if(isSpiralLayer(layer)){
@@ -2020,11 +2122,11 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 const pts=path?.points||[];if(pts.length<2)return path;
                 const sampler=acquireHighPrecisionGlintSampler(path,dynamicSource,glintTolerance);
                 if(morphInfo){
-                    drawMorphPathQuality(sampler,pts,Boolean(path.closed),morphInfo.roundingFrac,morphInfo.profileMode,morphInfo.splineBlend,morphInfo.continuousProfileBlend,morphInfo.splineRenderMode,path.cornerFlags||[],path.bridgeRoundFlags||[]);
+                    drawMorphPathQuality(sampler,pts,Boolean(path.closed),morphInfo.roundingFrac,morphInfo.profileMode,morphInfo.splineBlend,morphInfo.continuousProfileBlend,morphInfo.splineRenderMode,path.cornerFlags||[],path.bridgeRoundFlags||[],layer?.wholeCurveSpline===true,0,0,layer);
                 }else if(useSmoothSplinePath(layer,round,path)){
-                    splinePathForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true);
+                    splinePathForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true,1,0,layer);
                 }else{
-                    roundPolylineForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[]);
+                    roundPolylineForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[],null,false,null,layer);
                 }
                 return {...path,points:sampler.points.length>1?sampler.points:pts,cornerFlags:[]};
             });
@@ -2210,7 +2312,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const round=getRoundingStrength(layer.rounding),behavior=normalizeLightningBehaviorValue(cfg?.lightningBehavior,'symmetric'),needsPreview=forcePreview===true||cfg?.lightningMode==='across'||behavior!=='symmetric';
             const dynamicSource=isCurrentFrameDynamicPathList(source)||Boolean(runtimeState.morph?.active&&state.morph?.mode!=='light')||frameCtx?.minimalFadeEnabled===true||frameCtx?.greenMorphEnabled===true;
             const staticCacheable=!dynamicSource&&!isSpiralLayer(layer);
-            const staticKey=staticCacheable?`exactSplineV425|preview:${needsPreview?1:0}|${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode||'segments'}|r:${round.toFixed(5)}|fourier:${state.fourierMode?1:0}:${Math.round((Number(state.fourierStrength)||0)*100)/100}`:'';
+            const staticKey=staticCacheable?`exactSplineV425|preview:${needsPreview?1:0}|${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode||'segments'}|shape:${layer?.roundingShape||'spline'}|r:${round.toFixed(5)}|fourier:${state.fourierMode?1:0}:${Math.round((Number(state.fourierStrength)||0)*100)/100}`:'';
             if(staticCacheable){const variants=persistentExactLightningCache.get(source),hit=variants?.get(staticKey);if(hit){if(frameCtx){frameCtx[cacheFrameKey]=frameId;frameCtx[cacheSourceKey]=source;frameCtx[cacheValueKey]=hit;}return hit;}}
 
             if(isSpiralLayer(layer)){
@@ -2250,11 +2352,11 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
 
                     recorder.moveTo(pts[0].x,pts[0].y);for(let i=1;i<pts.length;i++)recorder.lineTo(pts[i].x,pts[i].y);if(path.closed)recorder.closePath();
                 }else if(morphInfo){
-                    drawMorphPathQuality(recorder,pts,Boolean(path.closed),morphInfo.roundingFrac,morphInfo.profileMode,morphInfo.splineBlend,morphInfo.continuousProfileBlend,morphInfo.splineRenderMode,path.cornerFlags||[],path.bridgeRoundFlags||[]);
+                    drawMorphPathQuality(recorder,pts,Boolean(path.closed),morphInfo.roundingFrac,morphInfo.profileMode,morphInfo.splineBlend,morphInfo.continuousProfileBlend,morphInfo.splineRenderMode,path.cornerFlags||[],path.bridgeRoundFlags||[],layer?.wholeCurveSpline===true,0,0,layer);
                 }else if(useSmoothSplinePath(layer,round,path)){
-                    splinePathForDraw(recorder,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true);
+                    splinePathForDraw(recorder,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true,1,0,layer);
                 }else{
-                    roundPolylineForDraw(recorder,pts,Boolean(path.closed),round,path.cornerFlags||[]);
+                    roundPolylineForDraw(recorder,pts,Boolean(path.closed),round,path.cornerFlags||[],null,false,null,layer);
                 }
                 const rail=recorder.finish(needsPreview),preview=needsPreview&&rail.fullPieces.length===1&&rail.fullPieces[0].length>1?rail.fullPieces[0]:pts;
                 return {...path,points:preview,cornerFlags:[],_exactLightningRail:rail};
@@ -2934,7 +3036,14 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
 
             const motionActive=(state.layers||[]).some(l=>l?.visible!==false&&l?.lineMotionFx?.enabled===true);
             const spriteActive=(state.layers||[]).some(l=>l?.visible!==false&&l?.sprite?.enabled===true);
-            if(!motionActive&&!spriteActive)return false;requestMainCanvasRender();return true;
+            if(!motionActive&&!spriteActive)return false;
+            // A running Blue Morph already owns the frame clock. Textured
+            // sprites (including Bones) consume that current frame: a second
+            // independent repaint request must never compete with Morph/GPU.
+            if(runtimeState?.morph?.active===true&&runtimeState.morph.paused!==true&&
+                runtimeState.morph.pausedByOrangeProject!==true&&runtimeState.morph.pausedByGreenProject!==true)
+                return true;
+            requestMainCanvasRender();return true;
         }
         function ensureGpuPathFxAnimation(){
             const active=(state.layers||[]).some(l=>l?.visible!==false&&(l?.lineMotionFx?.enabled===true||l?.sprite?.enabled===true));
@@ -3123,7 +3232,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 const t = Number.isFinite(runtimeState.morph.geometryT) ? runtimeState.morph.geometryT : 0;
                 const current = typeof getCurrentMorphCpuPaths==='function'
                     ? getCurrentMorphCpuPaths(layerIndex,t,'auxiliary-paths')
-                    : ((state.morph.mode==='circleSlide')
+                    : (((state.morph.mode==='circleSlide'||state.morph.mode==='topoCircle'))
                         ? (isChaosCircleMorphPair(layerIndex) ? buildCurrentChaosCircleMorphPaths(layerIndex,t) : buildCurrentCircleMorphPaths(layerIndex,t))
                         : buildCurrentMorphPaths(layerIndex, t));
                 if (current?.length) return finish(current);
@@ -3863,9 +3972,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const overflow=document.getElementById('morphCircleOverflowRow');
             fade?.classList.toggle('is-visible', mode==='fade');
 
-            slide?.classList.toggle('is-visible', ['topology','calm','circleSlide','light'].includes(mode));
+            slide?.classList.toggle('is-visible', ['topology','calm','circleSlide','topoCircle','light'].includes(mode));
 
-            overflow?.classList.toggle('hidden', mode!=='circleSlide');
+            overflow?.classList.toggle('hidden', !['circleSlide','topoCircle'].includes(mode));
         }
         function syncMotionUI(){
             const m=normalizeMotionState(),active=getActiveEffectLayer(),r=normalizeLayerMotionRotation(active);
@@ -4034,7 +4143,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             {const base=Math.max(1,Number.isFinite(Number(c.radius))?Number(c.radius):50),mult=Math.max(0,Number.isFinite(Number(c.radiusMultiplier))?Number(c.radiusMultiplier):1);if(base>50){const effective=base*mult;if(effective<=0){c.radius=50;c.radiusMultiplier=0;}else{const nextMult=Math.max(1,Math.ceil(effective/50));c.radius=effective/nextMult;c.radiusMultiplier=nextMult;}}else{c.radius=base;c.radiusMultiplier=mult;}}
             const mode=c.colorMode || (c.rainbow?'rainbow':c.matchLineColor?'line':'selected');
             c.colorMode=mode; c.matchLineColor=mode==='line'; c.rainbow=mode==='rainbow';
-            const vals={lampColor:c.color,lampFreezeLight:c.freezeLight===true,lampFreezeTailSec:c.freezeTailSec??1.5,lampFreezeHardness:c.freezeHardness??50,lampFreezeColorMode:['lamp','line','fixed','hue'].includes(c.freezeColorMode)?c.freezeColorMode:'lamp',lampFreezeColor:c.freezeColor||'#00ffcc',lampFreezeHueDegrees:c.freezeHueDegrees??45,lampFreezeHueDegreesNumber:c.freezeHueDegrees??45,lampFreezeChromatic:c.freezeChromatic===true,lampFreezeChromaticColor:c.freezeChromaticColor||'#22d3ee',lampFreezeRain:c.freezeRain===true,lampFreezeRainDegrees:c.freezeRainDegrees??180,lampFreezeRainDegreesNumber:c.freezeRainDegrees??180,lampFreezeRainSource:c.freezeRainSource==='lamp'?'lamp':'core',lampFreezeRainSpeed:c.freezeRainSpeed??50,lampFreezeRainTailSec:c.freezeRainTailSec??1.5,lampFreezeRainHardness:c.freezeRainHardness??50,lampBrightness:c.brightness,lampRadius:c.radius,lampRadiusMultiplier:c.radiusMultiplier??1,lampSoftness:c.softness,lampSoftnessMultiplier:c.softnessMultiplier??1,lampBlendMode:c.blendMode,lampType:c.type,lampDensity:c.density??100,lampDensityMultiplier:c.densityMultiplier??1,lampScatter:c.scatter??0,lampScatterMultiplier:c.scatterMultiplier??1,lampSizeVariation:c.sizeVariation??0,lampSizeVariationMultiplier:c.sizeVariationMultiplier??1,lampBrightnessVariation:c.brightnessVariation??0,lampBrightnessVariationMultiplier:c.brightnessVariationMultiplier??1,lampAdaptiveBrightness:c.adaptiveBrightness!==false,lampAdaptiveAdjustBrightness:c.adaptiveAdjustBrightness===true,lampAdaptiveStrength:c.adaptiveStrength??100,lampAdaptiveStrengthMultiplier:c.adaptiveStrengthMultiplier??1,lampAdaptiveFadeSec:c.adaptiveFadeSec??1,lampMorphEnabled:c.morphEnabled===true,lampMorphSize:c.morphSize??20,lampMorphBrightness:c.morphBrightness??25,lampMorphInertia:c.morphInertia??50,lampCornerInertiaLinked:c.cornerInertiaLinked!==false,lampCalmMode:c.calmMode===true,lampSnapToContour:withLampConfig(c,()=>isLampContourAttachmentEnabled())};
+            const vals={lampColor:c.color,lampFreezeLight:c.freezeLight===true,lampFreezeTailSec:c.freezeTailSec??1.5,lampFreezeHardness:c.freezeHardness??50,lampFreezeColorMode:['lamp','line','fixed','hue'].includes(c.freezeColorMode)?c.freezeColorMode:'lamp',lampFreezeColor:c.freezeColor||'#00ffcc',lampFreezeHueDegrees:c.freezeHueDegrees??45,lampFreezeHueDegreesNumber:c.freezeHueDegrees??45,lampFreezeChromatic:c.freezeChromatic===true,lampFreezeChromaticColor:c.freezeChromaticColor||'#22d3ee',lampFreezeRain:c.freezeRain===true,lampFreezeRainDegrees:c.freezeRainDegrees??180,lampFreezeRainDegreesNumber:c.freezeRainDegrees??180,lampFreezeRainSource:c.freezeRainSource==='lamp'?'lamp':'core',lampFreezeRainSpeed:c.freezeRainSpeed??50,lampFreezeRainTailSec:c.freezeRainTailSec??1.5,lampFreezeRainHardness:c.freezeRainHardness??50,lampBrightness:c.brightness,lampRadius:c.radius,lampRadiusMultiplier:c.radiusMultiplier??1,lampSoftness:c.softness,lampSoftnessMultiplier:c.softnessMultiplier??1,lampBlendMode:c.blendMode,lampType:c.type,lampDensity:c.density??100,lampDensityMultiplier:c.densityMultiplier??1,lampScatter:c.scatter??0,lampScatterMultiplier:c.scatterMultiplier??1,lampSizeVariation:c.sizeVariation??0,lampSizeVariationMultiplier:c.sizeVariationMultiplier??1,lampBrightnessVariation:c.brightnessVariation??0,lampBrightnessVariationMultiplier:c.brightnessVariationMultiplier??1,lampAdaptiveBrightness:c.adaptiveBrightness!==false,lampAdaptiveAdjustBrightness:c.adaptiveAdjustBrightness===true,lampAdaptiveStrength:c.adaptiveStrength??100,lampAdaptiveStrengthMultiplier:c.adaptiveStrengthMultiplier??1,lampAdaptiveFadeSec:c.adaptiveFadeSec??1,lampMorphEnabled:c.morphEnabled===true,lampMorphSize:c.morphSize??20,lampMorphBrightness:c.morphBrightness??25,lampMorphInertia:c.morphInertia??0,lampCornerInertiaLinked:c.cornerInertiaLinked!==false,lampSnapToContour:withLampConfig(c,()=>isLampContourAttachmentEnabled())};
             for(const [id,v] of Object.entries(vals)){const el=document.getElementById(id);if(!el)continue;if(el.type==='checkbox')el.checked=!!v;else el.value=v;}
             const showLines=document.getElementById('showLines'); if(showLines) showLines.checked=linesAreEffectivelyVisible();
             const showLamps=document.getElementById('showLamps'); if(showLamps) showLamps.checked=state.masterLayerEdit===true?everyLayerMatches(l=>getLayerLampsEnabled(l)):getLayerLampsEnabled(getActiveEffectLayer());
@@ -4072,8 +4181,8 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             set('lampAdaptiveFadeText',`${formatTimeSeconds(Math.max(0,Number(c.adaptiveFadeSec??1)))} с`);
             set('lampMorphSizeText',`${Math.round(Number(c.morphSize??20))}%`);
             set('lampMorphBrightnessText',`${Math.round(Number(c.morphBrightness??25))}%`);
-            set('lampMorphInertiaText',`${Math.round(Number(c.morphInertia??50))}%`);
-            document.getElementById('lampMorphInertiaRow')?.classList.toggle('hidden',motionMode!=='dynamic');
+            set('lampMorphInertiaText',`${Math.round(Number(c.morphInertia??0))}%`);
+            document.getElementById('lampMorphInertiaRow')?.classList.remove('hidden');
             document.getElementById('lampMorphSettings')?.classList.toggle('hidden',c.morphEnabled!==true);
             document.getElementById('lampDensityRow')?.classList.toggle('hidden',positionMode!=='arbitrary');
             const cornerRow=document.getElementById('lampCornerInertiaRow');
@@ -4130,13 +4239,22 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             normalizeSweepConfig(c);if(c.enabled===true)ensureSweepAnimation();
         }
 
-        function roundPolylineForDraw(ctx, points, closed, roundingFrac, cornerFlags, cornerFactors = null) {
+        function roundPolylineForDraw(ctx, points, closed, roundingFrac, cornerFlags, cornerFactors = null, independentMorphCuts = false, roundingGuardSource = null, filletLayer = null) {
             if (!points || points.length < 2) return;
+            if (!state.fourierMode && filletLayer &&
+                !cornerFactors && typeof somataDrawSplineCornerMode==='function' &&
+                somataDrawSplineCornerMode(ctx,points,Boolean(closed),roundingFrac,{baseSplineBlend:0,layer:filletLayer}))return;
+            if (!state.fourierMode && typeof ctx.bezierCurveTo === "function" && typeof drawUnifiedFilletPath === "function" && !cornerFactors &&
+                drawUnifiedFilletPath(ctx,points,Boolean(closed),roundingFrac,cornerFlags,{layer:filletLayer})) return;
             const strength=Math.max(0,Math.min(2,Number(roundingFrac)||0));
 
             if(strength>1.000001&&points.length>=3){
                 const pre=transformSplineKnotsForRounding(points,Boolean(closed),strength-1,cornerFlags||[]);
-                return roundPolylineForDraw(ctx,pre,closed,1,cornerFlags,cornerFactors);
+                const bounded=limitHighTurnExtraKnotSmoothing(points,pre,Boolean(closed),cornerFlags||[]);
+                // Preserve the authored turning angles and R when extra (>100%) knot
+                // smoothing changes their local tangent directions. Otherwise a
+                // 140° corner can become a 90° corner *before* the safety guard.
+                return roundPolylineForDraw(ctx,bounded,closed,1,cornerFlags,cornerFactors,independentMorphCuts,points);
             }
 
             if (state.fourierMode && points?._fourierPrepared !== true) {
@@ -4159,6 +4277,10 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             };
 
             const amount = Math.min(1,strength);
+            // A closed two-point orbit is a diameter traced in both
+            // directions, not an area with roundable corners. Emit its exact
+            // original rail at every rounding level (N=6, K=3, S=3).
+            if (closed && n===2) { rawPath(); return; }
             if (amount <= 0.001) {
                 rawPath();
                 return;
@@ -4240,6 +4362,43 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
 
             const data = new Map();
             const m = corners.length;
+            // The percentage is measured against the entire contour length,
+            // not the immediately adjacent polygon segments. Equal geometric
+            // shapes with different subdivision counts must round identically.
+            const wholeProfileLength = closed
+                ? distanceForward(0, n - 1) + Math.hypot(points[0].x-points[n-1].x,points[0].y-points[n-1].y)
+                : distanceForward(0, n - 1);
+            const globalShoulder=0.5*wholeProfileLength/Math.max(1,m)*amount;
+            const guardPoints=roundingGuardSource?.length===n?roundingGuardSource:points;
+            const originalRadius=guardPoints.reduce((r,p)=>Math.max(r,Math.hypot(p.x,p.y)),0);
+            const halfRadius=originalRadius*0.5;
+            // Exact first intersection of a line segment with the inner-half
+            // circle; unlike point sampling it cannot miss a short excursion
+            // through the protected radius. Traverse away from each corner.
+            const radialSafeCut=(corner,boundary,backwards,wanted)=>{
+                if(!(wanted>1e-8&&halfRadius>1e-7) ||
+                   Math.hypot(points[corner].x,points[corner].y)<=halfRadius+1e-7)return wanted;
+                let idx=corner,travelled=0,guard=0;
+                while(idx!==boundary && travelled<wanted && guard++<=n){
+                    const next=backwards?(idx-1+n)%n:(idx+1)%n;
+                    if(!closed && (backwards?idx===0:idx===n-1))break;
+                    const p=points[idx],v=points[next];
+                    const dx=v.x-p.x,dy=v.y-p.y,len=Math.hypot(dx,dy);
+                    const segment=Math.min(len,wanted-travelled);
+                    if(len>1e-9){
+                        const a=dx*dx+dy*dy,b=2*(p.x*dx+p.y*dy);
+                        const c=p.x*p.x+p.y*p.y-halfRadius*halfRadius;
+                        const disc=b*b-4*a*c;
+                        if(disc>=0){
+                            const t=(-b-Math.sqrt(disc))/(2*a);
+                            if(t>=0 && t<=segment/len+1e-10)
+                                return Math.max(0,Math.min(wanted,travelled+len*Math.max(0,t)-1e-7));
+                        }
+                    }
+                    travelled+=segment;idx=next;
+                }
+                return wanted;
+            };
             for (let q = 0; q < m; q++) {
                 const i = corners[q];
                 let prevBoundary;
@@ -4264,12 +4423,54 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 const factor = cornerFactors
                     ? Math.max(0, Math.min(1, Number(cornerFactors[i]) || 0))
                     : 1;
-                const cut = 0.5 * Math.min(inSpan, outSpan) * amount * factor;
+                // Distance-based shoulders: an arbitrary short neighbor must
+                // not shrink the long-side rounding. The half-run cap prevents
+                // collisions where fillets approach from both ends of a run.
+                // Retain the argument for compatibility with older callers.
+                // Near a complete reversal the fillet must disappear instead
+                // of forming a hairpin loop. When a large-angle shoulder would
+                // enter the inner half-radius, stop expanding it there too.
+                let pi=(i-1+n)%n,ni=(i+1)%n;
+                while(pi!==i && Math.hypot(points[i].x-points[pi].x,points[i].y-points[pi].y)<1e-8)pi=(pi-1+n)%n;
+                while(ni!==i && Math.hypot(points[i].x-points[ni].x,points[i].y-points[ni].y)<1e-8)ni=(ni+1)%n;
+                const currentTurnFactor=highTurnRoundingFactor(
+                    {x:points[i].x-points[pi].x,y:points[i].y-points[pi].y},
+                    {x:points[ni].x-points[i].x,y:points[ni].y-points[i].y});
+                // A strong-rounding prestep can completely change an angle.
+                // Do not allow it to erase the original high-turn protection.
+                const authoredTurnFactor=roundingGuardSource?.length===n
+                    ?highTurnRoundingFactor(
+                        {x:guardPoints[i].x-guardPoints[pi].x,y:guardPoints[i].y-guardPoints[pi].y},
+                        {x:guardPoints[ni].x-guardPoints[i].x,y:guardPoints[ni].y-guardPoints[i].y})
+                    :1;
+                const turnFactor=Math.min(currentTurnFactor,authoredTurnFactor);
+                let inCut=Math.min(inSpan*0.5,globalShoulder)*factor*turnFactor;
+                let outCut=Math.min(outSpan*0.5,globalShoulder)*factor*turnFactor;
+                if(turnFactor<0.999999){
+                    inCut=radialSafeCut(i,prevBoundary,true,inCut);
+                    outCut=radialSafeCut(i,nextBoundary,false,outCut);
+                }
 
-                const inPt = pointAlongPath(prevBoundary, i, Math.max(0, inSpan - cut));
-                const outPt = pointAlongPath(i, nextBoundary, cut);
-                data.set(i, { prevBoundary, nextBoundary, inSpan, outSpan, cut, inPt, outPt });
+                const inPt = pointAlongPath(prevBoundary, i, Math.max(0, inSpan - inCut));
+                const outPt = pointAlongPath(i, nextBoundary, outCut);
+                data.set(i, { prevBoundary, nextBoundary, inSpan, outSpan, inCut, outCut, inPt, outPt });
             }
+
+            // A near-180-degree reversal must NOT create an artificial side
+            // loop.  The earlier special two-cubic U-cap deliberately offset
+            // its midpoint sideways and produced the visible "ears" during
+            // both Static and Morph.  The angle limiter above makes the cut
+            // approach zero continuously; a quadratic stays within the two
+            // shoulders + original corner (convex hull) at every cut length.
+            const emitCornerCurve = (i, entry, exit) => {
+                const vertex=points[i];
+                const corner=data.get(i);
+                if((corner?.inCut||0)<1e-7 && (corner?.outCut||0)<1e-7){
+                    ctx.lineTo(vertex.x,vertex.y);
+                    return;
+                }
+                ctx.quadraticCurveTo(vertex.x,vertex.y,exit.x,exit.y);
+            };
 
             if (closed) {
                 const first = corners[0];
@@ -4283,9 +4484,9 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                     const toData = data.get(to);
                     const span = distanceForward(from, to);
 
-                    emitPathSlice(from, to, fromData.cut, Math.max(0, span - toData.cut));
+                    emitPathSlice(from, to, fromData.outCut, Math.max(0, span - toData.inCut));
 
-                    ctx.quadraticCurveTo(points[to].x, points[to].y, toData.outPt.x, toData.outPt.y);
+                    emitCornerCurve(to,toData.inPt,toData.outPt);
                 }
                 ctx.closePath();
                 return;
@@ -4297,10 +4498,10 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             for (const corner of corners) {
                 const d = data.get(corner);
                 const span = distanceForward(from, corner);
-                emitPathSlice(from, corner, startTrim, Math.max(0, span - d.cut));
-                ctx.quadraticCurveTo(points[corner].x, points[corner].y, d.outPt.x, d.outPt.y);
+                emitPathSlice(from, corner, startTrim, Math.max(0, span - d.inCut));
+                emitCornerCurve(corner,d.inPt,d.outPt);
                 from = corner;
-                startTrim = d.cut;
+                startTrim = d.outCut;
             }
             emitPathSlice(from, n - 1, startTrim, distanceForward(from, n - 1));
         }

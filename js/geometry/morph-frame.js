@@ -124,6 +124,33 @@ function buildMorphFrameInterpolationPlan(layerIndex,sourcePaths,targetPaths,var
             srcPolar:null,dstPolar:null,srcXYZ:null,dstXYZ:null,srcPolarAligned:null,dstPolarAligned:null,
             scratch:[],variant
         };
+        // Frame interpolation can expand a 4-vertex source into a 5-vertex
+        // destination (or repeat one source rail for a split orbit). A short
+        // cornerFlags array used to be carried through unchanged, so the new
+        // vertices were silently treated as unmarked and the Morph renderer
+        // stopped using the complete-profile-length fillet solver. Pre-align
+        // both corner maps with exactly the same indices as packed geometry.
+        if(sp&&dp&&!String(variant).startsWith('stableRounded')){
+            const sf=Array.isArray(sp.cornerFlags)?sp.cornerFlags:[];
+            const df=Array.isArray(dp.cornerFlags)?dp.cornerFlags:[];
+            if((sf.length===srcPts.length||df.length===dstPts.length)&&n>0){
+                rec.alignedCornerFlags=new Array(n);
+                for(let i=0;i<n;i++){
+                    const si=i%srcPts.length,di=(i+referenceOffset)%dstPts.length;
+                    rec.alignedCornerFlags[i]=sf[si]===true||df[di]===true;
+                }
+            }
+            const sb=Array.isArray(sp.bridgeRoundFlags)?sp.bridgeRoundFlags:[];
+            const db=Array.isArray(dp.bridgeRoundFlags)?dp.bridgeRoundFlags:[];
+            if(sb.length===srcPts.length||db.length===dstPts.length){
+                rec.alignedBridgeRoundFlags=new Array(n);
+                for(let i=0;i<n;i++){
+                    const si=i%srcPts.length,di=(i+referenceOffset)%dstPts.length;
+                    const a=sb[si],b=db[di];
+                    rec.alignedBridgeRoundFlags[i]=(a===false||b===false)?false:(a===true||b===true)?true:null;
+                }
+            }
+        }
         if(useRadial){
             rec.srcPolar=ensurePackedMorphPolar(srcPts,rec.srcPolar);
             rec.dstPolar=ensurePackedMorphPolar(dstPts,rec.dstPolar);
@@ -251,8 +278,8 @@ function interpolateMorphFramePlan(plan,t,result,stableRounded=false){
             let item=out[write];if(!item)item=out[write]={};
             item.points=base;
             item.closed=rec.closed;
-            item.cornerFlags=stableRounded?[]:(sp?.cornerFlags||dp?.cornerFlags||[]);
-            item.bridgeRoundFlags=stableRounded?[]:(sp?.bridgeRoundFlags||dp?.bridgeRoundFlags||[]);
+            item.cornerFlags=stableRounded?[]:(rec.alignedCornerFlags||(sp?.cornerFlags||dp?.cornerFlags||[]));
+            item.bridgeRoundFlags=stableRounded?[]:(rec.alignedBridgeRoundFlags||(sp?.bridgeRoundFlags||dp?.bridgeRoundFlags||[]));
             item._src=sp||null;item._dst=dp||null;
 
             item.spiralProfileRoundingBaked=Boolean(sp?.spiralProfileRoundingBaked&&dp?.spiralProfileRoundingBaked);

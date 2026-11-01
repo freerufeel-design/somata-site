@@ -1,0 +1,74 @@
+[
+  {
+    "sourceMode": "spline",
+    "targetMode": "segments",
+    "round": 0,
+    "sourceKnots": 5,
+    "sampledKnots": 12,
+    "start": 3.662085048010974,
+    "near": 3.662085048010974,
+    "first": 3.6592969821673527,
+    "end": 8.246546639231825,
+    "changed": 5.96636488340192
+  },
+  {
+    "sourceMode": "spline",
+    "targetMode": "segments",
+    "round": 55,
+    "sourceKnots": 5,
+    "sampledKnots": 12,
+    "start": 4.568816872427983,
+    "near": 4.568816872427983,
+    "first": 4.560733882030179,
+    "end": 7.894492455418382,
+    "changed": 4.502692043895747
+  },
+  {
+    "sourceMode": "spline",
+    "targetMode": "segments",
+    "round": 120,
+    "sourceKnots": 5,
+    "sampledKnots": 12,
+    "start": 1.8052400548696845,
+    "near": 1.8052400548696845,
+    "first": 1.8022633744855967,
+    "end": 4.987030178326474,
+    "changed": 2.7573422496570643
+  },
+  {
+    "sourceMode": "segments",
+    "targetMode": "spline",
+    "round": 0,
+    "sourceKnots": 5,
+    "sampledKnots": 5,
+    "start": 0,
+    "near": 0,
+    "first": 0.018964334705075445,
+    "end": 8.296351165980795,
+    "changed": 5.722184499314129
+  },
+  {
+    "sourceMode": "segments",
+    "targetMode": "spline",
+    "round": 55,
+    "sourceKnots": 5,
+    "sampledKnots": 5,
+    "start": 0,
+    "near": 0,
+    "first": 0.017064471879286693,
+    "end": 5.1649965706447185,
+    "changed": 5.361635802469136
+  },
+  {
+    "sourceMode": "segments",
+    "targetMode": "spline",
+    "round": 120,
+    "sourceKnots": 5,
+    "sampledKnots": 5,
+    "start": 0,
+    "near": 0,
+    "first": 0.012229080932784636,
+    "end": 2.1900411522633747,
+    "changed": 4.917688614540467
+  }
+]

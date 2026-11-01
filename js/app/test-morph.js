@@ -5,17 +5,25 @@ window.__spiroRegisterModule?.('js/app/test-morph');
 // state. Blue/Orange/Green remain the authoritative owners during Morph.
 const SomataTestMorph=(()=>{
     const defaults=Object.freeze({enabled:true,mode:'circleSlide',slide:'sector',spiralSlide:'standard',spiralType:'phaseCircle',duration:1});
+    // Honest Corridor is one choreographed animation: 80% original geometric
+    // trajectory, 20% additional copies, all inside Geometry > Duration.
+    const HONEST_CORRIDOR_FRACTION=.2;
     const SPIRAL_TYPES=new Set(['torn','continuous','phase','phaseCircle','minimalTurn']);
     const realKeys=['N','K','radius','radiusMultiplier','rotation','rounding','spiralStep','spiralOrder',
         'spiralLayers','spiralTurns','spiralOffset','spiralStartRadius','spiralEndRadius',
         'spiralWidth','spiralAngle','spiralPhase','profileOffset','splineTension'];
-    const structuralKeys=['N','K','customSuborbits','spiralEnabled','spiralClosed','roundingMode','profileMode','profileNodes',
+    const structuralKeys=['N','K','customSuborbits','spiralEnabled','spiralClosed','roundingMode','roundingShape','profileMode','profileNodes',
         'splineRenderMode','chaosStar','chaosClosures','spiralStepLinked','spiralTangential'];
     const observedKeys=[...new Set([...realKeys,...structuralKeys])];
     const dynamic=new Map();let applied=0,last=null;
     const clamp=(v,min,max,def)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):def));
     const selectLayer=()=>state.layers?.find(layer=>layer?.id===state.activeLayerId)||state.layers?.[0]||null;
-    function config(layer){return layer?.testMorph&&typeof layer.testMorph==='object'?{...defaults,...layer.testMorph}:{...defaults};}
+    function config(layer){
+        const saved=layer?.testMorph&&typeof layer.testMorph==='object'?layer.testMorph:{};
+        const globalType=state?.morph?.spiralMorphType;
+        const inherited=SPIRAL_TYPES.has(globalType)?globalType:defaults.spiralType;
+        return{...defaults,...saved,spiralType:(saved.spiralTypeExplicit===true||(saved.spiralTypeExplicit==null&&SPIRAL_TYPES.has(saved.spiralType)&&saved.spiralType!=='phaseCircle'))&&SPIRAL_TYPES.has(saved.spiralType)?saved.spiralType:inherited};
+    }
     const copy=v=>Array.isArray(v)?v.map(copy):v&&typeof v==='object'?Object.fromEntries(Object.entries(v).map(([k,x])=>[k,copy(x)])):v;
     function capture(layer){const v={};for(const key of observedKeys)v[key]=copy(layer?.[key]);return v;}
     const same=(a,b)=>observedKeys.every(k=>JSON.stringify(a?.[k])===JSON.stringify(b?.[k]));
@@ -73,28 +81,50 @@ const SomataTestMorph=(()=>{
         const source=frameCtx?.sourceLayer||frameCtx?.layer,layer=frameCtx?.layer;
         if(!source||!layer)return false;
         const cfg=config(source),id=source.id;
-        if(cfg.enabled!==true){dynamic.delete(id);syncTask();return false;}
+        if(cfg.enabled!==true){dynamic.delete(id);window.__somataCorridorStopHonestZeroOutro?.(id);window.__somataCorridorStopHonestZeroIntro?.(id);syncTask();return false;}
         // Never compete with Blue, Orange or Green. Discard any stale static tween.
         if(frameCtx.blueMorphProvider?.active||frameCtx.minimalFadeEnabled||frameCtx.greenMorphEnabled||
            frameCtx.orangeMorphProvider?.active||frameCtx.greenMorphProvider?.active){seed(source);syncTask();return false;}
         let r=dynamic.get(id),target=capture(source);
         if(!r){seed(source);return false;} // Enabling the checkbox must not move geometry.
         if(!same(target,r.observed)){
+            window.__somataCorridorStopHonestZeroOutro?.(id);
+            window.__somataCorridorStopHonestZeroIntro?.(id);
             const start=r.visual||r.observed;
+            const totalDuration=clamp(cfg.duration,.1,60,1)*1000;
             r={observed:target,from:copy(start),to:copy(target),visual:copy(start),start:now,
-                duration:clamp(cfg.duration,.1,60,1)*1000,active:true};
+                duration:totalDuration,totalDuration,active:true};
             // Endpoint identities are stable through the whole tween. Otherwise
             // getCachedLayerDrawData receives fresh objects every frame and heavy
             // Spiral/Polygon geometry is rebuilt despite unchanged endpoints.
-            r.fromEndpoint={...source,...r.from};r.toEndpoint={...source,...r.to};
+            // Ephemeral marker: only the finite Geometry > Animation edit may
+            // blend authored spline endpoints during a topology handoff. It is
+            // never written into the saved layer or into Blue's phase carrier.
+            r.fromEndpoint={...source,...r.from,__somataStaticEditEndpoint:true};
+            r.toEndpoint={...source,...r.to,__somataStaticEditEndpoint:true};
             dynamic.set(id,r);
             // Trigger only for an explicit order-0 endpoint, NEVER for a
             // nonzero->nonzero spiral crossing zero in the middle.
             if(r.from.spiralEnabled===true||r.to.spiralEnabled===true){
                 const fromOrder=r.from.spiralEnabled===true?(Number(r.from.spiralOrder)||0):0;
                 const toOrder=r.to.spiralEnabled===true?(Number(r.to.spiralOrder)||0):0;
-                if(source.spiralZeroTransitionMode!=='honest')
-                    window.__somataCorridorBeginOrderChange?.(id,fromOrder,toOrder,Math.max(.1,Number(cfg.duration)||1));
+                // Only an enabled Honest Corridor zero-endpoint edit splits the
+                // Geometry Duration. Other edits keep their existing full clock.
+                if(source.spiralZeroTransitionMode==='beautiful')
+                    window.__somataCorridorBeginOrderChange?.(id,fromOrder,toOrder,r.totalDuration/1000);
+                else if(source.spiralZeroTransitionMode==='honest'&&state.tunnel?.active===true&&((Math.abs(fromOrder)<1e-8)!==(Math.abs(toOrder)<1e-8))){
+                    const corridorMs=r.totalDuration*HONEST_CORRIDOR_FRACTION;
+                    r.duration=r.totalDuration-corridorMs;
+                    r.corridorMs=corridorMs;
+                    if(Math.abs(fromOrder)<1e-8){
+                        // 0 -> 1: Corridor gathers first, then Spiral unfolds;
+                        // both stages together end exactly at authored duration.
+                        window.__somataCorridorBeginHonestZeroIntro?.(id,now,corridorMs/1000,toOrder);
+                        r.start+=corridorMs;
+                    }
+                    // 1 -> 0: Spiral gathers first, then Corridor multiplies
+                    // in the remaining 20%, never after the configured end.
+                }
             }
             syncTask();
         }
@@ -107,17 +137,25 @@ const SomataTestMorph=(()=>{
         // vertex counts or rebuilding an approximation of strict Spiral on the CPU.
         const isSpiral=[source,r.from,r.to].some(v=>v?.spiralEnabled===true||Math.abs(Number(v?.spiralOrder)||0)>1e-8);
         const structural=hasStructuralChange(r.from,r.to);
-        const mode=['topology','calm','circleSlide','fade','light'].includes(cfg.mode)?cfg.mode:'circleSlide';
+        const mode=['topology','calm','circleSlide','topoCircle','fade','light'].includes(cfg.mode)?cfg.mode:'circleSlide';
         const geometryChanged=observedKeys.some(k=>differs(r.from,r.to,k));
         // Real-time Spiral static edits use the retained GPU Blue Spiral transport.
         // No ongoing oscillator: a finite edit starts only when source parameters change.
-        const resolvedSpiralType=SPIRAL_TYPES.has(cfg.spiralType)?cfg.spiralType:'phaseCircle';
+        const resolvedSpiralType=cfg.spiralType==='fadeSpiral'?'continuous':(SPIRAL_TYPES.has(cfg.spiralType)?cfg.spiralType:'phaseCircle');
         // N/K-only Spiral edits have a continuous angular representation. Do not
         // hold the old integer topology and replace it at mid-transition: that
         // made the displayed angle stay triangular and then jump to square.
         // The number of drawable branches may be rounded, but their *angular*
         // denominator and phase are fractional throughout the edit.
-        const angularSpiralEdit=Boolean(isSpiral&&structural&&
+        const changedN=differs(r.from,r.to,'N');
+        const changedK=differs(r.from,r.to,'K');
+        // A 'fix' describes how that axis is transported, not a ban on edits.
+        // When an axis uses fade, do not bypass it with the generic fractional
+        // N/K CPU animation (which used to show zero fade in Geometry > Animate).
+        const axisNeedsFade=(resolvedSpiralType==='continuous'&&(changedN||changedK))||
+            (resolvedSpiralType==='phase'&&changedN)||
+            (resolvedSpiralType==='minimalTurn'&&changedK);
+        const angularSpiralEdit=Boolean(!axisNeedsFade&&isSpiral&&structural&&
             r.from.spiralEnabled===true&&r.to.spiralEnabled===true&&
             Math.abs(Number(r.from.spiralOrder)||0)>1e-8&&
             Math.abs(Number(r.to.spiralOrder)||0)>1e-8&&
@@ -129,8 +167,12 @@ const SomataTestMorph=(()=>{
         // Retain the existing safe fade for cross-family/zero-order topology.
         const retainedSpiralPair=Boolean(isSpiral&&r.from.spiralEnabled===true&&r.to.spiralEnabled===true&&
             Math.abs(Number(r.from.spiralOrder)||0)>1e-8&&Math.abs(Number(r.to.spiralOrder)||0)>1e-8);
-        const useContinuousSpiralFade=Boolean(isSpiral&&structural&&resolvedSpiralType==='continuous'&&
-            !angularSpiralEdit&&!retainedSpiralPair);
+        // Fixed-N/K must never be overridden by the retained morph pair. Fade
+        // the exact source geometry OUT and target IN, with no in-between rail.
+        // Selective fades can use two GPU rails; if WebGPU is unavailable the
+        // explicit opacity fallback below still behaves as a fade.
+        const useContinuousSpiralFade=Boolean(isSpiral&&structural&&axisNeedsFade&&
+            (resolvedSpiralType==='continuous'||!retainedSpiralPair));
         const editPair=isSpiral&&geometryChanged&&!useContinuousSpiralFade?{sourceLayer:r.fromEndpoint,targetLayer:r.toEndpoint,
             spiralType:resolvedSpiralType,spiralSlideType:resolvedSpiralType,mode,progress:u}:null;
         const corridorOrderSequenced=window.__somataCorridorOrderChangeActive?.(id)===true;
@@ -157,21 +199,35 @@ const SomataTestMorph=(()=>{
                 sourceData:r.sourceData,targetData:r.targetData,
                 sourceProfileMode:a.profileMode,targetProfileMode:b.profileMode};
             if(mode==='fade'||mode==='light')provider.kind='blue-fade';
-            else if(mode==='circleSlide')provider.kind='blue-circle-slide';
+            else if((mode==='circleSlide'||mode==='topoCircle'))provider.kind='blue-circle-slide';
             else provider.kind='blue-anchor-linear';
             frameCtx.geometryProvider=provider;
             frameCtx.geometryMorphEnabled=true;
             frameCtx.topologyMorphEnabled=structural;
         }
         for(const key of observedKeys){if(key in visual)layer[key]=copy(visual[key]);}
-        // 10.4: one zero-order policy for both Blue and authored animation.
-        // Corridor manual choreography is driven by its own clock; use the same
-        // three-stage curve for the profile rather than a competing linear tween.
+        // Per-Corridor-copy angular transport must use the very same eased
+        // progress as the shape/keypoint morph, throughout the full Duration.
+        // No copy alpha, scale or population is animated in Layerwise mode.
+        delete layer.__spiralLayerwiseAngleMix;
+        delete layer.__spiralLayerwiseScaleExponent;
+        delete layer.__spiralLayerwiseRotationMode;
+        delete layer.__spiralLayerwiseReferenceDelta;
         if(isSpiral){
             const a=r.from.spiralEnabled===true?(Number(r.from.spiralOrder)||0):0;
             const b=r.to.spiralEnabled===true?(Number(r.to.spiralOrder)||0):0;
             const withCorridor=window.__somataCorridorOrderChangeActive?.(id)===true;
             const plan=window.SomataSpiralZeroTransition?.plan(source.spiralZeroTransitionMode,a,b,t,withCorridor);
+            const angleMix=window.SomataSpiralZeroTransition?.layerwiseAngleMix(
+                source.spiralZeroTransitionMode,a,b,t,state.tunnel?.active===true);
+            if(angleMix!==null&&angleMix!==undefined){
+                layer.__spiralLayerwiseAngleMix=angleMix;
+                layer.__spiralLayerwiseRotationMode=source.spiralLayerwiseRotationMode==='active'?'active':'minimal';
+                layer.__spiralLayerwiseReferenceDelta=window.SomataSpiralZeroTransition.layerwiseReferenceDelta(
+                    source.spiralZeroTransitionMode,a,b,r.fromEndpoint,r.toEndpoint,true);
+                layer.__spiralLayerwiseScaleExponent=window.SomataSpiralZeroTransition.layerwiseScaleExponent(
+                    source.spiralZeroTransitionMode,a,b,t,true);
+            }
             if(plan?.zeroEndpoint){
                 layer.spiralEnabled=true;
                 layer.spiralOrder=plan.order;
@@ -220,13 +276,41 @@ const SomataTestMorph=(()=>{
             const fraction=u<.5?1-2*u:2*u-1;
             const endpoint=u<.5?r.from:r.to;
             for(const key of observedKeys)if(key in endpoint)layer[key]=copy(endpoint[key]);
+            // CPU fallback still animates the unfixed axis during the opacity
+            // handoff; a missing WebGPU device must not silently turn Fix N
+            // or Fix K into a full two-endpoint freeze.
+            if(resolvedSpiralType==='phase'&&changedN){
+                const movingK=mix(Number(r.from.K)||1,Number(r.to.K)||1,u);
+                layer.K=Math.max(1,Math.round(movingK));
+                layer.__spiralAnimatedK=movingK;
+            }else if(resolvedSpiralType==='minimalTurn'&&changedK){
+                const movingN=mix(Number(r.from.N)||2,Number(r.to.N)||2,u);
+                layer.N=Math.max(2,Math.round(movingN));
+                layer.__spiralAnimatedN=movingN;
+            }
             const opacity=Number(endpoint.opacity??layer.opacity);
             layer.opacity=(Number.isFinite(opacity)?opacity:100)*Math.max(0,Math.min(1,fraction));
             // A second user edit during the fade must start from the exact
             // endpoint currently on screen, not from an invisible mixed path.
             r.visual=copy(endpoint);
+            if(resolvedSpiralType==='phase'&&changedN)r.visual.K=layer.K;
+            if(resolvedSpiralType==='minimalTurn'&&changedK)r.visual.N=layer.N;
         }
         if(t>=1){
+            // The reverse prelude is done and the Spiral is at its full authored
+            // endpoint. Drop its temporary per-copy fade before the next edit.
+            window.__somataCorridorStopHonestZeroIntro?.(id);
+            // All copies have naturally converged while order went 1 -> 0.
+            // Only NOW, on the exact static zero-order geometry, may Corridor
+            // multiply outward. Never alter the preceding Honest Spiral frames.
+            const fromOrder=r.from.spiralEnabled===true?(Number(r.from.spiralOrder)||0):0;
+            const toOrder=r.to.spiralEnabled===true?(Number(r.to.spiralOrder)||0):0;
+            if(source.spiralZeroTransitionMode==='honest'&&state.tunnel?.active===true&&r.corridorMs>0&&
+               Math.abs(fromOrder)>1e-8&&Math.abs(toOrder)<1e-8){
+                // The phase clock is anchored to the planned Spiral endpoint,
+                // not the first rendered frame after it (which may be late).
+                window.__somataCorridorBeginHonestZeroOutro?.(id,r.start+r.duration,(r.corridorMs||0)/1000);
+            }
             r.active=false;r.visual=copy(r.to);syncTask();
             // Schedule the first static frame explicitly. The final tween frame
             // must not remain on screen until some unrelated control repaints.
@@ -236,14 +320,16 @@ const SomataTestMorph=(()=>{
         last={layerId:id,progress:t,eased:u,mode:cfg.mode,spiralType:cfg.spiralType,transitioning:t<1,
             sourceN:r.from.N,renderN:layer.N,targetN:r.to.N,sourceK:r.from.K,renderK:layer.K,targetK:r.to.K,
             renderRotation:layer.rotation,structural,mode,strictSpiral:isSpiral,
-            topologyEndpointFade:isSpiral&&structural&&!angularSpiralEdit&&(useContinuousSpiralFade||!gpuEditReady),angularSpiralEdit,angularN:Number(layer.__spiralAnimatedN),angularK:Number(layer.__spiralAnimatedK),retainedGpuEdit:gpuEditReady,
+            topologyEndpointFade:isSpiral&&structural&&!angularSpiralEdit&&(useContinuousSpiralFade||!gpuEditReady),axisNeedsFade,angularSpiralEdit,angularN:Number(layer.__spiralAnimatedN),angularK:Number(layer.__spiralAnimatedK),retainedGpuEdit:gpuEditReady,
             forcedContinuousFade:useContinuousSpiralFade===true};
         return true;
     }
     function phase(layer,now=performance.now()){
         const r=dynamic.get(layer?.id),cfg=config(layer);
-        const progress=r?.active?clamp((now-r.start)/r.duration,0,1,0):1;
-        return {progress,eased:easing(progress,cfg),duration:r?.duration||clamp(cfg.duration,.1,60,1)*1000};
+        const total=r?.totalDuration||clamp(cfg.duration,.1,60,1)*1000;
+        const start=r?.start-(r?.corridorMs&&Math.abs(Number(r?.from?.spiralOrder)||0)<1e-8?r.corridorMs:0);
+        const progress=r?.active?clamp((now-start)/total,0,1,0):1;
+        return {progress,eased:easing(progress,cfg),duration:total};
     }
     function syncUI(){
         const layer=selectLayer(),cfg=config(layer),enabled=document.getElementById('testMorphEnabled');
@@ -274,7 +360,7 @@ const SomataTestMorph=(()=>{
     function change(key,val){
         const current=selectLayer();if(!current)return;
         const targets=state.masterLayerEdit===true?state.layers:[current];
-        for(const layer of targets){const previous=config(layer);layer.testMorph={...previous,[key]:val};
+        for(const layer of targets){const previous=config(layer);layer.testMorph={...previous,[key]:val,...(key==='spiralType'?{spiralTypeExplicit:true}:{})};
             if(key==='enabled'){if(val===true)seed(layer);else dynamic.delete(layer.id);}
         }
         updateTask();syncUI();
@@ -299,6 +385,6 @@ const SomataTestMorph=(()=>{
         syncUI();updateTask();
     }
     window.addEventListener('load',init);
-    return Object.freeze({applyFrame,syncUI,updateTask,config,phase,status:()=>({active:anyActive(),applied,last,transitions:[...dynamic].filter(([,r])=>r.active).map(([id,r])=>({id,from:r.from,to:r.to,start:r.start,duration:r.duration}))})});
+    return Object.freeze({applyFrame,syncUI,updateTask,config,phase,status:()=>({active:anyActive(),applied,last,transitions:[...dynamic].filter(([,r])=>r.active).map(([id,r])=>({id,from:r.from,to:r.to,start:r.start,duration:r.duration,totalDuration:r.totalDuration,corridorMs:r.corridorMs||0}))})});
 })();
 window.SomataTestMorph=SomataTestMorph;

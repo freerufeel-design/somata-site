@@ -1,6 +1,6 @@
 'use strict';
 // Regression: source fill metadata is computed once per layer without
-// changing legacy alpha, harmony or selected-fill semantics.
+// changing alpha or harmony. Source Fill is not trimmed by target count limits.
 const assert=require('node:assert/strict');
 const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness');
 (async()=>{
@@ -50,14 +50,14 @@ const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness')
   })()`,{timeoutMs:18000});
   assert.equal(records.length,3);
   records.forEach(r=>{
-   assert.deepEqual(r.sourceFillIndices,[0,3]);
+   assert.deepEqual(r.sourceFillIndices,[0,3,4]); // every visible source Fill, even when target max is 2
    assert.equal(r.source.length,6);
-   assert.deepEqual(r.source.map(s=>s.fill),[true,false,false,true,false,false]);
+   assert.deepEqual(r.source.map(s=>s.fill),[true,false,false,true,true,false]);
    assert(r.source.every(s=>Number.isFinite(s.fillOpacity)&&Number.isFinite(s.fillHueOffset)));
   });
   assert.deepEqual(records[0].source,records[2].source,'Native harmony source changed across restart');
   assert.deepEqual(uncaughtExceptions(h.events),[]);
   if(process.env.SOMATA_PARITY_SNAPSHOT==='1')process.stdout.write('SNAPSHOT:'+JSON.stringify(records)+'\n');
-  console.log('PASS Somata 10.4.8 Morph fill preparation and selection parity');
+  console.log('PASS Somata Morph fill source preservation and harmony parity');
  }finally{await h.close();}
 })().catch(err=>{console.error('FAIL',err.stack||err);process.exitCode=1;});

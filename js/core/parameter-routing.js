@@ -282,6 +282,7 @@ const SomataParameterRegistry=(()=>{
 
     // Lamps.
     generic('lamps.enabled','Лампочки','Лампочки','showLamps','showLamps',0,1,1,{type:'boolean'});
+    generic('lamps.morphInertia','Лампочки','Инерция лампочек','lampMorphInertia','lamps.morphInertia',-100,100,5);
     generic('lamps.radiusMultiplier','Лампочки','Множитель радиуса','lampRadiusMultiplier','lamps.radiusMultiplier',0,64,.01);
     generic('lamps.softnessMultiplier','Лампочки','Множитель мягкости','lampSoftnessMultiplier','lamps.softnessMultiplier',0,64,.01);
     generic('lamps.density','Лампочки','Плотность','lampDensity','lamps.density',0,200,1);
@@ -340,6 +341,7 @@ const SomataParameterRegistry=(()=>{
     // so both Standard Morph and Audio Link see the exact same canonical definitions.
     // Legacy spiral.order / spiral.step / spiral.stepLinked remain in saved data,
     // but authored controls are now only the special «Спиральные слои» range and geometry K.
+    generic('spiral.focusFigure','Спирали','Номер фигуры фокуса','paramSpiralRotationFocus','spiralRotationFocusFigure',1,256,1,{type:'integer',frameTarget:'layer'});
     generic('spiral.tangential','Спирали','Тангенциальность','paramSpiralTangential','spiralTangential',0,1,1,{type:'boolean',frameTarget:'layer'});
     generic('spiral.roundSeams','Спирали','Скруглять стыки','paramSpiralRoundSeams','spiralRoundSeams',0,1,1,{type:'boolean',frameTarget:'layer'});
     generic('spiral.fillEnabled','Спирали','Заливка спирали','paramSpiralFillEnabled','spiralFillEnabled',0,1,1,{type:'boolean',frameTarget:'layer'});
@@ -460,6 +462,7 @@ const SomataMorphParameterRouting=(()=>{
         for(const def of SomataParameterRegistry.morphable().filter(d=>d.morph?.legacy===true)){if(def.morph?.option)config.options[def.morph.option]=false;}
         config.options.byShape=spec.shape===true;
         config.options.bySpiralLayers=false;config.options.bySpiralOrder=false;
+        config.options.spiralLayersAdded=false;config.options.spiralOrderAdded=false;
         config.monoOrbitTransforms=Array.isArray(spec.orbits);
         config.orbitPercentMin=Array.isArray(spec.orbits)?Number(spec.orbits[0])||0:0;
         config.orbitPercentMax=Array.isArray(spec.orbits)?Number(spec.orbits[1])||0:0;
@@ -610,6 +613,9 @@ const SomataMorphParameterRouting=(()=>{
             // profile must still be truly empty until the user explicitly adds them.
             config.options.byShape=false;
             config.options.bySpiralLayers=false;config.options.bySpiralOrder=false;
+            // A newly created Blue profile starts with no routes, regardless
+            // of the source profile's added/paused special rows.
+            for(const kind of ['shape','orbits','chaos','spiralLayers','spiralOrder'])config.options[kind+'Added']=false;
             config.monoOrbitTransforms=false;
             config.chaosMorphEnabled=false;
         }

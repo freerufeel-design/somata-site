@@ -1,0 +1,232 @@
+[
+  {
+    "key": "13-false-0-1",
+    "segments": 12,
+    "hash": 1702128961
+  },
+  {
+    "key": "13-false-0.001-1",
+    "segments": 12,
+    "hash": 1702128961
+  },
+  {
+    "key": "13-false-0.09-1",
+    "segments": 12,
+    "hash": 1702128961
+  },
+  {
+    "key": "13-false-0.6-1",
+    "segments": 12,
+    "hash": 1702128961
+  },
+  {
+    "key": "13-false-1.6-2",
+    "segments": 12,
+    "hash": 1229792564
+  },
+  {
+    "key": "13-true-0-1",
+    "segments": 12,
+    "hash": 2621508683
+  },
+  {
+    "key": "13-true-0.001-1",
+    "segments": 12,
+    "hash": 2621508683
+  },
+  {
+    "key": "13-true-0.09-1",
+    "segments": 12,
+    "hash": 2621508683
+  },
+  {
+    "key": "13-true-0.6-1",
+    "segments": 12,
+    "hash": 2621508683
+  },
+  {
+    "key": "13-true-1.6-2",
+    "segments": 12,
+    "hash": 1988680386
+  },
+  {
+    "key": "80-false-0-2",
+    "segments": 79,
+    "hash": 4152088939
+  },
+  {
+    "key": "80-false-0.001-2",
+    "segments": 167,
+    "hash": 1061098617
+  },
+  {
+    "key": "80-false-0.09-2",
+    "segments": 167,
+    "hash": 3001057967
+  },
+  {
+    "key": "80-false-0.6-2",
+    "segments": 89,
+    "hash": 1356359046
+  },
+  {
+    "key": "80-false-1.6-0",
+    "segments": 79,
+    "hash": 605342929
+  },
+  {
+    "key": "80-true-0-2",
+    "segments": 79,
+    "hash": 50838193
+  },
+  {
+    "key": "80-true-0.001-2",
+    "segments": 167,
+    "hash": 3101004777
+  },
+  {
+    "key": "80-true-0.09-2",
+    "segments": 167,
+    "hash": 1743953706
+  },
+  {
+    "key": "80-true-0.6-2",
+    "segments": 89,
+    "hash": 2945443346
+  },
+  {
+    "key": "80-true-1.6-0",
+    "segments": 79,
+    "hash": 3826872814
+  },
+  {
+    "key": "240-false-0-0",
+    "segments": 239,
+    "hash": 280301522
+  },
+  {
+    "key": "240-false-0.001-0",
+    "segments": 239,
+    "hash": 3088920841
+  },
+  {
+    "key": "240-false-0.09-0",
+    "segments": 239,
+    "hash": 2042031651
+  },
+  {
+    "key": "240-false-0.6-0",
+    "segments": 239,
+    "hash": 1249929918
+  },
+  {
+    "key": "240-false-1.6-1",
+    "segments": 269,
+    "hash": 2567376142
+  },
+  {
+    "key": "240-true-0-0",
+    "segments": 239,
+    "hash": 1445852207
+  },
+  {
+    "key": "240-true-0.001-0",
+    "segments": 239,
+    "hash": 1785609287
+  },
+  {
+    "key": "240-true-0.09-0",
+    "segments": 239,
+    "hash": 4144721055
+  },
+  {
+    "key": "240-true-0.6-0",
+    "segments": 239,
+    "hash": 4001940000
+  },
+  {
+    "key": "240-true-1.6-1",
+    "segments": 269,
+    "hash": 3797975838
+  },
+  {
+    "key": "700-false-0.001-1",
+    "segments": 783,
+    "hash": 2470082969
+  },
+  {
+    "key": "700-false-0.09-1",
+    "segments": 783,
+    "hash": 2174481915
+  },
+  {
+    "key": "700-false-0.6-1",
+    "segments": 783,
+    "hash": 108051470
+  },
+  {
+    "key": "700-false-1.6-2",
+    "segments": 783,
+    "hash": 24548617
+  },
+  {
+    "key": "700-true-0.001-1",
+    "segments": 783,
+    "hash": 546015723
+  },
+  {
+    "key": "700-true-0.09-1",
+    "segments": 783,
+    "hash": 1989422508
+  },
+  {
+    "key": "700-true-0.6-1",
+    "segments": 783,
+    "hash": 527609630
+  },
+  {
+    "key": "700-true-1.6-2",
+    "segments": 783,
+    "hash": 729416000
+  },
+  {
+    "key": "2100-false-0.001-0",
+    "segments": 2099,
+    "hash": 4059354749
+  },
+  {
+    "key": "2100-false-0.09-0",
+    "segments": 2099,
+    "hash": 854702141
+  },
+  {
+    "key": "2100-false-0.6-0",
+    "segments": 2099,
+    "hash": 3508877780
+  },
+  {
+    "key": "2100-false-1.6-1",
+    "segments": 2363,
+    "hash": 760117102
+  },
+  {
+    "key": "2100-true-0.001-0",
+    "segments": 2099,
+    "hash": 4203406081
+  },
+  {
+    "key": "2100-true-0.09-0",
+    "segments": 2099,
+    "hash": 3446626697
+  },
+  {
+    "key": "2100-true-0.6-0",
+    "segments": 2099,
+    "hash": 3579313629
+  },
+  {
+    "key": "2100-true-1.6-1",
+    "segments": 2363,
+    "hash": 3442212006
+  }
+]

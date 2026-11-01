@@ -33,7 +33,7 @@ function renderLayerLampPass(frameCtx) {
 
             if(SomataGeometryPolicy.isStrict(frameCtx)){renderBackendTelemetry.mark('lamps','gpu','Spiral lamps GPU-only warmup');somataGpuContractError('SPIRAL_LAMP_NATIVE_QUEUE_FAILED',frameCtx,{nativeKind});continue;}
 
-            if(arcNative){const lampT=frameCtx.blueMorphProvider?.geometryT||0,rawPaths=getLayerFrameAuxiliaryPaths(frameCtx);let attachment=null;try{if(typeof useCanonicalV505TopologyLampAttachment==='function'&&useCanonicalV505TopologyLampAttachment(frameCtx))attachment=SomataFrameContourService?.paths?.(frameCtx)||null;}catch(_){attachment=null;}const fallback=withLampConfig(drawPlan.config,()=>collectMorphLampPoints(frameCtx.layerIndex,lampT,260,rawPaths,attachment));set.gpuLampNative=false;set.gpuPrepared=null;set.points=fallback;if(!fallback?.length)continue;visualPlan=prepareVisual();}
+            if(arcNative){const lampT=frameCtx.blueMorphProvider?.geometryT||0,rawPaths=getLayerFrameAuxiliaryPaths(frameCtx);let attachment=null;try{if(!SomataGeometryPolicy.isStrict(frameCtx)&&lampContourAttachmentEnabledForFrame(frameCtx)===true)attachment=SomataFrameContourService?.paths?.(frameCtx)||null;}catch(_){attachment=null;}const fallback=withLampConfig(drawPlan.config,()=>collectMorphLampPoints(frameCtx.layerIndex,lampT,260,rawPaths,attachment));set.gpuLampNative=false;set.gpuPrepared=null;set.points=fallback;if(!fallback?.length)continue;visualPlan=prepareVisual();}
             else{set.gpuLampNative=false;set.points=set.gpuPrepared?.attachmentPoints||set.points;set.gpuPrepared=null;if(!set.points?.length)continue;visualPlan=prepareVisual();}
         }
         if(!visualPlan?.items?.length)continue;

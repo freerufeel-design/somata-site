@@ -136,11 +136,13 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             return layer;
         }
         function ensureLayerEffectState(layer) {
-
+            // Legacy .spiroproject / playlist entries only retain Spline+.
+            if(layer && typeof layer==='object')layer.roundingShape='hybrid';
             if(layer && effectStateReadyLayers.has(layer))return layer;
             let owner=layer && typeof layer==='object' ? effectStateOwnerCache.get(layer) : null;
             if(!owner)owner=getPersistentEffectLayer(layer);
             if(!owner)return null;
+            owner.roundingShape='hybrid';
             if(layer && layer!==owner && typeof layer==='object')effectStateOwnerCache.set(layer,owner);
             if(effectStateReadyLayers.has(owner))return owner;
             if(typeof owner.showLamps!=='boolean') owner.showLamps=state.showLamps===true;
@@ -416,7 +418,8 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             owner.lamps.morphEnabled=false;
             if(owner.lamps.morphMotionMode==='current')owner.lamps.morphMotionMode='dynamic';
             if(!['linear','ghost','dynamic','smooth'].includes(owner.lamps.morphMotionMode))owner.lamps.morphMotionMode='linear';
-            owner.lamps.morphInertia=Math.max(0,Math.min(100,Number.isFinite(Number(owner.lamps.morphInertia))?Number(owner.lamps.morphInertia):50));
+            owner.lamps.calmMode=false; // retired UI behaviour; project migration is explicit
+            owner.lamps.morphInertia=Math.max(-100,Math.min(100,Number.isFinite(Number(owner.lamps.morphInertia))?Number(owner.lamps.morphInertia):0));
             if(typeof owner.lamps.cornerInertiaLinked!=='boolean')owner.lamps.cornerInertiaLinked=true;
             owner.lamps.cornerInertiaPercent=Math.max(0,Math.min(100,Number.isFinite(Number(owner.lamps.cornerInertiaPercent))?Number(owner.lamps.cornerInertiaPercent):10));
             owner.lamps.cornerInertiaSec=Math.max(0,Math.min(15,Number.isFinite(Number(owner.lamps.cornerInertiaSec))?Number(owner.lamps.cornerInertiaSec):0.5));
@@ -603,6 +606,9 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 lineJoinType: 'rounded',
                 rounding: 0,
                 roundingMode: 'standard',
+                roundingShape: 'hybrid',
+                roundingMaxRadiusDrop: 30,
+                roundingSmoothSplines: false,
                 audioNativeBand: null,
                 audioNativeBandAuto: true,
                 radius: 220,
@@ -666,9 +672,18 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
                 wholeCurveSpline: false,
                 spiralEnabled: false,
                 spiralOrder: 0,
-                spiralZeroTransitionMode: 'beautiful',
+                // Polygon uses order 0, but remembers the last selected Spiral order.
+                spiralRememberedOrder: 1,
+                spiralZeroTransitionMode: 'layerwise',
+                spiralLayerwiseRotationMode: 'minimal',
+                spiralRotationFocus: 4, // legacy integer retained for old profiles
+                spiralManualFocus: false,
+                spiralRotationFocusFigure: 7,
+                corridorFocusHighlight: false,
                 spiralStep: 1,
                 spiralStepLinked: true,
+                spiralStepLimiterEnabled: true,
+                spiralStepLimiter: 2,
                 spiralClosed: true,
                 spiralTangential: false,
                 spiralRoundSeams: true,

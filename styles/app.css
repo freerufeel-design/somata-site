@@ -1191,6 +1191,8 @@
         .spiral-settings-block.hidden { display:none !important; }
         .spiral-settings-row { display:grid; grid-template-columns:minmax(0,1fr) 82px; gap:8px; align-items:center; min-width:0; }
         .spiral-settings-row > span { font-size:10px; color:var(--text-muted); min-width:0; }
+        /* This is a primary transition setting, not a tiny secondary hint. */
+        #spiralSettingsBlock .spiral-zero-mode-setting > span { font-size:13px !important; line-height:1.3; }
         .spiral-settings-row input[type="number"] { width:82px !important; min-width:0; text-align:right; }
         /* Morph-capable geometry control: the same cyan framed vocabulary as routed parameters. */
         #spiralOrderControl.spiral-order-morphable { border:1px solid rgba(34,211,238,.65); border-radius:6px; padding:5px 7px; background:rgba(8,145,178,.09); box-shadow:inset 2px 0 0 rgba(34,211,238,.72); }
@@ -1207,6 +1209,10 @@
         .spiral-closure-toggle { display:grid; grid-template-columns:1fr 1fr; gap:2px; flex:1 1 auto; padding:2px; border:1px solid var(--border-light); border-radius:6px; background:rgba(15,23,42,.58); }
         .spiral-closure-toggle button { min-width:0; padding:4px 5px; justify-content:center; border:0; border-radius:4px; background:transparent; color:var(--text-muted); font-size:10px; }
         .spiral-closure-toggle button.active { color:#ecfeff; background:#0e7490; box-shadow:inset 0 0 0 1px rgba(34,211,238,.42); }
+        .spiral-layerwise-turn-row { display:flex; flex-direction:column; gap:5px; min-width:0; }
+        .spiral-layerwise-turn-row.hidden { display:none !important; }
+        .spiral-layerwise-turn-row > span { font-size:10px; color:var(--text-muted); }
+        .spiral-layerwise-turn-toggle button { font-size:10px; min-height:30px; white-space:normal; }
         .spiral-step-manual-disabled { opacity:.48; }
         .contour-mode-toggle { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:3px; width:100%; }
         .contour-mode-toggle button {
@@ -7461,3 +7467,80 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
 :is(#morphProfileBindings,#orangeMorphBindings) .morph-special-config-row > .morph-spiral-picker .audio-param-picker-button{
  font-size:9px!important;font-weight:650!important;color:#e2e8f0!important;min-height:25px;height:25px;padding:2px 6px;
 }
+
+/* 10.4.19.32 — live Fade slider below the visible Morph type selector. */
+#morphSettingsPanel .morph-routing-shell > #morphFadeDurationRow.morph-fade-live-row {
+  width:calc(100% - 12px); box-sizing:border-box; margin:0 6px;
+  border-radius:7px; background:rgba(8,145,178,.11);
+  border-color:rgba(34,211,238,.3); color:#cffafe; flex:0 0 auto;
+}
+#morphSettingsPanel .morph-routing-shell > #morphFadeDurationRow.morph-fade-live-row label {
+  display:flex; align-items:center; flex:1; gap:10px; width:100%; min-width:0;
+}
+#morphSettingsPanel .morph-routing-shell > #morphFadeDurationRow.morph-fade-live-row label > span:first-child {
+  white-space:nowrap; font-size:10px;
+}
+#morphSettingsPanel .morph-routing-shell > #morphFadeDurationRow.morph-fade-live-row .morph-fade-controls {
+  flex:1; width:auto; min-width:0; max-width:470px;
+  grid-template-columns:minmax(70px,1fr) 54px auto;
+}
+@media(max-width:520px){
+  #morphSettingsPanel .morph-routing-shell > #morphFadeDurationRow.morph-fade-live-row label{flex-wrap:wrap}
+  #morphSettingsPanel .morph-routing-shell > #morphFadeDurationRow.morph-fade-live-row .morph-fade-controls{width:100%;max-width:none}
+}
+
+/* Spiral Blue Morph checkbox pauses the route; the X button removes it. */
+#morphProfileBindings .morph-route-row.morph-spiral-paused{
+  border-color:rgba(71,85,105,.32);
+}
+#morphProfileBindings .morph-route-row.morph-spiral-paused .morph-spiral-picker,
+#morphProfileBindings .morph-route-row.morph-spiral-paused .morph-spiral-compact-controls{
+  opacity:.62;
+}
+
+/* 12.4: two independent controls — shape algorithm vs mono-radius. */
+.rounding-mode-row #paramRoundingShape{display:none!important}
+.rounding-shape-btn{padding:4px 6px;font:inherit;font-size:10px;line-height:1.2;border-radius:4px;background:transparent;color:inherit;border:0;cursor:pointer}
+.rounding-shape-btn.active{background:#0d9488;color:#fff}
+
+/* 12.5: independent three-choice rounding algorithm selector. */
+.rounding-mode-row:has(.rounding-shape-btn) .rounding-mode-toggle{grid-template-columns:repeat(3,minmax(0,1fr));min-width:205px}
+
+/* 13.0.9 — shared focus controls for Spiral and ordinary Corridor. */
+.somata-focus-setting{display:flex;flex-wrap:wrap;align-items:center;gap:6px;min-width:0}
+.somata-focus-setting label{display:flex;align-items:center;gap:8px;min-width:0;flex:0 1 auto;color:var(--text-muted);font-size:12px}
+.somata-focus-setting label span{white-space:nowrap}
+.somata-focus-setting input[type="number"]{width:54px!important;min-width:54px;text-align:center}
+.somata-focus-count{flex:1 1 110px;min-width:85px;font-size:10px;line-height:1.4;color:var(--text-muted);overflow-wrap:anywhere}
+.somata-focus-highlight-toggle{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text-muted);cursor:pointer}
+.somata-focus-highlight-toggle input{accent-color:#22d3ee}
+
+/* 13.0.11: permit RMB routing even for an inactive single-suborbit topology. */
+#suborbitsContainer.suborbits-routing-target input:disabled,
+#suborbitsContainer.suborbits-routing-target button:disabled { pointer-events: none; }
+#suborbitsContainer.suborbits-routing-target .row-label > span:first-child { cursor: context-menu; }
+
+/* 13.0.19: absolute 1-based figure focus, manual integer slider when requested. */
+.somata-focus-layout,#tunnelFocusSettings{display:flex;flex-direction:column;align-items:stretch;gap:6px;min-width:0}
+.somata-focus-count{display:block;flex:auto;min-height:14px}
+.somata-focus-toggles{display:flex;flex-flow:row wrap;align-items:center;gap:12px}
+.somata-focus-toggles .somata-focus-highlight-toggle{white-space:nowrap}
+.somata-focus-manual-controls{display:flex;flex-direction:column;gap:5px;min-width:0;padding:3px 0 5px}
+.somata-focus-manual-controls.hidden{display:none}
+.somata-focus-manual-controls label{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:12px;color:var(--text-muted)}
+.somata-focus-manual-controls input[type="range"]{width:100%;cursor:pointer;accent-color:#22d3ee}
+.somata-focus-manual-controls output{color:var(--text-main);font-variant-numeric:tabular-nums}
+.somata-focus-manual-controls label span{font-size:11px}
+
+/* 13.0.13: suborbits have the same K/N range-host architecture. The
+   disabled slider still permits right-click Morph routing on its outer row. */
+#suborbitsContainer{opacity:1!important}
+#suborbitsContainer .row-label{width:100%}
+#suborbitsContainer .row-inputs > .suborbits-routing-range-host{flex:1 1 auto;min-width:0;width:0}
+#suborbitsContainer .suborbits-routing-range-host>input:disabled{pointer-events:none!important;opacity:.66}
+#suborbitsContainer input:disabled,#suborbitsContainer button:disabled{opacity:.66}
+/* One shared muted appearance for any present-but-disabled Morph route. */
+#morphProfileBindings .morph-route-row.disabled,
+#orangeMorphBindings .morph-route-row.disabled{opacity:.5;filter:grayscale(.55)}
+#morphProfileBindings .morph-route-row.disabled > input[type=checkbox],
+#orangeMorphBindings .morph-route-row.disabled > input[type=checkbox]{opacity:1;filter:none}

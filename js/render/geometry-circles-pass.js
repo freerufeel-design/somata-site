@@ -75,7 +75,7 @@ function buildGeometryCircleGPUCommands(frameCtx,circles){
             if(state.tunnel.active){applyMotionTunnelLag(rec,copy,frameCtx.layer);rec.scale(Number(copy?.scale)||1,Number(copy?.scale)||1);}
             applyLayerFrameEffectTransform(rec,frameCtx);
             rec.globalAlpha=Math.max(0,Math.min(1,frameCtx.baseAlpha*alpha));
-            rec.strokeStyle=getTunnelCopyColor(layer.strokeColor||'#ffffff',copy,frameCtx.tunnelPaletteProfile);rec.fillStyle='transparent';
+            rec.strokeStyle=getTunnelCopyColor(layer.strokeColor||'#ffffff',copy,frameCtx.tunnelPaletteProfile,layer);rec.fillStyle='transparent';
             rec.lineWidth=Math.max(.5,Number(frameCtx.strokeWidth)||1.5)/Math.max(.001,Math.abs(Number(frameCtx.combinedScale)||1));
             rec.lineCap=frameCtx.lineCap||'round';rec.lineJoin=frameCtx.lineJoin||'round';
             for(const c of circles){if(!(c.r>0))continue;rec.beginPath();rec.arc(c.x,c.y,c.r,0,Math.PI*2);rec.stroke();}

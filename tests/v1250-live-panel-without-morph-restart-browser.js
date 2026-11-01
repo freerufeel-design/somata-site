@@ -1,0 +1,32 @@
+'use strict';
+const assert=require('node:assert/strict');const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness');
+(async()=>{const h=await createBrowserHarness({disableGpu:true,loadDelayMs:90,evalTimeoutMs:40000});try{
+ const r=await h.evaluate(`(()=>{
+ const layer=state.layers.find(l=>l.id===state.activeLayerId)||state.layers[0];
+ const shape=document.getElementById('paramRoundingShape'),round=document.getElementById('paramRounding');
+ if(!runtimeState.morph.active)document.getElementById('btnMorph').click();
+ if(!runtimeState.morph.active)throw Error('Morph did not start');
+ const rt=runtimeState.morph;const cycle=rt.cycleStart,phase=rt.progress;
+ document.querySelector('[data-rounding-shape="hybrid"]').click();
+ const afterMode=rt.cycleStart;
+ round.value='65';round.dispatchEvent(new Event('input',{bubbles:true}));
+ const afterSlider=rt.cycleStart;
+ const idx=state.layers.findIndex(l=>l.id===layer.id);
+ const snapshots={};for(const key of ['renderSourceLayers','renderTargetLayers','frameLayers','lightLayers','sourceVisuals','targetVisuals'])snapshots[key]={strength:rt[key]?.[idx]?.rounding,mode:rt[key]?.[idx]?.roundingShape};
+ const primary=snapshots.frameLayers?.strength??snapshots.renderSourceLayers?.strength;
+ const beforeContour=rt.cycleStart;
+ document.querySelector('[data-rounding-shape="contour"]').click();
+ const afterContour=rt.cycleStart;
+ document.querySelector('[data-rounding-shape="hybrid"]').click();
+ return{cycle,phase,afterMode,afterSlider,beforeContour,afterContour,selected:shape.value,rounding:layer.rounding,snapshots,primary,mode:layer.roundingShape,active:rt.active};
+ })()`,{timeoutMs:35000,label:'12.5 live left-to-right updates without phase restart'});
+ console.log('LIVE_PANEL',JSON.stringify(r));
+ assert.equal(r.selected,'hybrid');assert.equal(r.mode,'hybrid');assert.equal(r.rounding,65);
+ assert.equal(r.cycle,r.afterMode);assert.equal(r.cycle,r.afterSlider);assert.equal(r.cycle,r.afterContour);
+ assert.equal(r.active,true);
+ if(r.snapshots.frameLayers.strength!==undefined)assert.equal(r.snapshots.frameLayers.strength,65);
+ assert.equal(r.snapshots.renderSourceLayers.strength,65);
+ assert.equal(r.snapshots.renderTargetLayers.strength,65);
+ assert.equal(r.snapshots.renderSourceLayers.mode,'hybrid');
+ assert.deepEqual(uncaughtExceptions(h.events),[]);console.log('PASS live panel updates current Morph snapshots without resetting cycle');
+ }finally{await h.close();}})().catch(e=>{console.error(e.stack||e);process.exitCode=1});

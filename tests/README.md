@@ -1,3 +1,73 @@
+# Somata 12.7.2 — static target endpoint release gate
+
+- `node tests/v1272-static-target-strict-endpoint-regression.js` — real Blue
+  Morph click, four phases, constructs static target separately from authored
+  knots, compares alpha coverage with 2px geometry tolerance, checks exact
+  phase handoff and disabled live rebuilding.
+- `node tests/v1266-live-profile-single-prep-regression.js` — dual-contract
+  test: old 12.6.6 live hashes OR 12.7.2 phase-locked deterministic hashes and
+  zero per-frame Spline+ rebuilds; endpoints separately gated above.
+
+# Somata 12.7.1 — дополнительные near-boundary regression gates
+
+- `node tests/v1271-live-spline-tip-boundary-continuity-regression.js` — обязательный **PASS**. Реальный клик Blue Morph; 5 фаз Spline+ Topology с меняющимися Shape/N/K; сравнение всех p0/c1/c2/p3 на `t=0 ↔ 0.000001` и `t=0.9999 ↔ 1`, а также на первых 0.01 фазы. Исходная 12.7.0 FAIL на этом тесте.
+- `node tests/v1271-three-layer-near-boundary-continuity-regression.js` — 3 спирали × 3 последовательных стыка: сравнивает фактический endpoint старой фазы с новым `t=0` (software raster alpha) и новый `t=0 ↔ 0.000001` (Bézier controls). Нельзя ограничиваться только сравнением 1.0 ↔ 0.0.
+
+# Somata 12.7.0 — обязательный C0-gate спирали
+
+- `node tests/v1270-exact-terminal-spiral-phase-regression.js` — **PASS обязательно**: настоящие UI click Blue Morph, 5 фаз, N/K/Shape, истинный terminal Bézier rail и старт следующей фазы; измерение разницы альфа Canvas2D: 0.
+- `node tests/v1270-three-layer-exact-handoff-regression.js` — 3 слоя × 3 последовательных границы; сравнение геометрии каждого слоя.
+- `node tests/v1270-soak-phase-cubic-budget-regression.js` — 14 последовательных стыков и контроль бюджета сегментов; не допускает экспоненциального роста на нескольких фазах.
+- `node tests/v1270-topology-spline-rotation-seam-regression.js`, `node tests/v1270-calm-spline-rotation-seam-regression.js` — 3 фазовых стыка каждого режима со Spline+ и включённым вращением.
+- `node tests/v1269-spiral-fill-cyclic-band-seam-regression.js` — стабильность угловых пар Fill, включая Corridor.
+
+Прежний тест `v1269-phase-exact-c0-acceptance.todo.js` сравнивал новый старт **с заново построенной конечной фазой** после изменения пары Morph — не с геометрией, реально подготовленной перед commit. Такой тест давал ложный сигнал после правильной передачи конечного GPU rail. Он сохранён только в `tests/retired-phase-endpoint-tests/` для исторического анализа, не входит в release gate.
+
+## Somata 12.6.9 — Spiral Fill cyclic pairing correction (экспериментальный патч)
+
+- `node tests/v1269-spiral-fill-cyclic-band-seam-regression.js` — проверяет реальный `FillMeshPreparer` в браузере, в том числе Corridor: при проходе ветви через угловой 0/1 Fill обязан сохранять физические пары 0–1 и 2–3. На оригинальной 12.6.8 тест падает: на последнем сдвиге пары меняются на 0–3 / 1–2; после исправления проходит.
+- Изменён только `js/render/fill-plan.js`. После сортировки ветвей по круговому фазовому углу порядок циклически поворачивается до устойчивого исходного индекса пары. Нет изменений Line, Spline+, N/K, Morph часов, GPU shader или authored-состояния.
+- Ограничение: динамическая заливка при нечётной топологии/изменении количества ветвей по-прежнему требует отдельного решения, а аппаратный WebGPU не был визуально подтверждён.
+
+## Обязательные новые проверки 12.6.8
+
+- `node tests/v1268-spiral-width-remap-regression.js` — 46 сравнений 12.6.7 по координатам Bézier, ширинам и markers; тест длинных рельс.
+- `node tests/v1268-three-spiral-software-frame-benchmark.js` — реальный scheduler и 3 спирали в software Chromium; FPS **не** переносить на NVIDIA/WebGPU.
+- `node tests/v1268-spiral-perf-report-regression.js` — диагностический отчёт без аппаратного GPU не создаёт кадр.
+- `node tests/static-modules.js` + `node tests/browser-preflight.js` — регистрация всех модулей.
+- `node tests/v1267-spiral-live-phase-handoff-regression.js` — 5 фазовых стыков при Shape + N/K.
+- `node tests/v1265-spiral-exact-fast-parity.js` и `node tests/v1266-live-profile-single-prep-regression.js` — золотая геометрия, однократная подготовка.
+
+## Somata 12.6.7 — реальная непрерывность Spiral на границах фаз (31.10.2026)
+
+- `v1267-spiral-live-phase-handoff-regression.js`: настоящий click кнопки Blue Morph, шесть последовательных фаз N/K + Shape со случайным фиксированным seed, `byRotation=false`, пять границ и проверка **видимой Bézier GPU-preparation геометрии** через Canvas2D. Ранее на 12.6.6 скачки 66–134 единиц средней разницы alpha; после исправления пять переходов [8.97, 8.36, 0, 0, 2.30], критерий <12. Это не аппаратная сертификация WebGPU.
+- Источник ошибки: в новый цикл передавались узлы и authored-параметры, но терялся готовый точный `renderTargetLayers` carrier endpoint, что меняло форму / ориентацию первого кадра.
+- Исправление: одноразовая передача и использование последнего `renderTargetLayers` как нового Spiral `renderSourceLayers` **только при совпадении геометрии**; реальный Morph и авторское состояние не изменяются. Предыдущая фаза и новые пользовательские изменения не принудительно перезаписываются.
+- Обязательные дополнительные тесты: `v1266-live-profile-single-prep-regression.js`, `v1265-spiral-exact-fast-parity.js`, `v1265-spiral-gpu-exact-browser.js`, `v1262-cyclic-reindex-geometry-regression.js`, `v1262-visible-phase-seam-browser-regression.js`.
+
+## Somata 10.4.19.30 — регрессия на стыке фаз
+
+- `v10457-topocircle-mode-legacy-seam-regression.js`: 18 последовательных A→B→C, проверка канонической кривой на каждом конце двух фаз, N/K, segment/spline, 0/55/120%, angular/linear. Отдельно: пять старых режимов обязаны оставить геометрический темп линейным при `speedType=linear`, и новый `topoCircle` имеет отдельное включение из трёх меню.
+- `v10455` и `v10456` **перенастроены на выбор `topoCircle`**: эти тесты измеряют экспериментальный сглаженный ритм версии 10.4.19.29; они больше не требуют его от старых типов.
+- В регрессии 10.4.19.29 сегментный angular Morph при `t=0` отличался от настоящей исходной кривой (в отдельных сценариях ошибка средней альфы свыше 6 на пиксель при ширине 510). В версии 10.4.19.30 угловой и линейный Polygon используют одни точные исходную и целевую Bézier-кривые.
+
+## Somata 10.4.19.28 — начало фазы Polygon Morph (28.10.2026)
+
+- `v10453-spline-first-frame-authored-parity-regression.js`: настоящий click Blue Morph, шесть Canvas2D сценариев (отрезки ↔ сплайн, 0/55/120% скругления). Тест проверяет исходную статическую кривую против первого кадра при t=0, промежуточные кадры и точный видимый target. В чистой 10.4.19.27 — FAIL, в 10.4.19.28 — PASS.
+- `v10454-angular-spline-topology-first-frame-regression.js`: ещё шесть сценариев при изменении N/K и угловом перемещении опорных точек. Первый и последний кадры совпадают с authored-геометрией, изменение кривизны происходит внутри фазы.
+- Обновлён `v10430-polygon-animated-spline-boundary-regression.js`: новые Polygon Morph-кривые должны завершаться на **авторских** узлах и передавать их следующему циклу; sampled rendering bridge сохраняется только для fallback/специализированных путей.
+- Контроль: `v10425`, `v10431`, `v10432`, `v10434`, `v10436`, `v10448`, `v10449`, `v10450`, `v10451`, `v10452` — PASS в адресных браузерных проверках. Полный релизный suite / аппаратные пиксели NVIDIA не сертифицированы.
+
+
+## Somata 10.4.19.27 — фазовое исчезновение/появление Fill (28.10.2026)
+
+- При Blue Morph исходные включённые заливки больше не ограничиваются значением «максимальное число залитых слоёв» для целевой фигуры. Это ограничение относится **только к новой цели**. В 10.4.19.26 при цели 0 исходные заливки обнулялись ещё на `t=0`, вызывая видимый скачок яркости.
+- Переход **есть → нет** линейно уменьшает alpha с исходной до нуля; **нет → есть** увеличивает от нуля до целевой alpha. Используется та же `geometryT`, что и у контуров Blue Morph. Количество исходных заливок сохраняется на границе начала цикла независимо от целевого ограничения.
+- `v10452-fill-toggle-phase-continuity-regression.js` воспроизводит сбой на 10.4.19.26 и проверяет реальные браузерные Blue-кадры, две исходные заливки → ноль, одну незалитую фигуру → залитую, семь точек фазы и совпадение `fill` с alpha.
+- Заливка по-прежнему требует пригодной топологии; это изменение не делает возможной заливку открытых контуров или Spiral без `spiralFillEnabled`. Смена GPU-проходов не переписывается.
+
+- `v10450-linear-rounded-topology-suborbit-handoff-regression.js`: дополнительно 12 сценариев изменения N/K и числа подорбит (1↔2) при линейном Morph со скруглением, отрезки/локальный/целый сплайн; тестирует совпадение концов и исчезновение завершающего скачка.
+- `v10449-linear-rounded-polygon-morph-boundary-regression.js`: 18 Canvas2D сценариев линейного Polygon Morph, скругления 0/55/120%, отрезки/локальный сплайн/вся кривая, 5→5 и 5→8 узлов; проверяются оба конечных видимых состояния и подход к финалу.
 - `v10448-whole-curve-spline-unified-regression.js`: общий переключатель «Вся кривая — сплайн», по умолчанию выключен; Polygon сохраняет логические острые границы в локальном режиме, Spiral строит разные кривые при переключении, статическая и конечная Morph-геометрия согласованы.
 # Somata 10.4.19.23 — Spiral spline seam rounding during Blue Morph / Animation
 
@@ -261,3 +331,23 @@ Node/Chromium проверяет действия UI, состояние, finite
 (строгое растровое сопоставление Polygon; не игнорировать).
 
 - 10.4.19.22: v10446 запрещает скрытый минимум скругления стыков при 0% «Скругления вершин»; галочка только разрешает скругление с общей силой.
+
+
+## 10.4.19.29 — Mixed segment ↔ spline cycle velocity
+
+- `v10455-mixed-profile-cycle-velocity-regression.js` checks 24 true Bézier command sequences across both movement methods, rounding 0/55/120, both direction changes and optional N/K changes. Endpoint velocity must approach zero instead of jumping to the full central speed when the next Blue cycle starts.
+- `v10456-mixed-profile-optical-speed-regression.js` checks actual Canvas2D alpha-pixel motion over the whole phase in 6 representative scenes, and compares peak inter-frame change with the original linear-time movement. The target is a lower maximum pixel-change rate, not just equal images at t=0 and t=1.
+- `v10453`/`v10454` remain the first-frame/endpoint canonical-geometry guards; `v10432` covers terminal raster parity.
+- Only **mixed** segments ↔ spline transitions with **linear timing** get the temporal soft start/stop, leaving the straight-chord / angular spatial transport, 0/1 positions, pure-segment and pure-spline morph and other speed presets unchanged. Manual device validation remains required for real WebGPU.
+
+## Somata 11.0.0 — проверка границ фаз
+
+- `node tests/v110-blue-two-phase-authored-endpoints-regression.js` — проверяет два последовательных настоящих цикла Blue Morph: первый кадр новой фазы пиксельно совпадает со статической авторской фигурой и последним кадром предыдущей (по окружности, топологический, спокойный; отрезки и сплайн).
+- `node tests/v110-static-animation-exact-endpoint-regression.js` — 18 реальных ручных переходов Geometry > Animation с изменением скругления, узлов и N/K; первый, почти первый, почти последний, последний и статический кадры.
+- Новые тесты входят в `node tests/run-v9.js`. Ограничения Canvas2D: GPU-презентация на реальной видеокарте здесь не проверяется.
+
+## Somata 12.6.3 — single approved Spline+ algorithm
+
+- `v1263-golden-spline-plus-parity.js` checks exact Bézier command parity with the self-contained approved 12.6.2 fixture over 2,160 configurations.
+- `v1263-only-spline-plus-browser.js` checks that the retired alternative rounding-mode controls are absent, old project imports migrate to Spline+, both radius policies remain, and Morph slider edits do not restart the phase.
+- Tests that expected three alternative rounding algorithms (12.4–12.5) and the 12.1/12.2 contour-only experimental controls are historical, **not release acceptance tests** for 12.6.3.

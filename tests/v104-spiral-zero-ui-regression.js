@@ -41,7 +41,9 @@ const {createBrowserHarness}=require('./lib/browser-harness');
     assert.equal(result.cases.beautiful[4].population,0);
     assert.equal(result.cases.beautiful[3].order,1.5);
     assert.equal(result.cross.choreographed,false);
-    assert.equal(result.cases.honest[3].choreographed,false);
+    assert.equal(result.cases.honest[3].choreographed,true);
+    assert.equal(result.cases.honest[3].order,1.5);
+    assert.equal(result.cases.honest[2].population,0);
     console.log('PASS v104 zero modes, endpoint exactness, morphology chooser, tangency input, outside click');
   }finally{await h.close();}
 })().catch(err=>{console.error(err.stack||err);process.exitCode=1;});

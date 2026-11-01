@@ -10,15 +10,15 @@ const LAYER_PROPERTY_DEPENDENCIES = (() => {
 
     add('geometry', [
         'N','K','customSuborbits','chaosStar','chaosStepMinus','chaosStepPlus','chaosClosures','chaosSeed',
-        'closedLoop','lineJoinType','radius','radiusMultiplier','rounding','profileMode','splineRenderMode',
-        'profileNodes','profileSplineSegments','profileSplineMix','spiralEnabled','spiralOrder','spiralZeroTransitionMode','spiralTangential',
-        'spiralRoundSeams','spiralClosed','spiralStep','spiralStepLinked','spiralRounding','geometryCircles'
+        'closedLoop','lineJoinType','radius','radiusMultiplier','rounding','roundingShape','profileMode','splineRenderMode',
+        'profileNodes','profileSplineSegments','profileSplineMix','spiralEnabled','spiralOrder','spiralRememberedOrder','spiralZeroTransitionMode','spiralLayerwiseRotationMode','spiralRotationFocus','spiralManualFocus','spiralRotationFocusFigure','spiralTangential',
+        'spiralRoundSeams','spiralClosed','spiralStep','spiralStepLinked','spiralStepLimiterEnabled','spiralStepLimiter','spiralRounding','geometryCircles'
     ]);
     add('transform', [
         'rotation','offsetX','offsetY','scale','motionX','motionY','motionRotation','motionScale'
     ]);
     add('style', [
-        'strokeColor','strokeWidth','strokeWidthMultiplier','opacity','blendMode','glow','glowMultiplier',
+        'corridorFocusHighlight','strokeColor','strokeWidth','strokeWidthMultiplier','opacity','blendMode','glow','glowMultiplier',
         'glowIntensity','glowIntensityMultiplier','fill','fillColor','fillOpacity','fillMatchStroke',
         'outline','outlineColor','outlineWidth','lineProfile','lineProfileType','lineMarkerShape'
     ]);

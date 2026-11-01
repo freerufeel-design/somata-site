@@ -82,7 +82,7 @@ fn cubic(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,t:f32)->vec2<f32>{l
 fn main(@builtin(global_invocation_id) gid:vec3<u32>){
  let i=gid.x;let total=u.count*${SUBDIV}u;if(i>=total){return;}let ci=i/${SUBDIV}u;let sub=i%${SUBDIV}u;let b=ci*6u;let q=currentCubics[ci*2u];let r=currentCubics[ci*2u+1u];let w=endpointData[b+4u];let metaData=endpointData[b+5u];let phaseT=clamp(u.phase.x,0.0,1.0);
  let t0=f32(sub)/f32(${SUBDIV});let t1=f32(sub+1u)/f32(${SUBDIV});let a=cubic(q.xy,q.zw,r.xy,r.zw,t0);let bb=cubic(q.xy,q.zw,r.xy,r.zw,t1);
- let ws0=exp(mix(log(max(.02,w.x)),log(max(.02,w.z)),phaseT));let ws1=exp(mix(log(max(.02,w.y)),log(max(.02,w.w)),phaseT));let l0=exp(mix(log(max(.02,ws0)),log(max(.02,ws1)),t0));let l1=exp(mix(log(max(.02,ws0)),log(max(.02,ws1)),t1));let smoothPhase=phaseT*phaseT*(3.0-2.0*phaseT);let presence=mix(metaData.x,metaData.y,smoothPhase);
+ let logWs0=mix(w.x,w.z,phaseT);let logWs1=mix(w.y,w.w,phaseT);let l0=exp(mix(logWs0,logWs1,t0));let l1=exp(mix(logWs0,logWs1,t1));let smoothPhase=phaseT*phaseT*(3.0-2.0*phaseT);let presence=mix(metaData.x,metaData.y,smoothPhase);
  fastRail[i*2u]=vec4<f32>(a,bb);fastRail[i*2u+1u]=vec4<f32>(l0,l1,presence,metaData.w);
 }`;
 
@@ -110,14 +110,69 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{return vec2<f32>(u.row0.x*p.x+u.row0.y*p.
 fn centerShade(screenPos:vec2<f32>)->f32{if(u.phase.w<=.5){return 1.0;}let center=screenPoint(vec2<f32>(0.0,0.0));let det=abs(u.row0.x*u.row1.y-u.row0.y*u.row1.x);let matrixScale=max(.000001,sqrt(det));let rr=length(screenPos-center)/matrixScale;return smoothstep(u.phase.y,u.phase.z,rr);}
 @vertex fn vs(v:Vin,@builtin(instance_index) iid:u32)->Vout{
  var o:Vout;let cubicIndex=(iid/${SUBDIV}u)%max(1u,u.cubicCount);let sub=iid%${SUBDIV}u;let ci=iid/(max(1u,u.cubicCount)*${SUBDIV}u);let ri=cubicIndex*${SUBDIV}u+sub;let g0=fastRail[ri*2u];let g1=fastRail[ri*2u+1u];let a0=g0.xy;let b0=g0.zw;
- let cp0=copyData[ci*3u];let cp1=copyData[ci*3u+1u];let cp2=copyData[ci*3u+2u];let a=vec2<f32>(cp0.x*a0.x+cp0.y*a0.y,cp1.x*a0.x+cp1.y*a0.y);let bb=vec2<f32>(cp0.x*b0.x+cp0.y*b0.y,cp1.x*b0.x+cp1.y*b0.y);
- let sp0=screenPoint(a);let sp1=screenPoint(bb);let delta=sp1-sp0;let len=max(length(delta),0.0001);let dir=delta/len;let normal=vec2<f32>(-dir.y,dir.x);let l0=g1.x;let l1=g1.y;let sc=max(.000001,abs(cp0.w));
- let hw0=max(.18,u.params.x*sc*l0);let hw1=max(.18,u.params.x*sc*l1);let gr=max(0.0,u.params.y*sc);let pad=max(hw0,hw1)+gr+2.0;let tx=(v.corner.x+1.0)*.5;let lx=mix(-pad,len+pad,tx);let ly=v.corner.y*pad;let pos=sp0+dir*lx+normal*ly;
+ let cp0=copyData[ci*3u];let cp1=copyData[ci*3u+1u];let cp2=copyData[ci*3u+2u];
+ // N/K phaseCircle clones can be completely invisible at a phase endpoint.
+ // Cull in the vertex stage before expanding a huge Glow quad; the fragment
+ // stage already discards at EXACTLY these alpha thresholds. No shape change.
+ if(cp0.z*g1.z<=.00001||cp2.y<=.00001){
+   o.position=vec4<f32>(-2.0,-2.0,0.0,1.0);o.local=vec2<f32>(0.0);
+   o.segLen=1.0;o.logHalfWidth0=0.0;o.logHalfWidth1=0.0;
+   o.glowRadius=0.0;o.alpha=0.0;o.color=vec4<f32>(0.0);return o;
+ }
+ let a=vec2<f32>(cp0.x*a0.x+cp0.y*a0.y,cp1.x*a0.x+cp1.y*a0.y);let bb=vec2<f32>(cp0.x*b0.x+cp0.y*b0.y,cp1.x*b0.x+cp1.y*b0.y);
+ // Glow-only screen-space rail compaction.  The exact 8-piece rail is kept
+ // for Base, Fill, lamps and every other consumer.  Two adjacent glow pieces
+ // merge only when their join and width interpolation are subpixel close to
+ // the direct chord.  A skipped odd piece generates no fragments (no overdraw).
+ // This decision is made per copy, so zoom/rotation do not invalidate it.
+ var sp0=screenPoint(a);var sp1=screenPoint(bb);var l0=g1.x;var l1=g1.y;
+ let sc=max(.000001,abs(cp0.w));let gr=max(0.0,u.params.y*sc);
+ if(u.params.w>.00001){
+   let pairRi=cubicIndex*${SUBDIV}u+(sub&~1u);
+   let pg0=fastRail[pairRi*2u];let pg1=fastRail[pairRi*2u+1u];
+   let eg0=fastRail[(pairRi+1u)*2u];let eg1=fastRail[(pairRi+1u)*2u+1u];
+   let p0=screenPoint(vec2<f32>(cp0.x*pg0.x+cp0.y*pg0.y,cp1.x*pg0.x+cp1.y*pg0.y));
+   let pm=screenPoint(vec2<f32>(cp0.x*pg0.z+cp0.y*pg0.w,cp1.x*pg0.z+cp1.y*pg0.w));
+   let pe=screenPoint(vec2<f32>(cp0.x*eg0.z+cp0.y*eg0.w,cp1.x*eg0.z+cp1.y*eg0.w));
+   let chord=pe-p0;let denom=max(dot(chord,chord),.000001);
+   let f=clamp(dot(pm-p0,chord)/denom,0.0,1.0);
+   let shapeError=length(pm-(p0+f*chord));
+   let w0=max(.18,u.params.x*sc*pg1.x);let wm=max(.18,u.params.x*sc*pg1.y);let we=max(.18,u.params.x*sc*eg1.y);
+   let predictedWidth=exp(mix(log(w0),log(we),f));
+   // Never merge a reversed/hairpin pair or a sharp width transition.
+   let smoothJoin=dot(pm-p0,pe-pm)>0.0;
+   let merge=smoothJoin&&shapeError<=min(.60,max(.22,gr*.045))&&abs(wm-predictedWidth)<=min(.25,max(.12,gr*.020));
+   if(merge){
+     if((sub&1u)==1u){
+       o.position=vec4<f32>(-2.0,-2.0,0.0,1.0);o.local=vec2<f32>(0.0);o.segLen=1.0;
+       o.logHalfWidth0=0.0;o.logHalfWidth1=0.0;o.glowRadius=0.0;o.alpha=0.0;o.color=vec4<f32>(0.0);return o;
+     }
+     sp0=p0;sp1=pe;l0=pg1.x;l1=eg1.y;
+   }
+ }
+ let delta=sp1-sp0;let len=max(length(delta),0.0001);let dir=delta/len;let normal=vec2<f32>(-dir.y,dir.x);
+ let hw0=max(.18,u.params.x*sc*l0);let hw1=max(.18,u.params.x*sc*l1);let pad=max(hw0,hw1)+gr+2.0;
+ // Exact viewport rejection for the expanded straight capsule quad.
+ // Every vertex stays within sqrt(2)*pad of the endpoint bounding box,
+ // including diagonal normals and the round-cap margin.
+ let boundsPad=1.415*pad;
+ if(max(sp0.x,sp1.x)+boundsPad<0.0||min(sp0.x,sp1.x)-boundsPad>u.viewport.x||
+    max(sp0.y,sp1.y)+boundsPad<0.0||min(sp0.y,sp1.y)-boundsPad>u.viewport.y){
+   o.position=vec4<f32>(-2.0,-2.0,0.0,1.0);o.local=vec2<f32>(0.0);
+   o.segLen=1.0;o.logHalfWidth0=0.0;o.logHalfWidth1=0.0;
+   o.glowRadius=0.0;o.alpha=0.0;o.color=vec4<f32>(0.0);return o;
+ }
+ let tx=(v.corner.x+1.0)*.5;let lx=mix(-pad,len+pad,tx);let ly=v.corner.y*pad;let pos=sp0+dir*lx+normal*ly;
  o.position=vec4<f32>(pos.x/u.viewport.x*2.0-1.0,1.0-pos.y/u.viewport.y*2.0,0.0,1.0);o.local=vec2<f32>(lx,ly);o.segLen=len;o.logHalfWidth0=log(max(.001,hw0));o.logHalfWidth1=log(max(.001,hw1));o.glowRadius=gr;o.alpha=cp0.z*g1.z;o.color=vec4<f32>(cp1.z,cp1.w,cp2.x,cp2.y);return o;
 }
 @fragment fn fs(v:Vout)->@location(0) vec4<f32>{
  if(v.alpha<=.00001||v.color.a<=.00001){discard;}let cx=clamp(v.local.x,0.0,v.segLen);let q=cx/max(.0001,v.segLen);let hw=exp(mix(v.logHalfWidth0,v.logHalfWidth1,q));let d=length(vec2<f32>(v.local.x-cx,v.local.y));var cov=0.0;
- if(u.params.w>.00001&&v.glowRadius>.01){let edge=max(0.0,d-hw);let z=edge/max(.55,v.glowRadius*.44);cov=exp(-z*z*1.65)*(1.0-smoothstep(v.glowRadius*.76,v.glowRadius+2.0,edge))*u.params.w;}else{cov=clamp(hw+.75-d,0.0,1.0)*u.params.z;}
+ if(u.params.w>.00001&&v.glowRadius>.01){let edge=max(0.0,d-hw);
+   // At this distance smoothstep is exactly one, hence coverage is exactly
+   // zero: discard BEFORE the expensive exp(), not after it.
+   if(edge>=v.glowRadius+2.0){discard;}
+   let z=edge/max(.55,v.glowRadius*.44);cov=exp(-z*z*1.65)*(1.0-smoothstep(v.glowRadius*.76,v.glowRadius+2.0,edge))*u.params.w;
+ }else{if(d>=hw+.75){discard;}cov=clamp(hw+.75-d,0.0,1.0)*u.params.z;}
  let centerMask=centerShade(v.position.xy);
  let a=clamp(cov*centerMask*v.alpha*v.color.a,0.0,1.0);if(a<.0001){discard;}return vec4<f32>(v.color.rgb*a,a);
 }
@@ -138,7 +193,13 @@ fn fastJoinedTangent(ri:u32,sub:u32,right:bool,flags:f32,cp0:vec4<f32>,cp1:vec4<
 fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&&flags<1.5)||flags>=2.5;let last=flags>=1.5;return select(sub>0u||!first,sub+1u<${SUBDIV}u||!last,right);}
 @vertex fn vsUniform(v:Vin,@builtin(instance_index) iid:u32)->UniformOut{
  var o:UniformOut;let ci=(iid/${SUBDIV}u)%max(1u,u.cubicCount);let sub=iid%${SUBDIV}u;let copyIndex=iid/(max(1u,u.cubicCount)*${SUBDIV}u);let ri=ci*${SUBDIV}u+sub;let g0=fastRail[ri*2u];let g1=fastRail[ri*2u+1u];let right=v.corner.x>0.0;let local=select(g0.xy,g0.zw,right);
- let cp0=copyData[copyIndex*3u];let cp1=copyData[copyIndex*3u+1u];let cp2=copyData[copyIndex*3u+2u];let copied=vec2<f32>(cp0.x*local.x+cp0.y*local.y,cp1.x*local.x+cp1.y*local.y);let center=screenPoint(copied);
+ let cp0=copyData[copyIndex*3u];let cp1=copyData[copyIndex*3u+1u];let cp2=copyData[copyIndex*3u+2u];
+ // Same zero-contribution culling in the uniform-width Base raster path.
+ if(cp0.z*g1.z<=.00001||cp2.y<=.00001||u.params.z<=.00001){
+   o.position=vec4<f32>(-2.0,-2.0,0.0,1.0);o.edge=0.0;
+   o.halfWidth=0.0;o.alpha=0.0;o.color=vec4<f32>(0.0);return o;
+ }
+ let copied=vec2<f32>(cp0.x*local.x+cp0.y*local.y,cp1.x*local.x+cp1.y*local.y);let center=screenPoint(copied);
  let tangent=fastJoinedTangent(ri,sub,right,g1.w,cp0,cp1);let normal=vec2<f32>(-tangent.y,tangent.x);let scaleAt=select(g1.x,g1.y,right);let sc=max(.000001,abs(cp0.w));let hw=max(.18,u.params.x*sc*scaleAt);let pad=hw+.75;let seamOverlap=select(0.0,min(.55,max(.18,hw*.16)),fastJoinHasNeighbor(sub,right,g1.w));let along=select(-seamOverlap,seamOverlap,right);let pos=center+tangent*along+normal*(v.corner.y*pad);
  o.position=vec4<f32>(pos.x/u.viewport.x*2.0-1.0,1.0-pos.y/u.viewport.y*2.0,0.0,1.0);o.edge=v.corner.y*pad;o.halfWidth=hw;o.alpha=cp0.z*g1.z;o.color=vec4<f32>(cp1.z,cp1.w,cp2.x,cp2.y);return o;
 }
@@ -301,7 +362,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
             (outerMaxTurn>Math.PI*1.05&&visibleTurnRms>Math.PI*.70)
         );
         const phaseSpinRisk=spiralTransport==='phase'&&impossiblePolarWinding;
-        const minimalSpinRisk=minimal&&impossiblePolarWinding;
+        const minimalSpinRisk=(minimal||spiralTransport==='torn')&&impossiblePolarWinding;
         const pathCartesianFallback=forceCartesian||forceCartesianPath||phaseCircleSpinRisk||phaseSpinRisk||minimalSpinRisk;
         for(let i=0;i<n;i++){const s0=at(sp,i,0),s1=at(sp,i,1),s2=at(sp,i,2),s3=at(sp,i,3),d0=at(dp,i,0),d1=at(dp,i,1),d2=at(dp,i,2),d3=at(dp,i,3);const s=srcCubics[i],d=dstCubics[i],o=offset*FLOATS_PER_CUBIC;
             const localMaxPolarTurn=Math.max(Math.abs(d0.a-s0.a),Math.abs(d1.a-s1.a),Math.abs(d2.a-s2.a),Math.abs(d3.a-s3.a));
@@ -330,7 +391,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
 
             const metrics=(path,layer,cache)=>{
                 if(cache?.has(path))return cache.get(path);
-                const cubics=endpointCubics(path,layer),map=cubics.length?buildRailArcMap(cubics):null,rec={cubics,map};
+                const cubics=path?.__morphBoundarySourceCubics||endpointCubics(path,layer),map=cubics.length?buildRailArcMap(cubics):null,rec={cubics,map};
                 try{cache?.set(path,rec);}catch(_){}
                 return rec;
             };
@@ -378,6 +439,88 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         for(const pair of pairs||[]){pair._sourceRetainedMetrics=srcMetrics.get(pair.src)||null;pair._targetRetainedMetrics=dstMetrics.get(pair.dst)||null;pair.minimalTurnStablePairing=true;}
         return pairs||[];
     }
+    // Torn slide never duplicates an existing ray. Pair each source/target at
+    // most once; unmatched rays simply appear/disappear (a genuine tear).
+    function pairTornWithoutClones(sourcePaths,targetPaths,sourceLayer,targetLayer){
+        const src=(sourcePaths||[]).map((path,i)=>({path,i,phase:spiralBranchPhase(path,sourceLayer,i,sourcePaths.length)}));
+        const dst=(targetPaths||[]).map((path,i)=>({path,i,phase:spiralBranchPhase(path,targetLayer,i,targetPaths.length)}));
+        // One-layer Torn is NOT a periodic Spiral phase carrier. Match actual
+        // positions of each source/target open rail. A globally minimal one-to-
+        // one assignment (Hungarian, rectangular) minimizes total planar travel;
+        // a greedy angular match can strand a later ray far from its nearest end.
+        const planarCost=(ap,bp)=>{
+            const a=ap?.points||[],b=bp?.points||[];
+            if(!a.length||!b.length)return 1e12;
+            const at=(pts,t)=>{const q=t*(pts.length-1),i=Math.min(pts.length-2,Math.floor(q)),f=q-i,p=pts[i],r=pts[i+1]||p;return{x:(Number(p.x)||0)*(1-f)+(Number(r.x)||0)*f,y:(Number(p.y)||0)*(1-f)+(Number(r.y)||0)*f};};
+            let sum=0;
+            for(let k=0;k<=8;k++){
+                const t=k/8,p=at(a,t),q=at(b,t),dx=p.x-q.x,dy=p.y-q.y;
+                sum+=(k===0||k===8?2:1)*(dx*dx+dy*dy);
+            }
+            return sum/11;
+        };
+        const sourceRows=src.length<=dst.length;
+        const rows=sourceRows?src:dst,cols=sourceRows?dst:src;
+        const n=rows.length,m=cols.length;
+        const costs=rows.map((a,i)=>cols.map((b,j)=>{
+            const c=sourceRows?planarCost(a.path,b.path):planarCost(b.path,a.path);
+            return c+1e-8*(a.i*m+b.i); // deterministic tie-break
+        }));
+        // Standard O(n²m) rectangular assignment, n <= m. Run only once on
+        // endpoint preparation, never per animation frame.
+        const u=new Float64Array(n+1),v=new Float64Array(m+1),p=new Int32Array(m+1),way=new Int32Array(m+1);
+        for(let i=1;i<=n;i++){
+            p[0]=i;let j0=0;
+            const minv=new Float64Array(m+1).fill(Infinity),used=new Uint8Array(m+1);
+            do{
+                used[j0]=1;const i0=p[j0];let delta=Infinity,j1=0;
+                for(let j=1;j<=m;j++)if(!used[j]){
+                    const cur=costs[i0-1][j-1]-u[i0]-v[j];
+                    if(cur<minv[j]){minv[j]=cur;way[j]=j0;}
+                    if(minv[j]<delta){delta=minv[j];j1=j;}
+                }
+                for(let j=0;j<=m;j++){
+                    if(used[j]){u[p[j]]+=delta;v[j]-=delta;}
+                    else minv[j]-=delta;
+                }
+                j0=j1;
+            }while(p[j0]!==0);
+            do{const j1=way[j0];p[j0]=p[j1];j0=j1;}while(j0!==0);
+        }
+        const usedSource=new Set(),usedTarget=new Set(),pairs=[];
+        for(let j=1;j<=m;j++)if(p[j]!==0){
+            const a=sourceRows?rows[p[j]-1]:cols[j-1];
+            const b=sourceRows?cols[j-1]:rows[p[j]-1];
+            usedSource.add(a.i);usedTarget.add(b.i);
+            pairs.push({src:a.path,dst:b.path,sourcePathPresent:true,targetPathPresent:true,tornPair:true,tornCost:planarCost(a.path,b.path)});
+        }
+        for(const a of src)if(!usedSource.has(a.i))pairs.push({src:a.path,dst:a.path,sourcePathPresent:true,targetPathPresent:false,tornUnmatched:true});
+        for(const b of dst)if(!usedTarget.has(b.i))pairs.push({src:b.path,dst:b.path,sourcePathPresent:false,targetPathPresent:true,tornUnmatched:true});
+        return pairs;
+    }
+    function hasStepAxisChange(a,b){return Math.abs((Number(a?.K)||1)-(Number(b?.K)||1))>1e-8;}
+    function hasVertexAxisChange(a,b){return Math.round(Number(a?.N)||4)!==Math.round(Number(b?.N)||4);}
+    function pairFixedAxisFade(transport,srcLayer,dstLayer,srcPaths,dstPaths){
+        const nFade=transport==='phase'&&hasVertexAxisChange(srcLayer,dstLayer);
+        const kFade=transport==='minimalTurn'&&hasStepAxisChange(srcLayer,dstLayer);
+        if(!nFade&&!kFade)return null;
+        // There are two independent animated rails: each rail moves along the
+        // non-fixed axis, while its fixed-axis value never changes. Fade the
+        // OUTGOING rail and fade in the INCOMING rail. Do not interpolate the
+        // fixed parameter between the two rails or create K copies per vertex.
+        const rebuild=(original,axis)=>{
+            const patched={...original,...axis,__spiroGeometryStepResolved:false,
+                __spiralAnimatedEffectiveK:undefined,__spiralAnimatedK:undefined};
+            return typeof getSpiralGeometryLayer==='function'?getSpiralGeometryLayer(patched):patched;
+        };
+        const sourceOther=rebuild(srcLayer,nFade?{N:dstLayer.N}:{K:dstLayer.K});
+        const targetOther=rebuild(dstLayer,nFade?{N:srcLayer.N}:{K:srcLayer.K});
+        const out=stableSpiralPairs(srcPaths,buildOrbitPolylines(targetOther)||[],srcLayer,targetOther);
+        const incoming=stableSpiralPairs(buildOrbitPolylines(sourceOther)||[],dstPaths,sourceOther,dstLayer);
+        for(const pair of out){pair.sourceLayer=srcLayer;pair.targetLayer=targetOther;pair.sourcePathPresent=pair.sourcePathPresent!==false;pair.targetPathPresent=false;pair.fadeOutgoing=true;}
+        for(const pair of incoming){pair.sourceLayer=sourceOther;pair.targetLayer=dstLayer;pair.sourcePathPresent=false;pair.targetPathPresent=pair.targetPathPresent!==false;pair.fadeIncoming=true;}
+        return [...out,...incoming];
+    }
     function splitCubicRailToCountExact(cubics,count,allowIdentity=false){
         const src=Array.isArray(cubics)?cubics:[],target=Math.max(0,Math.round(Number(count)||0));
         if(!src.length||target<src.length)return null;
@@ -402,6 +545,26 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         }
         return out.length===target?out:null;
     }
+    function padExactPhaseSourceCubics(cubics,count){
+        // Keep every physically rendered cubic and its junction untouched.
+        // Correspondence slots are appended past the terminal point and are
+        // zero-length on the source frame; they grow only as the next Morph
+        // unfolds. No source cubic is re-tessellated at the phase seam.
+        const source=cubics||[],extra=Math.max(0,count-source.length);
+        if(!extra)return source;
+        const result=source.slice(),last=source.at(-1),p=last.p3;
+        for(let i=0;i<extra;i++)result.push({
+            p0:{...p},c1:{...p},c2:{...p},p3:{...p},
+            widthScale0:.02,widthScale1:.02,
+            // The original last knot had no successor, hence cannot be
+            // tangent-repaired against a newly inserted ghost segment.
+            __profileCorner0:true,__profileCorner1:true
+        });
+        // The old terminal cubic must remain the endpoint of the original
+        // segment group for source-side GPU tangent repair.
+        result[source.length-1]={...last,__profileCorner1:true};
+        return result;
+    }
     function carrierLayerSpec(layer,branchIndex){
         try{if(typeof __spiroGetSpiralCarrierSpec==='function')return __spiroGetSpiralCarrierSpec(layer,branchIndex);}catch(_){}
         const animatedN=Number(layer?.__spiralAnimatedN),N=Math.max(2,Number.isFinite(animatedN)?animatedN:(Number(layer?.N)||4)),R=typeof getEffectiveLayerRadius==='function'?getEffectiveLayerRadius(layer,220):Math.max(1,Number(layer?.radius)||220),rot=((Number(layer?.rotation)||0)*Math.PI)/180,bi=Number.isFinite(Number(branchIndex))?Number(branchIndex):0,angle=bi/N*TWO_PI+rot-Math.PI/2,order=typeof getEffectiveSpiralOrder==='function'?getEffectiveSpiralOrder(layer):(Number(layer?.spiralOrder)||1),dir=Math.max(-1,Math.min(1,order)),step=typeof getEffectiveSpiralStep==='function'?getEffectiveSpiralStep(layer):(Number(layer?.spiralStep ?? layer?.K)||1),ratio=typeof getSpiralClosureRatio==='function'?getSpiralClosureRatio():1.1,exp=Math.max(1e-9,Math.abs(order)||1),targetScale=Math.pow(Math.max(1.0000001,ratio),exp);
@@ -419,8 +582,29 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         }
         return out;
     }
-    function buildCarrierMappedLayer(rec,t){
+    // Only run value-key profile memoization for layers whose authored profile
+    // pair matches another Spiral layer. A unique animated spline changes on
+    // every frame; hashing it would cost more than the avoided preparation.
+    function spiralAuthoredProfileSignature(layer){
+        const nodes=Array.isArray(layer?.profileNodes)?layer.profileNodes:[];
+        return [layer?.profileMode||'',nodes.length,...nodes.flatMap(p=>[
+            Number(p?.x)||0,Number(p?.y)||0,p?.__profileCorner===true?1:0,
+            p?.__profileKeyCorner===true?1:0])].join('|');
+    }
+    function hasEquivalentSpiralProfilePair(layerIndex,source,target){
+        const sources=runtimeState.morph?.renderSourceLayers||[],targets=runtimeState.morph?.renderTargetLayers||[];
+        if(sources.length<2||targets.length<2)return false;
+        const sk=spiralAuthoredProfileSignature(source),dk=spiralAuthoredProfileSignature(target);
+        for(let i=0;i<Math.min(sources.length,targets.length);i++){
+            if(i===layerIndex)continue;
+            const a=sources[i],b=targets[i];if(!a||!b)continue;
+            if(spiralAuthoredProfileSignature(a)===sk&&spiralAuthoredProfileSignature(b)===dk)return true;
+        }
+        return false;
+    }
+    function buildCarrierMappedLayer(rec,t,prepareProfile=true){
         const src=rec.sourceLayer,dst=rec.targetLayer,u=clamp(Number(t)||0,0,1),transport=String(rec.spiralTransport||'phaseCircle'),layer=rec.carrierFrameLayer||(rec.carrierFrameLayer={});Object.assign(layer,src);
+        layer.__spiralSharedProfileAcrossLayers=rec.sharedProfilePair===true;
         const sn=Math.max(2,Number(src?.N)||4),dn=Math.max(2,Number(dst?.N)||sn),sk=Math.max(1,Number(src?.K)||1),dk=Math.max(1,Number(dst?.K)||sk);
         let frameN=sn,frameK=sk;
         // The mode-specific locks apply when the authored endpoints agree. Manual
@@ -446,7 +630,8 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         const so=Number(src?.spiralOrder)||0,to=Number(dst?.spiralOrder)||0;
         const orderT=u*u*(3-2*u);
         layer.spiralOrder=so+(to-so)*orderT;if(Math.abs(layer.spiralOrder)<=1e-8)layer.__spiralTangentialMix=0;const ss=typeof getEffectiveSpiralStep==='function'?getEffectiveSpiralStep(src):(Number(src?.spiralStep ?? src?.K)||1),ts=typeof getEffectiveSpiralStep==='function'?getEffectiveSpiralStep(dst):(Number(dst?.spiralStep ?? dst?.K)||ss);
-        layer.__spiralAnimatedK=frameK; // Fractional interpolation of canonical polygon K.
+        layer.__spiralAnimatedK=frameK; // Authored K for UI, not the orbit carrier.
+        layer.__spiralAnimatedEffectiveK=ss+(ts-ss)*u;
         layer.__spiralOrderInterpolating=true;
         layer.spiralStep=frameK; // Legacy mirror; never an independent control.
         layer.spiralStepLinked=true;
@@ -454,7 +639,11 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         try{mode=typeof MorphRendering!=='undefined'&&typeof MorphRendering.resolveMorphProfileModeForRender==='function'?MorphRendering.resolveMorphProfileModeForRender(src?.profileMode,dst?.profileMode,u):(u<.5?(src?.profileMode||'segments'):(dst?.profileMode||src?.profileMode||'segments'));}catch(_){mode=u<.5?(src?.profileMode||'segments'):(dst?.profileMode||src?.profileMode||'segments');}
         layer.profileMode=mode;layer.wholeCurveSpline=u<.5?(src?.wholeCurveSpline===true):(dst?.wholeCurveSpline===true);layer.profileNodes=copyProfileNodesForCarrier(src,dst,u,rec.carrierProfileScratch||(rec.carrierProfileScratch=[]));
         try{if(typeof setPreSampledSplineLayer==='function'&&typeof isPreSampledSplineLayer==='function'){const sampled=mode==='spline'&&((u<=1e-9&&isPreSampledSplineLayer(src))||(u>=1-1e-9&&isPreSampledSplineLayer(dst))||(u>1e-9&&u<1-1e-9&&isPreSampledSplineLayer(src)&&isPreSampledSplineLayer(dst)));setPreSampledSplineLayer(layer,sampled);}}catch(_){ }
-        let preparedProfile=null;try{if(typeof __spiroPrepareSpiralCarrierProfile==='function'){preparedProfile=__spiroPrepareSpiralCarrierProfile(layer,{profileNodes:layer.profileNodes,roundingFrac:typeof getRoundingStrength==='function'?getRoundingStrength(layer.rounding):Math.max(0,Number(layer.rounding)||0)/100});if(preparedProfile)stats.carrierProfilePrepares++;}}catch(_){preparedProfile=null;}
+        // The live spline clock can differ from the carrier clock. When it does,
+        // the sampled profile for the carrier clock would be thrown away immediately.
+        // Defer that preparation until the authoritative spline clock is applied.
+        let preparedProfile=null;
+        if(prepareProfile)try{if(typeof __spiroPrepareSpiralCarrierProfile==='function'){preparedProfile=__spiroPrepareSpiralCarrierProfile(layer,{profileNodes:layer.profileNodes,roundingFrac:typeof getRoundingStrength==='function'?getRoundingStrength(layer.rounding):Math.max(0,Number(layer.rounding)||0)/100});if(preparedProfile)stats.carrierProfilePrepares++;}}catch(_){preparedProfile=null;}
         return{layer,radius,frameN,frameK,preparedProfile};
     }
     function carrierAnchorAt(specS,specD,t,cartesian){
@@ -499,6 +688,19 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         }else{
             anchor=carrierAnchorAt(s,d,u,false);delta=(Number(s?.delta)||0)+((Number(d?.delta)||0)-(Number(s?.delta)||0))*u;targetScale=Math.exp((Number(s?.logScale)||0)+((Number(d?.logScale)||0)-(Number(s?.logScale)||0))*u);metric='legacy';
         }
+        // A cyclic limiter acts on the instantaneous authored K, not merely
+        // on its source/target endpoint values. Otherwise a 2→10 Morph with
+        // L=2 would freeze at 2 while the regular Spiral snapshot cycles.
+        const fromLayer=r.pair?.sourceLayer||rec.sourceLayer,toLayer=r.pair?.targetLayer||rec.targetLayer;
+        // Source/target carriers already contain bounded effective steps.
+        // NEVER re-cycle raw authored K in the middle of a changing N phase;
+        // that was the last path that injected extra full-step revolutions.
+        if(['continuous','phase','phaseCircle','minimalTurn'].includes(transport))
+            metric+='-effective-endpoint-step';
+        // Topology and rendered angular carrier must share the legal N step.
+        // This also covers a manually edited destination N smaller than 2*K.
+        const ringMax=Math.max(1,Math.floor(Math.max(2,N)/2));
+        if(step>ringMax){step=ringMax;delta=TWO_PI*step/Math.max(2,N)*dir;end=null;metric+='-N-clamped';}
         if(!end)end=rotateScaleCarrierPoint(anchor,delta,targetScale);
         // Match the per-layer frame snapshot so the GPU rail and ordinary geometry agree.
         const tangential=(Number(s?.tangential)||0)+((Number(d?.tangential)||0)-(Number(s?.tangential)||0))*ease;
@@ -547,7 +749,23 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
     // end of the animation.  Mixed spline/segments transitions interpolate
     // handles relative to their moving anchors, preserving the existing timing
     // of profileModeTransition without changing the carrier's endpoints.
-    function interpolatePreparedProfileCubics(source,target,t,handleT=t){
+    function preparedSpiralWidthLogs(record){
+        // Width values belong to the phase's immutable paired cubic rails.
+        // Precompute their logarithms once instead of four Math.log calls
+        // for every cubic on every animation frame.
+        if(record.preparedWidthLogs)return record.preparedWidthLogs;
+        const src=record.sc,dst=record.dc,log=new Float64Array(src.length*4);
+        for(let i=0;i<src.length;i++){
+            const a=src[i],b=dst[i],o=i*4;
+            log[o]=Math.log(Math.max(.02,Number(a.widthScale0)||1));
+            log[o+1]=Math.log(Math.max(.02,Number(b.widthScale0)||1));
+            log[o+2]=Math.log(Math.max(.02,Number(a.widthScale1)||1));
+            log[o+3]=Math.log(Math.max(.02,Number(b.widthScale1)||1));
+        }
+        record.preparedWidthLogs=log;
+        return log;
+    }
+    function interpolatePreparedProfileCubics(source,target,t,handleT=t,widthLogs=null){
         const u=clamp(Number(t)||0,0,1),h=clamp(Number(handleT)||0,0,1),out=new Array(source.length);
         const mix=(a,b,w)=>a+(b-a)*w;
         for(let j=0;j<source.length;j++){
@@ -558,9 +776,14 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
                       y:p0.y+mix(a.c1.y-a.p0.y,b.c1.y-b.p0.y,h)};
             const c2={x:p3.x+mix(a.c2.x-a.p3.x,b.c2.x-b.p3.x,h),
                       y:p3.y+mix(a.c2.y-a.p3.y,b.c2.y-b.p3.y,h)};
-            const wa0=Math.log(Math.max(.02,Number(a.widthScale0)||1)),wb0=Math.log(Math.max(.02,Number(b.widthScale0)||1));
-            const wa1=Math.log(Math.max(.02,Number(a.widthScale1)||1)),wb1=Math.log(Math.max(.02,Number(b.widthScale1)||1));
-            out[j]={p0,c1,c2,p3,widthScale0:Math.exp(mix(wa0,wb0,u)),widthScale1:Math.exp(mix(wa1,wb1,u))};
+            const wo=j*4;
+            const wa0=widthLogs?widthLogs[wo]:Math.log(Math.max(.02,Number(a.widthScale0)||1));
+            const wb0=widthLogs?widthLogs[wo+1]:Math.log(Math.max(.02,Number(b.widthScale0)||1));
+            const wa1=widthLogs?widthLogs[wo+2]:Math.log(Math.max(.02,Number(a.widthScale1)||1));
+            const wb1=widthLogs?widthLogs[wo+3]:Math.log(Math.max(.02,Number(b.widthScale1)||1));
+            out[j]={p0,c1,c2,p3,
+                widthScale0:wa0===0&&wb0===0?1:Math.exp(mix(wa0,wb0,u)),
+                widthScale1:wa1===0&&wb1===0?1:Math.exp(mix(wa1,wb1,u))};
         }
         return out;
     }
@@ -630,6 +853,40 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         }
         return cubics;
     }
+    // An exact phase snapshot can be topologically equal to the previous
+    // rendered rail but parametrized very differently from a newly rebuilt
+    // live-rounded Spline+ rail. Without this boundary taper, t=0 reads r.sc
+    // while t=epsilon reads the regenerated carrier: visually a teleport,
+    // particularly at sharp spiral tips. Keep the real endpoint cubics fixed,
+    // and introduce the live profile continuously over a short transition.
+    // The same correction applies approaching the target t=1 endpoint.
+    function spliceLiveRoundedCarrierAtBoundary(current,endpoint,endpointWeight){
+        if(!Array.isArray(current)||current.length!==endpoint?.length)return current;
+        const w=clamp(endpointWeight,0,1);
+        if(w<=0)return current;
+        if(w>=1)return endpoint;
+        // The path is newly built for this frame. Correct its coordinates
+        // in place instead of allocating four additional points per cubic.
+        // Rotational templates are independently snapshotted below before
+        // this function runs, so sibling branches still share the raw rail.
+        for(let i=0;i<current.length;i++){
+            const q=current[i],e=endpoint[i];
+            for(const name of ['p0','c1','c2','p3']){
+                q[name].x+=(e[name].x-q[name].x)*w;
+                q[name].y+=(e[name].y-q[name].y)*w;
+            }
+            q.widthScale0=(Number(q.widthScale0)||1)*(1-w)+(Number(e.widthScale0)||1)*w;
+            q.widthScale1=(Number(q.widthScale1)||1)*(1-w)+(Number(e.widthScale1)||1)*w;
+        }
+        return current;
+    }
+    function cloneCarrierCubicRailForTemplate(cubics){
+        return cubics.map(q=>({...q,p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}}));
+    }
+    function spiralEndpointTaper(t){
+        const u=clamp(t,0,1);
+        return u*u*(3-2*u);
+    }
     function ensureCarrierMappedCurrent(rec,t){
         if(!rec?.carrierMapped)return null;const tt=resolveEffectT(rec,t);if(Number.isFinite(rec.carrierCpuT)&&Math.abs(rec.carrierCpuT-tt)<1e-12&&rec.carrierPacked&&rec.carrierCurrentByPath)return rec.carrierPacked;
         const packed=rec.carrierPacked||(rec.carrierPacked=new Float32Array(rec.cubicCount*8)),byPath=rec.carrierCurrentByPath||(rec.carrierCurrentByPath=[]),frames=rec.carrierFrameSpecs||(rec.carrierFrameSpecs=[]);byPath.length=0;frames.length=0;
@@ -646,19 +903,26 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         // The fixed exact endpoint cubics are retained at t=0/1; no separate
         // post-Morph rounding pass is introduced.
         const liveRoundedSpline=rec.liveRoundedSpline===true&&preparedSpline;
-        const built=(tangentialOnly||(preparedSpline&&!liveRoundedSpline))?null:buildCarrierMappedLayer(rec,tt),layer=built?.layer,radius=built?.radius;
-        const splineHandleT=preparedSpline?resolveProfileModeTransitionT(rec,tt):tt;
+        // Smooth time only for the immutable two-endpoint Spiral rail. This
+        // suppresses the high derivative that otherwise looks like a tip snap
+        // in the last few real frames, without a special terminal renderer.
+        const endpointT=rec.phaseLockedEndpoints===true?spiralEndpointTaper(tt):tt;
+        const splineHandleT=rec.phaseLockedEndpoints===true?endpointT:
+            (preparedSpline?resolveProfileModeTransitionT(rec,tt):tt);
+        const deferredProfilePrep=liveRoundedSpline&&Math.abs(splineHandleT-tt)>1e-9;
+        const built=(tangentialOnly||(preparedSpline&&!liveRoundedSpline))?null:buildCarrierMappedLayer(rec,tt,!deferredProfilePrep),layer=built?.layer,radius=built?.radius;
         // The UI profile-transition schedule owns spline curvature, while the
         // carrier anchors/N/K keep their ordinary Morph clock. Rebuild only
         // the profile part of the intermediate static-equivalent rail when
         // the chosen handle schedule differs from geometric progress.
-        if(liveRoundedSpline&&built&&Math.abs(splineHandleT-tt)>1e-9){
+        if(deferredProfilePrep&&built){
             layer.profileNodes=copyProfileNodesForCarrier(rec.sourceLayer,rec.targetLayer,splineHandleT,rec.liveRoundProfileScratch||(rec.liveRoundProfileScratch=[]));
             if(typeof __spiroPrepareSpiralCarrierProfile==='function'){
                 built.preparedProfile=__spiroPrepareSpiralCarrierProfile(layer,{
                     profileNodes:layer.profileNodes,
                     roundingFrac:typeof getRoundingStrength==='function'?getRoundingStrength(layer.rounding):Math.max(0,Number(layer.rounding)||0)/100
                 });
+                if(built.preparedProfile)stats.carrierProfilePrepares++;
             }
         }
         let global=0,overflow=false;
@@ -688,6 +952,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
                 const templ=key?rotationalTemplates.get(key):null;
                 if(templ&&Math.abs(ar-templ.radius)<=Math.max(1e-7,templ.radius*1e-9)){
                     cubics=rotateCarrierCubics(templ.cubics,Math.atan2(Number(frame.anchor.y)||0,Number(frame.anchor.x)||0)-templ.angle);
+                    stats.carrierRotationalReuses=(stats.carrierRotationalReuses||0)+1;
                 }else{
                     const path=typeof __spiroBuildSpiralCarrierPath==='function'
                         ?__spiroBuildSpiralCarrierPath(layer,frame.anchor,{
@@ -699,18 +964,36 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
                         }):null;
                     const raw=path?endpointCubics(path,layer):[];
                     cubics=splitCubicRailToCountExact(raw,r.count,path?.__carrierMapped===true);
-                    if(cubics&&key)rotationalTemplates.set(key,{cubics,angle:Math.atan2(Number(frame.anchor.y)||0,Number(frame.anchor.x)||0),radius:ar});
+                    if(cubics&&key){
+                        // The endpoint splice must not alter the rotational
+                        // template reused for other branches of this frame.
+                        const templateRail=(tt<.15||tt>.85)
+                            ?cloneCarrierCubicRailForTemplate(cubics):cubics;
+                        rotationalTemplates.set(key,{cubics:templateRail,angle:Math.atan2(Number(frame.anchor.y)||0,Number(frame.anchor.x)||0),radius:ar});
+                        stats.carrierRotationalBuilds=(stats.carrierRotationalBuilds||0)+1;
+                    }
                 }
                 if(!cubics){
                     rec.liveRoundedSplineFallbacks=(rec.liveRoundedSplineFallbacks||0)+1;
                     cubics=interpolatePreparedProfileCubics(r.sc,r.dc,tt,splineHandleT);
                     if(r.explicitBridge===true)cubics=alignExplicitBridgeToCurrentPeriod(cubics,frame,r.roundedBridge===true);
                 }else rec.liveRoundedSplineFrames=(rec.liveRoundedSplineFrames||0)+1;
+                // 12.7.1: true C0 continuity for *nearby* real frames, not
+                // just the idealized 1.0/0.0 snapshot tested in 12.7.0.
+                // Preserve the static-equivalent live spline in the interior.
+                const boundarySpan=.15;
+                if(tt<boundarySpan){
+                    const liveWeight=spiralEndpointTaper(tt/boundarySpan);
+                    cubics=spliceLiveRoundedCarrierAtBoundary(cubics,r.sc,1-liveWeight);
+                }else if(tt>1-boundarySpan){
+                    const targetWeight=spiralEndpointTaper((tt-(1-boundarySpan))/boundarySpan);
+                    cubics=spliceLiveRoundedCarrierAtBoundary(cubics,r.dc,targetWeight);
+                }
             }else if(preparedSpline){
                 // This is a true Bézier-to-Bézier Morph, not a spline rebuild.
                 // Its subdivision layout is immutable until the next phase.
-                const frame=carrierFrameSpec(rec,r,tt);frames.push(frame);
-                cubics=interpolatePreparedProfileCubics(r.sc,r.dc,tt,splineHandleT);
+                const frame=carrierFrameSpec(rec,r,endpointT);frames.push(frame);
+                cubics=interpolatePreparedProfileCubics(r.sc,r.dc,endpointT,splineHandleT,preparedSpiralWidthLogs(r));
                 if(r.explicitBridge===true){
                     cubics=alignExplicitBridgeToCurrentPeriod(cubics,frame,r.roundedBridge===true);
                 }else if(r.periodic===true){
@@ -739,7 +1022,14 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
     }
 
     function buildLayerCpuResource(layerIndex,editPair=null){
-        const srcLayer=editPair?.sourceLayer||runtimeState.morph?.renderSourceLayers?.[layerIndex],dstLayer=editPair?.targetLayer||runtimeState.morph?.renderTargetLayers?.[layerIndex];if(!srcLayer||!dstLayer)return null;
+        const rawSrcLayer=editPair?.sourceLayer||runtimeState.morph?.renderSourceLayers?.[layerIndex],rawDstLayer=editPair?.targetLayer||runtimeState.morph?.renderTargetLayers?.[layerIndex];
+        if(!rawSrcLayer||!rawDstLayer)return null;
+        // The GPU must receive precisely the same bounded K as the ordinary
+        // geometry and the CPU fallbacks, BEFORE branch pairing or carrier
+        // creation. Never let raw authored K back into correspondence costs.
+        const srcLayer=typeof getSpiralGeometryLayer==='function'?getSpiralGeometryLayer(rawSrcLayer):rawSrcLayer;
+        const dstLayer=typeof getSpiralGeometryLayer==='function'?getSpiralGeometryLayer(rawDstLayer):rawDstLayer;
+        const sharedProfilePair=!editPair&&hasEquivalentSpiralProfilePair(layerIndex,srcLayer,dstLayer);
         if(!(srcLayer.spiralEnabled===true||dstLayer.spiralEnabled===true))return null;if(state?.fourierMode===true)return null;
         const spiralTransport=editPair?.spiralType||(typeof getEffectiveSpiralMorphTransport==='function'?getEffectiveSpiralMorphTransport():(typeof getSpiralMorphType==='function'?getSpiralMorphType():String(state?.morph?.spiralMorphType||'phaseCircle')));
         const profileMorphMode=String(editPair?.mode||state?.morph?.mode||'circleSlide');
@@ -752,8 +1042,23 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         // polygon and spiral endpoint rails in this cross-family case instead.
         const srcHasCoils=srcLayer?.spiralEnabled===true&&Math.abs(Number(srcLayer?.spiralOrder)||0)>1e-8;
         const dstHasCoils=dstLayer?.spiralEnabled===true&&Math.abs(Number(dstLayer?.spiralOrder)||0)>1e-8;
-        const carrierMappedEligible=srcHasCoils&&dstHasCoils&&spiralTransport!=='torn'&&profileMorphMode!=='fade';
-        const needsLiveRoundedSpline=Boolean(carrierMappedEligible&&
+        const selectiveFade=(spiralTransport==='phase'&&hasVertexAxisChange(srcLayer,dstLayer))||
+            (spiralTransport==='minimalTurn'&&hasStepAxisChange(srcLayer,dstLayer));
+        // A fading axis cannot simultaneously be rebuilt by the live carrier:
+        // otherwise the shader receives independently moving geometry even at
+        // a frame where that rail should ONLY be changing opacity. The paired
+        // static endpoint rails remain exact, while the non-fading axis still
+        // interpolates on each independent rail.
+        const carrierMappedEligible=srcHasCoils&&dstHasCoils&&!selectiveFade&&
+            spiralTransport!=='torn'&&spiralTransport!=='continuous'&&profileMorphMode!=='fade';
+        // Phase-locked endpoints (12.7.2): construct the static source and
+        // target once and only interpolate their prepared cubic rails. Never
+        // switch to a second live Spline+ rail inside the phase. The latter
+        // changes corner classification / tip curvature as N/K and branch
+        // correspondence change and was the source of visible topology snaps.
+        // Static edit preview keeps its existing live-rounded behavior.
+        const phaseLockedEndpoints=editPair===null&&carrierMappedEligible;
+        const needsLiveRoundedSpline=Boolean(!phaseLockedEndpoints&&carrierMappedEligible&&
             srcLayer?.profileMode==='spline'&&dstLayer?.profileMode==='spline'&&
             srcLayer?.spiralClosed!==false&&dstLayer?.spiralClosed!==false&&
             srcLayer?.spiralRoundSeams!==false&&dstLayer?.spiralRoundSeams!==false&&
@@ -763,11 +1068,64 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
             Array.isArray(srcLayer.profileNodes)&&Array.isArray(dstLayer.profileNodes)&&
             srcLayer.profileNodes.length===dstLayer.profileNodes.length);
         // A single authored Bézier profile rail; closed topology adds only a bridge.
-        let srcPaths=buildOrbitPolylines(srcLayer)||[],dstPaths=buildOrbitPolylines(dstLayer)||[];if(!srcPaths.length||!dstPaths.length)return null;const pairs=(spiralTransport==='minimalTurn'||spiralTransport==='torn')?pairMinimalTurnSpiralPaths(srcPaths,dstPaths,srcLayer,dstLayer):stableSpiralPairs(srcPaths,dstPaths,srcLayer,dstLayer);if(!pairs.length)return null;
+        // The phase end is the ONLY authoritative start of the next phase.
+        // A new branch-count pairing can have more/less (including invisible)
+        // paths even when all authored parameters match. Carry the exact
+        // completed GPU Bezier rails, not a newly generated similar contour.
+        const axisFade=(spiralTransport==='phase'&&hasVertexAxisChange(srcLayer,dstLayer)) ||
+            (spiralTransport==='minimalTurn'&&hasStepAxisChange(srcLayer,dstLayer));
+        const capped=srcLayer.spiralStepLimiterEnabled!==false||dstLayer.spiralStepLimiterEnabled!==false;
+        const exactStart=editPair===null&&!axisFade&&spiralTransport==='phaseCircle'&&!capped&&Array.isArray(srcLayer.__morphBoundaryRails)
+            ?srcLayer.__morphBoundaryRails:null;
+        let srcPaths=exactStart?.length
+            ?exactStart.map(entry=>({...entry.path,
+                __morphBoundarySourceCubics:entry.cubics,
+                __morphBoundarySourcePresent:entry.present===true}))
+            :buildOrbitPolylines(srcLayer)||[];
+        const dstPaths=buildOrbitPolylines(dstLayer)||[];
+        // Retired rails must never become new visible source paths. With a cyclic
+        // limiter rebuild the canonical N paths; otherwise phase boundaries can
+        // multiply K=3/4 even though their effective K is only 1/2.
+        srcPaths=srcPaths.filter(path=>path.__morphBoundarySourcePresent!==false);
+        if(!srcPaths.length||!dstPaths.length)return null;
+        const fixedAxisPairs=pairFixedAxisFade(spiralTransport,srcLayer,dstLayer,srcPaths,dstPaths);
+        // Under a cyclic cap, branch changes come from the vertex count N,
+        // not a growing integer K. Pair each path at most once; unmatched
+        // paths fade rather than repeatedly reusing one endpoint as clones.
+        // Unrestricted phase-circle retains its original split/merge feature.
+        const cyclicConstrained=(srcLayer.spiralStepLimiterEnabled!==false && dstLayer.spiralStepLimiterEnabled!==false &&
+            Math.round(Number(srcLayer.spiralStepLimiter)||2)===Math.round(Number(dstLayer.spiralStepLimiter)||2));
+        // Even with the optional cycle disabled, shrinking N can make an
+        // authored maximal K illegal. That is a forced K reduction, not a
+        // request to split a spiral into many equivalent overlapping rails.
+        const forcedStepDrop=Number(dstLayer.N)<Number(srcLayer.N)&&
+            Number(srcLayer.K)>Math.max(1,Math.floor(Number(dstLayer.N)/2));
+        // Fixed N/K is a strict crossfade for ALL geometric edits, not only a
+        // K/N count change. Neither rail moves, regardless of profile/rotation.
+        const fadesNK=spiralTransport==='continuous';
+        const pairs=fixedAxisPairs||(
+            fadesNK ? [
+                ...srcPaths.map(src=>({src,dst:src,sourcePathPresent:true,targetPathPresent:false,fadeOutgoing:true,stableSpiralPairing:true})),
+                ...dstPaths.map(dst=>({src:dst,dst,sourcePathPresent:false,targetPathPresent:true,fadeIncoming:true,stableSpiralPairing:true}))
+            ] : (spiralTransport==='torn'
+                ?pairTornWithoutClones(srcPaths,dstPaths,srcLayer,dstLayer)
+                :((cyclicConstrained||forcedStepDrop)&&spiralTransport==='phaseCircle'
+                    ?pairTornWithoutClones(srcPaths,dstPaths,srcLayer,dstLayer)
+                    :(spiralTransport==='minimalTurn'
+                        ?pairMinimalTurnSpiralPaths(srcPaths,dstPaths,srcLayer,dstLayer)
+                        :stableSpiralPairs(srcPaths,dstPaths,srcLayer,dstLayer)))));
+        if(!pairs.length)return null;
+        if(exactStart?.length){
+            // Stable split/merge already selects one visible copy per branch.
+            // An old retiring/ghost branch must remain invisible at phase 0.
+            for(const pair of pairs)
+                pair.sourcePathPresent=pair.sourcePathPresent!==false&&
+                    pair.src?.__morphBoundarySourcePresent===true;
+        }
 
         const records=[];let cubicCount=0;
         for(let pairIndex=0;pairIndex<pairs.length;pairIndex++){
-            const pair=pairs[pairIndex],sourceMetrics=pair._sourceRetainedMetrics||null,targetMetrics=pair._targetRetainedMetrics||null,rawSc=sourceMetrics?.cubics||endpointCubics(pair.src,srcLayer),rawDc=targetMetrics?.cubics||endpointCubics(pair.dst,dstLayer);if(!rawSc.length||!rawDc.length)continue;
+            const pair=pairs[pairIndex],pairSourceLayer=pair.sourceLayer||(pair.fadeIncoming?dstLayer:srcLayer),pairTargetLayer=pair.targetLayer||(pair.fadeOutgoing?srcLayer:dstLayer),sourceMetrics=pair._sourceRetainedMetrics||null,targetMetrics=pair._targetRetainedMetrics||null,rawSc=pair.src?.__morphBoundarySourceCubics||sourceMetrics?.cubics||endpointCubics(pair.src,pairSourceLayer),rawDc=pair.fadeOutgoing&&pair.src?.__morphBoundarySourceCubics?pair.src.__morphBoundarySourceCubics:(targetMetrics?.cubics||endpointCubics(pair.dst,pairTargetLayer));if(!rawSc.length||!rawDc.length)continue;
 
             const sourceRawArcMap=sourceMetrics?.map||buildRailArcMap(rawSc),targetRawArcMap=targetMetrics?.map||buildRailArcMap(rawDc),sourceRawKnotFractions=sourceRawArcMap.knots,targetRawKnotFractions=targetRawArcMap.knots;
             const crossFamily=srcHasCoils!==dstHasCoils,crossFamilyCartesianTransport=crossFamily&&(spiralTransport==='phaseCircle'||spiralTransport==='minimalTurn'||spiralTransport==='phase'||spiralTransport==='topology');
@@ -778,14 +1136,23 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
                 // *between* its two authored endpoints. Reserve subdivision-only
                 // cubics so the live intermediate carrier never falls back to
                 // the unsmoothed endpoint mix because of an inadequate budget.
-                if(needsLiveRoundedSpline)n+=Math.max(8,Math.ceil(n*.2));
-                sc=splitCubicRailToCountExact(rawSc,n);dc=splitCubicRailToCountExact(rawDc,n);
+                // Budget the extra *target* curvature once, not 20% of the
+                // carried source on every phase. Otherwise exact handoffs
+                // inflate the rail exponentially and destroy multi-layer FPS.
+                if(needsLiveRoundedSpline){
+                    if(exactStart?.length)n=Math.max(n,rawDc.length+Math.max(8,Math.ceil(rawDc.length*.2)));
+                    else n+=Math.max(8,Math.ceil(n*.2)); // unchanged original phase budget
+                }
+                sc=pair.src?.__morphBoundarySourceCubics
+                    ?padExactPhaseSourceCubics(rawSc,n)
+                    :splitCubicRailToCountExact(rawSc,n);
+                dc=splitCubicRailToCountExact(rawDc,n);
                 if(sc&&dc){exactSubdivisionOnly=true;commonFractions=cubicKnotFractions(sc);}else{const eq=equalizeCubicRailsByArc(rawSc,rawDc,sourceRawArcMap,targetRawArcMap);sc=eq.source;dc=eq.target;n=Math.min(sc.length,dc.length);commonFractions=eq.fractions.slice(0,n+1);arcEqualized=true;}
             }else{
                 const eq=equalizeCubicRailsByArc(rawSc,rawDc,sourceRawArcMap,targetRawArcMap);sc=eq.source;dc=eq.target;n=Math.min(sc.length,dc.length);commonFractions=eq.fractions.slice(0,n+1);arcEqualized=true;
             }
             if(!n||!sc?.length||!dc?.length)continue;
-            const sp=cubicRailPoints(sc),dp=cubicRailPoints(dc),sourceClosure=periodicClosureSpec(pair.src,rawSc,srcLayer),targetClosure=periodicClosureSpec(pair.dst,rawDc,dstLayer);records.push({pair,sp,dp,sc:sc.slice(0,n),dc:dc.slice(0,n),count:n,closed:Boolean(pair?.src?.closed&&pair?.dst?.closed),sourceClosure,targetClosure,periodic:Boolean(sourceClosure.periodic&&targetClosure.periodic),sourceRawCubics:rawSc,targetRawCubics:rawDc,sourceRawKnotFractions,targetRawKnotFractions,sourceLampKeyFractions:authoredFlagFractions(pair.src,sourceRawArcMap,'key'),targetLampKeyFractions:authoredFlagFractions(pair.dst,targetRawArcMap,'key'),sourceCornerFractions:authoredFlagFractions(pair.src,sourceRawArcMap,'corner'),targetCornerFractions:authoredFlagFractions(pair.dst,targetRawArcMap,'corner'),sourcePathLength:sourceRawArcMap.total,targetPathLength:targetRawArcMap.total,knotFractions:commonFractions||cubicKnotFractions(sc),explicitBridge:pair.src?.spiralExplicitBridge===true&&pair.dst?.spiralExplicitBridge===true,roundedBridge:srcLayer.spiralRoundSeams!==false&&dstLayer.spiralRoundSeams!==false,arcEqualized,exactSubdivisionOnly,crossFamilyCartesianTransport});cubicCount+=n;
+            const sp=cubicRailPoints(sc),dp=cubicRailPoints(dc),sourceClosure=spiralTransport==='torn'?{periodic:false,delta:0,logScale:0,error:0,tangentProtected:false}:periodicClosureSpec(pair.src,rawSc,pairSourceLayer),targetClosure=spiralTransport==='torn'?{periodic:false,delta:0,logScale:0,error:0,tangentProtected:false}:periodicClosureSpec(pair.dst,rawDc,pairTargetLayer);records.push({pair,sp,dp,sc:sc.slice(0,n),dc:dc.slice(0,n),count:n,closed:spiralTransport!=='torn'&&Boolean(pair?.src?.closed&&pair?.dst?.closed),sourceClosure,targetClosure,periodic:Boolean(sourceClosure.periodic&&targetClosure.periodic),sourceRawCubics:rawSc,targetRawCubics:rawDc,sourceRawKnotFractions,targetRawKnotFractions,sourceLampKeyFractions:authoredFlagFractions(pair.src,sourceRawArcMap,'key'),targetLampKeyFractions:authoredFlagFractions(pair.dst,targetRawArcMap,'key'),sourceCornerFractions:authoredFlagFractions(pair.src,sourceRawArcMap,'corner'),targetCornerFractions:authoredFlagFractions(pair.dst,targetRawArcMap,'corner'),sourcePathLength:sourceRawArcMap.total,targetPathLength:targetRawArcMap.total,knotFractions:commonFractions||cubicKnotFractions(sc),explicitBridge:pair.src?.spiralExplicitBridge===true&&pair.dst?.spiralExplicitBridge===true,roundedBridge:srcLayer.spiralRoundSeams!==false&&dstLayer.spiralRoundSeams!==false,arcEqualized,exactSubdivisionOnly,crossFamilyCartesianTransport});cubicCount+=n;
         }
         if(!cubicCount)return null;const data=new Float32Array(cubicCount*FLOATS_PER_CUBIC);let ci=0;for(const r of records)ci=packPairCubics(r.sc,r.dc,r.pair.sourcePathPresent!==false,r.pair.targetPathPresent!==false,data,ci,spiralTransport,profileMorphMode,r.crossFamilyCartesianTransport===true,standardSpiralSlide);
         const topologyMergeSplitCount=records.reduce((n,r)=>n+((r.pair.sourcePathPresent!==false)!==(r.pair.targetPathPresent!==false)?1:0),0);
@@ -826,13 +1193,22 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         // authority to equal-sized, closed spline edits with positive authored
         // rounding. Other Morphs preserve the proven prepared-rail transport.
         const liveRoundedSpline=needsLiveRoundedSpline;
-        let carrierFirst=0;for(let ri=0;ri<records.length;ri++){const r=records[ri],sbi=Number(r.pair?.src?.spiralBranchIndex),dbi=Number(r.pair?.dst?.spiralBranchIndex);r.firstSegment=carrierFirst;carrierFirst+=r.count;r.sourceCarrier=carrierLayerSpec(srcLayer,Number.isFinite(sbi)?sbi:ri);r.targetCarrier=carrierLayerSpec(dstLayer,Number.isFinite(dbi)?dbi:ri);r.currentBranchIndex=Number.isFinite(sbi)?sbi:(Number.isFinite(dbi)?dbi:ri);r.profileTargetCount=0;}
+        let carrierFirst=0;for(let ri=0;ri<records.length;ri++){const r=records[ri],sbi=Number(r.pair?.src?.spiralBranchIndex),dbi=Number(r.pair?.dst?.spiralBranchIndex);r.firstSegment=carrierFirst;carrierFirst+=r.count;r.sourceCarrier=carrierLayerSpec(r.pair.sourceLayer||srcLayer,Number.isFinite(sbi)?sbi:ri);r.targetCarrier=carrierLayerSpec(r.pair.targetLayer||dstLayer,Number.isFinite(dbi)?dbi:ri);r.currentBranchIndex=Number.isFinite(sbi)?sbi:(Number.isFinite(dbi)?dbi:ri);r.profileTargetCount=0;}
         const auxPairs=records.map((r,pairIndex)=>({source:r.sp,target:r.dp,sourcePresent:r.pair.sourcePathPresent!==false,targetPresent:r.pair.targetPathPresent!==false,closed:r.closed===true,points:[],pairIndex,sourceBranchIndex:Number(r.pair?.src?.spiralBranchIndex),targetBranchIndex:Number(r.pair?.dst?.spiralBranchIndex),sourceBranchCount:Math.max(2,Math.round(Number(srcLayer?.N)||records.length)),targetBranchCount:Math.max(2,Math.round(Number(dstLayer?.N)||records.length)),branchPhase:0}));const allClosed=records.length>0&&records.every(r=>r.closed===true);
-        const interpolationMetric=spiralTransport==='continuous'?'cartesian':(spiralTransport==='torn'?(profileMorphMode==='topology'?'cartesian':'least-turn-polar'):(spiralTransport==='minimalTurn'?'least-turn-polar':'outer-pinned-phase-polar'));
-        return{layerIndex,sourceLayer:srcLayer,targetLayer:dstLayer,carrierMapped,fullBezierMode,preparedContinuousSplineRail,preparedRoundedProfileRail,liveRoundedSpline,extraInterpolationActive:false,tangentialOnlyCarrierChange:isTangentialOnlyCarrierChange(srcLayer,dstLayer),carrierRecords:records,carrierCpuT:NaN,carrierPacked:null,carrierCurrentByPath:null,carrierOverflow:false,carrierUploadedT:NaN,carrierUploadedGeneration:-1,phaseSerial:Number(runtimeState.morph?.gpuPhasePrepareSerial)||0,staticEdit:editPair!==null,morphType:spiralTransport,spiralTransport,spiralSlideType:spiralTransport,profileMorphMode,interpolationMetric,sourceSpline:srcLayer?.profileMode==='spline',targetSpline:dstLayer?.profileMode==='spline',data,cubicCount,segmentCount:cubicCount,pathCount,pointCount:pointBase,allClosed,topologyMergeSplitCount,continuousTopologyTransport:spiralTransport==='phaseCircle'||spiralTransport==='minimalTurn'||(spiralTransport!=='torn'&&profileMorphMode!=='fade'),stableSpiralPairing:records.every(r=>r.pair?.stableSpiralPairing===true),exactSubdivisionOnly:records.every(r=>r.exactSubdivisionOnly===true),arcEqualizedRecords:records.filter(r=>r.arcEqualized===true).length,cartesianFallbackCubics,maxPackedPolarTurn,topologySignature:`spiral-bezier:${profileMorphMode}:${spiralTransport}:${layerIndex}:${pathCount}:${cubicCount}:${srcLayer?.profileMode==='spline'?'S':'G'}${dstLayer?.profileMode==='spline'?'S':'G'}:${records.map(r=>r.closed?1:0).join('')}`,cpuSegmentMeta,cpuPathSegmentRanges,cpuPathRanges:pathRanges,cpuPathPeriodic,cpuEndpointPathLengths,cpuPathKnotFractions,cpuPathLampKeyFractions,cpuPathCornerFractions,cpuPathClosure,maxEndpointClosureError,maxEndpointTangentClosureError,pathRanges:closureCubicRanges,closureCubicRanges,auxPairs,buffer:null,bind:null,uniformBase:null,uniformGlow:null,uniformBaseBind:null,uniformGlowBind:null,cubicBuffer:null,cubicUniformBuffer:null,cubicBind:null,pathRangeBuffer:null,segmentMetaBuffer:null,pathSegmentRangeBuffer:null,pathClosureBuffer:null,closureBind:null,tangentRepairBind:null,bezierVisualRail:true,bezierSubdiv:SUBDIV,arcSubdiv:ARC_SUBDIV,specialSpiralBezierRail:true,exactEndpointCubics:true,gpuOnlySpiralEffects:true,copyBuffer:null,copyBind:null,copyCapacity:0,copyData:new Float32Array(0),copyPackedFrameId:-1,copyPackedCount:0,copyPackedMultiColor:false,auxT:NaN,lastCubicT:NaN,currentCubicsCommittedFrameId:-1,currentCubicsCommittedT:NaN,currentCubicsRootProducerFrameId:-1,currentCubicsRootProducerT:NaN,ready:false};
+        const interpolationMetric=spiralTransport==='continuous'?'opacity-crossfade':(spiralTransport==='torn'?(profileMorphMode==='topology'?'cartesian':'least-turn-polar'):(spiralTransport==='minimalTurn'?'least-turn-polar':'outer-pinned-phase-polar'));
+        return{layerIndex,sourceLayer:srcLayer,targetLayer:dstLayer,sharedProfilePair,carrierMapped,phaseLockedEndpoints,fullBezierMode,preparedContinuousSplineRail,preparedRoundedProfileRail,liveRoundedSpline,extraInterpolationActive:false,tangentialOnlyCarrierChange:isTangentialOnlyCarrierChange(srcLayer,dstLayer),carrierRecords:records,carrierCpuT:NaN,carrierPacked:null,carrierCurrentByPath:null,carrierOverflow:false,carrierUploadedT:NaN,carrierUploadedGeneration:-1,phaseSerial:Number(runtimeState.morph?.gpuPhasePrepareSerial)||0,staticEdit:editPair!==null,morphType:spiralTransport,spiralTransport,spiralSlideType:spiralTransport,profileMorphMode,interpolationMetric,sourceSpline:srcLayer?.profileMode==='spline',targetSpline:dstLayer?.profileMode==='spline',data,cubicCount,segmentCount:cubicCount,pathCount,pointCount:pointBase,allClosed,topologyMergeSplitCount,continuousTopologyTransport:spiralTransport==='phaseCircle'||spiralTransport==='minimalTurn'||(spiralTransport!=='torn'&&profileMorphMode!=='fade'),stableSpiralPairing:records.every(r=>r.pair?.stableSpiralPairing===true),exactSubdivisionOnly:records.every(r=>r.exactSubdivisionOnly===true),arcEqualizedRecords:records.filter(r=>r.arcEqualized===true).length,cartesianFallbackCubics,maxPackedPolarTurn,topologySignature:`spiral-bezier:${profileMorphMode}:${spiralTransport}:${layerIndex}:${pathCount}:${cubicCount}:${srcLayer?.profileMode==='spline'?'S':'G'}${dstLayer?.profileMode==='spline'?'S':'G'}:${records.map(r=>r.closed?1:0).join('')}`,cpuSegmentMeta,cpuPathSegmentRanges,cpuPathRanges:pathRanges,cpuPathPeriodic,cpuEndpointPathLengths,cpuPathKnotFractions,cpuPathLampKeyFractions,cpuPathCornerFractions,cpuPathClosure,maxEndpointClosureError,maxEndpointTangentClosureError,pathRanges:closureCubicRanges,closureCubicRanges,auxPairs,buffer:null,bind:null,uniformBase:null,uniformGlow:null,uniformBaseBind:null,uniformGlowBind:null,cubicBuffer:null,cubicUniformBuffer:null,cubicBind:null,pathRangeBuffer:null,segmentMetaBuffer:null,pathSegmentRangeBuffer:null,pathClosureBuffer:null,closureBind:null,tangentRepairBind:null,bezierVisualRail:true,bezierSubdiv:SUBDIV,arcSubdiv:ARC_SUBDIV,specialSpiralBezierRail:true,exactEndpointCubics:true,gpuOnlySpiralEffects:true,copyBuffer:null,copyBind:null,copyCapacity:0,copyData:new Float32Array(0),copyPackedFrameId:-1,copyPackedCount:0,copyPackedMultiColor:false,auxT:NaN,lastCubicT:NaN,currentCubicsCommittedFrameId:-1,currentCubicsCommittedT:NaN,currentCubicsRootProducerFrameId:-1,currentCubicsRootProducerT:NaN,ready:false};
     }
     function allocateMorphPairGpu(rec,i){
-                rec.buffer=device.createBuffer({label:`Somata Spiral Bézier Morph L${i}`,size:Math.max(96,Math.ceil(rec.data.byteLength/16)*16),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.buffer,0,rec.data.buffer,rec.data.byteOffset,rec.data.byteLength);
+                // Spiral 13.0.6: bake logarithms of immutable width endpoints once
+                // per phase instead of evaluating 4 log + 2 exp operations in
+                // every GPU tessellation invocation for all SUBDIV samples.
+                // Keep rec.data untouched: auxiliary CPU paths still use widths.
+                const gpuData=new Float32Array(rec.data);
+                for(let ci=0;ci<rec.cubicCount;ci++){
+                    const o=ci*FLOATS_PER_CUBIC;
+                    for(let k=16;k<20;k++)gpuData[o+k]=Math.log(Math.max(.02,gpuData[o+k]));
+                }
+                rec.buffer=device.createBuffer({label:`Somata Spiral Bézier Morph L${i}`,size:Math.max(96,Math.ceil(gpuData.byteLength/16)*16),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(rec.buffer,0,gpuData.buffer,gpuData.byteOffset,gpuData.byteLength);
                 rec.cubicBuffer=device.createBuffer({label:`Somata Spiral Bézier shared current cubics L${i}`,size:Math.max(32,rec.cubicCount*32),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
                 rec.fastRailBuffer=device.createBuffer({label:`Somata 7.5 Spiral Fast Visual Rail L${i}`,size:Math.max(32,rec.cubicCount*SUBDIV*32),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
                 rec.cubicUniformBuffer=device.createBuffer({label:`Somata Spiral Bézier shared cubic phase L${i}`,size:32,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
@@ -850,7 +1226,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         return rec;
     }
     async function preparePhase(){
-        if(!(state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()))){retireCurrentResources('prepare-ineligible');return 0;}
+        if(!((state?.morph?.mode==='circleSlide'||state?.morph?.mode==='topoCircle')||(typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()))){retireCurrentResources('prepare-ineligible');return 0;}
         if(!await ensureReady()){retireCurrentResources('prepare-unavailable');return 0;}
         const nextResources=new Map();let built=0;
         try{
@@ -911,7 +1287,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         if(old)destroyStaticVisual(old);
         try{
             const meta=new Float32Array(source.cubicCount*24);
-            for(let i=0;i<source.cubicCount;i++){const o=i*24,w0=Math.max(.02,Number(source.cpuCubicWidthScales?.[i*2])||1),w1=Math.max(.02,Number(source.cpuCubicWidthScales?.[i*2+1])||1);meta[o+16]=w0;meta[o+17]=w1;meta[o+18]=w0;meta[o+19]=w1;meta[o+20]=1;meta[o+21]=1;}for(let pi=0;pi<(source.pathCount||0);pi++){const ro=pi*4,first=source.cpuPathSegmentRanges?.[ro]>>>0,count=source.cpuPathSegmentRanges?.[ro+1]>>>0;if(!count)continue;meta[first*24+23]=meta[first*24+23]+1;meta[(first+count-1)*24+23]=meta[(first+count-1)*24+23]+2;}
+            for(let i=0;i<source.cubicCount;i++){const o=i*24,w0=Math.max(.02,Number(source.cpuCubicWidthScales?.[i*2])||1),w1=Math.max(.02,Number(source.cpuCubicWidthScales?.[i*2+1])||1);meta[o+16]=Math.log(w0);meta[o+17]=Math.log(w1);meta[o+18]=meta[o+16];meta[o+19]=meta[o+17];meta[o+20]=1;meta[o+21]=1;}for(let pi=0;pi<(source.pathCount||0);pi++){const ro=pi*4,first=source.cpuPathSegmentRanges?.[ro]>>>0,count=source.cpuPathSegmentRanges?.[ro+1]>>>0;if(!count)continue;meta[first*24+23]=meta[first*24+23]+1;meta[(first+count-1)*24+23]=meta[(first+count-1)*24+23]+2;}
             const metaBuffer=device.createBuffer({label:`Somata static Spiral visual metadata L${key}`,size:Math.max(96,meta.byteLength),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
             device.queue.writeBuffer(metaBuffer,0,meta);
             const uniformBase=device.createBuffer({label:`Somata static Spiral base uniforms L${key}`,size:80,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
@@ -925,7 +1301,25 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         }catch(err){lastError=String(err?.message||err);stats.errors++;return null;}
     }
     function getVisualResource(frameCtx){return frameCtx?.spiralEditMorph?getStaticEditResource(frameCtx):frameCtx?.morphFrameActive?getResource(frameCtx.layerIndex):getStaticVisualResource(frameCtx);}
-    function resolveEffectT(rec,t){let tt=clamp(Number(t)||0,0,1);if(rec?.staticEdit===true)return tt;const currentPhaseSerial=Number(runtimeState.morph?.gpuPhasePrepareSerial)||0;if(runtimeState.morph?.gpuPhasePreparing===true&&Number(rec?.phaseSerial)!==currentPhaseSerial)tt=clamp(Number(runtimeState.morph?.gpuPhaseHandoffT),0,1);return tt;}
+    function resolveEffectT(rec,t){
+        let tt=clamp(Number(t)||0,0,1);
+        if(rec?.staticEdit!==true){
+            const currentPhaseSerial=Number(runtimeState.morph?.gpuPhasePrepareSerial)||0;
+            if(runtimeState.morph?.gpuPhasePreparing===true&&Number(rec?.phaseSerial)!==currentPhaseSerial)
+                tt=clamp(Number(runtimeState.morph?.gpuPhaseHandoffT),0,1);
+        }
+        // The exact Bézier carrier and its Web/Fill/Glow consumers must travel
+        // along the same zero-order phase as the Blue frame. Never invent a
+        // second easing curve or apply this to nonzero -> nonzero transports.
+        const from=rec?.sourceLayer?.spiralEnabled===true?Number(rec.sourceLayer.spiralOrder)||0:0;
+        const to=rec?.targetLayer?.spiralEnabled===true?Number(rec.targetLayer.spiralOrder)||0:0;
+        const withCorridor=rec?.staticEdit===true
+            ?window.__somataCorridorOrderChangeActive?.(rec.sourceLayer?.id)===true
+            :state.tunnel?.active===true;
+        const phase=window.SomataSpiralZeroTransition?.plan(rec?.sourceLayer?.spiralZeroTransitionMode,from,to,tt,withCorridor);
+        if(phase?.zeroEndpoint&&Math.abs(to-from)>1e-8)return clamp((phase.order-from)/(to-from),0,1);
+        return tt;
+    }
     function resolveProfileModeTransitionT(rec,t){
         const tt=Math.max(0,Math.min(1,Number(t)||0));
         // Even spline→spline changes can carry a different final curvature.
@@ -1037,14 +1431,13 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
             // Share the authoritative Corridor colour/angle values with Glow/Base/Fill.
             // Missing stroke base keeps the original direct rule (no cache substitution).
             const ang=corridor&&typeof getMotionTunnelLagRadians==='function'?(sharedBatch&&sharedBatch.copies[i]===cp&&sharedBatch.angleVersion[i]===sharedBatch.serial?sharedBatch.angles[i]:getMotionTunnelLagRadians(cp,frameCtx.layer)):0,cs=Math.cos(ang),sn=Math.sin(ang);
-            const style=corridor&&typeof getTunnelCopyColor==='function'?(sharedBatch&&frameCtx.tunnelBaseStrokeColor&&sharedBatch.copies[i]===cp&&sharedBatch.strokeVersion[i]===sharedBatch.serial?sharedBatch.stroke[i]:getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,cp,frameCtx.tunnelPaletteProfile)):(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#fff'),styleKey=String(style||''),c=rgba(style),o=k*12;if(firstStyle===null)firstStyle=styleKey;else if(styleKey!==firstStyle)multiColor=true;rec.copyData[o]=sc*cs;rec.copyData[o+1]=-sc*sn;rec.copyData[o+2]=ca;rec.copyData[o+3]=sc;rec.copyData[o+4]=sc*sn;rec.copyData[o+5]=sc*cs;rec.copyData[o+6]=c[0];rec.copyData[o+7]=c[1];rec.copyData[o+8]=c[2];rec.copyData[o+9]=c[3];k++;}
+            const style=corridor&&typeof getTunnelCopyColor==='function'?(sharedBatch&&frameCtx.tunnelBaseStrokeColor&&sharedBatch.copies[i]===cp&&sharedBatch.strokeVersion[i]===sharedBatch.serial?sharedBatch.stroke[i]:getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,cp,frameCtx.tunnelPaletteProfile,frameCtx.layer)):(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#fff'),styleKey=String(style||''),c=rgba(style),o=k*12;if(firstStyle===null)firstStyle=styleKey;else if(styleKey!==firstStyle)multiColor=true;rec.copyData[o]=sc*cs;rec.copyData[o+1]=-sc*sn;rec.copyData[o+2]=ca;rec.copyData[o+3]=sc;rec.copyData[o+4]=sc*sn;rec.copyData[o+5]=sc*cs;rec.copyData[o+6]=c[0];rec.copyData[o+7]=c[1];rec.copyData[o+8]=c[2];rec.copyData[o+9]=c[3];k++;}
         if(k){device.queue.writeBuffer(rec.copyBuffer,0,rec.copyData.buffer,0,k*48);stats.uploads+=k*48;}else stats.uploadSkips++;
         rec.copyPackedFrameId=fid;rec.copyPackedCount=k;rec.copyPackedMultiColor=multiColor;return k;
     }
     function prepareUniform(frameCtx,rec,copyCount,ctx,mode,opts){
         const tr=ctx.getTransform(),a=Number(tr.a)||1,b=Number(tr.b)||0,c=Number(tr.c)||0,d=Number(tr.d)||1,e=Number(tr.e)||0,f=Number(tr.f)||0;const matrixScale=Math.sqrt(Math.max(1e-12,Math.abs(a*d-b*c))),combined=Math.max(.001,Math.abs(Number(frameCtx.combinedScale)||1)),outerScale=matrixScale/combined;const hw=Math.max(.18,Math.max(.001,Number(frameCtx.strokeWidth)||1.5)*outerScale*.5),gr=mode==='glow'?Math.max(.5,Number(opts?.radiusPx)||0):0,core=mode==='base'?clamp(Number(opts?.alphaScale??1),0,1)*clamp(Number(frameCtx.baseAlpha)||0,0,1):0,glow=mode==='glow'?clamp(Number(opts?.alphaScale??1),0,1)*clamp(Number(frameCtx.baseAlpha)||0,0,1):0;let t=rec?.staticVisual===true?0:clamp(Number(frameCtx.spiralEditMorph?.progress??frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress)||0,0,1);
-        const currentPhaseSerial=Number(runtimeState.morph?.gpuPhasePrepareSerial)||0;
-        if(rec?.staticEdit!==true&&rec?.staticVisual!==true&&runtimeState.morph?.gpuPhasePreparing===true&&Number(rec?.phaseSerial)!==currentPhaseSerial)t=clamp(Number(runtimeState.morph?.gpuPhaseHandoffT),0,1);
+        t=rec?.staticVisual===true?0:resolveEffectT(rec,t);
         const centerShade=rec?.lastCenterShade?.enabled===true?rec.lastCenterShade:spiralCenterShadeSpec(frameCtx);rec.lastCenterShade=centerShade;uf.fill(0);uf[0]=width;uf[1]=height;uu[2]=rec.cubicCount>>>0;uu[3]=copyCount>>>0;uf[4]=a;uf[5]=c;uf[6]=e;uf[8]=b;uf[9]=d;uf[10]=f;uf[12]=hw;uf[13]=gr;uf[14]=core;uf[15]=glow;uf[16]=t;uf[17]=centerShade.enabled?centerShade.startRadius:0;uf[18]=centerShade.enabled?centerShade.endRadius:0;uf[19]=centerShade.enabled?1:0;const buf=mode==='glow'?rec.uniformGlow:rec.uniformBase;device.queue.writeBuffer(buf,0,uniformBytes);stats.uploads+=80;return mode==='glow'?rec.uniformGlowBind:rec.uniformBaseBind;
     }
     function resolveTarget(frameCtx,opts={}){
@@ -1131,14 +1524,34 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         const transported=(er,ea,cr,ca,currentAngle,cart)=>{const e=polarXY(er,ea),c=polarXY(cr,ca),v={x:c.x-e.x,y:c.y-e.y};return cart?v:rot(v,currentAngle-ea);};
         const mixHandle=(a,b,u)=>({x:a.x+(b.x-a.x)*u,y:a.y+(b.y-a.y)*u});
         const cubicAt=(p0,c1,c2,p3,q)=>{const z=1-q,z2=z*z,q2=q*q;return{x:z2*z*p0.x+3*z2*q*c1.x+3*z*q2*c2.x+q2*q*p3.x,y:z2*z*p0.y+3*z2*q*c1.y+3*z*q2*c2.y+q2*q*p3.y};};
+        // Width endpoints are immutable within a prepared phase. Cache their
+        // logarithms for all subpaths; each new frame only interpolates logs.
+        let widthLogs=rec.auxWidthLogs;
+        if(!widthLogs||widthLogs.length!==rec.cubicCount*4){
+            widthLogs=new Float64Array(rec.cubicCount*4);
+            for(let ci=0;ci<rec.cubicCount;ci++){
+                const off=ci*FLOATS_PER_CUBIC,wo=ci*4;
+                widthLogs[wo]=Math.log(Math.max(.02,data[off+16]));
+                widthLogs[wo+1]=Math.log(Math.max(.02,data[off+17]));
+                widthLogs[wo+2]=Math.log(Math.max(.02,data[off+18]));
+                widthLogs[wo+3]=Math.log(Math.max(.02,data[off+19]));
+            }
+            rec.auxWidthLogs=widthLogs;
+        }
         for(let pi=0;pi<rec.pathCount;pi++){
             const pair=rec.auxPairs[pi],ro=pi*4,first=ranges[ro]>>>0,count=ranges[ro+1]>>>0,need=count*subdiv+1;while(pair.points.length<need)pair.points.push({x:0,y:0,widthScale:1});pair.points.length=need;let w=0;
             for(let j=0;j<count;j++){
                 const ci=first+j,o=ci*FLOATS_PER_CUBIC,cart=data[o+22]>.5,p0=mixPolar(data[o],data[o+1],data[o+8],data[o+9],cart),p3=mixPolar(data[o+6],data[o+7],data[o+14],data[o+15],cart);
                 let c1=mixPolar(data[o+2],data[o+3],data[o+10],data[o+11],cart),c2=mixPolar(data[o+4],data[o+5],data[o+12],data[o+13],cart);
                 if(mixedMode){const a0=data[o+1]+(data[o+9]-data[o+1])*tt,a3=data[o+7]+(data[o+15]-data[o+7])*tt,hs1=transported(data[o],data[o+1],data[o+2],data[o+3],a0,cart),hd1=transported(data[o+8],data[o+9],data[o+10],data[o+11],a0,cart),hs2=transported(data[o+6],data[o+7],data[o+4],data[o+5],a3,cart),hd2=transported(data[o+14],data[o+15],data[o+12],data[o+13],a3,cart),h1=mixHandle(hs1,hd1,profileT),h2=mixHandle(hs2,hd2,profileT);c1={x:p0.x+h1.x,y:p0.y+h1.y};c2={x:p3.x+h2.x,y:p3.y+h2.y};}
-                const ws0=Math.exp(Math.log(Math.max(.02,data[o+16]))*(1-tt)+Math.log(Math.max(.02,data[o+18]))*tt),ws1=Math.exp(Math.log(Math.max(.02,data[o+17]))*(1-tt)+Math.log(Math.max(.02,data[o+19]))*tt);
-                const q0=j===0?0:1;for(let sj=q0;sj<=subdiv;sj++){const q=sj/subdiv,p=cubicAt(p0,c1,c2,p3,q),dst=pair.points[w++];dst.x=p.x;dst.y=p.y;dst.widthScale=Math.exp(Math.log(Math.max(.02,ws0))*(1-q)+Math.log(Math.max(.02,ws1))*q);}
+                const wo=ci*4,invT=1-tt;
+                const logWs0=widthLogs[wo]*invT+widthLogs[wo+2]*tt;
+                const logWs1=widthLogs[wo+1]*invT+widthLogs[wo+3]*tt;
+                const q0=j===0?0:1;for(let sj=q0;sj<=subdiv;sj++){
+                    const q=sj/subdiv,p=cubicAt(p0,c1,c2,p3,q),dst=pair.points[w++];
+                    dst.x=p.x;dst.y=p.y;
+                    dst.widthScale=Math.exp(logWs0*(1-q)+logWs1*q);
+                }
             }
             pair.points.length=w;pair.closed=pair.closed===true;const base=first*FLOATS_PER_CUBIC;pair.alpha=(data[base+20]*(1-tt)+data[base+21]*tt);
             const sn=Math.max(1,Number(pair.sourceBranchCount)||rec.pathCount),dn=Math.max(1,Number(pair.targetBranchCount)||rec.pathCount),sa=Number.isFinite(pair.sourceBranchIndex)?(((pair.sourceBranchIndex/sn)%1)+1)%1:NaN,da=Number.isFinite(pair.targetBranchIndex)?(((pair.targetBranchIndex/dn)%1)+1)%1:NaN;if(Number.isFinite(sa)&&Number.isFinite(da)){let d=da-sa;d=((d+.5)%1+1)%1-.5;pair.branchPhase=((sa+d*tt)%1+1)%1;}else pair.branchPhase=Number.isFinite(sa)?sa:(Number.isFinite(da)?da:pi/Math.max(1,rec.pathCount));
@@ -1149,7 +1562,26 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         const u=clamp(Number(t)||0,0,1),q=u*u*(3-2*u);
         return (sourcePresent!==false?1:0)*(1-q)+(targetPresent!==false?1:0)*q;
     }
-    function debugCarrierMappedPlan(layerIndex=0,t=0,editPair=null){const rec=buildLayerCpuResource(layerIndex,editPair);if(!rec)return null;const packed=rec.carrierMapped?ensureCarrierMappedCurrent(rec,t):null;return{carrierMapped:rec.carrierMapped===true,preparedContinuousSplineRail:rec.preparedContinuousSplineRail===true,preparedRoundedProfileRail:rec.preparedRoundedProfileRail===true,liveRoundedSpline:rec.liveRoundedSpline===true,liveRoundedSplineFrames:rec.liveRoundedSplineFrames||0,liveRoundedSplineFallbacks:rec.liveRoundedSplineFallbacks||0,joinedProfileMorph:rec.carrierRecords?.some(r=>!!r.plainSc&&!!r.plainDc)===true,carrierOverflow:rec.carrierOverflow===true,branchPresence:(rec.auxPairs||[]).map(p=>spiralBranchPresence(p.sourcePresent,p.targetPresent,t)),cubicCount:rec.cubicCount,pathCount:rec.pathCount,interpolationMetric:rec.interpolationMetric,tangentialOnlyCarrierChange:rec.tangentialOnlyCarrierChange===true,exactSubdivisionOnly:rec.exactSubdivisionOnly===true,arcEqualizedRecords:Number(rec.arcEqualizedRecords)||0,packed:packed?Array.from(packed):null,carrierFrames:(rec.carrierFrameSpecs||[]).map(f=>({anchor:{...f.anchor},end:{...f.end},delta:Number(f.delta)||0,targetScale:Number(f.targetScale)||1,N:Number(f.N)||0,step:Number(f.step)||0,direction:Number(f.direction)||1,tangential:Number(f.tangential)||0,metric:f.metric||''})),paths:(rec.carrierCurrentByPath||[]).map(path=>path.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3},widthScale0:Number(q.widthScale0)||1,widthScale1:Number(q.widthScale1)||1}))),sourcePaths:(rec.carrierRecords||[]).map(r=>r.sc.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}}))),targetPaths:(rec.carrierRecords||[]).map(r=>r.dc.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}})))};}
+    function captureTerminalRails(layerIndex=0){
+        // Prefer the already prepared resource; CPU fallback is only for tests
+        // and a temporarily unavailable GPU. No GPU readback is necessary.
+        const idx=Math.max(0,Number(layerIndex)||0),live=resources.get(idx);
+        const rt=runtimeState.morph;
+        // Use the resource that *actually painted* the completed phase when
+        // its identity and phase serial match. Rebuild only when unavailable.
+        const rec=live?.ready===true&&
+            Number(live.phaseSerial)===Number(rt?.gpuPhasePrepareSerial)&&
+            live.sourceLayer===rt?.renderSourceLayers?.[idx]&&
+            live.targetLayer===rt?.renderTargetLayers?.[idx]
+                ?live:buildLayerCpuResource(idx);
+        if(!rec?.carrierRecords?.length)return null;
+        return rec.carrierRecords.map(r=>({
+            path:r.pair.dst,
+            cubics:r.dc,
+            present:r.pair.targetPathPresent!==false
+        }));
+    }
+    function debugCarrierMappedPlan(layerIndex=0,t=0,editPair=null){const rec=buildLayerCpuResource(layerIndex,editPair);if(!rec)return null;const packed=rec.carrierMapped?ensureCarrierMappedCurrent(rec,t):null;return{carrierMapped:rec.carrierMapped===true,phaseLockedEndpoints:rec.phaseLockedEndpoints===true,preparedContinuousSplineRail:rec.preparedContinuousSplineRail===true,preparedRoundedProfileRail:rec.preparedRoundedProfileRail===true,liveRoundedSpline:rec.liveRoundedSpline===true,liveRoundedSplineFrames:rec.liveRoundedSplineFrames||0,liveRoundedSplineFallbacks:rec.liveRoundedSplineFallbacks||0,joinedProfileMorph:rec.carrierRecords?.some(r=>!!r.plainSc&&!!r.plainDc)===true,carrierOverflow:rec.carrierOverflow===true,branchPresence:(rec.auxPairs||[]).map(p=>spiralBranchPresence(p.sourcePresent,p.targetPresent,t)),cubicCount:rec.cubicCount,pathCount:rec.pathCount,interpolationMetric:rec.interpolationMetric,tangentialOnlyCarrierChange:rec.tangentialOnlyCarrierChange===true,exactSubdivisionOnly:rec.exactSubdivisionOnly===true,arcEqualizedRecords:Number(rec.arcEqualizedRecords)||0,packed:packed?Array.from(packed):null,carrierFrames:(rec.carrierFrameSpecs||[]).map(f=>({anchor:{...f.anchor},end:{...f.end},delta:Number(f.delta)||0,targetScale:Number(f.targetScale)||1,N:Number(f.N)||0,step:Number(f.step)||0,direction:Number(f.direction)||1,tangential:Number(f.tangential)||0,metric:f.metric||''})),paths:(rec.carrierCurrentByPath||[]).map(path=>path.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3},widthScale0:Number(q.widthScale0)||1,widthScale1:Number(q.widthScale1)||1}))),sourcePaths:(rec.carrierRecords||[]).map(r=>r.sc.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}}))),targetPaths:(rec.carrierRecords||[]).map(r=>r.dc.map(q=>({p0:{...q.p0},c1:{...q.c1},c2:{...q.c2},p3:{...q.p3}})))};}
     function debugCarrierAdvanceBench(layerIndex=0,samples=60){const rec=buildLayerCpuResource(layerIndex);if(!rec?.carrierMapped)return null;const n=Math.max(1,Math.min(600,Math.round(Number(samples)||60)));const t0=performance.now();let checksum=0;for(let i=0;i<n;i++){const t=(i+.5)/n,packed=ensureCarrierMappedCurrent(rec,t);if(!packed)return null;checksum+=packed[0]||0;}const ms=performance.now()-t0;return{samples:n,ms,msPerSample:ms/n,cubicCount:rec.cubicCount,pathCount:rec.pathCount,bytesPerRail:rec.cubicCount*8*4,checksum,carrierOverflow:rec.carrierOverflow===true};}
     function debugSpiralPhaseTransport(sourceStep,targetStep,N,direction,t,depth){return spiralPhaseStepAtDepth(sourceStep,targetStep,N,direction,t,depth);}
     function debugCorridorSeams(layerIndex=0,t=.5,copyStart=0){
@@ -1177,8 +1609,8 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         const end=rot(q,a),next=rot(p,b);
         return{seam:Math.hypot(end.x-next.x,end.y-next.y),endpoint:end,nextStart:next,phaseDelta:actualDelta,actualCopyDelta:b.angle-a.angle,radialRatio:actualScale,actualCopyRatio:b.scale/a.scale,pathSegments:path.length,carrierOverflow:rec.carrierOverflow,sharedTransform:true,analyticVsActualDelta:actualDelta-frame.delta,analyticVsActualScale:actualScale-frame.targetScale};
     }
-    function status(){const active=[...resources.entries()].map(([layerIndex,r])=>({layerIndex,morphType:r.morphType||'',spiralTransport:r.spiralTransport||r.morphType||'',profileMorphMode:r.profileMorphMode||'',interpolationMetric:r.interpolationMetric||'',carrierMapped:r.carrierMapped===true,carrierOverflow:r.carrierOverflow===true,cubicCount:r.cubicCount||0,pathCount:r.pathCount||0,topologyMergeSplitCount:r.topologyMergeSplitCount||0,continuousTopologyTransport:r.continuousTopologyTransport===true,exactSubdivisionOnly:r.exactSubdivisionOnly===true,arcEqualizedRecords:Number(r.arcEqualizedRecords)||0,cartesianFallbackCubics:r.cartesianFallbackCubics||0,maxPackedPolarTurn:Number(r.maxPackedPolarTurn)||0,ready:r.ready===true,periodicPaths:r.cpuPathClosure?Array.from({length:r.pathCount||0},(_,pi)=>r.cpuPathClosure[pi*8+4]>0.5&&r.cpuPathClosure[pi*8+5]>0.5).filter(Boolean).length:0,maxEndpointClosureError:Number(r.maxEndpointClosureError)||0,maxEndpointTangentClosureError:Number(r.maxEndpointTangentClosureError)||0}));return{supported:!!globalThis.navigator?.gpu,ready,initializing:Boolean(initializing),generation,lastError,resources:resources.size,active,staticVisualResources:staticVisualResources.size,stats:{...stats},lastDecision:{...decision},contract:'Somata 7.8.3 keeps the late-7.7.9 exact carrier/profile constructor for Spiral, no arc resampling, and one upload per t. Circular Spiral transports reuse an exact rotational carrier template across sibling branches; Torn stays explicit per-branch. Web and Lightning are 7.5-reference consumers: strict Spiral effects may only consume the exact specialized visible Spiral rail and never the generic shared morph rail. Continuous fixes N/K; Phase fixes N and transports K as the phase step; Phase-circle adds no-fade branch clone/merge; Minimal-turn keeps the step constant while N branches clone/merge; Torn uses minimum-turn pairing and exact Bezier subdivision only. Every spiral-to-spiral rail keeps periodic closure. Corridor center reveal remains whole-copy alpha; constant-step Corridor copy phase is synchronized to the exact current carrier delta; Glow follows the retained Spiral rail, and Glow/Base share the same packed copy transforms.'};}
-    return{warmup,isReady:()=>ready,beginStaticEdit,getStaticEditResource,preparePhase,invalidate,park,getResource,isEligible,reason,render,renderGlowAndBase,auxiliaryPaths,status,debugBuildCpuResource:buildLayerCpuResource,debugBuildCpuStaticEditResource:buildLayerCpuResource,debugCarrierMappedPlan,debugCarrierAdvanceBench,debugSpiralPhaseTransport,debugCorridorSeams,debugCenterShadeSpec:spiralCenterShadeSpec,debugCenterShadeAlpha:centerShadeAlphaForRadius};
+    function status(){const active=[...resources.entries()].map(([layerIndex,r])=>({layerIndex,morphType:r.morphType||'',spiralTransport:r.spiralTransport||r.morphType||'',profileMorphMode:r.profileMorphMode||'',interpolationMetric:r.interpolationMetric||'',carrierMapped:r.carrierMapped===true,carrierOverflow:r.carrierOverflow===true,cubicCount:r.cubicCount||0,pathCount:r.pathCount||0,topologyMergeSplitCount:r.topologyMergeSplitCount||0,continuousTopologyTransport:r.continuousTopologyTransport===true,exactSubdivisionOnly:r.exactSubdivisionOnly===true,arcEqualizedRecords:Number(r.arcEqualizedRecords)||0,cartesianFallbackCubics:r.cartesianFallbackCubics||0,maxPackedPolarTurn:Number(r.maxPackedPolarTurn)||0,ready:r.ready===true,periodicPaths:r.cpuPathClosure?Array.from({length:r.pathCount||0},(_,pi)=>r.cpuPathClosure[pi*8+4]>0.5&&r.cpuPathClosure[pi*8+5]>0.5).filter(Boolean).length:0,maxEndpointClosureError:Number(r.maxEndpointClosureError)||0,maxEndpointTangentClosureError:Number(r.maxEndpointTangentClosureError)||0}));return{supported:!!globalThis.navigator?.gpu,ready,initializing:Boolean(initializing),generation,lastError,resources:resources.size,active,staticVisualResources:staticVisualResources.size,stats:{...stats},lastDecision:{...decision},contract:'Somata 7.8.3 keeps the late-7.7.9 exact carrier/profile constructor for Spiral, no arc resampling, and one upload per t. Circular Spiral transports reuse an exact rotational carrier template across sibling branches; Torn stays explicit per-branch. Web and Lightning are 7.5-reference consumers: strict Spiral effects may only consume the exact specialized visible Spiral rail and never the generic shared morph rail. Continuous fixes N/K and crossfades exact source/target rails; Phase locks N; MinimalTurn locks K; Phase-circle changes N/K with clone/merge; Torn uses unique one-to-one branches with no cloning. Every spiral-to-spiral rail keeps periodic closure. Corridor center reveal remains whole-copy alpha; constant-step Corridor copy phase is synchronized to the exact current carrier delta; Glow follows the retained Spiral rail, and Glow/Base share the same packed copy transforms.'};}
+    return{warmup,isReady:()=>ready,beginStaticEdit,getStaticEditResource,preparePhase,invalidate,park,getResource,isEligible,reason,render,renderGlowAndBase,auxiliaryPaths,status,debugBuildCpuResource:buildLayerCpuResource,captureTerminalRails,debugBuildCpuStaticEditResource:buildLayerCpuResource,debugCarrierMappedPlan,debugCarrierAdvanceBench,debugSpiralPhaseTransport,debugCorridorSeams,debugResolveEffectT:resolveEffectT,debugCenterShadeSpec:spiralCenterShadeSpec,debugCenterShadeAlpha:centerShadeAlphaForRadius};
 })();
 window.prepareGpuSpiralBezierMorphResources=()=>WebGPUSpiralBezierMorphRenderer.preparePhase();
 window.invalidateGpuSpiralBezierMorphResources=(reason)=>WebGPUSpiralBezierMorphRenderer.invalidate(reason);
@@ -1190,5 +1622,40 @@ window.__somataSpiralMorphCpuPlan=(layerIndex=0)=>WebGPUSpiralBezierMorphRendere
 window.__somataSpiralCarrierMorphPlan=(layerIndex=0,t=0)=>WebGPUSpiralBezierMorphRenderer.debugCarrierMappedPlan(layerIndex,t);
 window.__somataSpiralCarrierAdvanceBench=(layerIndex=0,samples=60)=>WebGPUSpiralBezierMorphRenderer.debugCarrierAdvanceBench(layerIndex,samples);
 window.__somataSpiralPhaseTransport=(sourceStep,targetStep,N,direction,t,depth)=>WebGPUSpiralBezierMorphRenderer.debugSpiralPhaseTransport(sourceStep,targetStep,N,direction,t,depth);
+
+// Lightweight, read-only user-side performance evidence. Call from DevTools
+// after allowing a three-layer Spiral scene to animate for several seconds.
+// No pipeline changes, GPU readback, or extra frame requests are performed.
+window.__somataSpiralPerformanceReport=()=>{
+    const s=WebGPUSpiralBezierMorphRenderer.status();
+    const perf=typeof window.__spiroPerfSnapshot==='function'?window.__spiroPerfSnapshot():{};
+    const gov=typeof window.__spiroPerformanceGovernorStatus==='function'?window.__spiroPerformanceGovernorStatus():{};
+    const hub=typeof WebGPUDeviceHub!=='undefined'&&typeof WebGPUDeviceHub.status==='function'?WebGPUDeviceHub.status():{};
+    const visible=(Array.isArray(state?.layers)?state.layers:[]).filter(l=>l?.visible!==false);
+    const spiralLayers=visible.filter(l=>l?.spiralEnabled===true);
+    return{
+        version:'12.7.0',secureContext:globalThis.isSecureContext===true,
+        webGpuExposed:!!globalThis.navigator?.gpu,
+        webGpuHubReady:typeof WebGPUDeviceHub!=='undefined'&&typeof WebGPUDeviceHub.isReady==='function'?WebGPUDeviceHub.isReady():false,
+        hubGeneration:hub?.generation??null,
+        spiralGpuReady:s?.ready===true,spiralGpuInitializing:s?.initializing===true,
+        spiralGpuError:String(s?.lastError||''),spiralGpuFrames:Number(s?.stats?.frames)||0,
+        spiralGpuFallbacks:Number(s?.stats?.fallbacks)||0,
+        spiralGpuErrors:Number(s?.stats?.errors)||0,
+        visibleLayers:visible.length,spiralLayers:spiralLayers.length,
+        morphActive:runtimeState?.morph?.active===true,
+        spiralGpuResources:s?.active?.map(x=>({layerIndex:x.layerIndex,cubicCount:x.cubicCount,pathCount:x.pathCount,ready:x.ready,carrierMapped:x.carrierMapped}))||[],
+        renderMs:Number(perf?.renderMs)||0,
+        topPasses:Array.isArray(perf?.topPasses)?perf.topPasses.slice(0,8):[],
+        fpsGovernor:gov?.emaFps??null,
+        renderGovernorMs:gov?.emaRenderMs??null,
+        gpuGovernorMs:gov?.emaGpuMs??null,
+        gpuSamples:gov?.gpuSamples??null,
+        bottleneck:gov?.bottleneck??null,
+        devicePixelRatio:Number(globalThis.devicePixelRatio)||1,
+        canvasSize:(()=>{const c=document.getElementById('mainCanvas');return c?{width:c.width,height:c.height}:null})()
+    };
+};
+
 
 (()=>{if(!globalThis.navigator?.gpu||globalThis.isSecureContext!==true)return;const kick=()=>{try{WebGPUSpiralBezierMorphRenderer.warmup?.();}catch(_){}};if(typeof requestIdleCallback==='function')requestIdleCallback(kick,{timeout:350});else setTimeout(kick,0);})();

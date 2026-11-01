@@ -131,6 +131,16 @@ function prepareMainLayerMorphState(frameCtx, renderFrame) {
     const renderLayerSource=blue.renderLayer || sourceLayer;
     frameCtx.layerSource=renderLayerSource;
     frameCtx.layer=SomataRenderLayerSnapshot?.create?.(renderLayerSource)||renderLayerSource;
+    // Rotation focus is a live presentation preference, NOT part of anchor
+    // transport.  Copy the authored layer's value into this frame snapshot so
+    // editing it during Blue Morph takes effect without rebasing any points.
+    const authoredFocusLayer=state.layers?.[frameCtx.layerIndex];
+    if(frameCtx.layer&&authoredFocusLayer){
+        // Presentation mode lives on the authored layer; the figure index may be
+        // independently driven by routed Morph and therefore stays on frameCtx.layer.
+        frameCtx.layer.spiralManualFocus=authoredFocusLayer.spiralManualFocus===true;
+        frameCtx.layer.corridorFocusHighlight=authoredFocusLayer.corridorFocusHighlight===true;
+    }
     const effectLayerSource=liveEffectOwnerForFrameLayer(renderLayerSource);
     frameCtx.effectLayerSource=effectLayerSource;
     frameCtx.effectLayer=effectLayerSource===renderLayerSource?frameCtx.layer:(SomataRenderLayerSnapshot?.create?.(effectLayerSource)||effectLayerSource);
@@ -229,12 +239,23 @@ function prepareMainLayerTransformAndStyle(frameCtx, renderFrame) {
     frameCtx.tunnelFillPaletteProfile=tunnelColorShiftIsActive() ? resolveTunnelPaletteProfile(frameCtx.tunnelBaseFillColor,layer,layerIndex,'fill') : null;
 }
 
-function spiralCorridorCopiesForLayer(copies,layer){
+function spiralCorridorCopiesForLayer(copies,layer,now=performance.now()){
     // Corridor's spacing must be raised to the Spiral's radial order for ALL
     // GPU effects, never only in the specialised stroke renderer. The original
     // shared copy array is immutable from this layer's perspective.
     if(state.tunnel?.active!==true||layer?.spiralEnabled!==true||!Array.isArray(copies))return copies;
-    const exponent=Math.max(.000001,Math.abs(Number(getEffectiveSpiralOrder?.(layer))||1));
+    // Do not change the Honest Spiral's original radial collapse. At the
+    // EXACT zero endpoint its old `|| 1` fallback made the entire polygonal
+    // Corridor appear in a single frame. The dedicated post-morph animation
+    // instead restores the full Corridor exponent gradually from zero to one.
+    const order=Math.abs(Number(getEffectiveSpiralOrder?.(layer))||0);
+    const post=order<1e-8?window.__somataCorridorHonestZeroOutro?.(layer?.id,now):null;
+    // Layerwise is an in-place Corridor morph: never force copies together as
+    // |order| approaches zero. Transport the spacing exponent between its two
+    // proper endpoints on the SAME clock as the keypoint and angle animation.
+    const localExponent=Number(layer?.__spiralLayerwiseScaleExponent);
+    const layerwise=layer?.__spiralLayerwiseScaleExponent!=null&&Number.isFinite(localExponent);
+    const exponent=layerwise?Math.max(.000001,localExponent):Math.max(.000001,post?post.population:(order||1));
     if(Math.abs(exponent-1)<1e-8)return copies;
     const scaled=copies.map(copy=>{
         const scale=Math.max(1e-12,Math.abs(Number(copy?.scale)||1));
@@ -249,11 +270,42 @@ function spiralCorridorCopiesForLayer(copies,layer){
 function prepareMainLayerInstances(frameCtx, renderFrame) {
     const layerIndex = frameCtx.layerIndex;
     const layer = frameCtx.layer;
-    const baseCopies=spiralCorridorCopiesForLayer(renderFrame.tunnelCopies,layer);
+    const baseCopies=spiralCorridorCopiesForLayer(renderFrame.tunnelCopies,layer,frameCtx.now);
     const tunnelCopies=window.__somataCorridorCopiesForLayer?.(baseCopies,layer,frameCtx.now)||baseCopies;
     frameCtx.visibleInstances = prepareTunnelVisibleInstances(
-        tunnelCopies, frameCtx.layerExtent, frameCtx.audioScale, renderFrame.viewportOuterRadius, state.zoom, layer?.id || layerIndex, frameCtx.now
+        tunnelCopies, frameCtx.layerExtent, frameCtx.audioScale, renderFrame.viewportOuterRadius, state.zoom, layer?.id || layerIndex, frameCtx.now, layer
     );
+    // Resolve once for the *frame layer* before Base, Glow, Fill and Motion.
+    // Use source copies (not their culled array), preserving the continuous
+    // outer boundary across Corridor travel cycles and GPU/CPU render paths.
+    const focusPopulation=SomataCorridorFocus.population(frameCtx.visibleInstances.focusCopies||frameCtx.visibleInstances.copies,frameCtx.layerExtent*frameCtx.audioScale,state.zoom,renderFrame.viewportOuterRadius,state.tunnel,layer);
+    const focusState=SomataCorridorFocus.resolveFrame(layer,tunnelCopies,frameCtx.layerExtent*frameCtx.audioScale,state.zoom,renderFrame.viewportOuterRadius,state.tunnel,focusPopulation);
+    if(layer?.id===state.activeLayerId){
+        // Track the actual current population, not a percentage denominator.
+        // Do not overwrite the saved preferred figure when the corridor shrinks:
+        // figure #7 becomes active again as soon as seven figures are available.
+        const count=Math.max(1,focusState.total||1);
+        const configured=Math.max(1,Math.round(Number(layer?.spiralRotationFocusFigure)||7));
+        const effective=Math.min(count,layer?.spiralManualFocus===true?configured:7);
+        for(const id of ['paramSpiralRotationFocus','tunnelFocusNumber']){
+            const el=document.getElementById(id);
+            if(!el)continue;
+            if(el.max!==String(count))el.max=String(count);
+            if(document.activeElement!==el&&el.value!==String(effective))el.value=String(effective);
+        }
+        for(const id of ['spiralFocusPercentText','tunnelFocusPercentText']){
+            const el=document.getElementById(id);
+            if(el&&el.textContent!==`№${effective}`)el.textContent=`№${effective}`;
+        }
+        for(const id of ['spiralFocusPositionText','tunnelFocusPositionText']){
+            const el=document.getElementById(id);
+            if(el){const value=`→ фигура №${focusState.index+1}`;if(el.textContent!==value)el.textContent=value;}
+        }
+        const label=SomataCorridorFocus.countLabel(focusPopulation);
+        for(const id of ['spiralFocusCopyCount','tunnelFocusCopyCount']){
+            const el=document.getElementById(id);if(el){el.dataset.focusCount=String(count);if(el.textContent!==label)el.textContent=label;}
+        }
+    }
     const metrics=frameCtx.instanceMetrics;metrics.length=frameCtx.visibleInstances.copies.length;
     const metricZoom=Math.max(.001,Number(state.zoom)||1),metricCombined=Math.abs(Number(frameCtx.combinedScale)||1);
     const metricRadiusBase=Math.max(0,Number(frameCtx.layerExtent)||0)*Math.max(.001,Number(frameCtx.audioScale)||1)*metricZoom;
@@ -274,7 +326,27 @@ function prepareMainLayerVectorMaster(frameCtx) {
     const topologyGpuLazy=frameCtx._topologyMorphGpuLazy===true&&SomataGeometryRoleService.backendEligible(frameCtx,'topology','base')===true;
     const greenProjectGpuNative=SomataGeometryRoleService.backendEligible(frameCtx,'green','base')===true&&state.lineOutline?.enabled!==true;
 
-    const spiralBezierGpuNative=frameCtx.morphFrameActive===true&&SomataGeometryRoleService.backendEligible(frameCtx,'spiral','base')===true;
+    // Retained Spiral GPURenderer supports both static and Morph frames.  Do
+    // not rebuild the same CPU vector master for Glow if *both* active roles
+    // can consume the retained GPU rail.  Fall back to the existing Canvas
+    // path whenever either role is unsupported.
+    const spiralGpuBase=SomataGeometryRoleService.backendEligible(frameCtx,'spiral','base')===true;
+    // The actual prepared flag is set after vector/effect planning. Probe the
+    // scene route without retaining that temporary state or touching geometry.
+    let spiralGpuCanPresent=false;
+    if(spiralGpuBase&&!frameCtx.morphFrameActive){
+        const preparedBefore=frameCtx.prepared;
+        try{
+            frameCtx.prepared=true;
+            const route=SomataGeometryRoleService.spiralRoute(frameCtx);
+            spiralGpuCanPresent=Boolean(route?.deferLayerScene||route?.deferFrameScene);
+        }finally{frameCtx.prepared=preparedBefore;}
+    }
+    // Preserve the pre-existing fast morph path; add static Spiral only when
+    // its GPU Base AND (if requested) Glow renderer are actually available.
+    const spiralBezierGpuNative=(frameCtx.morphFrameActive&&spiralGpuBase)||(
+        spiralGpuCanPresent&&(frameCtx.glow<=0||SomataGeometryRoleService.backendEligible(frameCtx,'spiral','glow')===true)
+    );
     const shouldRecordDynamicVector = (topologyGpuLazy||greenProjectGpuNative||spiralBezierGpuNative)?false:(typeof shouldPrepareDynamicVectorMaster==='function'
         ? shouldPrepareDynamicVectorMaster(frameCtx)
         : Boolean(frameCtx.geometryMorphEnabled && frameCtx.geometryPlan?.kind !== 'lightning' && typeof Path2D !== 'undefined' && !state.showRoundingGuides &&
@@ -392,6 +464,22 @@ function prepareMainLayerFrame(renderFrame, layerIndex) {
     prepareMainLayerMorphState(frameCtx, renderFrame);
     try{window.SomataTestMorph?.applyFrame?.(frameCtx,renderFrame.now);}catch(error){console.warn('[Somata Test Morph] skipped',error);}
     try{window.__somataApplyCorridorEntranceLayer?.(frameCtx,renderFrame.now);}catch(error){console.warn('[Somata Corridor Entrance] skipped',error);}
+    // 13.0.26 geometry firewall: after all Morph/edit/audio/entrance overlays
+    // have resolved, but BEFORE any transform, path, Corridor, Glow or render
+    // planner can read K, project the cyclic connection-step limiter onto the
+    // presentation snapshot. This is deliberately after Geometry > Animation:
+    // an authored 8->9 tween at N=19 (limit=2) becomes a 2->1 visual tween
+    // throughout ALL downstream consumers, not just its Bézier endpoint rail.
+    // Never modify frameCtx.sourceLayer or state.layers (saved/raw K survives).
+    if(typeof getSpiralGeometryLayer==='function'){
+        const project=(layer)=>{
+            if(!SomataRenderLayerSnapshot?.isSnapshot?.(layer))return;
+            const bounded=getSpiralGeometryLayer(layer);
+            if(bounded!==layer)Object.assign(layer,bounded);
+        };
+        project(frameCtx.layer);
+        if(frameCtx.effectLayer!==frameCtx.layer)project(frameCtx.effectLayer);
+    }
     prepareMainLayerTransformAndStyle(frameCtx, renderFrame);
     prepareMainLayerGeometry(frameCtx);
     prepareMainLayerInstances(frameCtx, renderFrame);

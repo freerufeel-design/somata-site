@@ -118,7 +118,7 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{
         if(frameCtx.geometryProvider!==frameCtx.blueMorphProvider)return'another-geometry-provider';
         if(frameCtx.geometryPlan?.kind!=='blue-prepared')return'geometry-kind-'+String(frameCtx.geometryPlan?.kind||'unknown');
         if(frameCtx.geometryPlan?.kind==='lightning')return'lightning';
-        if(state?.morph?.mode==='circleSlide')return'circle-slide';
+        if((state?.morph?.mode==='circleSlide'||state?.morph?.mode==='topoCircle'))return'circle-slide';
         if(state?.showRoundingGuides)return'rounding-guides';
         if(frameCtx.lineProfileStrokeOnly)return'profile-replaces-base';
         if(mode==='base'&&!frameCtx.lineDisplayEnabled)return'line-hidden';
@@ -151,7 +151,7 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{
             const ca=Math.max(0,Math.min(1,Number(alphas?.[i]??1)));if(ca<=.0001)continue;
             const copy=src[i]||{},sc=state.tunnel?.active===true?Math.max(.000001,Math.abs(Number(copy.scale)||0)):1;
             const ang=state.tunnel?.active===true&&typeof getMotionTunnelLagRadians==='function'?getMotionTunnelLagRadians(copy,frameCtx.layer):0,cs=Math.cos(ang),sn=Math.sin(ang);
-            const style=state.tunnel?.active===true&&typeof getTunnelCopyColor==='function'?getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,copy,frameCtx.tunnelPaletteProfile):(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#ffffff');
+            const style=state.tunnel?.active===true&&typeof getTunnelCopyColor==='function'?getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,copy,frameCtx.tunnelPaletteProfile,frameCtx.layer):(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#ffffff');
             const c=colorRgba(style),o=k*12;
             copyData[o]=sc*cs;copyData[o+1]=-sc*sn;copyData[o+2]=ca;copyData[o+3]=sc;
             copyData[o+4]=sc*sn;copyData[o+5]=sc*cs;copyData[o+6]=c[0];copyData[o+7]=c[1];

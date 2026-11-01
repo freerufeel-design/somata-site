@@ -1,0 +1,945 @@
+{
+  "count": 126,
+  "hashes": [
+    {
+      "key": "190-false-0-0",
+      "drawHash": 2146307432,
+      "gpuHash": 1099831047,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-0-0.1",
+      "drawHash": 3011606812,
+      "gpuHash": 24564440,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-0-0.5",
+      "drawHash": 452134797,
+      "gpuHash": 226557345,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-0-1",
+      "drawHash": 733341574,
+      "gpuHash": 766594131,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-0-1.0001",
+      "drawHash": 306582377,
+      "gpuHash": 1056650878,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-0-1.5",
+      "drawHash": 3133676436,
+      "gpuHash": 880993867,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-0-2",
+      "drawHash": 1634254617,
+      "gpuHash": 3367383907,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-1-0",
+      "drawHash": 2577442292,
+      "gpuHash": 226915547,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-1-0.1",
+      "drawHash": 3419336603,
+      "gpuHash": 3751196233,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-1-0.5",
+      "drawHash": 2661885141,
+      "gpuHash": 3303403117,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-1-1",
+      "drawHash": 3918366470,
+      "gpuHash": 3600878573,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-1-1.0001",
+      "drawHash": 970052204,
+      "gpuHash": 588180953,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-1-1.5",
+      "drawHash": 3680059905,
+      "gpuHash": 3473674719,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-1-2",
+      "drawHash": 3799947683,
+      "gpuHash": 2620649383,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-2-0",
+      "drawHash": 1507957992,
+      "gpuHash": 4053813901,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-2-0.1",
+      "drawHash": 771364399,
+      "gpuHash": 4119827736,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-2-0.5",
+      "drawHash": 583192565,
+      "gpuHash": 3666250443,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-2-1",
+      "drawHash": 229360213,
+      "gpuHash": 1803408617,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-2-1.0001",
+      "drawHash": 1113727310,
+      "gpuHash": 2025556599,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-2-1.5",
+      "drawHash": 4118521575,
+      "gpuHash": 908277649,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-false-2-2",
+      "drawHash": 2460953385,
+      "gpuHash": 3538710886,
+      "drawLen": 190,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-0-0",
+      "drawHash": 2228395264,
+      "gpuHash": 1099831047,
+      "drawLen": 191,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-0-0.1",
+      "drawHash": 430121921,
+      "gpuHash": 24564440,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-0-0.5",
+      "drawHash": 1028471757,
+      "gpuHash": 226557345,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-0-1",
+      "drawHash": 1354264144,
+      "gpuHash": 766594131,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-0-1.0001",
+      "drawHash": 320618618,
+      "gpuHash": 1056650878,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-0-1.5",
+      "drawHash": 162779976,
+      "gpuHash": 880993867,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-0-2",
+      "drawHash": 1585787025,
+      "gpuHash": 3367383907,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-1-0",
+      "drawHash": 123333852,
+      "gpuHash": 226915547,
+      "drawLen": 191,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-1-0.1",
+      "drawHash": 124141754,
+      "gpuHash": 3751196233,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-1-0.5",
+      "drawHash": 893357514,
+      "gpuHash": 3303403117,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-1-1",
+      "drawHash": 2667931721,
+      "gpuHash": 3600878573,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-1-1.0001",
+      "drawHash": 372431347,
+      "gpuHash": 588180953,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-1-1.5",
+      "drawHash": 1890782604,
+      "gpuHash": 3473674719,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-1-2",
+      "drawHash": 1644405623,
+      "gpuHash": 2620649383,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-2-0",
+      "drawHash": 665694336,
+      "gpuHash": 4053813901,
+      "drawLen": 191,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-2-0.1",
+      "drawHash": 3851657404,
+      "gpuHash": 4119827736,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-2-0.5",
+      "drawHash": 1909462484,
+      "gpuHash": 3666250443,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-2-1",
+      "drawHash": 2091607861,
+      "gpuHash": 1803408617,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-2-1.0001",
+      "drawHash": 755938090,
+      "gpuHash": 2025556599,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-2-1.5",
+      "drawHash": 4052691150,
+      "gpuHash": 908277649,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "190-true-2-2",
+      "drawHash": 552073208,
+      "gpuHash": 3538710886,
+      "drawLen": 192,
+      "gpuLen": 189
+    },
+    {
+      "key": "600-false-0-0",
+      "drawHash": 3439336187,
+      "gpuHash": 1994759018,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-0-0.1",
+      "drawHash": 4047916179,
+      "gpuHash": 2948230219,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-0-0.5",
+      "drawHash": 105727846,
+      "gpuHash": 3593633200,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-0-1",
+      "drawHash": 3967082171,
+      "gpuHash": 3967353377,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-0-1.0001",
+      "drawHash": 3574375720,
+      "gpuHash": 196559194,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-0-1.5",
+      "drawHash": 1381362233,
+      "gpuHash": 487238616,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-0-2",
+      "drawHash": 1535499661,
+      "gpuHash": 2039147688,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-1-0",
+      "drawHash": 3276562327,
+      "gpuHash": 277304688,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-1-0.1",
+      "drawHash": 439118965,
+      "gpuHash": 2608454657,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-1-0.5",
+      "drawHash": 1605966761,
+      "gpuHash": 879441084,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-1-1",
+      "drawHash": 2763349224,
+      "gpuHash": 2481107038,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-1-1.0001",
+      "drawHash": 1494206380,
+      "gpuHash": 2589445466,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-1-1.5",
+      "drawHash": 1783607185,
+      "gpuHash": 2593856293,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-1-2",
+      "drawHash": 3881461274,
+      "gpuHash": 642620169,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-2-0",
+      "drawHash": 255251243,
+      "gpuHash": 1069122467,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-2-0.1",
+      "drawHash": 729503694,
+      "gpuHash": 1489625361,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-2-0.5",
+      "drawHash": 4090807477,
+      "gpuHash": 580612899,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-2-1",
+      "drawHash": 2055399138,
+      "gpuHash": 3041902839,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-2-1.0001",
+      "drawHash": 128931238,
+      "gpuHash": 607922819,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-2-1.5",
+      "drawHash": 2366055210,
+      "gpuHash": 3317343785,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-false-2-2",
+      "drawHash": 2993045455,
+      "gpuHash": 3228854893,
+      "drawLen": 600,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-0-0",
+      "drawHash": 2770275843,
+      "gpuHash": 1994759018,
+      "drawLen": 601,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-0-0.1",
+      "drawHash": 3591512227,
+      "gpuHash": 2948230219,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-0-0.5",
+      "drawHash": 1496034541,
+      "gpuHash": 3593633200,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-0-1",
+      "drawHash": 1656889391,
+      "gpuHash": 3967353377,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-0-1.0001",
+      "drawHash": 4050874161,
+      "gpuHash": 196559194,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-0-1.5",
+      "drawHash": 3169399500,
+      "gpuHash": 487238616,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-0-2",
+      "drawHash": 3041578437,
+      "gpuHash": 2039147688,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-1-0",
+      "drawHash": 2994229343,
+      "gpuHash": 277304688,
+      "drawLen": 601,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-1-0.1",
+      "drawHash": 1819455906,
+      "gpuHash": 2608454657,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-1-0.5",
+      "drawHash": 78321579,
+      "gpuHash": 879441084,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-1-1",
+      "drawHash": 1594969755,
+      "gpuHash": 2481107038,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-1-1.0001",
+      "drawHash": 3097999641,
+      "gpuHash": 2589445466,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-1-1.5",
+      "drawHash": 2693107875,
+      "gpuHash": 2593856293,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-1-2",
+      "drawHash": 2795057426,
+      "gpuHash": 642620169,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-2-0",
+      "drawHash": 1948334995,
+      "gpuHash": 1069122467,
+      "drawLen": 601,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-2-0.1",
+      "drawHash": 2612250566,
+      "gpuHash": 1489625361,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-2-0.5",
+      "drawHash": 1564991663,
+      "gpuHash": 580612899,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-2-1",
+      "drawHash": 2308747384,
+      "gpuHash": 3041902839,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-2-1.0001",
+      "drawHash": 3639860990,
+      "gpuHash": 607922819,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-2-1.5",
+      "drawHash": 978870428,
+      "gpuHash": 3317343785,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "600-true-2-2",
+      "drawHash": 820478869,
+      "gpuHash": 3228854893,
+      "drawLen": 602,
+      "gpuLen": 599
+    },
+    {
+      "key": "2000-false-0-0",
+      "drawHash": 4151989699,
+      "gpuHash": 2959966198,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-0-0.1",
+      "drawHash": 3786617422,
+      "gpuHash": 3856152131,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-0-0.5",
+      "drawHash": 1308823898,
+      "gpuHash": 3611631668,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-0-1",
+      "drawHash": 3892678688,
+      "gpuHash": 2919044801,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-0-1.0001",
+      "drawHash": 3736875465,
+      "gpuHash": 355279746,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-0-1.5",
+      "drawHash": 1527843964,
+      "gpuHash": 4075901418,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-0-2",
+      "drawHash": 2896699080,
+      "gpuHash": 1729537831,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-1-0",
+      "drawHash": 31474226,
+      "gpuHash": 1967362730,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-1-0.1",
+      "drawHash": 827079173,
+      "gpuHash": 1970803623,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-1-0.5",
+      "drawHash": 824562453,
+      "gpuHash": 947796774,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-1-1",
+      "drawHash": 1969872188,
+      "gpuHash": 3847957791,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-1-1.0001",
+      "drawHash": 1727640379,
+      "gpuHash": 2418804571,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-1-1.5",
+      "drawHash": 3697472099,
+      "gpuHash": 1888569421,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-1-2",
+      "drawHash": 2044328580,
+      "gpuHash": 2981565844,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-2-0",
+      "drawHash": 3349504740,
+      "gpuHash": 260294522,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-2-0.1",
+      "drawHash": 1085193373,
+      "gpuHash": 3456313372,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-2-0.5",
+      "drawHash": 4195439752,
+      "gpuHash": 30791043,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-2-1",
+      "drawHash": 3584814364,
+      "gpuHash": 1398964904,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-2-1.0001",
+      "drawHash": 3099396904,
+      "gpuHash": 2673879804,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-2-1.5",
+      "drawHash": 906465485,
+      "gpuHash": 1459043304,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-false-2-2",
+      "drawHash": 2719120242,
+      "gpuHash": 2530673064,
+      "drawLen": 2000,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-0-0",
+      "drawHash": 4153408843,
+      "gpuHash": 2959966198,
+      "drawLen": 2001,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-0-0.1",
+      "drawHash": 3471380311,
+      "gpuHash": 3856152131,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-0-0.5",
+      "drawHash": 3514268994,
+      "gpuHash": 3611631668,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-0-1",
+      "drawHash": 2891931254,
+      "gpuHash": 2919044801,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-0-1.0001",
+      "drawHash": 4283461155,
+      "gpuHash": 355279746,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-0-1.5",
+      "drawHash": 2820435133,
+      "gpuHash": 4075901418,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-0-2",
+      "drawHash": 236430863,
+      "gpuHash": 1729537831,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-1-0",
+      "drawHash": 3926950362,
+      "gpuHash": 1967362730,
+      "drawLen": 2001,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-1-0.1",
+      "drawHash": 2461826532,
+      "gpuHash": 1970803623,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-1-0.5",
+      "drawHash": 3859423540,
+      "gpuHash": 947796774,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-1-1",
+      "drawHash": 671086504,
+      "gpuHash": 3847957791,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-1-1.0001",
+      "drawHash": 1317938652,
+      "gpuHash": 2418804571,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-1-1.5",
+      "drawHash": 383573573,
+      "gpuHash": 1888569421,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-1-2",
+      "drawHash": 1471778020,
+      "gpuHash": 2981565844,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-2-0",
+      "drawHash": 2488025772,
+      "gpuHash": 260294522,
+      "drawLen": 2001,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-2-0.1",
+      "drawHash": 3027608672,
+      "gpuHash": 3456313372,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-2-0.5",
+      "drawHash": 1495551315,
+      "gpuHash": 30791043,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-2-1",
+      "drawHash": 3543250796,
+      "gpuHash": 1398964904,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-2-1.0001",
+      "drawHash": 521516380,
+      "gpuHash": 2673879804,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-2-1.5",
+      "drawHash": 1840728183,
+      "gpuHash": 1459043304,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    },
+    {
+      "key": "2000-true-2-2",
+      "drawHash": 3855633661,
+      "gpuHash": 2530673064,
+      "drawLen": 2002,
+      "gpuLen": 1999
+    }
+  ],
+  "perf": [
+    {
+      "n": 600,
+      "closed": false,
+      "round": 0.5,
+      "drawMs": 0.125,
+      "gpuMs": 0.22499999993791184
+    },
+    {
+      "n": 600,
+      "closed": false,
+      "round": 1.5,
+      "drawMs": 0.10000000009313226,
+      "gpuMs": 0.16666666666666666
+    },
+    {
+      "n": 600,
+      "closed": true,
+      "round": 0.5,
+      "drawMs": 0.14166666675979891,
+      "gpuMs": 0.20833333333333334
+    },
+    {
+      "n": 600,
+      "closed": true,
+      "round": 1.5,
+      "drawMs": 0.125,
+      "gpuMs": 0.16666666666666666
+    },
+    {
+      "n": 2000,
+      "closed": false,
+      "round": 0.5,
+      "drawMs": 0.3333333333333333,
+      "gpuMs": 0.5833333333333334
+    },
+    {
+      "n": 2000,
+      "closed": false,
+      "round": 1.5,
+      "drawMs": 0.3583333333954215,
+      "gpuMs": 0.7083333333333334
+    },
+    {
+      "n": 2000,
+      "closed": true,
+      "round": 0.5,
+      "drawMs": 0.4000000000620882,
+      "gpuMs": 0.5583333334264656
+    },
+    {
+      "n": 2000,
+      "closed": true,
+      "round": 1.5,
+      "drawMs": 0.42499999996895593,
+      "gpuMs": 0.5999999999379119
+    }
+  ]
+}

@@ -32,7 +32,7 @@ function resolveLayerLampEffectProvider(frameCtx,plan){
     if(!plan.enabled)return plan;
     const {tunnelCopies,viewportOuterRadius}=frameCtx.frame;
     const instances=plan.tunnelActive
-        ? prepareTunnelLampInstances(tunnelCopies,frameCtx.layerExtent,frameCtx.combinedScale,viewportOuterRadius,state.zoom,layer?.id||layerIndex,frameCtx.now,plan.baseConfig)
+        ? prepareTunnelLampInstances(tunnelCopies,frameCtx.layerExtent,frameCtx.combinedScale,viewportOuterRadius,state.zoom,layer?.id||layerIndex,frameCtx.now,plan.baseConfig,layer)
         : frameCtx.visibleInstances;
     plan.instances=instances;plan.adaptiveCount=instances.copies.length;
 
@@ -70,7 +70,11 @@ function resolveLayerLampEffectProvider(frameCtx,plan){
             // carrier of this frame. FrameContour is the same authority consumed by Line/Web;
             // rebuilding a second rounded/profile rail here can drift from the user's profile.
             let authoritativeLampAttachmentPaths=null;
-            if(followsMorph&&typeof useCanonicalV505TopologyLampAttachment==='function'&&useCanonicalV505TopologyLampAttachment(frameCtx)){
+            if(followsMorph && !SomataGeometryPolicy.isStrict(frameCtx) &&
+               lampContourAttachmentEnabledForFrame(frameCtx)===true){
+                // Somata 13: the *visible* rounded path is the lamp's only rail.
+                // Path identity stays on the semantic (moving) orbit and is resolved
+                // to the visible line in projectLampPointsToCurrentPolygon().
                 try{authoritativeLampAttachmentPaths=SomataFrameContourService?.paths?.(frameCtx)||null;}catch(_){authoritativeLampAttachmentPaths=null;}
             }
             const points=withLampConfig(plan.baseConfig,()=>frameCtx.greenMorphEnabled

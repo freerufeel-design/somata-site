@@ -163,6 +163,21 @@ function prepareGpuMorphLampFrame(frameCtx){
             gpuMorphLampBridgeStats.fallbacks++;gpuMorphLampBridgeStats.lastReason='v505-canonical-contour-attachment';
             return null;
         }
+        // Ordinary Somata 13 morphs are rendered from a phase-owned rounded
+        // contour. If "Snap to line" is enabled, GPU topology/arc shortcuts
+        // cannot independently reconstruct a DIFFERENT spline for the lamp.
+        // The CPU computes only the lamp anchors on that same live FrameContour;
+        // the existing GPU lamp renderer still draws the lights.
+        if(!strictSpiral&&frameCtx?.morphFrameActive&&!frameCtx?.greenMorphEnabled&&
+           frameCtx?.blueMorphProvider?.mode!=='fade'&&lampContourAttachmentEnabledForFrame(frameCtx)){
+            let visualRail=null;
+            try{visualRail=SomataFrameContourService?.paths?.(frameCtx)||null;}catch(_){visualRail=null;}
+            if(visualRail?.length){
+                gpuMorphLampBridgeStats.fallbacks++;
+                gpuMorphLampBridgeStats.lastReason='phase-owned-rounded-visible-contour';
+                return null;
+            }
+        }
         const mode=gpuMorphLampPositionMode(frameCtx);
         if(mode==='key'){
             const cfg=frameCtx?.layerLampConfig||ensureLayerLampState?.(frameCtx?.layer)||state?.lamps||{},motion=cfg?.morphMotionMode||'linear';

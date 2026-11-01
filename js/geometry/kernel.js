@@ -266,7 +266,12 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
             if(frameCtx._geometryContract){geometryContractStats.reused++;return frameCtx._geometryContract;}
             const layer=frameCtx.layer||{},plan=frameCtx.geometryPlan||{},geometry=GeometryKernel.frameView(frameCtx);
             if(plan.dynamic!==true&&geometry?.drawData)GeometryKernel.staticContours(geometry.drawData,'fillPolicy',true);
-            const fillAlpha=getFillOpacityUnit(layer.fillColor,DEFAULT_FILL_OPACITY_PERCENT);
+            // Topology/Calm orbit splitting uses a per-path Canvas alpha, but a
+            // native GPU stencil fills the union only once. The transient
+            // composite style preserves exactly the authored Fill luminosity.
+            const fillStyle=plan.dynamic===true&&typeof layer.__morphOrbitFillCompositeColor==='string'
+                ?layer.__morphOrbitFillCompositeColor:(layer.fillColor||layer.strokeColor||'#ffffff');
+            const fillAlpha=getFillOpacityUnit(fillStyle,DEFAULT_FILL_OPACITY_PERCENT);
 
             const spiral=isSpiralLayer(layer);
             let fillConfigured=layer.fill===true&&fillAlpha>.00001;
@@ -310,7 +315,7 @@ window.__spiroRegisterModule?.('js/geometry/kernel');
                 fillSuppressedNoTopology:fillConfigured&&!fillRequested,
                 fillRequested,
                 fillAlpha,
-                fillStyle:layer.fillColor||layer.strokeColor||'#ffffff',
+                fillStyle,
                 gpuMaskEligible,nativeGpuFillEligible,dynamicFrameNative,dynamicSpiralNative,dynamicCorridorNative,
                 exactCanvasFillRequired:fillRequested&&!gpuMaskEligible&&!nativeGpuFillEligible,
                 topologyStable:dynamic!==true,

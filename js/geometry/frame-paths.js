@@ -85,7 +85,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
 
             const retainedGpuReady=strictSpiral&&typeof currentGpuBezierMorphResource==='function'&&currentGpuBezierMorphResource(layerIndex)?.ready===true;
             if(strictSpiral&&retainedGpuReady){morphCpuPathDemandRuntime.strictSpiralBlocks++;return noteMorphCpuPathDemand('spiral-gpu-only',purpose,layerIndex,t,[]);}
-            if(state.morph?.mode==='circleSlide'){
+            if((state.morph?.mode==='circleSlide'||state.morph?.mode==='topoCircle')){
                 const chaos=typeof isChaosCircleMorphPair==='function'&&isChaosCircleMorphPair(layerIndex);
                 let paths=[];
 
@@ -209,7 +209,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
         // to its corner knots. The Bézier/spline pass can otherwise shrink it
         // again even after the input paths have been compensated.
         function fitRoundedPathsToPrimaryCircle(paths,layer){
-            if(layer?.roundingMode!=='monoradius'||!(Number(layer?.rounding)>0)||!Array.isArray(paths))return paths;
+            if(layer?.roundingMode!=='monoradius'||!Array.isArray(paths))return paths;
             const radius=getEffectiveLayerRadius(layer,220);
             if(!(radius>1e-7))return paths;
             let r2=0;
@@ -651,6 +651,23 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
 
             if(state.morph?.monoOrbitTransforms===true)return false;
 
+            // Never interpolate two *finished* rounded rails point-by-point
+            // when the polygon topology differs. A resampled smooth source
+            // vertex can be paired with an unrelated destination arc: the
+            // intermediate rail folds back on itself and develops 170-degree
+            // cusps even though both endpoints were rounded. Use the canonical
+            // moving-anchor rail in this case; its authored junction markers
+            // are rounded AFTER the intermediate geometry is constructed.
+            const sourceLayer=runtimeState.morph.renderSourceLayers?.[layerIndex];
+            const targetLayer=runtimeState.morph.renderTargetLayers?.[layerIndex];
+            if(sourceLayer&&targetLayer&&(
+                Number(sourceLayer.N)!==Number(targetLayer.N) ||
+                Number(sourceLayer.K)!==Number(targetLayer.K) ||
+                Number(sourceLayer.customSuborbits||0)!==Number(targetLayer.customSuborbits||0) ||
+                sourceLayer.closedLoop!==targetLayer.closedLoop ||
+                sourceLayer.profileNodes?.length!==targetLayer.profileNodes?.length
+            ))return false;
+
             if(srcMode==='spline'&&dstMode==='spline')return true;
             if(srcMode==='segments'&&dstMode==='segments'){
                 const sr=getRoundingStrength(sv.rounding ?? layer?.rounding);
@@ -659,14 +676,14 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             }
             return false;
         }
-        function sampleStableSmoothRoundedEndpointPath(path,roundingFrac,profileMode='spline',splineRenderMode='smooth'){
+        function sampleStableSmoothRoundedEndpointPath(path,roundingFrac,profileMode='spline',splineRenderMode='smooth',filletLayer=null){
             const pts=path?.points||[];
             if(pts.length<2)return {points:copyMorphPointArray(pts),closed:Boolean(path?.closed),cornerFlags:[],bridgeRoundFlags:[],_stableRoundedSplineRail:true};
             const sampler=createStableSplineRailSampler(6),round=Math.max(0,Math.min(2,Number(roundingFrac)||0));
             if(profileMode==='spline')
-                splinePathForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[]);
+                splinePathForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[],path.bridgeRoundFlags||[],filletLayer?.wholeCurveSpline===true,1,0,filletLayer);
             else
-                roundPolylineForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[]);
+                roundPolylineForDraw(sampler,pts,Boolean(path.closed),round,path.cornerFlags||[],null,false,null,filletLayer);
             const raw=sampler.points.length>1?sampler.points:pts;
 
             const count=Math.max(48,Math.min(960,Math.max(pts.length||0,raw.length||0)));
@@ -691,7 +708,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
             const layer=state.layers?.[layerIndex];
             const round=getRoundingStrength(visual.rounding ?? layer?.rounding);
             const mode=profile.mode||layer?.profileMode||'segments';
-            const rails=paths.map(path=>sampleStableSmoothRoundedEndpointPath(path,round,mode,layer?.splineRenderMode));
+            const rails=paths.map(path=>sampleStableSmoothRoundedEndpointPath(path,round,mode,layer?.splineRenderMode,layer));
             bucket[layerIndex]=rails;
             return rails;
         }
@@ -757,7 +774,7 @@ window.__spiroRegisterModule?.('js/geometry/frame-paths');
                 result.length=write;
             }
             const frameLayer=runtimeState.morph.frameLayers?.[layerIndex]||state.layers?.[layerIndex];
-            if(frameLayer?.roundingMode==='monoradius'&&Number(frameLayer?.rounding)>0){
+            if(frameLayer?.roundingMode==='monoradius'){
                 // These rails have already been rounded; source/destination
                 // interpolation must not contract their primary circle.
                 const src=runtimeState.morph.renderSourceLayers?.[layerIndex]||state.layers?.[layerIndex];

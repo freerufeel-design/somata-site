@@ -304,7 +304,7 @@ async function buildSharedGpuMorphResource(layerIndex,plan,phaseSerial){
 async function prepareSharedGpuMorphPathResources(){
     const phaseSerial=sharedGpuMorphPathRuntime.phaseSerial;
     sharedGpuMorphPathRuntime.stats.phaseBuilds++;
-    if(state?.morph?.mode==='circleSlide'){
+    if((state?.morph?.mode==='circleSlide'||state?.morph?.mode==='topoCircle')){
         sharedGpuMorphPathRuntime.whyUnavailable='circle-slide uses angular phase plan; CPU compatibility path remains lazy';
         return [];
     }

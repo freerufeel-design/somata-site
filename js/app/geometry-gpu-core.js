@@ -765,8 +765,9 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             const rel=a/Math.max(1e-9,b);
             return splitSplineCubic(left,rel).right;
         }
-        function buildEdgeLocalSplineRun(runPoints) {
+        function buildEdgeLocalSplineRun(runPoints, splineBlend = 1) {
             const pts=Array.isArray(runPoints)?runPoints:[];
+            const shapeBlend=Math.max(0,Math.min(1,Number(splineBlend)||0));
             const cubics=[];
             const cumulative=[0];
             let total=0;
@@ -780,11 +781,27 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                     const p0=i>0?pts[i-1]:{x:2*p1.x-p2.x,y:2*p1.y-p2.y};
                     const p3=i+2<pts.length?pts[i+2]:{x:2*p2.x-p1.x,y:2*p2.y-p1.y};
                     const ctrl=centripetalSplineBezierControls(p0,p1,p2,p3,0.5);
-                    c1=ctrl.c1;c2=ctrl.c2;
+                    // During a Segments↔Spline Morph the control handles are
+                    // interpolated; authored endpoints and anchor motion stay put.
+                    const line1={x:p1.x+(p2.x-p1.x)/3,y:p1.y+(p2.y-p1.y)/3};
+                    const line2={x:p1.x+2*(p2.x-p1.x)/3,y:p1.y+2*(p2.y-p1.y)/3};
+                    c1={x:line1.x+(ctrl.c1.x-line1.x)*shapeBlend,y:line1.y+(ctrl.c1.y-line1.y)*shapeBlend};
+                    c2={x:line2.x+(ctrl.c2.x-line2.x)*shapeBlend,y:line2.y+(ctrl.c2.y-line2.y)*shapeBlend};
                 }
                 cubics.push({p0:p1,c1,c2,p3:p2});
 
-                total+=Math.hypot(p2.x-p1.x,p2.y-p1.y);
+                // Measure the actual cubic arc, not just its endpoint chord.
+                // A deeply curved profile can be much longer than its chord;
+                // rounding is a physical distance along the visible profile.
+                const arc=[0];
+                let last=p1,arcLength=0;
+                for(let sample=1;sample<=16;sample++){
+                    const q=splineCubicPoint(cubics[cubics.length-1],sample/16);
+                    arcLength+=Math.hypot(q.x-last.x,q.y-last.y);
+                    arc.push(arcLength);last=q;
+                }
+                cubics[cubics.length-1].arcLengths=arc;
+                total+=arcLength;
                 cumulative.push(total);
             }
             return {points:pts,cubics,cumulative,total,trimStart:0,trimEnd:0};
@@ -800,7 +817,16 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             let i=0;
             while(i<cubics.length-1 && d>cum[i+1]) i++;
             const span=Math.max(1e-9,cum[i+1]-cum[i]);
-            const t=Math.max(0,Math.min(1,(d-cum[i])/span));
+            const segmentDistance=Math.max(0,Math.min(span,d-cum[i]));
+            const arc=cubics[i].arcLengths;
+            let t=segmentDistance/span;
+            if(arc&&arc.length>1){
+                let j=1;
+                while(j<arc.length-1&&segmentDistance>arc[j])j++;
+                const local=Math.max(0,Math.min(1,(segmentDistance-arc[j-1])/
+                    Math.max(1e-9,arc[j]-arc[j-1])));
+                t=(j-1+local)/(arc.length-1);
+            }
             let tangent=splineCubicDerivative(cubics[i],t);
             if(Math.hypot(tangent.x,tangent.y)<1e-8){
                 tangent={x:cubics[i].p3.x-cubics[i].p0.x,y:cubics[i].p3.y-cubics[i].p0.y};
@@ -819,7 +845,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 ctx.bezierCurveTo(seg.c1.x,seg.c1.y,seg.c2.x,seg.c2.y,seg.p3.x,seg.p3.y);
             }
         }
-        function collectEdgeLocalSplineRuns(points, closed, flags) {
+        function collectEdgeLocalSplineRuns(points, closed, flags, splineBlend = 1) {
             const n=points.length;
             if(n<2) return [];
             if(!closed){
@@ -830,7 +856,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 for(let k=0;k<uniq.length-1;k++){
                     const a=uniq[k],b=uniq[k+1];
                     if(b<=a) continue;
-                    runs.push({startBoundary:a,endBoundary:b,...buildEdgeLocalSplineRun(points.slice(a,b+1))});
+                    runs.push({startBoundary:a,endBoundary:b,...buildEdgeLocalSplineRun(points.slice(a,b+1),splineBlend)});
                 }
                 return runs;
             }
@@ -843,32 +869,70 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 const rp=[points[a]];
                 let i=a,guard=0;
                 while(i!==b && guard++<=n){i=(i+1)%n;rp.push(points[i]);}
-                if(rp.length>=2) runs.push({startBoundary:a,endBoundary:b,...buildEdgeLocalSplineRun(rp)});
+                if(rp.length>=2) runs.push({startBoundary:a,endBoundary:b,...buildEdgeLocalSplineRun(rp,splineBlend)});
             }
             return runs;
         }
-        function appendLocalSplineFillet(ctx, fromLoc, toLoc, cutDistance) {
+        // The same bounded fillet is used by Static and by every Morph frame.
+        // A cubic whose control handles escape the triangle between the trimmed
+        // shoulders and the authored corner can turn back and draw a little
+        // exterior "ear".  The old Static vs Morph tangent policies also made
+        // the shape jump at phase boundaries.  Keep motion and corner anchors
+        // untouched; constrain ONLY the displayed joining cubic.
+        function appendLocalSplineFillet(ctx, fromLoc, toLoc, cutDistance, liveSeamMix = 0, corner = null) {
             const a=fromLoc.point,b=toLoc.point;
             const dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy);
             if(d<=1e-8){ctx.lineTo(b.x,b.y);return;}
-            const chord={x:dx/d,y:dy/d};
-            const norm=v=>{const l=Math.hypot(v.x,v.y);return l>1e-9?{x:v.x/l,y:v.y/l}:{...chord};};
-
-            const orient=t=>{
-                t=norm(t);
-                const along=t.x*chord.x+t.y*chord.y;
-                if(along>=0.18)return t;
-                const w=Math.max(0,Math.min(1,(along+1)/1.18));
-                return norm({x:chord.x*(1-w)+t.x*w,y:chord.y*(1-w)+t.y*w});
+            const v=corner&&Number.isFinite(corner.x)&&Number.isFinite(corner.y)
+                ?corner:{x:(a.x+b.x)*0.5,y:(a.y+b.y)*0.5};
+            const area=(b.x-a.x)*(v.y-a.y)-(b.y-a.y)*(v.x-a.x);
+            // At a degenerate corner there is no area in which to construct
+            // a round; do not invent a lateral offset or a hairpin loop.
+            if(Math.abs(area)<1e-8*d*d){ctx.lineTo(b.x,b.y);return;}
+            const inTriangle=p=>{
+                const ab=(b.x-a.x)*(p.y-a.y)-(b.y-a.y)*(p.x-a.x);
+                const bv=(v.x-b.x)*(p.y-b.y)-(v.y-b.y)*(p.x-b.x);
+                const va=(a.x-v.x)*(p.y-v.y)-(a.y-v.y)*(p.x-v.x);
+                const sign=area>0?1:-1;
+                return ab*sign>=-1e-8&&bv*sign>=-1e-8&&va*sign>=-1e-8;
             };
-            const ta=orient(fromLoc.tangent),tb=orient(toLoc.tangent);
-            const dot=Math.max(-1,Math.min(1,ta.x*tb.x+ta.y*tb.y));
-            const theta=Math.acos(dot);
-            let h=d/(3*Math.max(0.28,Math.cos(theta/4)**2));
-            const safeCut=Math.max(1e-9,Number(cutDistance)||0);
-
-            h=Math.min(h,d*0.44,safeCut*0.92);
-            ctx.bezierCurveTo(a.x+ta.x*h,a.y+ta.y*h,b.x-tb.x*h,b.y-tb.y*h,b.x,b.y);
+            const projectOntoTriangle=p=>{
+                if(inTriangle(p))return p;
+                // Orthogonal projection onto a convex triangle is continuous
+                // as animated tangents cross its boundary. A hard switch to
+                // a different handle direction used to produce tiny pops.
+                let nearest=null,best=Infinity;
+                for(const [start,end] of [[a,b],[b,v],[v,a]]){
+                    const dx=end.x-start.x,dy=end.y-start.y;
+                    const denom=dx*dx+dy*dy;
+                    const t=denom>1e-12?Math.max(0,Math.min(1,
+                        ((p.x-start.x)*dx+(p.y-start.y)*dy)/denom)):0;
+                    const q={x:start.x+dx*t,y:start.y+dy*t};
+                    const dist=(q.x-p.x)**2+(q.y-p.y)**2;
+                    if(dist<best){best=dist;nearest=q;}
+                }
+                return nearest||p;
+            };
+            const safeControl=(at,tangent,backward)=>{
+                const cx=v.x-at.x,cy=v.y-at.y,dist=Math.hypot(cx,cy);
+                const maxHandle=Math.min(dist*0.46,d*0.38,Math.max(0,Number(cutDistance)||0)*0.75);
+                // Keep a small positive handle pointed into the wedge even
+                // when the incoming cubic tangent points straight backward.
+                const fallback={x:at.x+cx*0.28,y:at.y+cy*0.28};
+                const tx=(Number(tangent?.x)||0)*(backward?-1:1);
+                const ty=(Number(tangent?.y)||0)*(backward?-1:1);
+                const len=Math.hypot(tx,ty);
+                if(len<1e-9||maxHandle<1e-9)return fallback;
+                const p={x:at.x+tx/len*maxHandle,y:at.y+ty/len*maxHandle};
+                const q=projectOntoTriangle(p);
+                // This small continuous bias prevents zero-length Bézier
+                // derivatives when a wildly reversed tangent clips to a.
+                return {x:q.x*0.96+fallback.x*0.04,
+                    y:q.y*0.96+fallback.y*0.04};
+            };
+            const c1=safeControl(a,fromLoc.tangent,false);
+            const c2=safeControl(b,toLoc.tangent,true);
+            ctx.bezierCurveTo(c1.x,c1.y,c2.x,c2.y,b.x,b.y);
         }
         function drawWholeCentripetalSpline(ctx, points, closed) {
             const pts=points||[],n=pts.length;
@@ -886,7 +950,131 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             if(closed) ctx.closePath();
         }
 
-        function splinePathForDraw(ctx, rawPoints, closed = false, roundingFrac = 0, cornerFlags = [], bridgeRoundFlags = [], wholeCurveSpline = false) {
+        // A near-reversal is not a roundable polygon corner: the two rails
+        // return along each other.  Large fillets there make an exterior hook
+        // (most visible for N=6/K=3: two-point, closed suborbits).  Attenuate
+        // only turns above 135 degrees, continuously to zero at 180 degrees.
+        // This is a *display* constraint. Never change the authored points or
+        // the Morph transport / circle / topology interpolation itself.
+        function highTurnRoundingFactor(incoming, outgoing) {
+            const ax=Number(incoming?.x)||0,ay=Number(incoming?.y)||0;
+            const bx=Number(outgoing?.x)||0,by=Number(outgoing?.y)||0;
+            const al=Math.hypot(ax,ay),bl=Math.hypot(bx,by);
+            if(al<1e-9||bl<1e-9)return 1;
+            const cos=Math.max(-1,Math.min(1,(ax*bx+ay*by)/(al*bl)));
+            // 135deg -> 1, 180deg -> 0; squared for a gentle hairpin fade.
+            const u=Math.max(0,Math.min(1,(Math.acos(-1)-Math.acos(cos))/(Math.PI/4)));
+            return u*u;
+        }
+
+        // Above 100% the optional knot smoothing runs *before* the fillet.
+        // The high-turn guard must be LOCAL. A temporary 180° reversal on one
+        // transported Morph vertex used to set a single MIN factor for the
+        // *entire* outline, switching off extra rounding at every other corner.
+        // Keep the guard on that turn and its immediately incident knots only.
+        // A radial crossing is also constrained per knot, never globally.
+        // This changes only displayed smoothing, not the animated vertex rail.
+        function limitHighTurnExtraKnotSmoothing(original, smoothed, closed, cornerFlags) {
+            const pts=original||[],n=pts.length;
+            if(n<3||!Array.isArray(smoothed)||smoothed.length!==n)return smoothed;
+            const factors=new Float64Array(n).fill(1);
+            let hasProtectedTurn=false;
+            for(let i=0;i<n;i++){
+                if(cornerFlags?.[i]!==true||(!closed&&(i===0||i===n-1)))continue;
+                const a=pts[(i-1+n)%n],b=pts[i],c=pts[(i+1)%n];
+                const turn=highTurnRoundingFactor(
+                    {x:b.x-a.x,y:b.y-a.y},{x:c.x-b.x,y:c.y-b.y});
+                if(turn>=0.999999)continue;
+                hasProtectedTurn=true;
+                // Smoothing moves adjoining knots too; guard the whole local
+                // three-knot reversal without suppressing unrelated corners.
+                factors[i]=Math.min(factors[i],turn);
+                if(closed||i>1)factors[(i-1+n)%n]=Math.min(factors[(i-1+n)%n],turn);
+                if(closed||i<n-2)factors[(i+1)%n]=Math.min(factors[(i+1)%n],turn);
+            }
+            if(!hasProtectedTurn)return smoothed;
+            const radius=pts.reduce((r,p)=>Math.max(r,Math.hypot(p.x,p.y)),0);
+            const floor=radius*0.5;
+            if(floor>1e-7){
+                for(let i=0;i<n;i++){
+                    const a=pts[i],b=smoothed[i];
+                    if(Math.hypot(a.x,a.y)<=floor+1e-7)continue;
+                    const dx=b.x-a.x,dy=b.y-a.y,qa=dx*dx+dy*dy;
+                    if(qa<1e-12)continue;
+                    const qb=2*(a.x*dx+a.y*dy);
+                    const qc=a.x*a.x+a.y*a.y-floor*floor;
+                    const discriminant=qb*qb-4*qa*qc;
+                    if(discriminant<0)continue;
+                    const crossing=(-qb-Math.sqrt(discriminant))/(2*qa);
+                    if(crossing>=0&&crossing<factors[i])factors[i]=Math.max(0,crossing-1e-7);
+                }
+            }
+            return smoothed.map((p,i)=>({
+                ...p,
+                x:pts[i].x+(p.x-pts[i].x)*factors[i],
+                y:pts[i].y+(p.y-pts[i].y)*factors[i]
+            }));
+        }
+
+        // A fillet on a high-angle vertex must not consume the rail into the
+        // inner half of its original circumradius. The limit is only applied
+        // to the *fillet shoulders*, not to intentional unrounded chords
+        // passing through the centre (e.g. a diameter in K=N/2 mode).
+        // Work in distances along the actual spline run, not its chord.
+        function clampSplineFilletCutToHalfRadius(run,fromEnd,cut,originalRadius) {
+            const floor=originalRadius*0.5;
+            if(!(floor>1e-7&&cut>1e-8&&run?.total>1e-8))return cut;
+            const origin=locateOnEdgeLocalSplineRun(run,fromEnd?run.total:0).point;
+            if(Math.hypot(origin.x,origin.y)<=floor+1e-6)return cut;
+            const sample=d=>{
+                const p=locateOnEdgeLocalSplineRun(run,fromEnd?run.total-d:d).point;
+                return Math.hypot(p.x,p.y)-floor;
+            };
+            // Find the first entry into the excluded circle, even if a
+            // winding spline were to leave it again later in the run.
+            let last=0;
+            const steps=12;
+            for(let i=1;i<=steps;i++){
+                const d=cut*i/steps;
+                if(sample(d)<=1e-7){
+                    let lo=last,hi=d;
+                    for(let k=0;k<14;k++){
+                        const mid=(lo+hi)*0.5;
+                        if(sample(mid)>1e-7)lo=mid;else hi=mid;
+                    }
+                    return Math.max(0,lo);
+                }
+                last=d;
+            }
+            return cut;
+        }
+
+        function splinePathForDraw(ctx, rawPoints, closed = false, roundingFrac = 0, cornerFlags = [], bridgeRoundFlags = [], wholeCurveSpline = false, splineBlend = 1, liveSeamMix = 0, filletLayer = null) {
+            if(!state.fourierMode && filletLayer &&
+                typeof somataDrawSplineCornerMode==='function' &&
+                somataDrawSplineCornerMode(ctx,rawPoints,Boolean(closed),roundingFrac,{baseSplineBlend:splineBlend,layer:filletLayer}))return;
+            if (!state.fourierMode && typeof drawUnifiedFilletPath === "function" && Number(roundingFrac)>0.00001 &&
+                (wholeCurveSpline!==true || filletLayer?.roundingSmoothSplines===true)) {
+                const flags=filletLayer?.roundingSmoothSplines===true
+                    ?rawPoints.map((_,i)=>Boolean(closed)||(i>0&&i<rawPoints.length-1)):cornerFlags;
+                const filletOpts={spline:true,layer:filletLayer,wholeCurveSpline,
+                    bridgeRoundFlags:wholeCurveSpline===true?null:bridgeRoundFlags};
+                // The legacy spline renderer and the rounded rail are not the
+                // same curve at 0%: abruptly choosing the rounded rail above
+                // 0.00001 used to redraw an entire profile in ONE frame.
+                // Blend their *geometry*, not their opacity, near zero.
+                const low=Math.max(0,Math.min(1,(Number(roundingFrac)||0)/.06));
+                if(low<1&&typeof blendMorphFilletPaths==='function'){
+                    const u=low*low*(3-2*low);
+                    blendMorphFilletPaths(ctx,
+                        c=>splinePathForDraw(c,rawPoints,closed,0,cornerFlags,bridgeRoundFlags,wholeCurveSpline,splineBlend,liveSeamMix,filletLayer),
+                        c=>{if(!drawUnifiedFilletPath(c,rawPoints,Boolean(closed),roundingFrac,flags,filletOpts))
+                            splinePathForDraw(c,rawPoints,closed,0,cornerFlags,bridgeRoundFlags,wholeCurveSpline,splineBlend,liveSeamMix,filletLayer);},
+                        u,Boolean(closed));
+                    return;
+                }
+                if(drawUnifiedFilletPath(ctx,rawPoints,Boolean(closed),roundingFrac,flags,filletOpts))return;
+            }
             let points=(rawPoints||[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y)));
             if(points.length<2) return;
             const round=Math.max(0,Math.min(2,Number(roundingFrac)||0));
@@ -894,6 +1082,13 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             let flags=Array.isArray(cornerFlags)?cornerFlags.slice(0,points.length):[];
             const bridgePolicy=Array.isArray(bridgeRoundFlags)&&bridgeRoundFlags.length===points.length;
             let bridgeFlags=bridgePolicy?bridgeRoundFlags.slice(0,points.length):[];
+            // The old code selected ONLY positive bridge flags when an array
+            // existed. A valid array containing no true values inadvertently
+            // suppressed EVERY authored corner during Morph. null means the
+            // knot is not an edge bridge; explicit false blocks only that
+            // particular straight-join bridge.
+            const roundableAt=boundary=>flags[boundary]===true &&
+                (!bridgePolicy || bridgeFlags[boundary]!==false);
 
             if(state.fourierMode && rawPoints?._fourierPrepared!==true){
                 points=buildFourierWavePoints(points,Boolean(closed),`spline:${round.toFixed(4)}`);
@@ -904,37 +1099,69 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             }
 
             const runs=wholeCurveSpline===true || rawPoints?._spiroWholeCurveSpline===true
-                ? [] : collectEdgeLocalSplineRuns(points,Boolean(closed),flags);
+                ? [] : collectEdgeLocalSplineRuns(points,Boolean(closed),flags,splineBlend);
             if(!runs.length){
                 const roundedPoints=round>0.001
                     ? transformSplineKnotsForRounding(points,Boolean(closed),round,flags)
                     : points;
-                drawWholeCentripetalSpline(ctx,roundedPoints,Boolean(closed));
+                const boundedPoints=round>1.000001
+                    ? limitHighTurnExtraKnotSmoothing(points,roundedPoints,Boolean(closed),flags)
+                    : roundedPoints;
+                drawWholeCentripetalSpline(ctx,boundedPoints,Boolean(closed));
                 return;
             }
 
             const junctions=[];
             const runCount=runs.length;
+            // A rounding percentage refers to the COMPLETE visible profile,
+            // not the length of whichever two segments happen to meet here.
+            // The per-corner budget is an arc distance, independent of sampling
+            // density or of a tiny segment immediately beside the corner.
+            // Each shoulder is then limited to half the run between two actual
+            // corners so adjacent fillets cannot overlap or reverse direction.
+            const pathLength=runs.reduce((sum,run)=>sum+Math.max(0,run.total),0);
+            let roundableCount=0;
+            for(let i=closed?0:1;i<runCount;i++){
+                const boundary=runs[i].startBoundary;
+                if(roundableAt(boundary))roundableCount++;
+            }
+            const globalShoulder=roundableCount>0
+                ?0.5*pathLength/roundableCount*filletRound:0;
+            const originalRadius=points.reduce((r,p)=>Math.max(r,Math.hypot(p.x,p.y)),0);
+            const cutAtJunction=(prev,next,roundable)=>{
+                if(!roundable)return {left:0,right:0};
+                const a=Math.max(0,Number(prev.total)||0);
+                const b=Math.max(0,Number(next.total)||0);
+                const last=prev.cubics?.[prev.cubics.length-1],first=next.cubics?.[0];
+                const inTangent=last?{x:last.p3.x-last.c2.x,y:last.p3.y-last.c2.y}:null;
+                const outTangent=first?{x:first.c1.x-first.p0.x,y:first.c1.y-first.p0.y}:null;
+                const factor=highTurnRoundingFactor(inTangent,outTangent);
+                let left=Math.min(a*0.5,globalShoulder)*factor;
+                let right=Math.min(b*0.5,globalShoulder)*factor;
+                if(factor<0.999999){
+                    left=clampSplineFilletCutToHalfRadius(prev,true,left,originalRadius);
+                    right=clampSplineFilletCutToHalfRadius(next,false,right,originalRadius);
+                }
+                return {left,right};
+            };
             if(closed){
                 for(let i=0;i<runCount;i++){
                     const prev=runs[(i-1+runCount)%runCount],next=runs[i];
                     const boundary=next.startBoundary;
-                    const roundable=bridgePolicy?bridgeFlags[boundary]===true:flags[boundary]===true;
-                    const maxCut=roundable?0.5*Math.min(prev.total,next.total):0;
-                    const cut=maxCut*filletRound;
-                    prev.trimEnd=Math.max(prev.trimEnd||0,cut);
-                    next.trimStart=Math.max(next.trimStart||0,cut);
-                    junctions.push({boundary,roundable,cut,prev,next});
+                    const roundable=roundableAt(boundary);
+                    const cuts=cutAtJunction(prev,next,roundable);
+                    prev.trimEnd=Math.max(prev.trimEnd||0,cuts.left);
+                    next.trimStart=Math.max(next.trimStart||0,cuts.right);
+                    junctions.push({boundary,roundable,cuts,prev,next});
                 }
             }else{
                 for(let i=1;i<runCount;i++){
                     const prev=runs[i-1],next=runs[i],boundary=next.startBoundary;
-                    const roundable=bridgePolicy?bridgeFlags[boundary]===true:flags[boundary]===true;
-                    const maxCut=roundable?0.5*Math.min(prev.total,next.total):0;
-                    const cut=maxCut*filletRound;
-                    prev.trimEnd=Math.max(prev.trimEnd||0,cut);
-                    next.trimStart=Math.max(next.trimStart||0,cut);
-                    junctions.push({boundary,roundable,cut,prev,next});
+                    const roundable=roundableAt(boundary);
+                    const cuts=cutAtJunction(prev,next,roundable);
+                    prev.trimEnd=Math.max(prev.trimEnd||0,cuts.left);
+                    next.trimStart=Math.max(next.trimStart||0,cuts.right);
+                    junctions.push({boundary,roundable,cuts,prev,next});
                 }
             }
 
@@ -964,10 +1191,11 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 if(!hasNext) continue;
                 const ni=(i+1)%runCount;
                 const boundary=runs[ni].startBoundary;
-                const roundable=bridgePolicy?bridgeFlags[boundary]===true:flags[boundary]===true;
-                const cut=roundable?Math.min(runs[i].trimEnd||0,runs[ni].trimStart||0):0;
+                const roundable=roundableAt(boundary);
+                const cut=roundable
+                    ? Math.max(runs[i].trimEnd||0,runs[ni].trimStart||0):0;
                 if(roundable&&cut>1e-9){
-                    appendLocalSplineFillet(ctx,locs[i].end,locs[ni].start,cut);
+                    appendLocalSplineFillet(ctx,locs[i].end,locs[ni].start,cut,1,points[boundary]);
                 }else{
                     const b=locs[ni].start.point;
 
@@ -1348,7 +1576,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             }
         }
 
-        function sampleSmoothSpiralSplineForVariableWidth(points, roundingFrac = 0, cornerFlags = null) {
+        function sampleSmoothSpiralSplineForVariableWidth(points, roundingFrac = 0, cornerFlags = null, splineShape = false, filletLayer = null) {
             const src=(Array.isArray(points)?points:[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y)));
             if(src.length<3)return src;
             const sampled=[];
@@ -1397,6 +1625,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             if(state.fourierMode){
 
                 splinePathForDraw(sampler,src,false,Math.max(0,Math.min(2,Number(roundingFrac)||0)),Array.isArray(cornerFlags)?cornerFlags:[],[]);
+            }else if(splineShape && true && typeof somataDrawSplineCornerMode==='function'){
+                somataDrawSplineCornerMode(sampler,src,false,roundingFrac,{baseSplineBlend:1,layer:filletLayer});
             }else{
                 drawSpiralSpaceCentripetalSpline(sampler,src,roundingFrac);
             }
@@ -1428,8 +1658,9 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             return sampled;
         }
 
-        function buildSmoothSpiralBezierSegments(points, roundingFrac = 0, cornerFlags = null) {
-            const src=(Array.isArray(points)?points:[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y)));
+        function buildSmoothSpiralBezierSegments(points, roundingFrac = 0, cornerFlags = null, splineShape = false, filletLayer = null, prevalidated = false) {
+            // The caller's segment builder has already rejected invalid nodes.
+            const src=prevalidated?points:(Array.isArray(points)?points:[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y)));
             if(src.length<2)return [];
             const segments=[];let current=null;
             const pushLine=(x,y)=>{
@@ -1459,26 +1690,51 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             // Whole-curve spline deliberately softens authored junctions. The
             // default local spline preserves them, just like the static carrier.
             const whole=points?._spiroWholeCurveSpline===true;
-            if(whole) drawSpiralSpaceCentripetalSpline(recorder,src,Math.max(0,Math.min(2,Number(roundingFrac)||0)));
+            if(splineShape && true && typeof somataDrawSplineCornerMode==='function')
+                somataDrawSplineCornerMode(recorder,src,false,roundingFrac,{baseSplineBlend:1,layer:filletLayer,prevalidated:true});
+            else if(whole) drawSpiralSpaceCentripetalSpline(recorder,src,Math.max(0,Math.min(2,Number(roundingFrac)||0)));
             else splinePathForDraw(recorder,src,false,Math.max(0,Math.min(2,Number(roundingFrac)||0)),
                 Array.isArray(cornerFlags)?cornerFlags:[],[],false);
             if(!segments.length)return [];
 
             const direct=segments.length===src.length-1;
-            const srcCum=[0];let srcTotal=0;for(let i=1;i<src.length;i++){srcTotal+=Math.hypot(src[i].x-src[i-1].x,src[i].y-src[i-1].y);srcCum.push(srcTotal);}
-            const widthAtFraction=(f)=>{
-                if(src.length<2)return Math.max(.02,Number(src[0]?.widthScale)||1);
-                const target=Math.max(0,Math.min(1,Number(f)||0))*Math.max(1e-9,srcTotal);let i=0;while(i<src.length-2&&srcCum[i+1]<target)i++;
-                const span=Math.max(1e-9,srcCum[i+1]-srcCum[i]),u=Math.max(0,Math.min(1,(target-srcCum[i])/span));
-                const a=Math.max(.02,Number(src[i]?.widthScale)||1),b=Math.max(.02,Number(src[Math.min(src.length-1,i+1)]?.widthScale)||a);
-                return Math.exp(Math.log(a)+(Math.log(b)-Math.log(a))*u);
-            };
-            for(let i=0;i<segments.length;i++){
-                const seg=segments[i];
-                seg.widthScale0=direct?Math.max(.02,Number(src[i]?.widthScale)||1):widthAtFraction(i/segments.length);
-                seg.widthScale1=direct?Math.max(.02,Number(src[Math.min(src.length-1,i+1)]?.widthScale)||seg.widthScale0):widthAtFraction((i+1)/segments.length);
-                seg.__profileCorner0=direct&&src[i]?.__profileCorner===true;
-                seg.__profileCorner1=direct&&src[Math.min(src.length-1,i+1)]?.__profileCorner===true;
+            if(direct){
+                // Spline+ has exactly one cubic per transported edge.  Its
+                // widths already correspond to the original nodes: no arc
+                // length table or per-segment interpolation is necessary.
+                for(let i=0;i<segments.length;i++){
+                    const seg=segments[i];
+                    seg.widthScale0=Math.max(.02,Number(src[i]?.widthScale)||1);
+                    seg.widthScale1=Math.max(.02,Number(src[Math.min(src.length-1,i+1)]?.widthScale)||seg.widthScale0);
+                    seg.__profileCorner0=src[i]?.__profileCorner===true;
+                    seg.__profileCorner1=src[Math.min(src.length-1,i+1)]?.__profileCorner===true;
+                }
+            }else{
+                // Keep the full approved remapping only for rails whose
+                // output cubic count differs from the input node count.
+                const srcCum=[0];let srcTotal=0;for(let i=1;i<src.length;i++){srcTotal+=Math.hypot(src[i].x-src[i-1].x,src[i].y-src[i-1].y);srcCum.push(srcTotal);}
+                // The fractions in this caller are monotone (i / segmentCount).
+                // Reuse the last exact arc interval instead of rescanning all
+                // earlier source edges for every output cubic. Keep a reset for
+                // any future caller that requests decreasing fractions.
+                let widthCursor=0, widthCursorTarget=-Infinity;
+                const widthAtFraction=(f)=>{
+                    if(src.length<2)return Math.max(.02,Number(src[0]?.widthScale)||1);
+                    const target=Math.max(0,Math.min(1,Number(f)||0))*Math.max(1e-9,srcTotal);
+                    if(target<widthCursorTarget)widthCursor=0;
+                    while(widthCursor<src.length-2&&srcCum[widthCursor+1]<target)widthCursor++;
+                    widthCursorTarget=target;const i=widthCursor;
+                    const span=Math.max(1e-9,srcCum[i+1]-srcCum[i]),u=Math.max(0,Math.min(1,(target-srcCum[i])/span));
+                    const a=Math.max(.02,Number(src[i]?.widthScale)||1),b=Math.max(.02,Number(src[Math.min(src.length-1,i+1)]?.widthScale)||a);
+                    return Math.exp(Math.log(a)+(Math.log(b)-Math.log(a))*u);
+                };
+                for(let i=0;i<segments.length;i++){
+                    const seg=segments[i];
+                    seg.widthScale0=widthAtFraction(i/segments.length);
+                    seg.widthScale1=widthAtFraction((i+1)/segments.length);
+                    seg.__profileCorner0=false;
+                    seg.__profileCorner1=false;
+                }
             }
             segments._spiroBezierSpiral=true;
             return segments;
@@ -1559,17 +1815,105 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             }
             return out;
         }
-        function buildSpiralBezierSegments(points, roundingFrac = 0, cornerFlags = null, smoothSpline = false) {
+        // Blend two Spiral carriers by matching *arc stations*, not by pairing
+        // unrelated Bézier indices. Split each original cubic exactly with De
+        // Casteljau before blending its controls: at mix=0 and mix=1 the two
+        // original curves are reproduced exactly (even with different counts).
+        // This is display-only; the Morph anchors and spiral transport are not
+        // modified. It eliminates the old switch at rounding=0.001.
+        function blendSpiralCarrierCubics(authored, rounded, mix) {
+            if(!authored?.length||!rounded?.length)return rounded;
+            const lerp=(a,b,t)=>a+(b-a)*t;
+            const point=(a,b,t)=>({x:lerp(a.x,b.x,t),y:lerp(a.y,b.y,t)});
+            const cubicPoint=(q,t)=>{
+                const u=1-t;
+                return {x:u*u*u*q.p0.x+3*u*u*t*q.c1.x+3*u*t*t*q.c2.x+t*t*t*q.p3.x,
+                    y:u*u*u*q.p0.y+3*u*u*t*q.c1.y+3*u*t*t*q.c2.y+t*t*t*q.p3.y};
+            };
+            const table=curve=>{
+                const stations=[0];let total=0;
+                for(const q of curve){
+                    let p=q.p0;
+                    for(let j=1;j<=12;j++){
+                        const v=cubicPoint(q,j/12);
+                        total+=Math.hypot(v.x-p.x,v.y-p.y);
+                        stations.push(total);p=v;
+                    }
+                }
+                return {curve,stations,total};
+            };
+            const A=table(authored),B=table(rounded);
+            if(!(A.total>1e-9&&B.total>1e-9))return rounded;
+            const boundary=t=>{
+                const values=[0,1];
+                for(let i=1;i<t.curve.length;i++)values.push(t.stations[i*12]/t.total);
+                return values;
+            };
+            // Each interval is a subsegment of one cubic from each carrier.
+            // Exact De Casteljau splitting means no uniform tessellation is
+            // needed; complexity stays linear in actual authored segments.
+            const stations=boundary(A).concat(boundary(B));
+            stations.sort((a,b)=>a-b);
+            const cuts=[];
+            for(const f of stations)if(!cuts.length||f-cuts[cuts.length-1]>1e-12)cuts.push(f);
+            if(cuts[cuts.length-1]<1)cuts.push(1);
+            const locate=(table,f,preferEnd)=>{
+                const target=f*table.total,a=table.stations;
+                let lo=0,hi=a.length-1;
+                while(lo<hi){const m=(lo+hi)>>1;if(a[m]<target)lo=m+1;else hi=m;}
+                let k=Math.max(1,lo);
+                if(preferEnd&&Math.abs(target-a[k-1])<1e-9)k=Math.max(1,k-1);
+                if(!preferEnd&&k%12===0&&Math.abs(target-a[k])<1e-9&&k<a.length-1)
+                    return {idx:Math.min(table.curve.length-1,k/12),t:0};
+                const idx=Math.min(table.curve.length-1,Math.floor((k-1)/12));
+                const local=k-1-idx*12;
+                const d=Math.max(1e-12,a[k]-a[k-1]);
+                return {idx,t:Math.max(0,Math.min(1,(local+(target-a[k-1])/d)/12))};
+            };
+            const split=(q,t)=>{
+                const p01=point(q.p0,q.c1,t),p12=point(q.c1,q.c2,t),p23=point(q.c2,q.p3,t);
+                const p012=point(p01,p12,t),p123=point(p12,p23,t),p=point(p012,p123,t);
+                return [{p0:q.p0,c1:p01,c2:p012,p3:p},{p0:p,c1:p123,c2:p23,p3:q.p3}];
+            };
+            const section=(table,from,to)=>{
+                const a=locate(table,from,false),b=locate(table,to,true);
+                // The union grid contains all natural segment boundaries.
+                const idx=a.idx,source=table.curve[idx];
+                const t0=a.t,t1=b.idx===idx?b.t:1;
+                const right=t0>0?split(source,t0)[1]:source;
+                const span=(t1-t0)/Math.max(1e-12,1-t0);
+                return span<1-1e-12?split(right,Math.max(0,Math.min(1,span)))[0]:right;
+            };
+            const out=[];
+            for(let i=1;i<cuts.length;i++){
+                const a=cuts[i-1],b=cuts[i];if(b-a<1e-12)continue;
+                const pa=section(A,a,b),pb=section(B,a,b);
+                const value=(field)=>point(pa[field],pb[field],mix);
+                const wa=locate(A,a,false),wb=locate(B,a,false);
+                const ea=locate(A,b,true),eb=locate(B,b,true);
+                const weight=(tab,l)=>{
+                    const q=tab.curve[l.idx],t=l.t;
+                    return Math.exp(lerp(Math.log(Math.max(.02,Number(q.widthScale0)||1)),Math.log(Math.max(.02,Number(q.widthScale1)||1)),t));
+                };
+                out.push({p0:value('p0'),c1:value('c1'),c2:value('c2'),p3:value('p3'),
+                    widthScale0:lerp(weight(A,wa),weight(B,wb),mix),
+                    widthScale1:lerp(weight(A,ea),weight(B,eb),mix)});
+            }
+            out._spiroBezierSpiral=true;out._spiroExactFinalSpace=true;
+            return out;
+        }
+        window.__spiroBlendCarrierCubics=blendSpiralCarrierCubics;
+        function buildSpiralBezierSegments(points, roundingFrac = 0, cornerFlags = null, smoothSpline = false, splineShape = false, filletLayer = null) {
 
             if(state.fourierMode!==true&&Array.isArray(points?._spiroRetainedCubics)&&points._spiroRetainedCubics.length){
                 return finalizePeriodicSpiralBezierCarrier(points._spiroRetainedCubics,points);
             }
             const src=(Array.isArray(points)?points:[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y)));
             if(src.length<2||state.fourierMode)return [];
-            if(smoothSpline===true)return finalizePeriodicSpiralBezierCarrier(buildSmoothSpiralBezierSegments(src,roundingFrac,cornerFlags),src);
+            if(smoothSpline===true)return finalizePeriodicSpiralBezierCarrier(buildSmoothSpiralBezierSegments(src,roundingFrac,cornerFlags,splineShape,filletLayer,true),src);
             const segments=[];
 
-            const unrounded=Math.max(0,Number(roundingFrac)||0)<=.001;
+            const unrounded=Math.max(0,Number(roundingFrac)||0)<=1e-10;
             const hasMappedControls=unrounded&&src.some(p=>Number.isFinite(Number(p?.__spiralBezierC1X))&&Number.isFinite(Number(p?.__spiralBezierC1Y))&&Number.isFinite(Number(p?.__spiralBezierC2X))&&Number.isFinite(Number(p?.__spiralBezierC2Y)));
             const hasMappedTangents=unrounded&&src.some(p=>Number.isFinite(Number(p?.__spiralBezierOutTx))||Number.isFinite(Number(p?.__spiralBezierInTx)));
             if(hasMappedControls||hasMappedTangents){
@@ -1612,10 +1956,47 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             if(!segments.length)return [];
 
             const srcCum=[0];let srcTotal=0;for(let i=1;i<src.length;i++){srcTotal+=Math.hypot(src[i].x-src[i-1].x,src[i].y-src[i-1].y);srcCum.push(srcTotal);}
-            const widthAtFraction=(f)=>{const target=Math.max(0,Math.min(1,Number(f)||0))*Math.max(1e-9,srcTotal);let i=0;while(i<src.length-2&&srcCum[i+1]<target)i++;const span=Math.max(1e-9,srcCum[i+1]-srcCum[i]),u=Math.max(0,Math.min(1,(target-srcCum[i])/span));const a=Math.max(.02,Number(src[i]?.widthScale)||1),b=Math.max(.02,Number(src[Math.min(src.length-1,i+1)]?.widthScale)||a);return Math.exp(Math.log(a)+(Math.log(b)-Math.log(a))*u);};
-            const direct=segments.length===src.length-1&&Math.max(0,Number(roundingFrac)||0)<=.001;
-            for(let i=0;i<segments.length;i++){const q=segments[i];q.widthScale0=direct?Math.max(.02,Number(src[i]?.widthScale)||1):widthAtFraction(i/segments.length);q.widthScale1=direct?Math.max(.02,Number(src[Math.min(src.length-1,i+1)]?.widthScale)||q.widthScale0):widthAtFraction((i+1)/segments.length);q.__profileCorner0=direct&&src[i]?.__profileCorner===true;q.__profileCorner1=direct&&src[Math.min(src.length-1,i+1)]?.__profileCorner===true;}
+            // OutputArc values and their normalized fractions are nondecreasing.
+            // Preserve the exact historical width formula and interval boundary
+            // condition while advancing the source interval in amortized O(1).
+            let widthCursor=0,widthCursorTarget=-Infinity;
+            const widthAtFraction=(f)=>{const target=Math.max(0,Math.min(1,Number(f)||0))*Math.max(1e-9,srcTotal);if(target<widthCursorTarget)widthCursor=0;while(widthCursor<src.length-2&&srcCum[widthCursor+1]<target)widthCursor++;widthCursorTarget=target;const i=widthCursor;const span=Math.max(1e-9,srcCum[i+1]-srcCum[i]),u=Math.max(0,Math.min(1,(target-srcCum[i])/span));const a=Math.max(.02,Number(src[i]?.widthScale)||1),b=Math.max(.02,Number(src[Math.min(src.length-1,i+1)]?.widthScale)||a);return Math.exp(Math.log(a)+(Math.log(b)-Math.log(a))*u);};
+            // Width belongs to positions along the original spiral rail,
+            // NEVER to the index of a generated fillet cubic. 11.0.8 switched
+            // from authored point widths to i/segmentCount at rounding=.001:
+            // a single inserted cubic could reorder the entire width ramp.
+            const direct=segments.length===src.length-1 && segments.every((q,i)=>
+                Math.hypot(q.p0.x-src[i].x,q.p0.y-src[i].y)<1e-7 &&
+                Math.hypot(q.p3.x-src[i+1].x,q.p3.y-src[i+1].y)<1e-7);
+            const outputArc=[0];
+            for(const q of segments){
+                let p=q.p0,total=0;
+                for(let j=1;j<=6;j++){
+                    const t=j/6,u=1-t,v={x:u*u*u*q.p0.x+3*u*u*t*q.c1.x+3*u*t*t*q.c2.x+t*t*t*q.p3.x,
+                        y:u*u*u*q.p0.y+3*u*u*t*q.c1.y+3*u*t*t*q.c2.y+t*t*t*q.p3.y};
+                    total+=Math.hypot(v.x-p.x,v.y-p.y);p=v;
+                }
+                outputArc.push(outputArc.at(-1)+total);
+            }
+            const outputTotal=Math.max(1e-9,outputArc.at(-1));
+            for(let i=0;i<segments.length;i++){
+                const q=segments[i];
+                q.widthScale0=direct?Math.max(.02,Number(src[i]?.widthScale)||1):widthAtFraction(outputArc[i]/outputTotal);
+                q.widthScale1=direct?Math.max(.02,Number(src[Math.min(src.length-1,i+1)]?.widthScale)||q.widthScale0):widthAtFraction(outputArc[i+1]/outputTotal);
+                q.__profileCorner0=direct&&src[i]?.__profileCorner===true;
+                q.__profileCorner1=direct&&src[Math.min(src.length-1,i+1)]?.__profileCorner===true;
+            }
             segments._spiroBezierSpiral=true;segments._spiroExactFinalSpace=true;
+            const strength=Math.max(0,Number(roundingFrac)||0);
+            const mapped=src.some(p=>(Number.isFinite(p?.__spiralBezierC1X)&&Number.isFinite(p?.__spiralBezierC1Y)&&
+                Number.isFinite(p?.__spiralBezierC2X)&&Number.isFinite(p?.__spiralBezierC2Y)) ||
+                (Number.isFinite(p?.__spiralBezierOutTx)&&Number.isFinite(p?.__spiralBezierOutTy)) ||
+                (Number.isFinite(p?.__spiralBezierInTx)&&Number.isFinite(p?.__spiralBezierInTy)));
+            if(strength>1e-10&&strength<.12&&mapped){
+                const authored=buildSpiralBezierSegments(src,0,cornerFlags,false);
+                const u=Math.min(1,strength/.12),smooth=u*u*(3-2*u);
+                return finalizePeriodicSpiralBezierCarrier(blendSpiralCarrierCubics(authored,segments,smooth),src);
+            }
             return finalizePeriodicSpiralBezierCarrier(segments,src);
         }
         window.__spiroBuildSpiralBezierSegments=buildSpiralBezierSegments;
@@ -1640,8 +2021,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             if(!layer)return 'none';
             let h=2166136261>>>0;
             const mix=(v)=>{const text=String(v??'');for(let i=0;i<text.length;i++){h^=text.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}h^=124;h=Math.imul(h,16777619)>>>0;};
-            mix(layer.profileMode||'segments');mix(layer.wholeCurveSpline===true?1:0);mix(normalizeSplineRenderMode(layer.splineRenderMode));mix(layer.rounding??0);mix(layer.roundingMode||'standard');mix(layer.lineJoinType||'rounded');mix(typeof getConfiguredSplinePointCount==='function'?getConfiguredSplinePointCount():(state.morph?.splinePoints??12));
-            mix(layer.spiralEnabled===true?1:0);mix(layer.N??0);mix(layer.spiralEnabled===true?getSpiralAngularVertexCount(layer):'');mix(layer.K??0);mix(layer.customSuborbits??'');mix(layer.spiralStep??'');mix(layer.spiralStepLinked===true?1:0);mix(layer.spiralOrder??'');
+            mix(layer.profileMode||'segments');mix(layer.wholeCurveSpline===true?1:0);mix(normalizeSplineRenderMode(layer.splineRenderMode));mix(layer.rounding??0);mix(layer.roundingMode||'standard');mix(layer.roundingShape||'spline');mix(layer.roundingMaxRadiusDrop??30);mix(layer.roundingSmoothSplines===true?1:0);mix(typeof window!=='undefined'&&window.__somataSplineFilletSteps===8?8:16);mix(typeof window!=='undefined'&&window.__somataFastFilletSweep===true?1:0);mix(layer.lineJoinType||'rounded');mix(typeof getConfiguredSplinePointCount==='function'?getConfiguredSplinePointCount():(state.morph?.splinePoints??12));
+            mix(layer.spiralEnabled===true?1:0);mix(layer.N??0);mix(layer.spiralEnabled===true?getSpiralAngularVertexCount(layer):'');mix(layer.K??0);mix(layer.customSuborbits??'');mix(layer.spiralStep??'');mix(layer.spiralStepLinked===true?1:0);mix(layer.spiralStepLimiterEnabled!==false?1:0);mix(layer.spiralStepLimiter??2);mix(layer.spiralOrder??'');
             mix(Math.round((Number(layer.radius)||0)*1e6));mix(Math.round((Number(layer.radiusMultiplier)||1)*1e6));mix(Math.round((Number(layer.rotation)||0)*1e6));
             mix(layer.spiralTangential===true?1:0);mix(Number.isFinite(layer.__spiralTangentialMix)?layer.__spiralTangentialMix:0);mix(layer.spiralRoundSeams!==false?1:0);mix(layer.spiralClosed!==false?1:0);mix(layer.closedLoop!==false?1:0);
             const bridge=resolveMorphCommittedSpiralSpline(layer);
@@ -1803,14 +2184,14 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         const spiralStrokePreparedCache=new WeakMap();
         const spiralSegmentAlphaCache=new WeakMap();
         const spiralStrokeHotpathStats={requests:0,hits:0,builds:0,staticHits:0,frameHits:0,alphaBufferReuses:0};
-        function prepareSpiralStrokePoints(points,roundingFrac,cornerFlags,smoothSpline){
+        function prepareSpiralStrokePoints(points,roundingFrac,cornerFlags,smoothSpline,splineShape=false,filletLayer=null){
             if(!Array.isArray(points)||points.length<2)return points;
             spiralStrokeHotpathStats.requests++;
             const round=Math.max(0,Math.min(2,Number(roundingFrac)||0));
             const frameTag=Number(points._frameGeometryId)||0;
             const fourier=state.fourierMode===true?1:0;
             const fourierStrength=Math.round((Number(state.fourierStrength)||0)*100)/100;
-            const key=`${smoothSpline===true?1:0}|${round.toFixed(5)}|${fourier}|${fourierStrength}`;
+            const key=`${smoothSpline===true?1:0}|${splineShape?1:0}|shape:${filletLayer?.roundingShape||'spline'}|${round.toFixed(5)}|${fourier}|${fourierStrength}`;
             const rec=spiralStrokePreparedCache.get(points);
             if(rec&&rec.key===key&&rec.cornerFlags===cornerFlags&&rec.frameTag===frameTag){
                 spiralStrokeHotpathStats.hits++;
@@ -1820,7 +2201,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             let pts=points;
             if(smoothSpline===true){
 
-                pts=sampleSmoothSpiralSplineForVariableWidth(points,round,cornerFlags);
+                pts=sampleSmoothSpiralSplineForVariableWidth(points,round,cornerFlags,splineShape,filletLayer);
             }else{
                 if(round>0.001&&Array.isArray(cornerFlags)&&cornerFlags.some(Boolean))pts=smoothMorphPath(points,false,round,cornerFlags);
                 if(state.fourierMode&&pts?._fourierPrepared!==true)pts=buildFourierWavePoints(pts,false,`spiral:${round.toFixed(4)}`);
@@ -1837,10 +2218,12 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         }
         window.__spiroSpiralStrokeHotpathStatus=()=>({...spiralStrokeHotpathStats});
 
-        function strokeVariableWidthSpiralPath(ctx, points, roundingFrac = 0, cornerFlags = null, smoothSpline = false) {
+        function strokeVariableWidthSpiralPath(ctx, points, roundingFrac = 0, cornerFlags = null, smoothSpline = false, filletLayer = null) {
             if (!Array.isArray(points) || points.length < 2 || ctx.__suppressStroke) return;
 
             const round = Math.max(0, Math.min(2, Number(roundingFrac) || 0));
+            const splineShape=round>0 && filletLayer && !state.fourierMode;
+            if(splineShape)smoothSpline=true;
             const baseWidth = Math.max(0.05, Number(ctx.lineWidth) || 1);
             const alphaStart = Math.max(0, Math.min(1, Number(ctx.globalAlpha) || 0));
             const alphaEndRatioRaw = Number(ctx.__spiralCorridorAlphaEndRatio);
@@ -1850,7 +2233,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 : alphaStart;
 
             if (state.fourierMode !== true && typeof ctx.__recordVariableWidthBezierSpiral === 'function' && (ctx.__spiroNativeBezierSpiral === true || ctx.__spiroGLGeometryRecorder === true)) {
-                const cubics=buildSpiralBezierSegments(points,round,cornerFlags,smoothSpline===true);
+                const cubics=buildSpiralBezierSegments(points,round,cornerFlags,smoothSpline===true,splineShape,filletLayer);
                 if(cubics.length){
                     const lastWidthScale=Math.max(.02,Number(cubics[cubics.length-1]?.widthScale1)||1),logSpan=Math.log(lastWidthScale);
                     const alphaForWidth=(w,fallbackT)=>{
@@ -1864,7 +2247,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 }
             }
 
-            let pts = prepareSpiralStrokePoints(points,round,cornerFlags,smoothSpline);
+            let pts = prepareSpiralStrokePoints(points,round,cornerFlags,smoothSpline,splineShape,filletLayer);
             if (!Array.isArray(pts) || pts.length < 2) return;
 
             const lastWidthScale = Math.max(0.02, Number(pts[pts.length - 1]?.widthScale) || 1);
@@ -2017,7 +2400,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 }
 
                 if (variableSpiralWidth) {
-                    strokeVariableWidthSpiralPath(ctx, path.points, path.spiralProfileRoundingBaked===true ? 0 : roundingFrac, path.cornerFlags || [], layer.profileMode === 'spline' && path.spiralProfileSplineBaked!==true);
+                    strokeVariableWidthSpiralPath(ctx, path.points, path.spiralProfileRoundingBaked===true ? 0 : roundingFrac, path.cornerFlags || [], layer.profileMode === 'spline' && path.spiralProfileSplineBaked!==true, layer);
                     continue;
                 }
                 const p2d = (!ctx?.__spiroGLGeometryRecorder && !state.fourierMode && !showGuides) ? drawData.path2ds?.[i] : null;
@@ -2026,8 +2409,8 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                     if (!ctx.__suppressStroke) ctx.stroke(p2d);
                 } else {
                     ctx.beginPath();
-                    if (useSmoothSplinePath(layer, roundingFrac, path)) splinePathForDraw(ctx, path.points, path.closed, roundingFrac, path.cornerFlags || [], path.bridgeRoundFlags || [], layer.wholeCurveSpline===true);
-                    else roundPolylineForDraw(ctx, path.points, path.closed, roundingFrac, path.cornerFlags || []);
+                    if (useSmoothSplinePath(layer, roundingFrac, path)) splinePathForDraw(ctx, path.points, path.closed, roundingFrac, path.cornerFlags || [], path.bridgeRoundFlags || [], layer.wholeCurveSpline===true, 1, 0, layer);
+                    else roundPolylineForDraw(ctx, path.points, path.closed, roundingFrac, path.cornerFlags || [],null,false,null,layer);
                     if (!ctx.__suppressFill && layer.fill && path.closed) fillCanvasGeometry(ctx,layer);
                     if (!ctx.__suppressStroke) ctx.stroke();
                 }
@@ -2186,8 +2569,65 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             // Animated K is a continuous interpolation of the same canonical K,
             // not a user-editable second step. Preserve its fractional phase on GPU.
             const k=Number(layer?.__spiralAnimatedK);
-            return normalizeSpiralStep(Number.isFinite(k)?k:(layer?.K ?? 1), layer);
+            const authored=normalizeSpiralStep(Number.isFinite(k)?k:(layer?.K ?? 1),layer);
+            // Even when the optional cyclic limiter is off, the spiral
+            // topology has a legal maximum K for its current N. This is the
+            // same forced reduction used by the ordinary polygon editor.
+            const angularN=Number(layer?.__spiralAnimatedN);
+            const rawN=Number.isFinite(angularN)?angularN:Number(layer?.N);
+            const ringMax=Number.isFinite(rawN)?Math.max(1,Math.floor(Math.max(2,rawN)/2)):Infinity;
+            // Morph's animated carrier can interpolate two *effective* steps.
+            // Never wrap it a second time: e.g. effective 2->2 must remain 2,
+            // even if raw K moves from its maximum for N=20 to N=12.
+            const bounded=Number(layer?.__spiralAnimatedEffectiveK);
+            if(Number.isFinite(bounded)&&bounded>=1)return Math.min(ringMax,bounded);
+            if(layer?.spiralStepLimiterEnabled===false || !Number.isFinite(authored) || authored<1)return Math.min(authored,ringMax);
+            const rawLimit=Number(layer?.spiralStepLimiter);
+            const limit=Math.max(1,Math.min(120,Math.round(Number.isFinite(rawLimit)?rawLimit:2)));
+            const cycle=(integerStep)=>((integerStep-1)%limit+limit)%limit+1;
+            const lower=Math.floor(authored),frac=authored-lower;
+            // Fractional K during Morph must not jump at L -> L+1.
+            const cycled=cycle(lower)+(cycle(lower+1)-cycle(lower))*frac;
+            // A shrinking vertex ring can make even the wrapped step illegal.
+            // Apply the N-dependent reduction HERE, at the same authority used
+            // by the Bézier carrier and the ordinary orbit builder; do not let
+            // the latter clamp a step that the renderer still sees in full.
+            return Math.min(ringMax,cycled);
         }
+
+        // 13.0.26: GEOMETRY-LEVEL K GATE. Project state retains the user's raw
+        // connection step (K=9); every geometry consumer instead sees the
+        // effective cyclic step (K=1 with limit=2). This view is ephemeral:
+        // it must never be written to the authored layer or into a saved project.
+        // In particular, correspondence algorithms and GPU carriers MUST NOT
+        // read a raw K after this projection, even when the endpoint renderer
+        // already used the wrapped angle correctly.
+        function getSpiralGeometryLayer(layer) {
+            if(!layer||!isSpiralLayer(layer)||layer.spiralStepLimiterEnabled===false||layer.__spiroGeometryStepResolved===true)
+                return layer;
+            const effective=getEffectiveSpiralStep(layer);
+            if(!Number.isFinite(effective))return layer;
+            const N=Math.max(2,Math.round(Number(layer.N)||4));
+            const branchK=Math.max(1,Math.min(Math.max(1,Math.floor(N/2)),Math.round(effective)));
+            const result={...layer,
+                K:branchK,
+                spiralStep:effective,
+                __spiroAuthoredConnectionK:Number(layer.K)||1,
+                __spiroGeometryStepResolved:true,
+                // Cached effective step must be authoritative for fractional
+                // frame values and must NOT be passed through modulo twice.
+                __spiralAnimatedEffectiveK:effective,
+                __spiralAnimatedK:undefined
+            };
+            return result;
+        }
+        window.__spiroSpiralLimiterProbe=(layer)=>{
+            const authored=Math.max(1,Number(layer?.K)||1);
+            const v=getSpiralGeometryLayer(layer);
+            return {N:Number(layer?.N)||0,authoredK:authored,effectiveK:getEffectiveSpiralStep(layer),
+                geometryK:Number(v?.K)||0,limiterEnabled:layer?.spiralStepLimiterEnabled!==false,
+                limiter:Math.max(1,Math.round(Number(layer?.spiralStepLimiter)||2))};
+        };
 
         function getContourMode(layer) {
             if (layer?.extendedProfileEnabled === true) return layer.extendedProfileMode === 'repeat' ? 'extended-profile' : 'extended-linear';
@@ -2204,6 +2644,16 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
 
         function setContourMode(layer, mode) {
             if (!layer) return;
+            // The polygon renderer requires order 0. Store the last explicitly
+            // selected spiral order independently so the family toggle never
+            // destroys it. Old projects without this field start at order 1.
+            const wasSpiral=layer.spiralEnabled===true;
+            if(wasSpiral){
+                const order=Number(layer.spiralOrder);
+                if(Number.isFinite(order))layer.spiralRememberedOrder=normalizeSpiralOrder(order,false);
+            }
+            if(layer.spiralRememberedOrder===undefined||layer.spiralRememberedOrder===null||
+               !Number.isFinite(Number(layer.spiralRememberedOrder)))layer.spiralRememberedOrder=1;
 
             if (mode === 'spiral') mode = layer.spiralClosed === false ? 'spiral-open' : 'spiral-closed';
             if (mode === 'extended-linear' || mode === 'extended-profile') {
@@ -2217,6 +2667,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             layer.extendedProfileEnabled = false;
 
             if (mode === 'spiral-closed' || mode === 'spiral-open') {
+                if(!wasSpiral)layer.spiralOrder=normalizeSpiralOrder(layer.spiralRememberedOrder,false);
                 layer.spiralEnabled = true;
                 layer.spiralClosed = mode === 'spiral-closed';
 
@@ -2444,6 +2895,18 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 compactBezierProfile:true
             };
         }
+
+        // CPU Morph and Static must begin corner rounding from the same compact
+        // authored segment profile. The old CPU fallback densified every segment
+        // uniformly; that moved fillet locations on the handoff to Static.
+        window.__spiroPrepareRoundedSegmentMorphProfile=(points,angularN,step)=>{
+            const n=Math.max(2,Number(angularN)||4),k=Math.max(1e-9,Number(step)||1);
+            return buildSpiralProfileForDraw({
+                profileMode:'segments',spiralEnabled:true,spiralOrder:1,
+                N:Math.round(n),__spiralAnimatedN:n,K:Math.max(1,Math.round(k)),
+                spiralStep:k,spiralStepLinked:false
+            },points,Math.max(points?.length||2,getConfiguredSplinePointCount()),1).points;
+        };
 
         const spiralFinalSpaceProfileRoundStats={
             calls:0,corners:0,roundedCorners:0,hardSeamPreserved:0,
@@ -2851,7 +3314,24 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         // contain many branches/corridor rails, but the authored profile, spline sampling and
         // compact segment layout are identical for every branch.  Preparing them once per
         // layer/frame avoids repeating the expensive profile sampler N times.
-        const spiralCarrierProfilePrepStats={prepares:0,reuses:0,lastTargetCount:0,lastPointCount:0};
+        const spiralCarrierProfilePrepStats={prepares:0,reuses:0,sharedHits:0,sharedMisses:0,lastTargetCount:0,lastPointCount:0};
+        // Bounded cross-layer memo. Many Spiral layers reuse the same authored
+        // profile and compact segment layout. Rebuilding that normalized profile
+        // for every branch/layer creates large main-thread stalls. The key uses
+        // actual numeric profile coordinates and every input read by
+        // buildSpiralProfileForDraw, not transient layer object identity.
+        const spiralSharedProfileCache=new Map(),SPIRAL_PROFILE_CACHE_LIMIT=64;
+        function spiralSharedProfileSignature(layer,points,target,round,sampled){
+            const mode=String(layer?.profileMode||'');
+            const parts=[mode,target,round,sampled?1:0];
+            if(mode==='segments'){
+                parts.push(getSpiralAngularVertexCount(layer),getEffectiveSpiralStep(layer));
+            }
+            if(sampled)parts.push((layer?.__lampLogicalCornerFlags||[]).map(x=>x?1:0).join(''));
+            for(const p of points){parts.push(Number(p?.x)||0,Number(p?.y)||0,
+                p?.__profileCorner===true?1:0,p?.__profileKeyCorner===true?1:0);}
+            return parts.join('|');
+        }
         function prepareSpiralCarrierProfile(layer, carrierSpec = {}) {
             if(!layer)return null;
             const smoothSplineMode=layer.profileMode==='spline';
@@ -2868,17 +3348,32 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 baseProfilePts.length,
                 Math.round(Number(carrierSpec?.profileTargetCount)||getSpiralRenderSampleCount(layer,Math.max(baseProfilePts.length,getConfiguredSplinePointCount())))
             );
-            const profileData=buildSpiralProfileForDraw(
-                layer,baseProfilePts,targetCount,spiralRounding,
-                carrierSpec?.profileSpaceSplineAlreadySampled===true||profileSpaceSplineAlreadySampled
-            );
+            const sampled=carrierSpec?.profileSpaceSplineAlreadySampled===true||profileSpaceSplineAlreadySampled;
+            // Do not cache non-finite/invalid editing inputs. The memo is exact
+            // and bounded even when every phase animates a unique profile.
+            const canShare=(carrierSpec?.forceSharedProfile===true||layer?.__spiralSharedProfileAcrossLayers===true)&&
+                baseProfilePts.length<=256&&baseProfilePts.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y));
+            const sig=canShare?spiralSharedProfileSignature(layer,baseProfilePts,targetCount,spiralRounding,sampled):null;
+            if(sig&&spiralSharedProfileCache.has(sig)){
+                const hit=spiralSharedProfileCache.get(sig);
+                spiralSharedProfileCache.delete(sig);spiralSharedProfileCache.set(sig,hit);
+                spiralCarrierProfilePrepStats.sharedHits++;
+                return hit;
+            }
+            const profileData=buildSpiralProfileForDraw(layer,baseProfilePts,targetCount,spiralRounding,sampled);
             spiralCarrierProfilePrepStats.prepares++;
+            spiralCarrierProfilePrepStats.sharedMisses++;
             spiralCarrierProfilePrepStats.lastTargetCount=targetCount;
             spiralCarrierProfilePrepStats.lastPointCount=profileData?.points?.length||0;
-            return{baseProfilePts,spiralRounding,targetCount,profileData,profilePts:profileData?.points||[],profileSpaceSplineAlreadySampled};
+            const result={baseProfilePts,spiralRounding,targetCount,profileData,profilePts:profileData?.points||[],profileSpaceSplineAlreadySampled};
+            if(sig){spiralSharedProfileCache.set(sig,result);
+                if(spiralSharedProfileCache.size>SPIRAL_PROFILE_CACHE_LIMIT)
+                    spiralSharedProfileCache.delete(spiralSharedProfileCache.keys().next().value);
+            }
+            return result;
         }
         window.__spiroPrepareSpiralCarrierProfile=prepareSpiralCarrierProfile;
-        window.__spiroSpiralCarrierProfilePrepStatus=()=>({...spiralCarrierProfilePrepStats});
+        window.__spiroSpiralCarrierProfilePrepStatus=()=>({...spiralCarrierProfilePrepStats,sharedEntries:spiralSharedProfileCache.size});
 
         function buildSpiralCarrierPath(layer, anchor, carrierSpec = {}) {
             if(!layer||!anchor)return null;
@@ -3011,6 +3506,12 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         }
 
         function buildOrbitPolylines(layer) {
+            // All static and CPU geometry receives a capped K *before* orbit
+            // traversal, branch indexing, suborbit count and profile sampling.
+            // The recursion runs at most once; the resolved render view carries
+            // the same effective K used later by its angular carrier.
+            const projected=getSpiralGeometryLayer(layer);
+            if(projected!==layer)return buildOrbitPolylines(projected);
             // The animated Blue Morph rail uses a paired, pre-sampled spline.
             // During phase handoff the authored layer retains its compact profile
             // nodes; a fallback/static Polygon or Spiral pass must display the
@@ -3025,7 +3526,13 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 return buildOrbitPolylines(display);
             }
             const N = Math.max(2, Math.round(Number(layer.N) || 4));
-            const K = Math.max(1, Math.min(Math.floor(N / 2), Math.round(Number(layer.K) || 1)));
+            // For Spiral, K controls BOTH the angular carrier and the orbit/edge
+            // traversal. Previously only the angle was folded, so raw K=3 with
+            // limit=2 still created raw-K=3 suborbits and phantom copies.
+            const spiralTopology = isSpiralLayer(layer);
+            const authoredK = Math.max(1,Math.round(Number(layer.K)||1));
+            const wrappedK = spiralTopology ? getEffectiveSpiralStep({...layer,__spiralAnimatedK:undefined,__spiralAnimatedN:undefined}) : authoredK;
+            const K = Math.max(1,Math.min(Math.floor(N/2),Math.round(wrappedK)));
             const R = getEffectiveLayerRadius(layer, 220);
             const rotRad = ((Number(layer.rotation) || 0) * Math.PI) / 180;
             const chaosEnabled = layer.chaosStar === true && !isSpiralLayer(layer);
@@ -3287,7 +3794,10 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                     interiorCorner(p.ptIdx) ||
                     (smoothSplineRenderer ? bridgeJunction[i] : (roundedJoin && bridgeJunction[i])));
 
-                const bridgeRoundFlags = polyPoints.map((p, i) => roundedJoin && bridgeJunction[i]);
+                // Only authored bridge junctions carry an explicit yes/no
+                // policy. Ordinary interior profile corners use null, so a
+                // straight bridge cannot disable their rounding.
+                const bridgeRoundFlags = polyPoints.map((p, i) => bridgeJunction[i] ? roundedJoin : null);
                 paths.push({ points: polyPoints.map(({x,y}) => ({x,y})), closed: true, cornerFlags, bridgeRoundFlags, orbitIndex:sIdx });
             }
             return paths;
@@ -4248,9 +4758,9 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
             }
             function prepareUniformSlot(frameCtx,targetCtx,copyIndex=null,mesh=null){
                 const copies=frameCtx.visibleInstances?.copies||[],copy=copyIndex==null?null:copies[copyIndex];
-                const fillColor=frameCtx.layer?.fillColor||frameCtx.layer?.strokeColor||'#ffffff';
+                const fillColor=frameCtx.layer?.__morphOrbitFillCompositeColor||frameCtx.layer?.fillColor||frameCtx.layer?.strokeColor||'#ffffff';
                 const shiftedFill=copy&&mesh?.corridorBaked!==true&&typeof getTunnelCopyColor==='function'
-                    ?getTunnelCopyColor(fillColor,copy,frameCtx.tunnelFillPaletteProfile):fillColor;
+                    ?getTunnelCopyColor(fillColor,copy,frameCtx.tunnelFillPaletteProfile,frameCtx.layer):fillColor;
                 const rgba=GPUColorCache.rgba(shiftedFill);
                 const alphaList=frameCtx.visibleInstances?.fillAlphas||frameCtx.visibleInstances?.alphas||[];
                 const copyAlpha=mesh?.corridorBaked===true?1:Math.max(0,Math.min(1,Number(alphaList[copyIndex==null?0:copyIndex]??1)));
@@ -4291,7 +4801,11 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
                                 pass.setPipeline(pipeline);pass.setBindGroup(0,prepared.slot.bindGroup);pass.setVertexBuffer(0,part.vertexBuffer);pass.setIndexBuffer(part.indexBuffer,part.indexFormat);pass.drawIndexed(part.indexCount);pass.end();draws++;first=false;totalTriangles+=part.triangleCount;
                             }else if(part.type==='winding'){
                                 const pass=encoder.beginRenderPass({colorAttachments:[{view:msaaTexture.createView(),resolveTarget:targetTexture.createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:(first&&!preserveTarget)?'clear':'load',storeOp:'store'}],depthStencilAttachment:{view:stencilTexture.createView(),depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'discard',stencilClearValue:0,stencilLoadOp:'clear',stencilStoreOp:'discard'}});
-                                const mathematical=getLayerFillRule(frameCtx.layer)==='evenodd';
+                                // An orbit split repeats identical closed paths at the
+                                // boundary. Even-odd stencil would cancel on even
+                                // overlap counts (Fill appears OFF); winding keeps
+                                // the covered union with one composite Fill alpha.
+                                const mathematical=!frameCtx.layer?.__morphOrbitFillCompositeColor&&getLayerFillRule(frameCtx.layer)==='evenodd';
                                 pass.setStencilReference(0);pass.setPipeline(mathematical?parityStencilPipeline:windingStencilPipeline);pass.setBindGroup(0,prepared.slot.bindGroup);pass.setVertexBuffer(0,part.vertexBuffer);pass.draw(part.vertexCount);
                                 if(mathematical)parityDraws++;else windingDraws++;totalWinding+=part.triangleCount;
                                 pass.setPipeline(mathematical?parityCoverPipeline:windingCoverPipeline);pass.setBindGroup(0,prepared.slot.bindGroup);pass.draw(3);if(mathematical)parityCovers++;else windingCovers++;
@@ -8585,9 +9099,9 @@ fn markerSd(p:vec2<f32>)->f32{
                 const m=rec._matrix;
                 pushXY(m[0]*x+m[2]*y+m[4],m[1]*x+m[3]*y+m[5]);
             };
-            const cubic=(p0,p1x,p1y,p2x,p2y,p3x,p3y)=>{
-                for(let i=1;i<=GL_CUBIC_STEPS;i++){
-                    const t=i/GL_CUBIC_STEPS,u=1-t,uu=u*u,tt=t*t;
+            const cubic=(p0,p1x,p1y,p2x,p2y,p3x,p3y,steps=GL_CUBIC_STEPS)=>{
+                for(let i=1;i<=steps;i++){
+                    const t=i/steps,u=1-t,uu=u*u,tt=t*t;
                     pushXY(
                         uu*u*p0.x+3*uu*t*p1x+3*u*tt*p2x+tt*t*p3x,
                         uu*u*p0.y+3*uu*t*p1y+3*u*tt*p2y+tt*t*p3y
@@ -8630,12 +9144,14 @@ fn markerSd(p:vec2<f32>)->f32{
 
             const rec={
                 __spiroGLGeometryRecorder:true,__spiroNativeVariableWidth:false,__spiroNativeBezierSpiral:false,__phaseResidentMode:false,__disableAdaptiveSpiral:false,
+                __somataPhaseSplineFastSampling:false,
                 commands,globalAlpha:1,lineWidth:1,strokeStyle:'#fff',fillStyle:'transparent',lineCap:'round',lineJoin:'round',miterLimit:10,globalCompositeOperation:'source-over',
                 __suppressStroke:false,__suppressFill:false,__forceStrokeStyle:null,_matrix:[1,0,0,1,0,0],_matrixScratch:[1,0,0,1,0,0],
                 __resetForBaseContext(ctx,phaseResident=false){
                     try{WebGPUStrokeRenderer.invalidateMutableCommands?.(commands);}catch(_){}
                     commands.length=0;commandCount=0;workSubpathCount=0;current=null;unsupported=false;stackDepth=0;
                     phaseResidentMode=phaseResident===true;this.__phaseResidentMode=phaseResidentMode;this.__disableAdaptiveSpiral=false;
+                    this.__somataPhaseSplineFastSampling=false;
                     matrixFromCtx(ctx,this._matrix);
 
                     const nativeWebGPU=WebGPUStrokeRenderer.isReady();
@@ -8671,7 +9187,11 @@ fn markerSd(p:vec2<f32>)->f32{
                     const p1x=m[0]*(+c1x||0)+m[2]*(+c1y||0)+m[4],p1y=m[1]*(+c1x||0)+m[3]*(+c1y||0)+m[5];
                     const p2x=m[0]*(+c2x||0)+m[2]*(+c2y||0)+m[4],p2y=m[1]*(+c2x||0)+m[3]*(+c2y||0)+m[5];
                     const p3x=m[0]*(+x||0)+m[2]*(+y||0)+m[4],p3y=m[1]*(+x||0)+m[3]*(+y||0)+m[5];
-                    cubic(p0,p1x,p1y,p2x,p2y,p3x,p3y);
+                    // These cubics have already been exactly partitioned
+                    // against five rails. Six samples per resulting small
+                    // piece avoid double tessellation; all other WebGPU paths
+                    // retain their original 12-sample quality and topology.
+                    cubic(p0,p1x,p1y,p2x,p2y,p3x,p3y,this.__somataPhaseSplineFastSampling||GL_CUBIC_STEPS);
                 },
                 quadraticCurveTo(cx,cy,x,y){
                     if(!current?.pointCount){this.moveTo(x,y);return;}
@@ -9807,7 +10327,7 @@ fn markerSd(p:vec2<f32>)->f32{
         const persistentLampRenderedPathsCache = new WeakMap();
 
         function isLampContourAttachmentEnabled() {
-            const cfg=state.lamps || (state.lamps={});
+            const cfg=(typeof getLampEvaluationConfig==='function'?getLampEvaluationConfig():null) || state.lamps || (state.lamps={});
             if(typeof cfg.snapToContour==='boolean') return cfg.snapToContour;
             if(typeof cfg.snapToPolygon==='boolean' && typeof cfg.stickToRounding==='boolean') return cfg.snapToPolygon || cfg.stickToRounding;
             if(typeof cfg.snapToPolygon==='boolean') return cfg.snapToPolygon;
@@ -9815,7 +10335,7 @@ fn markerSd(p:vec2<f32>)->f32{
             return true;
         }
         function setLampContourAttachmentEnabled(enabled) {
-            const cfg=state.lamps || (state.lamps={});
+            const cfg=(typeof getLampEvaluationConfig==='function'?getLampEvaluationConfig():null) || state.lamps || (state.lamps={});
             const on=enabled!==false;
             cfg.snapToContour=on;
 
@@ -9885,7 +10405,7 @@ fn markerSd(p:vec2<f32>)->f32{
             if(!morphInfo&&isSpiralLayer(layer)&&typeof buildExactSpiralEffectPaths==='function')return buildExactSpiralEffectPaths(source,layer);
             const round=Math.max(0,Math.min(2,Number(morphInfo?.roundingFrac ?? getRoundingStrength(layer?.rounding))||0));
             const dynamic=Boolean(morphInfo)||isCurrentFrameDynamicPathList(source);
-            const cacheKey=`${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode||'segments'}|${round.toFixed(5)}|fourier:${state.fourierMode?1:0}`;
+            const cacheKey=`${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode||'segments'}|shape:${layer?.roundingShape||'spline'}|drop:${layer?.roundingMaxRadiusDrop??30}|spline:${layer?.roundingSmoothSplines===true?1:0}|filletSteps:${typeof window!=='undefined'&&window.__somataSplineFilletSteps===8?8:16}|filletSweep:${typeof window!=='undefined'&&window.__somataFastFilletSweep===true?1:0}|${round.toFixed(5)}|fourier:${state.fourierMode?1:0}`;
             if(!dynamic && source && typeof source==='object'){
                 let variants=persistentLampRenderedPathsCache.get(source);
                 const hit=variants?.get(cacheKey); if(hit)return hit;
@@ -9901,11 +10421,11 @@ fn markerSd(p:vec2<f32>)->f32{
                 const sampler=createLampRenderedPathSampler();
                 const effectiveRound=isSpiralLayer(layer)&&path?.spiralProfileRoundingBaked===true?0:round;
                 if(morphInfo){
-                    drawMorphPathQuality(sampler,pts,Boolean(path.closed),effectiveRound,morphInfo.profileMode,morphInfo.splineBlend,morphInfo.continuousProfileBlend,morphInfo.splineRenderMode,path.cornerFlags||[],path.bridgeRoundFlags||[]);
+                    drawMorphPathQuality(sampler,pts,Boolean(path.closed),effectiveRound,morphInfo.profileMode,morphInfo.splineBlend,morphInfo.continuousProfileBlend,morphInfo.splineRenderMode,path.cornerFlags||[],path.bridgeRoundFlags||[],layer?.wholeCurveSpline===true,0,0,layer);
                 }else if(useSmoothSplinePath(layer,effectiveRound,path)){
-                    splinePathForDraw(sampler,pts,Boolean(path.closed),effectiveRound,path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true);
+                    splinePathForDraw(sampler,pts,Boolean(path.closed),effectiveRound,path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true,1,0,layer);
                 }else{
-                    roundPolylineForDraw(sampler,pts,Boolean(path.closed),effectiveRound,path.cornerFlags||[]);
+                    roundPolylineForDraw(sampler,pts,Boolean(path.closed),effectiveRound,path.cornerFlags||[],null,false,null,layer);
                 }
                 return {...path,points:sampler.points.length>1?sampler.points:pts,cornerFlags:[]};
             });

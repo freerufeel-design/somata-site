@@ -274,7 +274,7 @@ function currentGpuBezierMorphResource(layerIndex){
         // 7.7: keep the 7.5 effect-authority rule. Any strict Spiral morph effect must
         // consume the specialized visible Spiral rail, never the generic shared morph rail.
         // circle-rebuild modes count as specialized as well, exactly as in 7.5.
-        const specialMode=Boolean(state?.morph?.mode==='circleSlide'||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild())||(hasSpiralEndpoint&&typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()));
+        const specialMode=Boolean((state?.morph?.mode==='circleSlide'||state?.morph?.mode==='topoCircle')||(typeof spiralMorphUsesCircleRebuild==='function'&&spiralMorphUsesCircleRebuild())||(hasSpiralEndpoint&&typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail()));
         const o=state?.morph?.options||{},spiralGeometryRequested=Boolean(o.byVertices||o.bySteps||o.byShape||state?.morph?.monoOrbitTransforms||o.byRounding||o.bySize||o.byRotation||o.bySpiralOrder||o.bySpiralLayers);
 
         const strictSpiralMorphRail=Boolean(hasSpiralEndpoint&&specialMode&&spiralGeometryRequested&&state?.fourierMode!==true);

@@ -104,7 +104,14 @@ function resetLayerMorphProvider(provider,system) {
 
 function buildBlueExactEndpointLayer(baseLayer,visual,profile){
     const snap={...(baseLayer||{}),...(visual||{})};
-    const raw=Array.isArray(profile?.rawNodes)&&profile.rawNodes.length?profile.rawNodes:(Array.isArray(profile?.nodes)?profile.nodes:(baseLayer?.profileNodes||[]));
+    // Profile `nodes` / `rawNodes` may be the old phase's *paired transport*
+    // grid when a phase is handed off. Keep that grid untouched for the
+    // Topology/Circle Slide movement solver; render the visible first frame
+    // from the committed authored knots instead. Otherwise a duplicated/
+    // re-sampled transport knot becomes a new spline/fillet corner at t=0.
+    const authored=profile?.phaseHandoff===true && Array.isArray(profile?.authoredNodes) && profile.authoredNodes.length>=2
+        ? profile.authoredNodes : null;
+    const raw=authored || (Array.isArray(profile?.rawNodes)&&profile.rawNodes.length?profile.rawNodes:(Array.isArray(profile?.nodes)?profile.nodes:(baseLayer?.profileNodes||[])));
     snap.profileMode=profile?.mode||baseLayer?.profileMode||'segments';
     snap.profileNodes=(raw||[]).map(p=>({x:Number(p?.x)||0,y:Number(p?.y)||0}));
     // Endpoint snapshots are authored/static geometry, never the paired/resampled Morph grid.
@@ -125,7 +132,7 @@ function resolveBlueMorphLayerProvider(frameCtx,renderFrame) {
     const carrierPlan=snap.profileCarrierPlans?.[layerIndex]||null;
     provider.carrierKind=carrierPlan?.carrierKind||'polygon';
     provider.spiralTransport=carrierPlan?.spiralTransport||'polygon';
-    provider.circleAlgorithm=snap.mode==='circleSlide';
+    provider.circleAlgorithm=(snap.mode==='circleSlide'||snap.mode==='topoCircle');
     provider.lightMorphEnabled=Boolean(snap.active && snap.mode==='light' && !snap.monoOrbitTransforms);
     provider.forcedLampMorph=Boolean(snap.active && snap.mode==='lightning');
     provider.lightningFlashAlpha=provider.forcedLampMorph ? getLightningFlashAlpha(snap.progress) : 0;
@@ -146,7 +153,7 @@ function resolveBlueMorphLayerProvider(frameCtx,renderFrame) {
 
     const retainedSpiralMode=Boolean(specialSpiralGeometryRequested&&typeof spiralMorphUsesRetainedBezierRail==='function'&&spiralMorphUsesRetainedBezierRail());
     const strictContinuousSpiral=Boolean(retainedSpiralMode&&specialSpiralEndpoint&&typeof spiralMorphForcesContinuousRail==='function'&&spiralMorphForcesContinuousRail());
-    const effectiveCircleMode=snap.mode==='circleSlide';
+    const effectiveCircleMode=(snap.mode==='circleSlide'||snap.mode==='topoCircle');
 
     const directChaosCircleMode=Boolean(!provider.lightMorphEnabled&&snap.active&&effectiveCircleMode&&(sourceChaos||targetChaos));
     provider.circleAngular=Boolean(!provider.lightMorphEnabled && !sourceChaos && !targetChaos && snap.active && effectiveCircleMode &&
@@ -176,6 +183,23 @@ function resolveBlueMorphLayerProvider(frameCtx,renderFrame) {
     // Exact endpoint layers are consumed only by fade, circle-slide and
     // polygon-anchor providers. Building them for static/lightning/prepared
     // frames used to clone two layers and every profile node per render pass.
+    // When Blue changes ONLY a polygon's fillet amount, render the live frame
+    // through the same canonical Static contour used at both phase boundaries.
+    // The old anchor/smoothed-carrier Morph rounded a different set of points,
+    // so it arrived at a foreign curve and visibly snapped on phase handoff.
+    // Mono Radius must be fitted on the final rounded contour on every frame.
+    if(provider.geometryActive && snap.options.byRounding===true &&
+       !specialSpiralEndpoint && !sourceChaos && !targetChaos &&
+       typeof isRoundingOnlyMorphPair==='function'){
+        const a=buildBlueExactEndpointLayer(sourceLayer,snap.sourceVisuals?.[layerIndex],snap.sourceProfiles?.[layerIndex]);
+        const b=buildBlueExactEndpointLayer(sourceLayer,snap.targetVisuals?.[layerIndex],snap.targetProfiles?.[layerIndex]);
+        if(isRoundingOnlyMorphPair(a,b)){
+            provider.kind='static';
+            provider.circleAngular=false;
+            provider.topology=false;
+            provider.geometryActive=false;
+        }
+    }
     if(provider.kind==='blue-fade'||provider.kind==='blue-circle-slide'||provider.kind==='blue-anchor-linear'){
         const exactSourceLayer=buildBlueExactEndpointLayer(sourceLayer,snap.sourceVisuals?.[layerIndex],snap.sourceProfiles?.[layerIndex]);
         const exactTargetLayer=buildBlueExactEndpointLayer(sourceLayer,snap.targetVisuals?.[layerIndex],snap.targetProfiles?.[layerIndex]);

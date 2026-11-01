@@ -64,6 +64,11 @@ const quick=[
  'v10417-particle-corridor-uniform-parity-regression.js',
  'v10418-geometry-circles-hotpath-parity-regression.js',
  'v10419-frame-contour-assembly-parity-regression.js',
+ // Real UI → exact GPU rail across five phase boundaries (12.6.7).
+ 'v1267-spiral-live-phase-handoff-regression.js',
+ // Strict 12.7.0 C0 proof against the actual completed GPU Bezier rail.
+ 'v1270-exact-terminal-spiral-phase-regression.js',
+ 'v1270-three-layer-exact-handoff-regression.js',
  // User-facing Spiral layout and endpoint motion must be in the release gate.
  'v10420-spiral-compact-tangency-regression.js',
  'v10421-spiral-endpoint-cubic-parity-regression.js',
@@ -75,7 +80,6 @@ const quick=[
  'v10427-nontorn-spline-phase-owned-bezier-regression.js',
  'v10428-nontorn-spline-corridor-seam-regression.js',
  'v10429-terminal-spline-profile-transition-regression.js',
- 'v10430-polygon-animated-spline-boundary-regression.js',
  'v10431-profile-transition-shared-clock-regression.js',
  'v10432-visible-polygon-spline-curve-endpoint-regression.js',
  'v10433-mixed-spline-midpoint-render-regression.js',
@@ -92,6 +96,40 @@ const quick=[
  'v10446-closed-spiral-round-seams-regression.js',
  'v10447-spline-seam-live-morph-parity-regression.js',
  'v10448-whole-curve-spline-unified-regression.js',
+ 'v10449-linear-rounded-polygon-morph-boundary-regression.js',
+ 'v10450-linear-rounded-topology-suborbit-handoff-regression.js',
+ 'v10451-fill-zero-corridor-bones-blue-regression.js',
+ 'v10452-fill-toggle-phase-continuity-regression.js',
+ 'v10419-36-blue-phase-fill-handoff-regression.js',
+ 'v10419-36-dice-morph-lifecycle-regression.js',
+ 'v10455-mixed-profile-cycle-velocity-regression.js',
+ 'v10456-mixed-profile-optical-speed-regression.js',
+ 'v10457-topocircle-mode-legacy-seam-regression.js',
+ 'v10458-circle-27-probe.js',
+ 'v10458-circle-ui-27-parity-regression.js',
+ 'v10459-topology-calm-reference19-regression.js',
+ 'v10460-topology-calm-v19-anchor-drawing-regression.js',
+ 'v10481-preserve-morph-anchor-motion.js',
+ 'v10461-topology-calm-two-real-phases-v19-regression.js',
+ 'v110-blue-two-phase-authored-endpoints-regression.js',
+ 'v110-static-animation-exact-endpoint-regression.js',
+ // Original user-provided 10.4 is the reference for the three core Morph solvers.
+ 'v1101-104-original-motion-regression.js',
+ 'v1101-104-flat-motion-regression.js',
+ 'v1101-canonical-endpoint-pixel-regression.js',
+ 'v10419-31-honest-corridor-spiral-order-regression.js',
+ 'v10419-36-rounded-segments-morph-static-handoff-regression.js',
+ 'v10419-36-rounded-segment-monoradius-canonical-handoff-regression.js',
+ 'v10419-37-rounded-topology-canonical-boundary-regression.js',
+ 'v10419-36-layerwise-corridor-regression.js',
+ 'v10419-37-layerwise-minimal-turn-regression.js',
+ 'v10419-39-blue-spiral-ui-parity-regression.js',
+ 'v10419-36-honest-duration-budget-regression.js',
+ 'v10419-36-honest-prezero-corridor-regression.js',
+ 'v10419-36-honest-postzero-corridor-regression.js',
+ 'v10419-36-honest-prezero-blue-regression.js',
+ 'v10419-36-honest-postzero-blue-regression.js',
+ 'v10419-32-fade-visible-slider-regression.js',
  'v9221-tangential-spiral-transition.js',
  'v103-tangential-zero-order-linear.js',
  'v101-spiral-wrap-layout.js',
@@ -105,7 +143,7 @@ const cases=full?fs.readdirSync(testsRoot).filter(f=>f.endsWith('.js')&&!helpers
 // signal, NOT a historical test that should be masked as an expected PASS.
 let passed=0,failed=0,timedOut=0;
 const timeoutMs=Math.max(2000,Number(process.env.SOMATA_TEST_TIMEOUT_MS)||35000);
-console.log(`Somata 10.4.19 tests: ${full?'FULL':'QUICK'} (${cases.length} cases; ${timeoutMs} ms/case)`);
+console.log(`Somata 11.0.0 tests: ${full?'FULL':'QUICK'} (${cases.length} cases; ${timeoutMs} ms/case)`);
 // Capture child output in memory rather than regenerating .log files.
 // Run asynchronously: a browser subprocess can outlive the Node test process
 // and retain an inherited pipe, which makes spawnSync hang after a timeout.
