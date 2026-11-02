@@ -135,7 +135,6 @@
 
     function markAdvancedRows() {
         const selectors = [
-            '#lineLayerModeControl',
             '#profileSplineRenderRow',
             '#profileModeTransitionRow',
             '#profileModeTransitionPercentRow',

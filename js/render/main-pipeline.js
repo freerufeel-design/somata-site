@@ -221,7 +221,7 @@ function prepareMainLayerTransformAndStyle(frameCtx, renderFrame) {
     frameCtx.baseAlpha=baseAlpha;
     frameCtx.lineOpacityFactor=lineOpacityFactor;
     frameCtx.lineAlpha=baseAlpha*lineOpacityFactor;
-    frameCtx.lineLayerMode=(layer?.lineLayerMode??layer?.spiralLineType)==='segmented'?'segmented':'uniform';
+    frameCtx.lineLayerMode='uniform';
     frameCtx.spiralLineType=frameCtx.lineLayerMode; // legacy renderer/project alias
     frameCtx.combinedScale=audioScale*lightMorphScale;
     frameCtx.combinedRotationOffset=audioRotationOffset+lightMorphRotation+linearMotionRotation;

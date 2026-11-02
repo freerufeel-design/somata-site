@@ -1934,9 +1934,9 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             spiralFillTypeRow?.classList.toggle('hidden',!spiralFillEnabled);
             if(spiralFillTypeInput&&document.activeElement!==spiralFillTypeInput)spiralFillTypeInput.value=layer.spiralFillType==='chopped'?'chopped':'interwinding';
 
-            const lineLayerMode=(layer.lineLayerMode??layer.spiralLineType)==='segmented'?'segmented':'uniform';
-            layer.lineLayerMode=lineLayerMode;layer.spiralLineType=lineLayerMode;
-            document.querySelectorAll('[data-line-layer-mode]').forEach(btn=>{const active=btn.dataset.lineLayerMode===lineLayerMode;btn.classList.toggle('active',active);btn.setAttribute('aria-pressed',active?'true':'false');});
+            // The segmented accumulation mode is retired: old saved values
+            // migrate to uniform as soon as a layer becomes active.
+            layer.lineLayerMode='uniform';layer.spiralLineType='uniform';
             const lineOpacity=Math.max(0,Math.min(100,Number.isFinite(Number(layer.lineOpacity))?Number(layer.lineOpacity):100));
             layer.lineOpacity=lineOpacity;
             const lineOpacityInput=document.getElementById('paramLineOpacity');if(lineOpacityInput&&document.activeElement!==lineOpacityInput)lineOpacityInput.value=String(lineOpacity);
@@ -6589,13 +6589,6 @@ syncMorphProfileUI();
                 }
             });
 
-            document.querySelectorAll('[data-line-layer-mode]').forEach(btn=>btn.addEventListener('click',()=>{
-                const active=getActiveLayer();if(!active)return;
-                const mode=btn.dataset.lineLayerMode==='segmented'?'segmented':'uniform';
-                for(const layer of getLayerEditTargets()){layer.lineLayerMode=mode;layer.spiralLineType=mode;}
-                document.querySelectorAll('[data-line-layer-mode]').forEach(x=>{const on=x.dataset.lineLayerMode===mode;x.classList.toggle('active',on);x.setAttribute('aria-pressed',on?'true':'false');});
-                requestMainCanvasRender();
-            }));
             document.getElementById('paramLineOpacity')?.addEventListener('input',(e)=>{
                 const active=getActiveLayer();if(!active)return;
                 const value=Math.max(0,Math.min(100,Number(e.target.value)||0));
@@ -15426,8 +15419,8 @@ syncMorphProfileUI();
                 glowMultiplier: Number.isFinite(Number(l.glowMultiplier))?Math.max(0,Number(l.glowMultiplier)):1,
                 glowIntensity: Number.isFinite(Number(l.glowIntensity))?Math.max(0,Math.min(200,Number(l.glowIntensity))):40,
                 glowIntensityMultiplier: Number.isFinite(Number(l.glowIntensityMultiplier))?Math.max(0,Number(l.glowIntensityMultiplier)):1,
-                lineLayerMode:(l.lineLayerMode??l.spiralLineType)==='segmented'?'segmented':'uniform',
-                spiralLineType:(l.lineLayerMode??l.spiralLineType)==='segmented'?'segmented':'uniform',
+                lineLayerMode:'uniform',
+                spiralLineType:'uniform',
                 motionRotation: l.motionRotation&&typeof l.motionRotation==='object' ? {...defaults.motionRotation,...l.motionRotation} : null,
                 N: Math.max(2, Math.min(120, Math.round(Number(l.N) || Number(defaults.N) || 4))),
                 chaosStar: l.chaosStar === true,

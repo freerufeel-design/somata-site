@@ -7219,7 +7219,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                 sharedJoinDynamicFrameCache.set(commands,{frameId,record:rec});
                 return rec;
             }
-            function commandLineLayerMode(commands){const layer=commands?.__spiroLayerRef||null;return (layer?.lineLayerMode??layer?.spiralLineType)==='segmented'?'segmented':'uniform';}
+            function commandLineLayerMode(commands){return 'uniform';}
             function commandLineBlendKind(commands,fallback='max'){return commandLineLayerMode(commands)==='segmented'?'over':fallback;}
             function prepareSharedJoinRecord(commands){
                 if(!sharedJoinBindGroupLayout||!sharedJoinBodyPipeline||!sharedJoinPointPipeline)return null;

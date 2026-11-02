@@ -2,16 +2,18 @@
 
 window.__spiroRegisterModule?.('js/core/palette');
 
-        const PLAYLIST_PALETTE_ORDER = ['standard','pastel','acid','rgb','rasta','fire','ice','sex','holy'];
+        const PLAYLIST_PALETTE_ORDER = ['standard','dichrom','pastel','acid','rgb','rasta','fire','ice','sex','holy'];
         const GRAFFITI_STANDARD_BRIGHT_COLORS = Object.freeze(['#0088ff','#00ffcc','#ff007f','#39ff14','#ffe600','#ff3300','#ff1493','#bf00ff','#76ff03']);
         const LEGACY_STANDARD_PLAYLIST_COLORS = Object.freeze(['#22d3ee','#3b82f6','#8b5cf6','#ec4899','#f97316','#facc15','#34d399']);
         const PLAYLIST_PALETTE_NAMES = Object.freeze({
-            standard:'Стандарт', pastel:'Пастель', acid:'Кислотная', rgb:'RGB', rasta:'Раста',
+            standard:'Стандарт', dichrom:'Дихром', pastel:'Пастель', acid:'Кислотная', rgb:'RGB', rasta:'Раста',
             fire:'Огонь', ice:'Лёд', sex:'Секс', holy:'Святая'
         });
         const FACTORY_PLAYLIST_PALETTE_RECORDS = Object.freeze({
 
             standard:Object.freeze({name:'Стандарт',keyColors:GRAFFITI_STANDARD_BRIGHT_COLORS,multiplier:1}),
+            // Built-in palette from the three-stop editor example. All stops remain editable.
+            dichrom:Object.freeze({name:'Дихром',keyColors:Object.freeze(['#ffffff','#00ff00','#000000']),multiplier:2}),
             pastel:Object.freeze({name:'Пастель',keyColors:Object.freeze(['#a5f3fc','#c4b5fd','#fbcfe8','#fde68a','#99f6e4']),multiplier:1}),
             acid:Object.freeze({name:'Кислотная',keyColors:Object.freeze(['#39ff14','#00fff0','#6366ff','#ff00cc','#fff500','#ff5f00']),multiplier:1}),
             rgb:Object.freeze({name:'RGB',keyColors:Object.freeze(['#ff0000','#00ff00','#0000ff']),multiplier:1}),
@@ -57,7 +59,7 @@ window.__spiroRegisterModule?.('js/core/palette');
             const legacyUntouchedStandard=key==='standard'&&keys.length===LEGACY_STANDARD_PLAYLIST_COLORS.length&&keys.every((c,i)=>c===LEGACY_STANDARD_PLAYLIST_COLORS[i]);
             if(keys.length&&!legacyExpandedFactory&&!legacyUntouchedStandard)base.keyColors=keys;
             base.name=String(src.name||base.name||key).slice(0,80);
-            base.multiplier=Math.max(1,Math.min(5,Math.round(Number(src.multiplier)||1)));
+            base.multiplier=Math.max(1,Math.min(5,Math.round(Number(src.multiplier ?? base.multiplier)||1)));
             base.saturation=Math.max(0,Math.min(200,Number.isFinite(Number(src.saturation))?Number(src.saturation):100));
             base.brightness=Math.max(0,Math.min(100,Number.isFinite(Number(src.brightness))?Number(src.brightness):50));
             base.contrast=Math.max(0,Math.min(100,Number.isFinite(Number(src.contrast))?Number(src.contrast):50));
