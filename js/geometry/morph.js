@@ -1169,7 +1169,11 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                     u = Math.max(0, Math.min(1, (u - (1 - span)) / span));
                 }
             }
-            return u * u * (3 - 2 * u);
+            // Fifth-order smootherstep keeps both velocity AND acceleration
+            // zero at the selected transition-window boundaries.  The old
+            // cubic smoothstep changed acceleration abruptly at the exact
+            // start/end of a short "Начало/Конец фазы" window.
+            return u * u * u * (u * (6 * u - 15) + 10);
         }
 
         // Reference behavior from Somata 10.4.19.29 for ALL legacy modes.
@@ -1272,10 +1276,10 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const round=getRoundingStrength(layer.rounding);
             if(useSmoothSplinePath(layer,round,path))
                 splinePathForDraw(recorder,path.points,Boolean(path.closed),round,
-                    path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true);
+                    path.cornerFlags||[],path.bridgeRoundFlags||[],layer.wholeCurveSpline===true,1,0,layer);
             else
                 roundPolylineForDraw(recorder,path.points,Boolean(path.closed),round,
-                    path.cornerFlags||[]);
+                    path.cornerFlags||[],null,false,null,layer);
             if(!valid||!cubics.length||cubics.some(q=>[q.p0,q.c1,q.c2,q.p3].some(p=>!Number.isFinite(p.x+p.y))))return null;
             return cubics;
         }
@@ -1957,7 +1961,40 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             }finally{legacyFilletCorrectionGuard=false;}
         }
 
+        // A Segments <-> Spline transition on the same orbit must not use the
+        // equalized/sampled Morph profile grid as the *visible* contour.
+        // That grid has extra knots and different corner flags from the authored
+        // Spline+ path. On a bent profile those differences appear as a snap on
+        // handoff; a manually straightened profile merely hides the mismatch.
+        // Reuse the actual visible cubic endpoint contours and interpolate their
+        // handles even when the authored profile nodes have changed. Changes
+        // to the orbit geometry itself continue to use the selected
+        // original selected Morph transport.
+        function isAuthoredProfileTransitionPair(src,dst) {
+            if(!src||!dst||!isMixedSplineSegmentTransition(src.profileMode,dst.profileMode) ||
+                isSpiralLayer(src)||isSpiralLayer(dst)||src.spiralEnabled===true||dst.spiralEnabled===true||
+                src.chaosStar===true||dst.chaosStar===true||state.fourierMode===true||
+                (Number(src.rounding)||0)>1e-8||(Number(dst.rounding)||0)>1e-8)return false;
+            const keys=['N','K','radius','radiusMultiplier','rotation','customSuborbits',
+                'closedLoop','rounding','roundingMode','roundingShape',
+                'roundingSmoothSplines','wholeCurveSpline','lineJoinType',
+                'extendedProfileEnabled','extendedProfileMode','splineRenderMode'];
+            for(const key of keys)if((src[key]??null)!==(dst[key]??null))return false;
+            const a=Array.isArray(src.__morphExactProfileNodes)?src.__morphExactProfileNodes:src.profileNodes;
+            const b=Array.isArray(dst.__morphExactProfileNodes)?dst.__morphExactProfileNodes:dst.profileNodes;
+            if(!Array.isArray(a)||!Array.isArray(b)||a.length<2||b.length<2)return false;
+            return a.every(p=>Number.isFinite(Number(p?.x))&&Number.isFinite(Number(p?.y))) &&
+                b.every(p=>Number.isFinite(Number(p?.x))&&Number.isFinite(Number(p?.y)));
+        }
         function drawAngularAnchorMorph(ctx, layer, sourceLayer, targetLayer, t, alpha, slideType, movementMode = 'angular', monoradiusDrawScale = 1) {
+            // When only the profile (nodes and/or mode) changes the orbit
+            // anchors do not move. Draw the real static rails at both ends;
+            // do not reclassify bends at 50% or replace raw nodes by samples.
+            if(isAuthoredProfileTransitionPair(sourceLayer,targetLayer)) {
+                const a=resolveExactPolygonMorphEndpoint(sourceLayer);
+                const b=resolveExactPolygonMorphEndpoint(targetLayer);
+                if(drawExactPolygonSplineProfileMorph27(ctx,layer,a,b,t,alpha,movementMode,monoradiusDrawScale))return;
+            }
             if(['topology','calm','circleSlide'].includes(state.morph.mode) &&
                 Math.abs(monoradiusDrawScale-1)<1e-8 &&
                 legacyFilletDrawCorrected(ctx,layer,sourceLayer,targetLayer,t,alpha,slideType,movementMode))return;
@@ -2154,7 +2191,11 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 options.polygonN = options.spiralEnabled && typeof getSpiralAngularVertexCount === 'function'
                     ? getSpiralAngularVertexCount(layer)
                     : Math.max(2, Math.round(Number(layer.N) || vertexPts.length || 4));
-                options.profileMode = morphProfileMode;
+                // Do not recompute the logical corner map at blend=0.5.
+                // The stroke must keep one consistent junction policy for the
+                // entire change of curvature; static Spline+ is the endpoint.
+                // At blend=0 Segments is straight irrespective of this flag.
+                options.profileMode = mixedSplineSegment ? 'spline' : morphProfileMode;
                 options.continuousProfileBlend = mixedSplineSegment;
                 options.splineRenderMode = layer?.splineRenderMode;
                 options.lineJoinType = layer?.lineJoinType || 'rounded';
@@ -2672,6 +2713,12 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             const reference19=state?.morph?.mode==='topology'||state?.morph?.mode==='calm';
             if(reference19) wholeCurveSpline=false;
             const round=Math.max(0,Math.min(2,Number(roundingFrac)||0));
+            // At positive rounding both profile types deliberately use the
+            // same approved Spline+ rail.  Do not subdivide/crossfade this
+            // identical contour just to animate an otherwise inert mode flag:
+            // that would increase cubic count during a live Morph for no
+            // visible gain.  The dedicated mode timeline affects the curves
+            // below when corner rounding is disabled.
             // The new spline algorithm constructs a single O(N) cubic rail,
             // independent of the original segment/profile classification.
             // Never alter the reference Morph carrier or its phase clock.
@@ -2679,7 +2726,18 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 !state.fourierMode && typeof somataDrawSplineCornerMode==='function'){
                 const baseBlend=splineBlend!=null?Math.max(0,Math.min(1,Number(splineBlend)||0)):
                     (profileMode==='spline'?1:0);
-                if(somataDrawSplineCornerMode(ctx,points,Boolean(closed),round,{baseSplineBlend:baseBlend,layer:filletLayer,duplicateStable:true}))return;
+                // At 0% Spline+ emits straight segments. Keep that behavior
+                // for Segments profiles, but let Spline profiles (including a
+                // live Segments↔Spline transition) use their original cubics
+                // with unrounded joins. Positive rounding keeps Spline+.
+                if((round>0 || (baseBlend<=1e-7 && !continuousProfileBlend)) &&
+                    somataDrawSplineCornerMode(ctx,points,Boolean(closed),round,{baseSplineBlend:baseBlend,layer:filletLayer,duplicateStable:true}))return;
+                // At zero rounding, the entire mode transition is a single
+                // Spline+ path family. No replacement renderer at t=100%.
+                if(round===0 && (continuousProfileBlend || baseBlend>1e-7) &&
+                    somataDrawSplineCornerMode(ctx,points,Boolean(closed),0,{
+                        sharpJunctions:true,cornerFlags:wholeCurveSpline?[]:cornerFlags,
+                        baseSplineBlend:baseBlend,layer:filletLayer,duplicateStable:true}))return;
             }
 
             // Detect actual geometric kinks AFTER the current Morph frame has
@@ -2766,6 +2824,24 @@ window.__spiroRegisterModule?.('js/geometry/morph');
                 let blendPoints=points;
                 if(round>0.001 && typeof transformSplineKnotsForRounding==='function') {
                     try { blendPoints=transformSplineKnotsForRounding(points,Boolean(closed),round,cornerFlags||[]) || points; } catch(_) {}
+                }
+                // At zero rounding the authored Spline is constructed from
+                // edge-local cubic runs (or one whole-curve run).  The older
+                // drawMorphSplineBlendPath had a *different* run/endpoint
+                // policy, so Morph could approach one curve at t=1 and then
+                // jump to another when Static took over.  Interpolate handles
+                // inside the exact unrounded Spline builder instead.  This
+                // also respects the sharp, unrounded logical joins.
+                if(round<=0.001 && !state.fourierMode){
+                    if(blend<=1e-9){
+                        // Exact same zero endpoint as the static Segments
+                        // builder, including the closed-loop command policy.
+                        roundPolylineForDraw(ctx,points,Boolean(closed),0,cornerFlags||[],null,false,null,filletLayer);
+                    }else{
+                        splinePathForDraw(ctx,points,Boolean(closed),0,cornerFlags||[],
+                            bridgeRoundFlags||[],wholeCurveSpline,blend,liveSeamMix,filletLayer);
+                    }
+                    return;
                 }
                 drawMorphSplineBlendPath(ctx,blendPoints,Boolean(closed),blend,wholeCurveSpline?[]:(cornerFlags||[]));
                 return;

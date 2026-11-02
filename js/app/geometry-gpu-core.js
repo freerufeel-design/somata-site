@@ -934,7 +934,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             const c2=safeControl(b,toLoc.tangent,true);
             ctx.bezierCurveTo(c1.x,c1.y,c2.x,c2.y,b.x,b.y);
         }
-        function drawWholeCentripetalSpline(ctx, points, closed) {
+        function drawWholeCentripetalSpline(ctx, points, closed, splineBlend = 1) {
             const pts=points||[],n=pts.length;
             if(n<2) return;
             if(n===2){ctx.moveTo(pts[0].x,pts[0].y);ctx.lineTo(pts[1].x,pts[1].y);if(closed)ctx.closePath();return;}
@@ -945,7 +945,15 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 const p0=closed?pts[(i-1+n)%n]:(i>0?pts[i-1]:{x:2*p1.x-p2.x,y:2*p1.y-p2.y});
                 const p3=closed?pts[(j+1)%n]:(j+1<n?pts[j+1]:{x:2*p2.x-p1.x,y:2*p2.y-p1.y});
                 const c=centripetalSplineBezierControls(p0,p1,p2,p3,0.5);
-                ctx.bezierCurveTo(c.c1.x,c.c1.y,c.c2.x,c.c2.y,p2.x,p2.y);
+                // Use the same cubic rail at every point of a Segments↔Spline
+                // transition.  Without blending the whole-curve fallback, a
+                // closed profile with fewer than two logical corners snapped
+                // directly to its final Spline shape at the first Morph frame.
+                const b=Math.max(0,Math.min(1,Number(splineBlend)||0));
+                const a1x=p1.x+(p2.x-p1.x)/3,a1y=p1.y+(p2.y-p1.y)/3;
+                const a2x=p1.x+2*(p2.x-p1.x)/3,a2y=p1.y+2*(p2.y-p1.y)/3;
+                ctx.bezierCurveTo(a1x+(c.c1.x-a1x)*b,a1y+(c.c1.y-a1y)*b,
+                    a2x+(c.c2.x-a2x)*b,a2y+(c.c2.y-a2y)*b,p2.x,p2.y);
             }
             if(closed) ctx.closePath();
         }
@@ -1050,9 +1058,16 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
         }
 
         function splinePathForDraw(ctx, rawPoints, closed = false, roundingFrac = 0, cornerFlags = [], bridgeRoundFlags = [], wholeCurveSpline = false, splineBlend = 1, liveSeamMix = 0, filletLayer = null) {
-            if(!state.fourierMode && filletLayer &&
-                typeof somataDrawSplineCornerMode==='function' &&
-                somataDrawSplineCornerMode(ctx,rawPoints,Boolean(closed),roundingFrac,{baseSplineBlend:splineBlend,layer:filletLayer}))return;
+            // With rounding disabled, honor the authored Spline profile. Spline+
+            // intentionally draws a polygon at 0%, which hid the original
+            // edge-local cubic runs and their *unrounded* (sharp) junctions.
+            // Leave the Spline+ path completely unchanged above zero.
+            if(!state.fourierMode && typeof somataDrawSplineCornerMode==='function' &&
+                (Number(roundingFrac)>0 || (Number(roundingFrac)===0 && filletLayer?.profileMode==='spline')) &&
+                somataDrawSplineCornerMode(ctx,rawPoints,Boolean(closed),roundingFrac,{
+                    baseSplineBlend:splineBlend,layer:filletLayer,
+                    sharpJunctions:!(Number(roundingFrac)>0),
+                    cornerFlags:wholeCurveSpline?[]:cornerFlags}))return;
             if (!state.fourierMode && typeof drawUnifiedFilletPath === "function" && Number(roundingFrac)>0.00001 &&
                 (wholeCurveSpline!==true || filletLayer?.roundingSmoothSplines===true)) {
                 const flags=filletLayer?.roundingSmoothSplines===true
@@ -1075,6 +1090,12 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 }
                 if(drawUnifiedFilletPath(ctx,rawPoints,Boolean(closed),roundingFrac,flags,filletOpts))return;
             }
+            // Direct geometry callers (including GPU sampling) must use the
+            // exact same sharp-junction Spline+ even without a layer object.
+            if(!state.fourierMode && !(Number(roundingFrac)>0) && typeof somataDrawSplineCornerMode==='function' &&
+                somataDrawSplineCornerMode(ctx,rawPoints,Boolean(closed),0,{
+                    sharpJunctions:true,cornerFlags:wholeCurveSpline?[]:cornerFlags,
+                    baseSplineBlend:splineBlend,layer:filletLayer}))return;
             let points=(rawPoints||[]).filter(p=>p&&Number.isFinite(Number(p.x))&&Number.isFinite(Number(p.y)));
             if(points.length<2) return;
             const round=Math.max(0,Math.min(2,Number(roundingFrac)||0));
@@ -1107,7 +1128,7 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
                 const boundedPoints=round>1.000001
                     ? limitHighTurnExtraKnotSmoothing(points,roundedPoints,Boolean(closed),flags)
                     : roundedPoints;
-                drawWholeCentripetalSpline(ctx,boundedPoints,Boolean(closed));
+                drawWholeCentripetalSpline(ctx,boundedPoints,Boolean(closed),splineBlend);
                 return;
             }
 
@@ -1625,7 +1646,11 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             if(state.fourierMode){
 
                 splinePathForDraw(sampler,src,false,Math.max(0,Math.min(2,Number(roundingFrac)||0)),Array.isArray(cornerFlags)?cornerFlags:[],[]);
-            }else if(splineShape && true && typeof somataDrawSplineCornerMode==='function'){
+            }else if(splineShape && !(Number(roundingFrac)>0)){
+                // Sample the same authored edge-local spline as the visible line;
+                // do not substitute Spline+'s zero-rounding straight segments.
+                splinePathForDraw(sampler,src,false,0,Array.isArray(cornerFlags)?cornerFlags:[],[],filletLayer?.wholeCurveSpline===true,1,0,filletLayer);
+            }else if(splineShape && typeof somataDrawSplineCornerMode==='function'){
                 somataDrawSplineCornerMode(sampler,src,false,roundingFrac,{baseSplineBlend:1,layer:filletLayer});
             }else{
                 drawSpiralSpaceCentripetalSpline(sampler,src,roundingFrac);
@@ -1690,7 +1715,11 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             // Whole-curve spline deliberately softens authored junctions. The
             // default local spline preserves them, just like the static carrier.
             const whole=points?._spiroWholeCurveSpline===true;
-            if(splineShape && true && typeof somataDrawSplineCornerMode==='function')
+            if(splineShape && !(Number(roundingFrac)>0))
+                // Build the *same* unrounded authored spline in the retained GPU
+                // cubics as in the static canvas and lamp sampling paths.
+                splinePathForDraw(recorder,src,false,0,Array.isArray(cornerFlags)?cornerFlags:[],[],whole,1,0,filletLayer);
+            else if(splineShape && typeof somataDrawSplineCornerMode==='function')
                 somataDrawSplineCornerMode(recorder,src,false,roundingFrac,{baseSplineBlend:1,layer:filletLayer,prevalidated:true});
             else if(whole) drawSpiralSpaceCentripetalSpline(recorder,src,Math.max(0,Math.min(2,Number(roundingFrac)||0)));
             else splinePathForDraw(recorder,src,false,Math.max(0,Math.min(2,Number(roundingFrac)||0)),

@@ -1,0 +1,1374 @@
+{
+  "title": "Actual geometry of last phase frame vs next phase first frame",
+  "created": "2026-11-02T12:09:28.242Z",
+  "metrics": "symmetrical spatial distance between rasterized contour ink pixels on an 800x800 canvas at .50 scene scale (pixels)",
+  "exactLimitPx": 1.5,
+  "nearLimitPx": 2.5,
+  "nearSamples": "t=0.9999 and t=0.0001",
+  "cases": [
+    {
+      "name": "polygon-topology-spline",
+      "mode": "topology",
+      "spiral": false,
+      "rounding": 145,
+      "boundaries": [
+        {
+          "fromSerial": 1,
+          "toSerial": 2,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 2792,
+            "coverageB": 2792,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 1,
+            "meanPx": 0.08792689586760875,
+            "coverageA": 2786,
+            "coverageB": 3270,
+            "rawAlphaMAE": 0.202525
+          },
+          "lastTopology": {
+            "sourceN": 9,
+            "targetN": 14,
+            "sourceK": 4,
+            "targetK": 6,
+            "sourceKnots": 4,
+            "targetKnots": 5,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 14,
+            "targetN": 9,
+            "sourceK": 6,
+            "targetK": 3,
+            "sourceKnots": 5,
+            "targetKnots": 5,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 2,
+          "toSerial": 3,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1145,
+            "coverageB": 1145,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 2,
+            "p95Px": 1,
+            "meanPx": 0.151295672507306,
+            "coverageA": 1148,
+            "coverageB": 1520,
+            "rawAlphaMAE": 0.121453125
+          },
+          "lastTopology": {
+            "sourceN": 14,
+            "targetN": 9,
+            "sourceK": 6,
+            "targetK": 3,
+            "sourceKnots": 5,
+            "targetKnots": 5,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 9,
+            "targetN": 10,
+            "sourceK": 3,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 5,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 3,
+          "toSerial": 4,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1619,
+            "coverageB": 1619,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 2.23606797749979,
+            "p95Px": 0,
+            "meanPx": 0.03557251142689561,
+            "coverageA": 1617,
+            "coverageB": 1608,
+            "rawAlphaMAE": 0.0307765625
+          },
+          "lastTopology": {
+            "sourceN": 9,
+            "targetN": 10,
+            "sourceK": 3,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 5,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 10,
+            "targetN": 14,
+            "sourceK": 5,
+            "targetK": 3,
+            "sourceKnots": 5,
+            "targetKnots": 5,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        }
+      ],
+      "sawSerials": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "controls": {
+        "identical": {
+          "hausdorffPx": 0,
+          "p95Px": 0,
+          "meanPx": 0,
+          "coverageA": 1418,
+          "coverageB": 1418,
+          "rawAlphaMAE": 0
+        },
+        "differentRounding": {
+          "hausdorffPx": 53.9351462406472,
+          "p95Px": 50.635955604688654,
+          "meanPx": 16.32774422409351,
+          "coverageA": 1418,
+          "coverageB": 1604,
+          "rawAlphaMAE": 0.7525859375
+        }
+      }
+    },
+    {
+      "name": "polygon-topocircle-spline",
+      "mode": "topoCircle",
+      "spiral": false,
+      "rounding": 145,
+      "boundaries": [
+        {
+          "fromSerial": 5,
+          "toSerial": 6,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 2792,
+            "coverageB": 2792,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 2.8284271247461903,
+            "p95Px": 0,
+            "meanPx": 0.015372135815428001,
+            "coverageA": 2791,
+            "coverageB": 2797,
+            "rawAlphaMAE": 0.02271875
+          },
+          "lastTopology": {
+            "sourceN": 9,
+            "targetN": 14,
+            "sourceK": 4,
+            "targetK": 6,
+            "sourceKnots": 4,
+            "targetKnots": 5,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 14,
+            "targetN": 11,
+            "sourceK": 6,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 3,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 6,
+          "toSerial": 7,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1952,
+            "coverageB": 1952,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 0,
+            "meanPx": 0.03483709175509143,
+            "coverageA": 1954,
+            "coverageB": 1947,
+            "rawAlphaMAE": 0.032903125
+          },
+          "lastTopology": {
+            "sourceN": 14,
+            "targetN": 11,
+            "sourceK": 6,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 3,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 11,
+            "targetN": 10,
+            "sourceK": 5,
+            "targetK": 5,
+            "sourceKnots": 3,
+            "targetKnots": 3,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 7,
+          "toSerial": 8,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1583,
+            "coverageB": 1583,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 0,
+            "meanPx": 0.008951708617153498,
+            "coverageA": 1577,
+            "coverageB": 1578,
+            "rawAlphaMAE": 0.009425
+          },
+          "lastTopology": {
+            "sourceN": 11,
+            "targetN": 10,
+            "sourceK": 5,
+            "targetK": 5,
+            "sourceKnots": 3,
+            "targetKnots": 3,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 10,
+            "targetN": 9,
+            "sourceK": 5,
+            "targetK": 2,
+            "sourceKnots": 3,
+            "targetKnots": 5,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        }
+      ],
+      "sawSerials": [
+        5,
+        6,
+        7,
+        8
+      ],
+      "controls": {
+        "identical": {
+          "hausdorffPx": 0,
+          "p95Px": 0,
+          "meanPx": 0,
+          "coverageA": 1418,
+          "coverageB": 1418,
+          "rawAlphaMAE": 0
+        },
+        "differentRounding": {
+          "hausdorffPx": 53.9351462406472,
+          "p95Px": 50.635955604688654,
+          "meanPx": 16.32774422409351,
+          "coverageA": 1418,
+          "coverageB": 1604,
+          "rawAlphaMAE": 0.7525859375
+        }
+      }
+    },
+    {
+      "name": "polygon-topology-segments",
+      "mode": "topology",
+      "spiral": false,
+      "rounding": 65,
+      "boundaries": [
+        {
+          "fromSerial": 9,
+          "toSerial": 10,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 2246,
+            "coverageB": 2246,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 1,
+            "meanPx": 0.11061963209847689,
+            "coverageA": 2253,
+            "coverageB": 2739,
+            "rawAlphaMAE": 0.180509375
+          },
+          "lastTopology": {
+            "sourceN": 9,
+            "targetN": 14,
+            "sourceK": 4,
+            "targetK": 6,
+            "sourceKnots": 4,
+            "targetKnots": 5,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 14,
+            "targetN": 9,
+            "sourceK": 6,
+            "targetK": 3,
+            "sourceKnots": 5,
+            "targetKnots": 5,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 10,
+          "toSerial": 11,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1103,
+            "coverageB": 1103,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 2.23606797749979,
+            "p95Px": 1,
+            "meanPx": 0.13709560167738985,
+            "coverageA": 1101,
+            "coverageB": 1428,
+            "rawAlphaMAE": 0.1135921875
+          },
+          "lastTopology": {
+            "sourceN": 14,
+            "targetN": 9,
+            "sourceK": 6,
+            "targetK": 3,
+            "sourceKnots": 5,
+            "targetKnots": 5,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 9,
+            "targetN": 10,
+            "sourceK": 3,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 5,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 11,
+          "toSerial": 12,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1127,
+            "coverageB": 1127,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1,
+            "p95Px": 0,
+            "meanPx": 0.0088261253309797,
+            "coverageA": 1131,
+            "coverageB": 1135,
+            "rawAlphaMAE": 0.010584375
+          },
+          "lastTopology": {
+            "sourceN": 9,
+            "targetN": 10,
+            "sourceK": 3,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 5,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 10,
+            "targetN": 14,
+            "sourceK": 5,
+            "targetK": 3,
+            "sourceKnots": 5,
+            "targetKnots": 5,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        }
+      ],
+      "sawSerials": [
+        9,
+        10,
+        11,
+        12
+      ],
+      "controls": {
+        "identical": {
+          "hausdorffPx": 0,
+          "p95Px": 0,
+          "meanPx": 0,
+          "coverageA": 1428,
+          "coverageB": 1428,
+          "rawAlphaMAE": 0
+        },
+        "differentRounding": {
+          "hausdorffPx": 54.230987451824994,
+          "p95Px": 51,
+          "meanPx": 16.4542862476567,
+          "coverageA": 1428,
+          "coverageB": 1604,
+          "rawAlphaMAE": 0.75513125
+        }
+      }
+    },
+    {
+      "name": "polygon-circle-slide-segments",
+      "mode": "circleSlide",
+      "spiral": false,
+      "rounding": 65,
+      "boundaries": [
+        {
+          "fromSerial": 13,
+          "toSerial": 14,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 2246,
+            "coverageB": 2246,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 0,
+            "meanPx": 0.03065810432295201,
+            "coverageA": 2253,
+            "coverageB": 2272,
+            "rawAlphaMAE": 0.0360890625
+          },
+          "lastTopology": {
+            "sourceN": 9,
+            "targetN": 14,
+            "sourceK": 4,
+            "targetK": 6,
+            "sourceKnots": 4,
+            "targetKnots": 5,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 14,
+            "targetN": 11,
+            "sourceK": 6,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 3,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 14,
+          "toSerial": 15,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1631,
+            "coverageB": 1631,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1,
+            "p95Px": 1,
+            "meanPx": 0.09891808346213292,
+            "coverageA": 2332,
+            "coverageB": 2844,
+            "rawAlphaMAE": 0.300484375
+          },
+          "lastTopology": {
+            "sourceN": 14,
+            "targetN": 11,
+            "sourceK": 6,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 3,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 11,
+            "targetN": 10,
+            "sourceK": 5,
+            "targetK": 5,
+            "sourceKnots": 3,
+            "targetKnots": 3,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 15,
+          "toSerial": 16,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1484,
+            "coverageB": 1484,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 2.23606797749979,
+            "p95Px": 0,
+            "meanPx": 0.03136494473684671,
+            "coverageA": 1473,
+            "coverageB": 1483,
+            "rawAlphaMAE": 0.023784375
+          },
+          "lastTopology": {
+            "sourceN": 11,
+            "targetN": 10,
+            "sourceK": 5,
+            "targetK": 5,
+            "sourceKnots": 3,
+            "targetKnots": 3,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 10,
+            "targetN": 9,
+            "sourceK": 5,
+            "targetK": 2,
+            "sourceKnots": 3,
+            "targetKnots": 5,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        }
+      ],
+      "sawSerials": [
+        13,
+        14,
+        15,
+        16
+      ],
+      "controls": {
+        "identical": {
+          "hausdorffPx": 0,
+          "p95Px": 0,
+          "meanPx": 0,
+          "coverageA": 1428,
+          "coverageB": 1428,
+          "rawAlphaMAE": 0
+        },
+        "differentRounding": {
+          "hausdorffPx": 54.230987451824994,
+          "p95Px": 51,
+          "meanPx": 16.4542862476567,
+          "coverageA": 1428,
+          "coverageB": 1604,
+          "rawAlphaMAE": 0.75513125
+        }
+      }
+    },
+    {
+      "name": "polygon-circle-slide-spline",
+      "mode": "circleSlide",
+      "spiral": false,
+      "rounding": 145,
+      "boundaries": [
+        {
+          "fromSerial": 17,
+          "toSerial": 18,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 2792,
+            "coverageB": 2792,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 0,
+            "meanPx": 0.02003734583851392,
+            "coverageA": 2786,
+            "coverageB": 2795,
+            "rawAlphaMAE": 0.0349625
+          },
+          "lastTopology": {
+            "sourceN": 9,
+            "targetN": 14,
+            "sourceK": 4,
+            "targetK": 6,
+            "sourceKnots": 4,
+            "targetKnots": 5,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 14,
+            "targetN": 11,
+            "sourceK": 6,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 3,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "imageFiles": {
+            "last": "/mnt/data/somata_spline_plus_sharp_work/tests/polygon-circle-slide-spline-boundary-1-last.png",
+            "first": "/mnt/data/somata_spline_plus_sharp_work/tests/polygon-circle-slide-spline-boundary-1-first.png"
+          }
+        },
+        {
+          "fromSerial": 18,
+          "toSerial": 19,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1952,
+            "coverageB": 1952,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1,
+            "p95Px": 1,
+            "meanPx": 0.09467084639498433,
+            "coverageA": 2888,
+            "coverageB": 3492,
+            "rawAlphaMAE": 0.3685421875
+          },
+          "lastTopology": {
+            "sourceN": 14,
+            "targetN": 11,
+            "sourceK": 6,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 3,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 11,
+            "targetN": 10,
+            "sourceK": 5,
+            "targetK": 5,
+            "sourceKnots": 3,
+            "targetKnots": 3,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 19,
+          "toSerial": 20,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1583,
+            "coverageB": 1583,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 0,
+            "meanPx": 0.022128916895780355,
+            "coverageA": 1592,
+            "coverageB": 1590,
+            "rawAlphaMAE": 0.0264515625
+          },
+          "lastTopology": {
+            "sourceN": 11,
+            "targetN": 10,
+            "sourceK": 5,
+            "targetK": 5,
+            "sourceKnots": 3,
+            "targetKnots": 3,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 10,
+            "targetN": 9,
+            "sourceK": 5,
+            "targetK": 2,
+            "sourceKnots": 3,
+            "targetKnots": 5,
+            "sourceRounding": 145,
+            "targetRounding": 145,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        }
+      ],
+      "sawSerials": [
+        17,
+        18,
+        19,
+        20
+      ],
+      "controls": {
+        "identical": {
+          "hausdorffPx": 0,
+          "p95Px": 0,
+          "meanPx": 0,
+          "coverageA": 1418,
+          "coverageB": 1418,
+          "rawAlphaMAE": 0
+        },
+        "differentRounding": {
+          "hausdorffPx": 53.9351462406472,
+          "p95Px": 50.635955604688654,
+          "meanPx": 16.32774422409351,
+          "coverageA": 1418,
+          "coverageB": 1604,
+          "rawAlphaMAE": 0.7525859375
+        }
+      }
+    },
+    {
+      "name": "polygon-topocircle-segments",
+      "mode": "topoCircle",
+      "spiral": false,
+      "rounding": 65,
+      "boundaries": [
+        {
+          "fromSerial": 21,
+          "toSerial": 22,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 2246,
+            "coverageB": 2246,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 0,
+            "meanPx": 0.013482297010333938,
+            "coverageA": 2250,
+            "coverageB": 2249,
+            "rawAlphaMAE": 0.01730625
+          },
+          "lastTopology": {
+            "sourceN": 9,
+            "targetN": 14,
+            "sourceK": 4,
+            "targetK": 6,
+            "sourceKnots": 4,
+            "targetKnots": 5,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 14,
+            "targetN": 11,
+            "sourceK": 6,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 3,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 22,
+          "toSerial": 23,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1631,
+            "coverageB": 1631,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 2,
+            "p95Px": 0,
+            "meanPx": 0.029161076478586685,
+            "coverageA": 1619,
+            "coverageB": 1627,
+            "rawAlphaMAE": 0.0258
+          },
+          "lastTopology": {
+            "sourceN": 14,
+            "targetN": 11,
+            "sourceK": 6,
+            "targetK": 5,
+            "sourceKnots": 5,
+            "targetKnots": 3,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 11,
+            "targetN": 10,
+            "sourceK": 5,
+            "targetK": 5,
+            "sourceKnots": 3,
+            "targetKnots": 3,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 23,
+          "toSerial": 24,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 1484,
+            "coverageB": 1484,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 0,
+            "meanPx": 0.009998939396322449,
+            "coverageA": 1483,
+            "coverageB": 1483,
+            "rawAlphaMAE": 0.0090875
+          },
+          "lastTopology": {
+            "sourceN": 11,
+            "targetN": 10,
+            "sourceK": 5,
+            "targetK": 5,
+            "sourceKnots": 3,
+            "targetKnots": 3,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "firstTopology": {
+            "sourceN": 10,
+            "targetN": 9,
+            "sourceK": 5,
+            "targetK": 2,
+            "sourceKnots": 3,
+            "targetKnots": 5,
+            "sourceRounding": 65,
+            "targetRounding": 65,
+            "sourceRotation": 17,
+            "targetRotation": 17,
+            "sourceRadius": 185,
+            "targetRadius": 185
+          },
+          "images": null
+        }
+      ],
+      "sawSerials": [
+        21,
+        22,
+        23,
+        24
+      ],
+      "controls": {
+        "identical": {
+          "hausdorffPx": 0,
+          "p95Px": 0,
+          "meanPx": 0,
+          "coverageA": 1428,
+          "coverageB": 1428,
+          "rawAlphaMAE": 0
+        },
+        "differentRounding": {
+          "hausdorffPx": 54.230987451824994,
+          "p95Px": 51,
+          "meanPx": 16.4542862476567,
+          "coverageA": 1428,
+          "coverageB": 1604,
+          "rawAlphaMAE": 0.75513125
+        }
+      }
+    },
+    {
+      "name": "spiral-circle-slide-spline",
+      "mode": "circleSlide",
+      "spiral": true,
+      "rounding": 145,
+      "boundaries": [
+        {
+          "fromSerial": 25,
+          "toSerial": 26,
+          "exact": {
+            "hausdorffPx": 2,
+            "p95Px": 0,
+            "meanPx": 0.0069424899146261375,
+            "coverageA": 5342,
+            "coverageB": 5317,
+            "rawAlphaMAE": 0.01775
+          },
+          "near": {
+            "hausdorffPx": 2,
+            "p95Px": 0,
+            "meanPx": 0.012078651685393259,
+            "coverageA": 5345,
+            "coverageB": 5335,
+            "rawAlphaMAE": 0.0295921875
+          },
+          "lastTopology": {
+            "pathCount": 14,
+            "cubicCount": 742,
+            "locked": true
+          },
+          "firstTopology": {
+            "pathCount": 14,
+            "cubicCount": 1126,
+            "locked": true
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 26,
+          "toSerial": 27,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 4649,
+            "coverageB": 4649,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 0,
+            "meanPx": 0.007248060806620051,
+            "coverageA": 4653,
+            "coverageB": 4648,
+            "rawAlphaMAE": 0.0166734375
+          },
+          "lastTopology": {
+            "pathCount": 14,
+            "cubicCount": 1126,
+            "locked": true
+          },
+          "firstTopology": {
+            "pathCount": 12,
+            "cubicCount": 1020,
+            "locked": true
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 27,
+          "toSerial": 28,
+          "exact": {
+            "hausdorffPx": 2.23606797749979,
+            "p95Px": 0,
+            "meanPx": 0.02456745451396012,
+            "coverageA": 3341,
+            "coverageB": 3347,
+            "rawAlphaMAE": 0.038721875
+          },
+          "near": {
+            "hausdorffPx": 2.23606797749979,
+            "p95Px": 0,
+            "meanPx": 0.021605908279440564,
+            "coverageA": 3341,
+            "coverageB": 3346,
+            "rawAlphaMAE": 0.033821875
+          },
+          "lastTopology": {
+            "pathCount": 12,
+            "cubicCount": 1020,
+            "locked": true
+          },
+          "firstTopology": {
+            "pathCount": 14,
+            "cubicCount": 570,
+            "locked": true
+          },
+          "images": null
+        }
+      ],
+      "sawSerials": [
+        25,
+        26,
+        27,
+        28
+      ],
+      "controls": {
+        "identical": {
+          "hausdorffPx": 0,
+          "p95Px": 0,
+          "meanPx": 0,
+          "coverageA": 9093,
+          "coverageB": 9093,
+          "rawAlphaMAE": 0
+        },
+        "differentRounding": {
+          "hausdorffPx": 122.14745187681976,
+          "p95Px": 98.85848471426213,
+          "meanPx": 65.61478345564585,
+          "coverageA": 9093,
+          "coverageB": 8297,
+          "rawAlphaMAE": 5.7429
+        }
+      }
+    },
+    {
+      "name": "spiral-topology-spline",
+      "mode": "topology",
+      "spiral": true,
+      "rounding": 145,
+      "boundaries": [
+        {
+          "fromSerial": 29,
+          "toSerial": 30,
+          "exact": {
+            "hausdorffPx": 2,
+            "p95Px": 0,
+            "meanPx": 0.0069424899146261375,
+            "coverageA": 5342,
+            "coverageB": 5317,
+            "rawAlphaMAE": 0.01775
+          },
+          "near": {
+            "hausdorffPx": 2,
+            "p95Px": 0,
+            "meanPx": 0.012078651685393259,
+            "coverageA": 5345,
+            "coverageB": 5335,
+            "rawAlphaMAE": 0.0295921875
+          },
+          "lastTopology": {
+            "pathCount": 14,
+            "cubicCount": 742,
+            "locked": true
+          },
+          "firstTopology": {
+            "pathCount": 14,
+            "cubicCount": 1126,
+            "locked": true
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 30,
+          "toSerial": 31,
+          "exact": {
+            "hausdorffPx": 0,
+            "p95Px": 0,
+            "meanPx": 0,
+            "coverageA": 4649,
+            "coverageB": 4649,
+            "rawAlphaMAE": 0
+          },
+          "near": {
+            "hausdorffPx": 1.4142135623730951,
+            "p95Px": 0,
+            "meanPx": 0.007248060806620051,
+            "coverageA": 4653,
+            "coverageB": 4648,
+            "rawAlphaMAE": 0.0166734375
+          },
+          "lastTopology": {
+            "pathCount": 14,
+            "cubicCount": 1126,
+            "locked": true
+          },
+          "firstTopology": {
+            "pathCount": 12,
+            "cubicCount": 1020,
+            "locked": true
+          },
+          "images": null
+        },
+        {
+          "fromSerial": 31,
+          "toSerial": 32,
+          "exact": {
+            "hausdorffPx": 2.23606797749979,
+            "p95Px": 0,
+            "meanPx": 0.02456745451396012,
+            "coverageA": 3341,
+            "coverageB": 3347,
+            "rawAlphaMAE": 0.038721875
+          },
+          "near": {
+            "hausdorffPx": 2.23606797749979,
+            "p95Px": 0,
+            "meanPx": 0.021605908279440564,
+            "coverageA": 3341,
+            "coverageB": 3346,
+            "rawAlphaMAE": 0.033821875
+          },
+          "lastTopology": {
+            "pathCount": 12,
+            "cubicCount": 1020,
+            "locked": true
+          },
+          "firstTopology": {
+            "pathCount": 14,
+            "cubicCount": 570,
+            "locked": true
+          },
+          "images": null
+        }
+      ],
+      "sawSerials": [
+        29,
+        30,
+        31,
+        32
+      ],
+      "controls": {
+        "identical": {
+          "hausdorffPx": 0,
+          "p95Px": 0,
+          "meanPx": 0,
+          "coverageA": 9093,
+          "coverageB": 9093,
+          "rawAlphaMAE": 0
+        },
+        "differentRounding": {
+          "hausdorffPx": 122.14745187681976,
+          "p95Px": 98.85848471426213,
+          "meanPx": 65.61478345564585,
+          "coverageA": 9093,
+          "coverageB": 8297,
+          "rawAlphaMAE": 5.7429
+        }
+      }
+    }
+  ],
+  "errors": [
+    {
+      "name": "polygon-topocircle-spline",
+      "from": 5,
+      "to": 6,
+      "exact": 0,
+      "near": 2.8284271247461903
+    },
+    {
+      "name": "spiral-circle-slide-spline",
+      "from": 25,
+      "to": 26,
+      "exact": 2,
+      "near": 2
+    },
+    {
+      "name": "spiral-circle-slide-spline",
+      "from": 27,
+      "to": 28,
+      "exact": 2.23606797749979,
+      "near": 2.23606797749979
+    },
+    {
+      "name": "spiral-topology-spline",
+      "from": 29,
+      "to": 30,
+      "exact": 2,
+      "near": 2
+    },
+    {
+      "name": "spiral-topology-spline",
+      "from": 31,
+      "to": 32,
+      "exact": 2.23606797749979,
+      "near": 2.23606797749979
+    }
+  ]
+}

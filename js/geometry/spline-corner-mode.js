@@ -13,7 +13,77 @@ function somataDrawSplineCornerMode(ctx, raw, closed, rounding, options = {}) {
         raw.filter(p=>p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)));
     if(pts.length < 2) return false;
     const value = Math.max(0, Math.min(2, Number(rounding) || 0));
+    // The 0%-rounding Spline profile is a *variant of the same Spline+ rail*,
+    // with only its logical junctions kept sharp. Morph interpolates the
+    // handles of this variant (not two unrelated path builders), so its
+    // 100% endpoint is precisely the static Spline path.
+    if (options.sharpJunctions === true && value <= 1e-10) {
+        return somataDrawSharpJunctionSplinePlus(ctx, pts, Boolean(closed),
+            options.baseSplineBlend, options.cornerFlags, options.duplicateStable === true, options.layer);
+    }
     return somataDrawRadialSplineRounding(ctx, pts, Boolean(closed), value, options.layer, options.duplicateStable === true);
+}
+
+// Zero-rounding special case of Spline+: one cubic per ORIGINAL carrier edge.
+// The only difference from the shared-tangent Spline+ is at marked joints:
+// adjacent cubics have independent edge-aligned handles, so the junction
+// stays sharp while the points within each profile run remain smoothly curved.
+// Handles are blended from exactly straight to curved with zero endpoint
+// velocity. The same kernel serves static Spline, live Morph and GPU sampling.
+function somataDrawSharpJunctionSplinePlus(ctx, pts, closed, splineBlend = 1, cornerFlags = [], duplicateStable = false, layer = null) {
+    const n = pts.length, edges = closed ? n : n - 1;
+    if (n < 2) return false;
+    const clamp = t => Math.max(0, Math.min(1, Number(t) || 0));
+    const b = clamp(splineBlend === undefined ? 1 : splineBlend);
+    const mix = b * b * b * (b * (6 * b - 15) + 10);
+    const flags = Array.isArray(cornerFlags) ? cornerFlags : [];
+    ctx.moveTo(pts[0].x, pts[0].y);
+    if (mix <= 1e-12 || n === 2) {
+        // closePath itself supplies the final straight edge, just as the
+        // approved 0% Spline+ does; do not double-emit a closure segment.
+        for (let i = 1; i < n; i++) ctx.lineTo(pts[i].x, pts[i].y);
+        if (closed) ctx.closePath();
+        return true;
+    }
+    const tangents = new Array(n);
+    for (let i = 0; i < n; i++) {
+        const prev = pts[(i === 0 && !closed) ? 0 : (i - 1 + n) % n];
+        const next = pts[(i === n - 1 && !closed) ? n - 1 : (i + 1) % n];
+        const dx = next.x - prev.x, dy = next.y - prev.y;
+        const length = Math.hypot(dx, dy);
+        tangents[i] = length > 1e-12 ? {x:dx/length, y:dy/length} : {x:0, y:0};
+    }
+    if (duplicateStable && typeof somataStabilizeSplineDuplicateTangents === 'function' && n > 2) {
+        let total = 0;
+        for (let i = 0; i < edges; i++) {
+            const p = pts[i], q = pts[(i + 1) % n];
+            total += Math.hypot(q.x - p.x, q.y - p.y);
+        }
+        const radius = Number(layer?.radius) * Number(layer?.radiusMultiplier ?? 1);
+        const sides = Math.round(Number(layer?.N));
+        const baseEdge = radius > 0 && sides >= 3
+            ? 2 * radius * Math.sin(Math.PI / sides) : total / Math.max(2, edges);
+        const native = tangents.map(t => ({...t}));
+        somataStabilizeSplineDuplicateTangents(pts, pts, tangents, native, closed, baseEdge);
+    }
+    for (let i = 0; i < edges; i++) {
+        const j = (i + 1) % n, p = pts[i], q = pts[j];
+        const dx = q.x - p.x, dy = q.y - p.y;
+        const chord = Math.hypot(dx, dy);
+        const line1x = p.x + dx / 3, line1y = p.y + dy / 3;
+        const line2x = q.x - dx / 3, line2y = q.y - dy / 3;
+        const out = flags[i] === true ? {x:dx / (chord || 1), y:dy / (chord || 1)} : tangents[i];
+        const inc = flags[j] === true ? {x:dx / (chord || 1), y:dy / (chord || 1)} : tangents[j];
+        const h = chord * .28;
+        const curve1x = p.x + out.x * h, curve1y = p.y + out.y * h;
+        const curve2x = q.x - inc.x * h, curve2y = q.y - inc.y * h;
+        ctx.bezierCurveTo(line1x + (curve1x - line1x) * mix,
+            line1y + (curve1y - line1y) * mix,
+            line2x + (curve2x - line2x) * mix,
+            line2y + (curve2y - line2y) * mix, q.x, q.y);
+    }
+    if (closed) ctx.closePath();
+    return true;
 }
 
 
