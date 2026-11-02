@@ -151,6 +151,18 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             return `#${out}${tunnelColorAlphaSuffix(value)}`;
         }
 
+        // Blue Morph Fill is represented as rgba(...), while authored colors
+        // often use #RRGGBBAA. Keep its alpha when rotating a routed hue;
+        // the Corridor-only hex helper cannot parse rgba and returns white.
+        function rotateBluePaletteHueColor(value,degrees){
+            if(typeof value!=='string'||value==='transparent'||Math.abs(Number(degrees)||0)<1e-9)return value;
+            const rgba=value.trim().match(/^rgba\(\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*([+-]?[\d.]+)\s*\)$/i);
+            if(!rgba)return tunnelRotateHueHex(value,degrees);
+            const hex=tunnelRotateHueHex(colorBaseHex6(value,'#000000'),degrees);
+            const n=parseInt(hex.slice(1,7),16);
+            return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${rgba[1]})`;
+        }
+
         function tunnelNearestPaletteStop(baseColor, colors) {
             const base=tunnelColorBaseHex(baseColor),n=parseInt(base.slice(1),16);
             const br=(n>>16)&255,bg=(n>>8)&255,bb=n&255;
@@ -2232,7 +2244,11 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         function syncGenericMorphRangeBindings(){
             ensureGenericMorphRangeBindings();const live=runtimeState?.morph?.active===true,profile=getActiveMorphProfile();
             for(const def of (window.SomataParameterRegistry?.morphable?.()||[])){
-                if(def.morph?.legacy===true)continue;const el=document.getElementById(def.ui?.mainId),host=el?.closest?.('.generic-morph-range-host');if(!host)continue;const binding=profile?.type==='standard'?getActiveMorphBindings(profile).find(b=>b.parameter===def.id):null,on=binding?.enabled!==false&&!!binding,rangeMode=on&&live;host.classList.toggle('morph-live',rangeMode);host.dataset.sliderMode=rangeMode?'morph-range':'value';const dual=[...host.querySelectorAll('.blue-morph-dual')],originalTab=Number(el.dataset.blueMorphOriginalTabIndex);if(rangeMode){el.tabIndex=-1;el.setAttribute('aria-hidden','true');}else{el.tabIndex=Number.isFinite(originalTab)?originalTab:0;el.removeAttribute('aria-hidden');hideMorphSliderBubble(host,0);}for(const input of dual){input.disabled=!rangeMode;input.tabIndex=rangeMode?0:-1;input.setAttribute('aria-hidden',rangeMode?'false':'true');}
+                if(def.morph?.legacy===true)continue;const el=document.getElementById(def.ui?.mainId),host=el?.closest?.('.generic-morph-range-host');if(!host)continue;const binding=profile?.type==='standard'?getActiveMorphBindings(profile).find(b=>b.parameter===def.id):null,on=binding?.enabled!==false&&!!binding;
+                // Palette Hue is a playlist-wide authored value. Once routed to Blue Morph,
+                // its dual-range editor must be available even before playback starts.
+                // Other parameters retain the established live-only dual-range behavior.
+                const rangeMode=on&&(live||def.id==='palette.hueOffset');host.classList.toggle('morph-live',rangeMode);host.dataset.sliderMode=rangeMode?'morph-range':'value';const dual=[...host.querySelectorAll('.blue-morph-dual')],originalTab=Number(el.dataset.blueMorphOriginalTabIndex);if(rangeMode){el.tabIndex=-1;el.setAttribute('aria-hidden','true');}else{el.tabIndex=Number.isFinite(originalTab)?originalTab:0;el.removeAttribute('aria-hidden');hideMorphSliderBubble(host,0);}for(const input of dual){input.disabled=!rangeMode;input.tabIndex=rangeMode?0:-1;input.setAttribute('aria-hidden',rangeMode?'false':'true');}
                 const min=Number(dual[0]?.min),max=Number(dual[0]?.max);let lo=Number(binding?.min),hi=Number(binding?.max);if(!Number.isFinite(lo)||!Number.isFinite(hi)){const range=defaultMorphBindingRange(def);lo=Number(range.min);hi=Number(range.max);}if(Number.isFinite(min))lo=Math.max(min,lo);if(Number.isFinite(max))hi=Math.min(max,hi);if(lo>hi)[lo,hi]=[hi,lo];if(dual[0]&&document.activeElement!==dual[0])dual[0].value=String(lo);if(dual[1]&&document.activeElement!==dual[1])dual[1].value=String(hi);if(Number.isFinite(min)&&Number.isFinite(max))setBlueMorphRangeCss(host,lo,hi,min,max);
             }
         }
@@ -9437,13 +9453,14 @@ syncMorphProfileUI();
                     layer.lineJoinType = snap.lineJoinType || layer.lineJoinType || 'rounded';
                     if (Number.isFinite(scale)) layer.radius = Math.max(1, (Number(snap.radius) || Number(layer.radius) || 220) * scale);
                     if (Number.isFinite(rot) && !rotationAudioOverride) layer.rotation = (Number(snap.rotation) || Number(layer.rotation) || 0) + rot;
-                    layer.strokeColor = snap.strokeColor || layer.strokeColor;
+                    const overlay=Number(snap.__bluePaletteHueShift)||0;
+                    layer.strokeColor = overlay?rotateBluePaletteHueColor(snap.strokeColor||layer.strokeColor,-overlay):(snap.strokeColor||layer.strokeColor);
                     layer.strokeWidth = Math.max(0.5, Math.min(20, Number(snap.strokeWidth) || Number(layer.strokeWidth) || 1.5));
 
                     if (state.morph.options.byOpacity) layer.opacity = Math.max(0, Math.min(100, Number(snap.opacity) || 0));
                     if (state.morph.options.byFillColor) {
                         layer.fill = Boolean(snap.fill);
-                        layer.fillColor = snap.fillColor || colorWithPercentAlpha(layer.strokeColor, layer.fill ? getFillOpacityPercent(layer.fillColor) : 0);
+                        layer.fillColor = (overlay?rotateBluePaletteHueColor(snap.fillColor||'#000000',-overlay):snap.fillColor) || colorWithPercentAlpha(layer.strokeColor, layer.fill ? getFillOpacityPercent(layer.fillColor) : 0);
                     } else if (layer.fill) {
                         layer.fillColor = colorWithPercentAlpha(layer.strokeColor, getFillOpacityPercent(layer.fillColor));
                     }
@@ -9584,9 +9601,17 @@ syncMorphProfileUI();
                     }
                     applyBlueSpiralZeroOrderFrame(snap,baseLayer,srcV,dstV,
                         sourceSpiralOn,targetSpiralOn,spiralLayerMorph,t,corridorActive);
+                    // Light Morph uses the same bounded endpoint K interpolation
+                    // as Full Morph, the retained Bézier carrier and Corridor.
+                    // Re-wrapping fractional *raw* K on each frame otherwise
+                    // introduces extra revolutions and splits copied Spiral rails.
+                    delete snap.__spiralAnimatedEffectiveK;
                     if(spiralCorridorPhase && (sourceSpiralOn||targetSpiralOn)){
-                        const ss=normalizeSpiralStep(srcV.spiralStep ?? srcV.K ?? 1,srcV),ts=normalizeSpiralStep(dstV.spiralStep ?? dstV.K ?? 1,dstV);
+                        const ss=Number(srcV.K)||1,ts=Number(dstV.K)||ss;
                         snap.__spiralAnimatedK=ss+(ts-ss)*t;
+                        const eff0=getEffectiveSpiralStep({...snap,...srcV,__spiralAnimatedK:undefined,__spiralAnimatedN:undefined,__spiralAnimatedEffectiveK:undefined});
+                        const eff1=getEffectiveSpiralStep({...snap,...dstV,__spiralAnimatedK:undefined,__spiralAnimatedN:undefined,__spiralAnimatedEffectiveK:undefined});
+                        snap.__spiralAnimatedEffectiveK=eff0+(eff1-eff0)*t;
                         snap.spiralStep=snap.__spiralAnimatedK;snap.spiralStepLinked=true;
                     }else{snap.spiralStep=normalizeSpiralStep(srcV.spiralStep ?? baseLayer.spiralStep ?? baseLayer.K ?? 1,srcV);snap.spiralStepLinked=srcV.spiralStepLinked!==false;}
                     snap.spiralClosed = baseLayer.spiralClosed !== false;
@@ -9640,7 +9665,13 @@ syncMorphProfileUI();
                     if(!canonical||!frame||frame.id!==canonical.id)return;
                     const profileNodes=frame.profileNodes;
                     for(const key of BLUE_FRAME_COMMIT_KEYS){
-                        if(Object.prototype.hasOwnProperty.call(frame,key))canonical[key]=frame[key];
+                        if(!Object.prototype.hasOwnProperty.call(frame,key))continue;
+                        // The routed Palette Hue is a presentation-only Blue frame effect.
+                        // Never bake it into authored colors on a stop/rebase: doing so
+                        // would rotate the same hues again at the next cycle.
+                        const overlay=Number(frame.__bluePaletteHueShift)||0;
+                        canonical[key]=(overlay&&['strokeColor','fillColor'].includes(key))
+                            ?rotateBluePaletteHueColor(frame[key],-overlay):frame[key];
                     }
 
                     if(Array.isArray(profileNodes))canonical.profileNodes=profileNodes.map(p=>({...p}));
@@ -9880,7 +9911,25 @@ syncMorphProfileUI();
             // Shared appearance contract for Light and Full Blue Morph. Light
             // always writes its source opacity when the opacity route is off;
             // Full Morph preserves the existing resolved-layer opacity instead.
-            const applyBlueMorphFrameAppearance=(snapshot,canonicalLayer,idx,srcV,dstV,t,options,globalHueMorph,lightMode)=>{
+            // Palette > General Hue Offset is routed by Blue profiles as a global
+            // value. Palette previews used that routed value, but already existing
+            // scene colors were never updated. Apply its DIFFERENCE from the native
+            // Blue frame hue to the transient display layers only. This also lets
+            // the built-in global-hue Morph and the independently routed parameter
+            // operate together without applying the native hue change twice.
+            const bluePaletteHueDelta=()=>{
+                const nativeHue=state.morph.morphGlobalHueOffset===true
+                    ?((Number(runtimeState.morph.frameGlobalHueOffset)||0)%360+360)%360
+                    :normalizePlaylistHueOffset(state.playlistPaletteHueOffset);
+                const routedHue=getEffectivePlaylistHueOffset();
+                return ((routedHue-nativeHue+540)%360)-180;
+            };
+            const applyBlueMorphFrameAppearance=(snapshot,canonicalLayer,idx,srcV,dstV,t,options,globalHueMorph,lightMode,paletteHueDelta)=>{
+                // Reused Full Morph frame layers must start with the authored
+                // color when legacy Color Morph is disabled; otherwise the hue
+                // overlay accumulates on every animation frame.
+                if(!options.byColor&&!globalHueMorph)snapshot.strokeColor=canonicalLayer.strokeColor;
+                if(!options.byFillColor&&!options.byColor&&!globalHueMorph)snapshot.fillColor=canonicalLayer.fillColor;
                 if(options.byColor||globalHueMorph){
                     snapshot.strokeColor=globalHueMorph
                         ?lerpPreparedHslWithHueAmount(runtimeState.morph.sourceColorHsl?.[idx],runtimeState.morph.targetColorHsl?.[idx],t,state.morph.globalHueOffsetRange)
@@ -9891,6 +9940,14 @@ syncMorphProfileUI();
                 if(options.byOpacity)snapshot.opacity=srcV.opacity+(dstV.opacity-srcV.opacity)*t;
                 else if(lightMode)snapshot.opacity=srcV.opacity;
                 applyFillMorphFrame(snapshot,idx,t,snapshot.strokeColor);
+                snapshot.__bluePaletteHueShift=paletteHueDelta;
+                if(Math.abs(paletteHueDelta)>1e-9){
+                    snapshot.strokeColor=rotateBluePaletteHueColor(snapshot.strokeColor,paletteHueDelta);
+                    if(typeof snapshot.fillColor==='string'&&snapshot.fillColor!=='transparent')
+                        snapshot.fillColor=rotateBluePaletteHueColor(snapshot.fillColor,paletteHueDelta);
+                    if(typeof snapshot.__morphOrbitFillCompositeColor==='string')
+                        snapshot.__morphOrbitFillCompositeColor=rotateBluePaletteHueColor(snapshot.__morphOrbitFillCompositeColor,paletteHueDelta);
+                }
             };
 
             const animateMorph = (now) => {
@@ -10006,7 +10063,10 @@ syncMorphProfileUI();
 
                 if (now - (runtimeState.morph.lastSidebarPaint || 0) >= 100) {
                     updateSidebarFromMorph(t);
-                    if(state.morph.morphGlobalHueOffset===true){syncPlaylistPaletteHueOffsetUI();refreshPlaylistPaletteHuePreviews();}
+                    const displayedHue=document.getElementById('playlistPaletteHueOffsetText')?.textContent;
+                    if(state.morph.morphGlobalHueOffset===true||displayedHue!==`${Math.round(getEffectivePlaylistHueOffset())}°`){
+                        syncPlaylistPaletteHueOffsetUI();refreshPlaylistPaletteHuePreviews();
+                    }
                     runtimeState.morph.lastSidebarPaint = now;
                 }
                 if (state.morph.mode === 'light' && !state.morph.monoOrbitTransforms) updateLightMorphKeyframe(t, elapsed, runtimeState.morph.lightGeometryBucket < 0, cycleMs);
@@ -10018,6 +10078,7 @@ syncMorphProfileUI();
                 const morphOptions=state.morph.options;
                 const lightMode=state.morph.mode==='light'&&!state.morph.monoOrbitTransforms;
                 const globalHueMorph=state.morph.morphGlobalHueOffset===true;
+                const paletteHueDelta=bluePaletteHueDelta();
                 const rotationMorph=morphOptions.byRotation&&!isAudioRotationOverrideActive();
                 const spiralLayerMorph=!lightMode&&isSpiralLayerMorphEnabled();
                 const spiralContinuity=spiralLayerMorph&&spiralMorphKeepsContinuity();
@@ -10045,7 +10106,7 @@ syncMorphProfileUI();
                             ? (Number(srcV.rotation)||0) + ((Number(dstV.rotation)||0) - (Number(srcV.rotation)||0)) * t
                             : srcV.rotation;
                         runtimeState.morph.lightRotations[idx] = visualRotation - srcV.rotation;
-                        applyBlueMorphFrameAppearance(snap,canonicalLayer,idx,srcV,dstV,t,morphOptions,globalHueMorph,true);
+                        applyBlueMorphFrameAppearance(snap,canonicalLayer,idx,srcV,dstV,t,morphOptions,globalHueMorph,true,paletteHueDelta);
                     } else {
                         if (morphOptions.byShape && !(runtimeState.morph.manualProfileEditing && layer.id === state.activeLayerId)) {
 
@@ -10139,7 +10200,7 @@ syncMorphProfileUI();
 
                         if (morphOptions.byRounding) layer.rounding = interpolateMorphRounding(srcV.rounding,dstV.rounding,t);
                         layer.lineJoinType = (t < 0.5 ? (srcV.lineJoinType || 'rounded') : (dstV.lineJoinType || 'rounded'));
-                        applyBlueMorphFrameAppearance(layer,canonicalLayer,idx,srcV,dstV,t,morphOptions,globalHueMorph,false);
+                        applyBlueMorphFrameAppearance(layer,canonicalLayer,idx,srcV,dstV,t,morphOptions,globalHueMorph,false,paletteHueDelta);
                     }
                 });
 

@@ -906,8 +906,13 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let first=(flags>=.5&
         // Smooth time only for the immutable two-endpoint Spiral rail. This
         // suppresses the high derivative that otherwise looks like a tip snap
         // in the last few real frames, without a special terminal renderer.
-        const endpointT=rec.phaseLockedEndpoints===true?spiralEndpointTaper(tt):tt;
-        const splineHandleT=rec.phaseLockedEndpoints===true?endpointT:
+        // The Carrier endpoint angle (K/N) must follow the SAME geometry clock
+        // as Corridor copy poses and the ordinary per-frame Spiral snapshot.
+        // Smoothing the *endpoint positions* independently opened visible gaps
+        // between adjacent copied coils (22+ px in the bundled playlist).
+        // Keep the intentional smoothing only for the Bézier *handles*.
+        const endpointT=tt;
+        const splineHandleT=rec.phaseLockedEndpoints===true?spiralEndpointTaper(tt):
             (preparedSpline?resolveProfileModeTransitionT(rec,tt):tt);
         const deferredProfilePrep=liveRoundedSpline&&Math.abs(splineHandleT-tt)>1e-9;
         const built=(tangentialOnly||(preparedSpline&&!liveRoundedSpline))?null:buildCarrierMappedLayer(rec,tt,!deferredProfilePrep),layer=built?.layer,radius=built?.radius;

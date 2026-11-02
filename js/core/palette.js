@@ -121,7 +121,11 @@ window.__spiroRegisterModule?.('js/core/palette');
                 if(Number.isFinite(Number(morphValue)))base=Number(morphValue);
                 if(typeof audioApplyNumeric==='function')base=audioApplyNumeric('palette.hueOffset',base,-1);
             }catch(_){}
-            return normalizePlaylistHueOffset(base);
+            // A cyclic Blue/Audio hue route may interpolate through negative or
+            // >360° angles (e.g. 0° -> 180° takes the -180° branch). Clamping
+            // those intermediate values to 0/360 froze the displayed palette.
+            // Wrap the effective angle; keep the authored slider's 360° endpoint.
+            return base<0||base>360 ? ((base%360)+360)%360 : normalizePlaylistHueOffset(base);
         }
         function paletteRotateHueHex(hex,degrees){
             const h=normalizePaletteHex(hex)||'#000000';

@@ -46,7 +46,7 @@ async function main(){
     assert(limit.defaults.enabled===true&&limit.defaults.value===2,`defaults: ${JSON.stringify(limit.defaults)}`);
     assert(JSON.stringify(limit.binary)===JSON.stringify([1,2,1,2,1,2,1,2,1,2,1,2]),`binary cycle: ${limit.binary}`);
     assert(JSON.stringify(limit.ternary)===JSON.stringify([1,2,3,1,2,3,1,2,3,1,2,3]),`ternary cycle: ${limit.ternary}`);
-    assert(limit.original===12,`disabled must return original K, got ${limit.original}`);
+    assert(limit.original===10,`disabled retains raw K=12 but geometry is bounded by N/2=10; got ${limit.original}`);
     assert(JSON.stringify(limit.tween)===JSON.stringify([2,1.75,1.5,1.25,1]),`fractional no-jump: ${limit.tween}`);
     assert(limit.uiChecked===true&&limit.uiValue==='2',`limiter controls default ${JSON.stringify(limit)}`);
     console.log('PASS effective Spiral K cycles 1-2 and 1-2-3; disabled; fractional tween; checkbox defaults');
@@ -68,9 +68,9 @@ async function main(){
             return {step:r?.carrierFrames?.[0]?.step,phase:r?.carrierFrames?.[0]?.metric,branches:r?.pathCount};
         });
     })()`);
-    assert(JSON.stringify(phase.map(q=>q.step))===JSON.stringify([1,2,1,2,1]),`cyclic GPU carrier 1→5: ${JSON.stringify(phase)}`);
+    assert(JSON.stringify(phase.map(q=>q.step))===JSON.stringify([1,1,1,1,1]),`cyclic GPU carrier interpolates effective endpoint steps 1→1: ${JSON.stringify(phase)}`);
     assert(phase.every(q=>q.branches>0),`phase branches: ${JSON.stringify(phase)}`);
-    console.log('PASS GPU carrier follows the same cyclic K across Morph 1→5');
+    console.log('PASS GPU carrier interpolates effective endpoints without cyclical mid-phase wobble');
     const geom=await evaluate(`(()=>{const l=createLayer('preflight-geometry');l.N=4;l.K=1;l.radius=100;const sig=x=>(x||[]).flatMap(p=>p.points||[]).slice(0,32).reduce((s,p)=>s+(Number(p.x)||0)*.73+(Number(p.y)||0)*1.17,0);const a=sig(buildMorphGeometry(l,48));l.N=7;invalidateLayerGeometry(l,'preflight');const b=sig(buildMorphGeometry(l,48));return {a,b,diff:Math.abs(a-b)};})()`);
     assert(Number.isFinite(geom.diff)&&geom.diff>1e-4,`geometry did not change after invalidation: ${JSON.stringify(geom)}`);console.log('PASS browser geometry invalidation/rebuild');
     const lamp=await evaluate(`(()=>{beginLampAdaptiveFrame();const layer=createLayer('preflight-lamp');const cfg={...state.lamps,radius:20,radiusMultiplier:1,brightness:100,adaptiveBrightness:false,color:'#ff0000',colorMode:'selected',scatter:0,sizeVariation:0,brightnessVariation:0};const style=prepareLampDrawStyle(cfg,-1,1,1,1,{});const plan=prepareLampVisualPlan([{x:10,y:20,lampLevel:1,lampPresence:1}],layer,cfg,style,-1,{items:[]});return {count:plan.items.length,rad:plan.items[0]?.rad,brightness:plan.items[0]?.brightness,color:plan.items[0]?.color};})()`);

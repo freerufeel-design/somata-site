@@ -1,3 +1,4 @@
+window.__spiroRegisterModule?.('js/core/morph-row-lifecycle');
 // Somata 13.0.13 — shared, engine-independent Morph parameter-row lifecycle.
 // Every Morph row has two INDEPENDENT properties:
 //   added: present in editor; active: changes scene during Morph.
