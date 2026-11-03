@@ -2398,6 +2398,12 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         // and Path2D; only the angular uniforms change each frame. Dynamic source contours
         // are explicitly excluded, so morphing geometry is never shown one frame late.
         const spectralStaticContourCache=new WeakMap();
+        const spectralStaticLayerCache=new WeakMap();
+        function sameSpectralBytes(a,b){
+            if(!a||!b||a.length!==b.length)return false;
+            for(let i=0;i<a.length;i++)if(a[i]!==b[i])return false;
+            return true;
+        }
         function buildBezierGlintPrepared(frameCtx,exactPaths,cfg,phase,now,layerIndex=-1){
             const type=effectiveGlintType(cfg),spectral=type==='spectral';
             const cacheable=spectral&&Array.isArray(exactPaths)&&exactPaths._frameGeometryId==null;
@@ -2432,7 +2438,21 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const cx=(minX+maxX)*.5,cy=(minY+maxY)*.5,progress=Math.max(0,Math.min(1,Number(phase)||0)),baseDir=cfg?.direction==='backward'?-1:1,speedDir=speedDeg<0?-1:1,direction=baseDir*speedDir,first=cubics[0]?.p0,startAngle=first?Math.atan2(first.y-cy,first.x-cx):0;
 
             const prepared={bezierGlint:true,glintType:type,spectral,spectralCycleLocked:spectral===true,spectralProgress:progress,spectralDirection:direction,spectralStartAngle:startAngle,cubicData:data,cubicBreaks,cubicCount:cubics.length,path2d,centerX:cx,centerY:cy,sectorSpanAngle:sectorDeg*Math.PI/180,sectorDegrees:sectorDeg,angularSpeed:speedDeg,maskRadius:Math.max(10000,Math.hypot(maxX-minX,maxY-minY)*8+1000),spectralResident:cacheable};
-            if(cacheable)spectralStaticContourCache.set(exactPaths,prepared);
+            if(cacheable){
+                const layer=frameCtx?.layer,old=layer?spectralStaticLayerCache.get(layer):null;
+                if(old&&old.centerX===cx&&old.centerY===cy&&old.spectralStartAngle===startAngle&&
+                   sameSpectralBytes(old.cubicData,data)&&sameSpectralBytes(old.cubicBreaks,cubicBreaks)){
+                    // Reuse the SAME Float32Array identity to hit the resident WebGPU
+                    // storage-buffer cache. Rebuilding/uploading every frame was a
+                    // major source of stutter on complex static profiles.
+                    const reused={...old,spectralProgress:progress,spectralDirection:direction,
+                        sectorSpanAngle:sectorDeg*Math.PI/180,sectorDegrees:sectorDeg,angularSpeed:speedDeg};
+                    spectralStaticContourCache.set(exactPaths,reused);
+                    return reused;
+                }
+                if(layer)spectralStaticLayerCache.set(layer,prepared);
+                spectralStaticContourCache.set(exactPaths,prepared);
+            }
             return prepared;
         }
 
@@ -2815,13 +2835,24 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             lightningPreparedCache.set(paths,data);lightningPreparedFrame=data;return data;
         }
 
+        // The entire strike has ONE geometry. Micro-strikes are brightness samples
+        // on that same stroke, not independently constructed/rasterized contours.
+        // Only neighboring pulse centers can contribute to a given time sample;
+        // this stays O(1) even with extreme automated strike counts.
         function collectLightningMicroPulses(t,count,target=[]){
-            target.length=0;const rawCount=Number(count),n=Number.isFinite(rawCount)?Math.max(0,Math.round(rawCount)):0;if(!n)return target;
-            const evalPulse=(i)=>{if(i<0||i>=n)return null;const center=(i+1)/(n+1),pulse=Math.exp(-Math.pow((t-center)/.055,2))*Math.pow(1-center*.42,1.2);return pulse>.015?{index:i,intensity:pulse*.88}:null;};
-            if(n<=64){for(let i=0;i<n;i++){const p=evalPulse(i);if(p)target.push(p);}return target;}
-            const k=t*(n+1)-1,best=[null,null];
-            for(let i=Math.max(0,Math.floor(k)-5);i<=Math.min(n-1,Math.ceil(k)+5);i++){const p=evalPulse(i);if(!p)continue;const parity=i&1;if(!best[parity]||p.intensity>best[parity].intensity)best[parity]=p;}
-            if(best[0])target.push(best[0]);if(best[1])target.push(best[1]);return target;
+            target.length=0;
+            const raw=Number(count),n=Number.isFinite(raw)?Math.max(0,Math.min(1000000,Math.round(raw))):0;
+            if(!n)return target;
+            const centerIndex=t*(n+1)-1;
+            const nearest=Math.max(0,Math.min(n-1,Math.round(centerIndex)));
+            let bestIntensity=0,bestIndex=-1;
+            for(let i=Math.max(0,nearest-1);i<=Math.min(n-1,nearest+1);i++){
+                const center=(i+1)/(n+1);
+                const pulse=Math.exp(-Math.pow((t-center)/.055,2))*Math.pow(1-center*.42,1.2)*.88;
+                if(pulse>bestIntensity){bestIntensity=pulse;bestIndex=i;}
+            }
+            if(bestIntensity>.015)target.push({index:bestIndex,intensity:bestIntensity});
+            return target;
         }
         // Single strike envelope. The multiplier changes the duration, not the number of GPU passes.
         function lightningStrikeDurationMs(cfg,layerIndex=-1){
@@ -2866,7 +2897,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
                 let peak=null;
                 for(const pulse of out.microPulses)if(!peak||pulse.intensity>peak.intensity)peak=pulse;
                 out.microIndex=peak?peak.index:-1;
-                out.stage='strike';out.intensity=Math.max(0,Math.min(1,attack*(.26+.84*release)+Number(peak?.intensity||0)*.45));return out;
+                out.stage='strike';out.intensity=Math.max(0,Math.min(1,attack*release*(count>0?(0.32+0.82*Number(peak?.intensity||0)):1)));return out;
             }
             return out;
         }
@@ -2971,21 +3002,35 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             hit=`rgb(${Math.round((rgb[0]+(1-rgb[0])*mix)*255)},${Math.round((rgb[1]+(1-rgb[1])*mix)*255)},${Math.round((rgb[2]+(1-rgb[2])*mix)*255)})`;
             if(lightningBrightCoreColorCache.size>64)lightningBrightCoreColorCache.clear();lightningBrightCoreColorCache.set(key,hit);return hit;
         }
+        const lightningOnePassTintCache=new Map();
+        function lightningOnePassColor(primary,secondary){
+            // A fixed tint combines both authored lightning colors, so the second
+            // color still matters without allocating a new tinted contour for
+            // each micro-flash. Only the opacity envelope varies with time.
+            const key=String(primary||'#ffffff')+'|'+String(secondary||'#7dd3fc');
+            let tint=lightningOnePassTintCache.get(key);if(tint)return tint;
+            const a=GPUColorCache.rgb(primary||'#ffffff'),b=GPUColorCache.rgb(secondary||'#7dd3fc');
+            const channel=i=>Math.round(255*Math.max(0,Math.min(1,(a[i]*.76+b[i]*.24)*.66+.34)));
+            tint=`rgb(${channel(0)},${channel(1)},${channel(2)})`;
+            if(lightningOnePassTintCache.size>64)lightningOnePassTintCache.clear();
+            lightningOnePassTintCache.set(key,tint);return tint;
+        }
         function lightningVisualGlowRadius(glow){
 
             return Math.max(0,Number(glow)||0);
         }
 
         function queueLightningStrikeWebGL(ctx,pieces,layer,alpha,frame,intensity,microIndex=-1,suppressBase=false){
-            const a=Math.max(0,Math.min(1,(Number(alpha)||0)*Math.max(0,Number(intensity)||0)));if(a<=.001)return true;
+            const a=Math.max(0,Math.min(1,(Number(alpha)||0)*Math.max(0,Number(intensity)||0)));
+            if(a<=.001)return true;
             if(!suppressBase&&frame.showBase)SweepGPURenderer.queueStroke(ctx,pieces,Math.max(.15,frame.baseW),layer?.strokeColor||'#ffffff',a*frame.lineOpacity,0,0,0);
-            const micro=microIndex>=0,outerColor=micro&&microIndex%2===0?frame.primary:frame.secondary,innerColor=micro&&microIndex%2===0?frame.secondary:frame.primary;
-            const outerW=frame.precisionHigh?Math.max(frame.boltW+.22,frame.boltW*1.18):Math.max(frame.boltW+.7,frame.boltW*1.9),bright=Math.max(0,frame.brightness||0);
-            const coreA=a*Math.max(0,Math.min(1,frame.glowIntensity)),haloA=a*.82*frame.glowIntensity*bright,glowR=lightningVisualGlowRadius(frame.glow);
-            // Both passes read the same GPU segment: color changes, not geometry.
-            SweepGPURenderer.queueStroke(ctx,pieces,outerW,outerColor,0,glowR,haloA*(frame.smoothLighting?.34:.27),frame.softness);
-            SweepGPURenderer.queueStroke(ctx,pieces,frame.boltW,lightningBrightCoreColor(innerColor),coreA,0,0,0);
-            return true;
+            const bright=Math.max(0,frame.brightness||0);
+            const coreA=a*Math.max(0,Math.min(1,frame.glowIntensity));
+            const haloA=a*.82*frame.glowIntensity*bright*(frame.smoothLighting?.34:.27);
+            // No alternate-colored micro-strokes. A single retained segment has
+            // core AND halo; micro-strikes change alpha, never geometry or tint.
+            return SweepGPURenderer.queueStroke(ctx,pieces,Math.max(.2,frame.boltW),lightningOnePassColor(frame.primary,frame.secondary),
+                coreA,lightningVisualGlowRadius(frame.glow),haloA,frame.softness);
         }
         function queueMovingSweepGlowWebGL(ctx,paths,layer,alpha=1,now=performance.now(),frameData=null){
             if(!SweepGPURenderer.isAvailable())return false;

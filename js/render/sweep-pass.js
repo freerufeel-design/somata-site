@@ -127,7 +127,10 @@ function renderLayerSweepInstance(frameCtx,effectOverride=null){
     if(cfg.effectType==='lightning'&&effect.frameData?.lightningVector?.stage==='idle')return;
     if(typeof somataGpuBackendAllowed==='function'&&!somataGpuBackendAllowed())return reportSweepGpuIssue(frameCtx,'backend-unavailable','GPU backend is unavailable');
 
-    const useCurrentProfile=sweepProfileMode(cfg)==='current';
+    // Lightning on complex Graffiti/profile carriers reuses the already prepared
+    // centerline instead of rasterizing the full profile ribbon for every blink.
+    // Only ordinary Glint keeps the costly profile-specific appearance.
+    const useCurrentProfile=cfg.effectType!=='lightning'&&sweepProfileMode(cfg)==='current';
     if(useCurrentProfile&&SomataProfileSweepAdapter.isCurrentCarrier(frameCtx)){
         // An invisible base Line must never suppress an independently enabled
         // Glint merely because an optional profile surface was not allocated.
@@ -138,7 +141,7 @@ function renderLayerSweepInstance(frameCtx,effectOverride=null){
         if(frameCtx._profileSweepAttempted===true&&frameCtx.lineDisplayEnabled!==false)return reportSweepGpuIssue(frameCtx,'profile-carrier-encode','Current-profile Sweep could not encode the active line-profile carrier; thin-line substitution is intentionally blocked',{effectType:cfg.effectType,profileShape:'current'});
     }
 
-    if(SomataProfileSweepAdapter.hasActiveOverlay(frameCtx)){
+    if(cfg.effectType!=='lightning'&&SomataProfileSweepAdapter.hasActiveOverlay(frameCtx)){
         if(SomataProfileSweepAdapter.renderOnActiveOverlay(frameCtx,effect,baseAlpha,visibleInstances))return;
         return reportSweepGpuIssue(frameCtx,'profile-overlay-join','Sweep could not join the active line-profile GPU overlay',{effectType:cfg.effectType,profileShape:sweepProfileMode(cfg)});
     }

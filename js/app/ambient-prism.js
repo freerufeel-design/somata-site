@@ -8,7 +8,7 @@ const SomataAmbientPrism=(()=>{
         rainbow:{enabled:false,offset:6,strength:40},
         reiatsu:{enabled:false,strength:25,speed:100},
         earthquake:{enabled:false,strength:25,speed:100},
-        clouds:{enabled:false,density:42,color:'#acc5e7',hue:0,opacity:24,speed:12},
+        clouds:{enabled:false,density:42,color:'#acc5e7',opacity:24,speed:12},
         noise:{enabled:false,type:'turbulence',scale:46,stretchX:1,stretchY:1,color:'#dce9ff',hue:0,opacity:18,speed:18},
         glitch:{enabled:false,frequency:18,intensity:30}
     };
@@ -16,10 +16,10 @@ const SomataAmbientPrism=(()=>{
     const keys={rain:['Enabled','Angle','Density','Color','Hue','Opacity','Speed'],
         dichotomy:['Enabled','Count','Offset','Opacity','Hue','ColorA','ColorB','ColorC'],
         rainbow:['Enabled','Offset','Strength'],reiatsu:['Enabled','Strength','Speed'],earthquake:['Enabled','Strength','Speed'],
-        clouds:['Enabled','Density','Color','Hue','Opacity','Speed'],
+        clouds:['Enabled','Density','Color','Opacity','Speed'],
         noise:['Enabled','Type','Scale','StretchX','StretchY','Color','Hue','Opacity','Speed'],
         glitch:['Enabled','Frequency','Intensity']};
-    const multiplierKeys=Object.freeze({rainbow:Object.freeze(['offset', 'strength']),rain:Object.freeze(['density', 'hue', 'speed']),dichotomy:Object.freeze(['offset', 'hue', 'opacity']),reiatsu:Object.freeze(['strength', 'speed']),earthquake:Object.freeze(['strength', 'speed']),clouds:Object.freeze(['density', 'hue', 'opacity', 'speed']),noise:Object.freeze(['scale','stretchX','stretchY','hue','opacity','speed']),glitch:Object.freeze(['frequency','intensity']),prism:Object.freeze(['size', 'refraction', 'dispersion', 'speed', 'positionX', 'positionY', 'tiltX', 'tiltY'])});
+    const multiplierKeys=Object.freeze({rainbow:Object.freeze(['offset', 'strength']),rain:Object.freeze(['density', 'hue', 'speed']),dichotomy:Object.freeze(['offset', 'hue', 'opacity']),reiatsu:Object.freeze(['strength', 'speed']),earthquake:Object.freeze(['strength', 'speed']),clouds:Object.freeze(['density', 'opacity', 'speed']),noise:Object.freeze(['scale','stretchX','stretchY','hue','opacity','speed']),glitch:Object.freeze(['frequency','intensity']),prism:Object.freeze(['size', 'refraction', 'dispersion', 'speed', 'positionX', 'positionY', 'tiltX', 'tiltY'])});
     const multiplierValue=(v,unlimited=false)=>{const n=Number(v);return Number.isFinite(n)&&n>0?(unlimited?n:Math.max(.125,Math.min(8,n))):1;};
     let root,ambientCanvas,prismCanvas,ambientCtx,prismCtx,width=0,height=0,dpr=1,started=false;
     let lastConfig='',lastRender=0,frameCounter=0,postScenePaintCount=0,lastOpticalSceneFrameId=0;
@@ -37,6 +37,25 @@ const SomataAmbientPrism=(()=>{
             if(!state.ambient[group]||typeof state.ambient[group]!=='object')state.ambient[group]={...fields};
             else for(const [key,v] of Object.entries(fields))if(state.ambient[group][key]===undefined)state.ambient[group][key]=v;
             for(const key of multiplierKeys[group]||[])if(state.ambient[group][key+'Multiplier']===undefined)state.ambient[group][key+'Multiplier']=1;
+        }
+        // Old playlists may have an independent cloud hue dial. Fold its last
+        // authored tint into the color swatch ONCE, then discard the redundant
+        // dial; subsequently the color picker is the sole color authority.
+        {
+            const c=state.ambient.clouds;
+            const degrees=Number(c.hue)||0, multiplier=Number(c.hueMultiplier);
+            if(Math.abs(degrees)>1e-9)c.color=hueShift(String(c.color||'#acc5e7'),degrees*(Number.isFinite(multiplier)&&multiplier>0?multiplier:1));
+            delete c.hue;delete c.hueMultiplier;
+        }
+        // Cloud sliders are 0–100 for ergonomic adjustment, but their multipliers
+        // have no maximum. Carry old numeric-only values above 100 into the
+        // multiplier so the visible cloud density/speed never changes on upgrade.
+        for(const key of ['density','speed']){
+            const c=state.ambient.clouds,base=Number(c[key]),mult=Number(c[key+'Multiplier']);
+            if(Number.isFinite(base)&&base>100){
+                c[key]=100;
+                c[key+'Multiplier']=(Number.isFinite(mult)&&mult>0?mult:1)*(base/100);
+            }
         }
         // v8.20.13: removed ineffective rain angle/opacity multipliers. Keep old
         // projects visually compatible by folding their effective value once.
@@ -228,12 +247,12 @@ const SomataAmbientPrism=(()=>{
         });
     }
     function clouds(ctx,cfg,time){
-        const density=clamp(cfg.density,0,100);
+        const density=Math.max(0,Number(cfg.density)||0);
         const opacity=clamp(cfg.opacity,0,100)/100;
         if(density<=0||opacity<=0)return;
         const velocity=Math.max(0,Number(cfg.speed)||0);
-        const tone=hueShift(String(cfg.color||'#acc5e7'),cfg.hue||0);
-        const layers=density<25?1:density<65?2:3;
+        const tone=String(cfg.color||'#acc5e7');
+        const layers=density<25?1:density<65?2:3; // bounded GPU/Canvas work; density itself has no maximum
         ctx.save();ctx.globalCompositeOperation='screen';
         ctx.imageSmoothingEnabled=true;
         for(let i=0;i<layers;i++){
@@ -248,7 +267,7 @@ const SomataAmbientPrism=(()=>{
             const phaseX=i*tileW*.37,phaseY=i*tileH*.29;
             const offsetX=((driftX+phaseX)%tileW+tileW)%tileW;
             const offsetY=((driftY+phaseY)%tileH+tileH)%tileH;
-            ctx.globalAlpha=opacity*(.52+.23*density/100)*(i===0?.73:.62);
+            ctx.globalAlpha=opacity*(.52+.46*(1-Math.exp(-density/200)))*(i===0?.73:.62);
             for(let x=offsetX-tileW;x<width;x+=tileW){
                 for(let y=offsetY-tileH;y<height;y+=tileH){
                     ctx.drawImage(tex,x,y,tileW,tileH);
@@ -884,7 +903,7 @@ const SomataAmbientPrism=(()=>{
             if(typeof value==='number')result[key]=effectiveValue(`${path}.${key}`,value);
         }
         for(const key of multiplierKeys[group]||[]){
-            result[key]=Number(result[key])*multiplierValue(result[key+'Multiplier'],group==='prism'||(group==='rain'&&['density','speed'].includes(key)));
+            result[key]=Number(result[key])*multiplierValue(result[key+'Multiplier'],group==='prism'||(['rain','clouds'].includes(group)&&['density','speed'].includes(key)));
         }
         return result;
     }
@@ -1015,7 +1034,7 @@ const SomataAmbientPrism=(()=>{
         for(const [group,list] of Object.entries(multiplierKeys))for(const key of list){
             const id=(group==='prism'?'prism':'ambient'+group[0].toUpperCase()+group.slice(1))+key[0].toUpperCase()+key.slice(1)+'Multiplier';
             const input=document.getElementById(id),owner=group==='prism'?state.prism:state.ambient[group];
-            if(input)input.value=String(multiplierValue(owner?.[key+'Multiplier'],group==='prism'||(group==='rain'&&['density','speed'].includes(key))));
+            if(input)input.value=String(multiplierValue(owner?.[key+'Multiplier'],group==='prism'||(['rain','clouds'].includes(group)&&['density','speed'].includes(key))));
         }
         const above=document.getElementById('ambientOverPrism');if(above)above.checked=state.ambientOverPrism===true;
         const vm=document.getElementById('tunnelVignetteMultiplier');if(vm)vm.value=String(state.tunnel?.vignetteMultiplier??1);

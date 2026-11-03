@@ -15892,7 +15892,7 @@ syncMorphProfileUI();
             for(const layer of state.layers){if(!layer.lamps||typeof layer.lamps!=='object')layer.lamps=cloneLampConfig(state.lamps);ensureLayerLampState(layer);}
             try{LampGPURenderer?.resetFreezeAll?.();}catch(_){}
             applyProjectCameraSettings(settings);
-            const defaultAmbient={rain:{enabled:false,angle:14,density:70,color:'#a6c8ff',hue:0,opacity:55,speed:170},dichotomy:{enabled:false,count:2,offset:6,opacity:30,hue:0,colorA:'#ff4089',colorB:'#0ce4ff',colorC:'#ffe176'},rainbow:{enabled:false,offset:6,strength:40},reiatsu:{enabled:false,strength:25,speed:100},earthquake:{enabled:false,strength:25,speed:100},clouds:{enabled:false,density:42,color:'#acc5e7',hue:0,opacity:24,speed:12}};
+            const defaultAmbient={rain:{enabled:false,angle:14,density:70,color:'#a6c8ff',hue:0,opacity:55,speed:170},dichotomy:{enabled:false,count:2,offset:6,opacity:30,hue:0,colorA:'#ff4089',colorB:'#0ce4ff',colorC:'#ffe176'},rainbow:{enabled:false,offset:6,strength:40},reiatsu:{enabled:false,strength:25,speed:100},earthquake:{enabled:false,strength:25,speed:100},clouds:{enabled:false,density:42,color:'#acc5e7',opacity:24,speed:12}};
             state.ambientOverPrism=settings.ambientOverPrism===true;
             state.ambient=Object.fromEntries(Object.entries(defaultAmbient).map(([key,def])=>[key,{...def,...((settings.ambient||{})[key]||{})}]));
             // Projects authored before Earthquake had screen jitter under Reiatsu.

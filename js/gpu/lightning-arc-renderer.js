@@ -183,12 +183,16 @@ struct V{@builtin(position) p:vec4<f32>};
         }catch(_){stats.bundleFallbacks++;return null;}
     }
     function strokeStyles(frame,baseAlpha,cfg){
-        const out=[];if(!frame||frame.stage==='idle')return out;const aBase=Math.max(0,Math.min(1,Number(baseAlpha)||0));
-
-        const pushStrike=(intensity,microIndex=-1)=>{const a=Math.max(0,Math.min(1,aBase*Math.max(0,Number(intensity)||0)));if(a<=.001)return;const micro=microIndex>=0,outerColor=micro&&microIndex%2===0?frame.primary:frame.secondary,innerColor=micro&&microIndex%2===0?frame.secondary:frame.primary,outerW=frame.precisionHigh?Math.max(frame.boltW+.22,frame.boltW*1.18):Math.max(frame.boltW+.7,frame.boltW*1.9),gr=lightningVisualGlowRadius(frame.glow),bright=Math.max(0,frame.brightness||0),coreA=a*Math.max(0,Math.min(1,frame.glowIntensity)),haloA=a*.82*frame.glowIntensity*bright;
-            out.push({width:outerW,color:outerColor,coreAlpha:0,glowRadius:gr,glowAlpha:haloA*(frame.smoothLighting?.34:.27),softness:frame.softness,flashFrac:1,travel:0});
-            out.push({width:frame.boltW,color:lightningBrightCoreColor(innerColor),coreAlpha:coreA,glowRadius:0,glowAlpha:0,softness:0,flashFrac:1,travel:0});};
-        pushStrike(frame.intensity,Number.isInteger(frame.microIndex)?frame.microIndex:-1);return out;
+        if(!frame||frame.stage==='idle')return [];
+        const a=Math.max(0,Math.min(1,(Number(baseAlpha)||0)*Math.max(0,Number(frame.intensity)||0)));
+        if(a<=.001)return [];
+        // Same exact retained Arc for every alpha pulse: one raster + composite,
+        // not a separate halo, core and a new stroke for each micro-strike.
+        return [{width:Math.max(.2,frame.boltW),color:lightningOnePassColor(frame.primary,frame.secondary),
+            coreAlpha:a*Math.max(0,Math.min(1,frame.glowIntensity)),
+            glowRadius:lightningVisualGlowRadius(frame.glow),
+            glowAlpha:a*.82*frame.glowIntensity*Math.max(0,frame.brightness||0)*(frame.smoothLighting?.34:.27),
+            softness:frame.softness,flashFrac:1,travel:0}];
     }
     function encode(targetTexture,prepared,frame,ctx,baseAlpha,behavior='symmetric',copies=null,alphas=null,frameCtx=null,footprint=1){
         const encodeStartedAt=performance.now();
@@ -202,7 +206,7 @@ struct V{@builtin(position) p:vec4<f32>};
             const arcStartedAt=performance.now();const hadCommitted=arcRec.hasCommittedData&&arcRec.lastCommittedT===prepared.table.gpuMorphT;const arcReady=typeof spiroGpuPrepareArcForLayerScene==='function'?spiroGpuPrepareArcForLayerScene(frameCtx,prepared.table,encoder):(typeof encodeGpuMorphArcTable==='function'&&encodeGpuMorphArcTable(prepared.table,encoder));stats.lastArcPrepareCpuMs=Math.max(0,performance.now()-arcStartedAt);if(!arcReady)throw new Error('GPU Morph Arc encode failed');if(hadCommitted||frameCtx?.frame?.gpuLayerSceneDeferred)stats.arcReuses++;else stats.arcEncodes++;
             const pbg=pathBind(prepared.table);if(!pbg)throw new Error('Lightning Arc path bind unavailable');let copyBg=null,copyCount=1;
             if(Array.isArray(copies)&&copies.length){const shared=WebGPUCorridorCopyStore.acquire(device,generation,frameCtx,copies,alphas,'sweep',footprint,frameCtx?.layer);if(!shared?.buffer||!shared.k)return{handled:true,commandBuffer:null};copyCount=shared.k;copyBg=copyBind(shared.buffer);stats.corridorFrames++;stats.corridorCopies+=copyCount;}
-            const rasterSubdiv=lightningRasterSubdiv(prepared),instances=arcRec.segmentCount*rasterSubdiv*copyCount,haloStyles=styles.filter(s=>Number(s.glowAlpha)>0&&!(Number(s.coreAlpha)>0)),coreStyles=styles.filter(s=>Number(s.coreAlpha)>0);stats.lastInstances=instances;stats.lastStyleCount=styles.length;stats.lastRasterSubdiv=rasterSubdiv;stats.lastStage=String(frame.stage||'idle');stats.lastBehavior=String(behavior||'symmetric');stats.lastPrecision=String(prepared?.cfg?.lightningPrecision||'exact');let targetView=targetViews.get(targetTexture);if(!targetView){targetView=targetTexture.createView();targetViews.set(targetTexture,targetView);}const clipped=behavior==='inside'||behavior==='outside';let pass;
+            const rasterSubdiv=lightningRasterSubdiv(prepared),instances=arcRec.segmentCount*rasterSubdiv*copyCount,combinedStyles=styles;stats.lastInstances=instances;stats.lastStyleCount=styles.length;stats.lastRasterSubdiv=rasterSubdiv;stats.lastStage=String(frame.stage||'idle');stats.lastBehavior=String(behavior||'symmetric');stats.lastPrecision=String(prepared?.cfg?.lightningPrecision||'exact');let targetView=targetViews.get(targetTexture);if(!targetView){targetView=targetTexture.createView();targetViews.set(targetTexture,targetView);}const clipped=behavior==='inside'||behavior==='outside';let pass;
             if(clipped){const maskUniform=fillUniform(ctx,prepared,{width:1,color:'#ffffff',coreAlpha:0,glowRadius:0,glowAlpha:0,flashFrac:1,travel:0},false);pass=encoder.beginRenderPass({colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}],depthStencilAttachment:{view:stencilView,depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'discard',stencilClearValue:0,stencilLoadOp:'clear',stencilStoreOp:'store'}});pass.setPipeline(maskPipeline);pass.setBindGroup(0,maskUniform.bind);pass.setBindGroup(1,pbg);pass.draw(3,arcRec.segmentCount);pass.end();stats.clippedFrames++;stats.stencilEdges+=arcRec.segmentCount;}
             const drawAnalyticGroup=(group,core)=>{if(!group.length)return;pass=encoder.beginRenderPass({colorAttachments:[{view:scratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});for(const style of group){const ub=fillUniform(ctx,prepared,style,Boolean(copyBg));if(!ub)continue;const bundled=strokeBundle(arcRec,pbg,copyBg,ub,instances);if(bundled){pass.executeBundles(bundled.list);stats.bundleExecutes++;}else{pass.setPipeline(copyBg?strokeCorridorPipeline:strokePipeline);pass.setBindGroup(0,ub.bind);pass.setBindGroup(1,pbg);if(copyBg)pass.setBindGroup(2,copyBg);pass.draw(4,instances);}stats.strokeDraws++;}pass.end();const blendMode=core?sweepCoreBlendMode(prepared.cfg):sweepGlowBlendMode(prepared.cfg);
                 if(SomataSweepLampBlend.encode(encoder,device,format,scratchTexture,targetTexture,blendMode,
@@ -213,8 +217,7 @@ struct V{@builtin(position) p:vec4<f32>};
             // separable-blur branch duplicated the whole contour into an extra mask + blur chain
             // and was the dominant flash-time stall on real GPUs. Analytic softness keeps the
             // same controls while avoiding that cross-renderer dependency and extra passes.
-            drawAnalyticGroup(haloStyles,false);stats.analyticHaloPasses+=haloStyles.length;stats.strikeBlurBypasses+=haloStyles.length;
-            drawAnalyticGroup(coreStyles,true);
+            drawAnalyticGroup(combinedStyles,true);stats.analyticHaloPasses+=combinedStyles.length;stats.strikeBlurBypasses+=combinedStyles.length;
             stats.frames++;stats.draws++;stats.logicalSegments+=arcRec.segmentCount*copyCount*styles.length;stats.exactRasterSubsegments+=arcRec.segmentCount*rasterSubdiv*copyCount*styles.length;stats.cpuPathBuildsAvoided++;stats.cpuExactRailBuildsAvoided++;stats.cpuPieceBuildsAvoided++;stats.cpuSegmentUploadsAvoided+=arcRec.segmentCount;
             const commandBuffer=encoder.finish(),encodeMs=Math.max(0,performance.now()-encodeStartedAt);stats.lastEncodeCpuMs=encodeMs;stats.emaEncodeCpuMs=stats.emaEncodeCpuMs?stats.emaEncodeCpuMs*.82+encodeMs*.18:encodeMs;stats.maxEncodeCpuMs=Math.max(stats.maxEncodeCpuMs,encodeMs);lastError='';return{handled:true,commandBuffer,onSubmitted:()=>noteGpuMorphArcTableSubmitted?.(prepared.table)};
         }catch(err){lastError=String(err?.message||err);const encodeMs=Math.max(0,performance.now()-encodeStartedAt);stats.lastEncodeCpuMs=encodeMs;stats.emaEncodeCpuMs=stats.emaEncodeCpuMs?stats.emaEncodeCpuMs*.82+encodeMs*.18:encodeMs;stats.maxEncodeCpuMs=Math.max(stats.maxEncodeCpuMs,encodeMs);stats.failures++;return{handled:false,commandBuffer:null,reason:lastError};}

@@ -43,21 +43,47 @@ struct VOut{
  @location(5) @interpolate(flat) softness:f32,
  @location(6) @interpolate(flat) sourceA:vec2<f32>,
  @location(7) @interpolate(flat) sourceB:vec2<f32>,
- @location(8) @interpolate(flat) copyAlpha:f32
+ @location(8) @interpolate(flat) copyAlpha:f32,
+ @location(9) @interpolate(flat) sectorClass:u32
 };
 fn cubic(p0:vec2<f32>,c1:vec2<f32>,c2:vec2<f32>,p3:vec2<f32>,t:f32)->vec2<f32>{let q=1.0-t;return q*q*q*p0+3.0*q*q*t*c1+3.0*q*t*t*c2+t*t*t*p3;}
 fn screenPoint(p:vec2<f32>)->vec2<f32>{return vec2<f32>(u.row0.x*p.x+u.row0.y*p.y+u.row0.z,u.row1.x*p.x+u.row1.y*p.y+u.row1.z);}
 fn makeVertex(vid:u32,iid:u32,useCopy:bool)->VOut{
- let cubicCount=max(1u,u32(u.head.z+0.5));let perCopy=cubicCount*${SUBDIV}u;let ci=select(0u,iid/perCopy,useCopy);let unit=select(iid,iid%perCopy,useCopy);let cubicIndex=unit/${SUBDIV}u;let sub=unit%${SUBDIV}u;let b=cubicIndex*2u;
- let r0=cubicData[b];let r1=cubicData[b+1u];let p0=r0.xy;let c1=r0.zw;let c2=r1.xy;let p3=r1.zw;let t0=f32(sub)/f32(${SUBDIV});let t1=f32(sub+1u)/f32(${SUBDIV});let sa=cubic(p0,c1,c2,p3,t0);let sb=cubic(p0,c1,c2,p3,t1);var a=sa;var z=sb;var ca=1.0;var cs=1.0;
+ let cubicCount=max(1u,u32(u.head.z+0.5));let subdiv=max(1u,u32(u.head.w+0.5));let perCopy=cubicCount*subdiv;let ci=select(0u,iid/perCopy,useCopy);let unit=select(iid,iid%perCopy,useCopy);let cubicIndex=unit/subdiv;let sub=unit%subdiv;let b=cubicIndex*2u;
+ let r0=cubicData[b];let r1=cubicData[b+1u];let p0=r0.xy;let c1=r0.zw;let c2=r1.xy;let p3=r1.zw;let t0=f32(sub)/f32(subdiv);let t1=f32(sub+1u)/f32(subdiv);let sa=cubic(p0,c1,c2,p3,t0);let sb=cubic(p0,c1,c2,p3,t1);var a=sa;var z=sb;var ca=1.0;var cs=1.0;
  if(useCopy){let q0=copyData[ci*2u];let q1=copyData[ci*2u+1u];a=vec2<f32>(q0.x*sa.x+q0.y*sa.y,q1.x*sa.x+q1.y*sa.y);z=vec2<f32>(q0.x*sb.x+q0.y*sb.y,q1.x*sb.x+q1.y*sb.y);ca=q0.z;cs=max(0.000001,abs(q1.z));}
  let aa=screenPoint(a);let bb=screenPoint(z);let delta=bb-aa;let len=max(length(delta),0.0001);let dir=delta/len;let n=vec2<f32>(-dir.y,dir.x);let hw=max(select(0.18,0.50,useCopy),u.style.x*cs);let gr=select(0.0,max(select(0.0,1.0,useCopy),u.style.y*cs),u.style.y>0.001);let pad=hw+gr+3.0;let corners=array<vec2<f32>,4>(vec2<f32>(-1.0,-1.0),vec2<f32>(1.0,-1.0),vec2<f32>(-1.0,1.0),vec2<f32>(1.0,1.0));let c=corners[vid%4u];let tx=(c.x+1.0)*0.5;let lx=mix(-pad,len+pad,tx);let ly=c.y*pad;let p=aa+dir*lx+n*ly;
- var o:VOut;o.position=vec4<f32>(p.x/u.head.x*2.0-1.0,1.0-p.y/u.head.y*2.0,0.0,1.0);o.local=vec2<f32>(lx,ly);o.segLen=len;o.halfWidth=hw;o.glowRadius=gr;o.alpha=u.style.z;o.softness=u.style.w;o.sourceA=sa;o.sourceB=sb;o.copyAlpha=ca;return o;
+ var o:VOut;o.position=vec4<f32>(p.x/u.head.x*2.0-1.0,1.0-p.y/u.head.y*2.0,0.0,1.0);o.local=vec2<f32>(lx,ly);o.segLen=len;o.halfWidth=hw;o.glowRadius=gr;o.alpha=u.style.z;o.softness=u.style.w;o.sourceA=sa;o.sourceB=sb;o.copyAlpha=ca;
+ // Conservative segment-level sector rejection/acceptance. A cross product
+ // changes by at most |sb-sa| along this segment; boundaries stay exact.
+ var cls=2u;
+ if(u.flags.x>0.5){
+  let kind=abs(u.flags.y);
+  if(kind<0.5){cls=0u;}
+  else if(kind>2.5){cls=1u;}
+  else{
+   let s=u.sector.zw;let e=u.flags.zw;let axis=u.sector.xy;
+   let sign=select(-1.0,1.0,u.flags.y>0.0);
+   let a0=sa-axis;let a1=sb-axis;let margin=length(a1-a0)+0.0001;
+   let c00=sign*(s.x*a0.y-s.y*a0.x);let c01=sign*(s.x*a1.y-s.y*a1.x);
+   let c10=sign*(a0.x*e.y-a0.y*e.x);let c11=sign*(a1.x*e.y-a1.y*e.x);
+   if(kind<1.5){
+    if(min(c00,c01)>margin&&min(c10,c11)>margin){cls=1u;}
+    else if(max(c00,c01)<-margin||max(c10,c11)<-margin){cls=0u;}
+   }else{
+    if(min(c00,c01)>margin||min(c10,c11)>margin){cls=1u;}
+    else if(max(c00,c01)<-margin&&max(c10,c11)<-margin){cls=0u;}
+   }
+  }
+ }
+ o.sectorClass=cls;return o;
 }
 @vertex fn vs(@builtin(vertex_index) vid:u32,@builtin(instance_index) iid:u32)->VOut{return makeVertex(vid,iid,false);}
 @vertex fn vsCorridor(@builtin(vertex_index) vid:u32,@builtin(instance_index) iid:u32)->VOut{return makeVertex(vid,iid,true);}
 fn sectorVisible(v:VOut)->bool{
  if(u.flags.x<0.5){return true;}
+ if(v.sectorClass==0u){return false;}
+ if(v.sectorClass==1u){return true;}
  // No per-pixel atan2: sector boundaries are calculated once on CPU, then
  // tested with oriented 2-D cross products. The same test covers the wrap seam.
  let kind=abs(u.flags.y);if(kind<0.5){return false;}if(kind>=2.5){return true;}
@@ -131,20 +157,25 @@ struct V{@builtin(position) p:vec4<f32>};
         }
         const cubicBind=cachedBufferBind(cubicBindCache,cubicLayout,cubicBuffer,'cubicBindCacheHits');
         let copyBind=null,copyCount=1;if(Array.isArray(copies)&&copies.length){const rec=WebGPUCorridorCopyStore.acquire(device,generation,frameCtx,copies,alphas,'sweep',footprint,layer);if(!rec?.buffer||!rec.k){if(ownsCubic)try{cubicBuffer.destroy();}catch(_){}if(spectralRec){spectralRec.users--;trimSpectralBuffers();}return null;}copyCount=rec.k;copyBind=cachedBufferBind(copyBindCache,copyLayout,rec.buffer,'copyBindCacheHits');stats.corridorFrames++;stats.copies+=copyCount;}
+        const spectralSubdiv=prepared.spectral===true?(prepared.cubicCount>450?6:(prepared.cubicCount>180?8:SUBDIV)):SUBDIV;
         const sx=Math.hypot(Number(tr.a)||0,Number(tr.b)||0),sy=Math.hypot(Number(tr.c)||0,Number(tr.d)||0),scale=Math.sqrt(Math.max(1e-12,sx*sy)),coreRgb=GPUColorCache.rgb(cfg?.color||'#ffffff'),haloRgb=GPUColorCache.rgb(cfg?.haloColor||cfg?.color||'#ffffff'),baseAlpha=Math.max(0,Math.min(1,Number(alpha)||0)),coreOpacity=Math.max(0,Math.min(1,Number.isFinite(Number(visual?.opacity))?Number(visual.opacity):1)),brightness=Math.max(0,Number(visual?.brightness)||0),coreColorGain=1,fullWidth=Math.max(.15,Math.abs(Number(lineWidth)||.15)*scale),halfWidth=fullWidth*.5,gr=Math.max(0,Number(visual?.glowSize)||0)*scale,haloAlpha=gr>.001&&Number(visual?.strength)>.001?Math.max(0,Math.min(32,baseAlpha*.22*Number(visual.strength)*brightness)):0,coreAlpha=baseAlpha*coreOpacity,softness=Math.max(0,Number(visual?.softness)||0),uniformPair=acquireUniformPair();
-        const writeUniform=(isCore)=>{const f=isCore?uniformPair.coreData:uniformPair.haloData;f.fill(0);f[0]=width;f[1]=height;f[2]=prepared.cubicCount;f[3]=copyCount;f[4]=tr.a;f[5]=tr.c;f[6]=tr.e;f[8]=tr.b;f[9]=tr.d;f[10]=tr.f;f[12]=halfWidth;f[13]=isCore?0:gr;f[14]=isCore?coreAlpha:haloAlpha;f[15]=softness;const rgb=isCore?coreRgb:haloRgb;f[16]=rgb[0];f[17]=rgb[1];f[18]=rgb[2];f[19]=isCore?coreColorGain:1;f[20]=Number(prepared.centerX)||0;f[21]=Number(prepared.centerY)||0;
+        const writeUniform=(isCore)=>{const f=isCore?uniformPair.coreData:uniformPair.haloData;f.fill(0);f[0]=width;f[1]=height;f[2]=prepared.cubicCount;f[3]=spectralSubdiv;f[4]=tr.a;f[5]=tr.c;f[6]=tr.e;f[8]=tr.b;f[9]=tr.d;f[10]=tr.f;f[12]=halfWidth;f[13]=isCore?0:gr;f[14]=isCore?coreAlpha:haloAlpha;f[15]=softness;const rgb=isCore?coreRgb:haloRgb;f[16]=rgb[0];f[17]=rgb[1];f[18]=rgb[2];f[19]=isCore?coreColorGain:1;f[20]=Number(prepared.centerX)||0;f[21]=Number(prepared.centerY)||0;
             // Compute sector boundary unit vectors once, not once per shaded pixel.
             if(prepared.spectral===true){
-                const tau=Math.PI*2,progress=Math.max(0,Math.min(1,Number(prepared.spectralProgress)||0)),head=progress*tau;
+                const tau=Math.PI*2,raw=Number(prepared.spectralProgress)||0;
+                const progress=((raw%1)+1)%1,head=progress*tau;
                 const span=Math.max(.000001,Math.min(tau,Number(prepared.sectorSpanAngle)||Math.PI/4));
-                const tail=Math.max(0,head-span),arc=head-tail,dir=Number(prepared.spectralDirection)<0?-1:1;
-                const origin=Number(prepared.spectralStartAngle)||0,start=origin+dir*tail,end=origin+dir*head;
+                const dir=Number(prepared.spectralDirection)<0?-1:1;
+                // A full sector follows the head across zero. At phase 1 and phase 0
+                // the same part of the contour is lit, so there is no reset/jump.
+                const origin=Number(prepared.spectralStartAngle)||0;
+                const start=origin+dir*(head-span),end=origin+dir*head;
                 f[22]=Math.cos(start);f[23]=Math.sin(start);f[24]=1;
-                f[25]=head<=.000001?0:dir*(arc>=tau-.000001?3:(arc>Math.PI?2:1));
+                f[25]=dir*(span>=tau-.000001?3:(span>Math.PI?2:1));
                 f[26]=Math.cos(end);f[27]=Math.sin(end);
             }else{f[24]=0;f[25]=1;}
             const buffer=isCore?uniformPair.coreBuffer:uniformPair.haloBuffer;device.queue.writeBuffer(buffer,0,f);return{buffer,bind:isCore?uniformPair.coreBind:uniformPair.haloBind};};
-        const halo=writeUniform(false),core=writeUniform(true);let released=false;return{cubicBuffer,cubicBind,copyBind,copyCount,halo,core,instances:prepared.cubicCount*SUBDIV*copyCount,destroy(){if(released)return;released=true;if(ownsCubic)try{cubicBuffer?.destroy?.();}catch(_){}if(spectralRec){spectralRec.users=Math.max(0,spectralRec.users-1);trimSpectralBuffers();}releaseUniformPair(uniformPair);}};
+        const halo=writeUniform(false),core=writeUniform(true);let released=false;return{cubicBuffer,cubicBind,copyBind,copyCount,halo,core,instances:prepared.cubicCount*spectralSubdiv*copyCount,destroy(){if(released)return;released=true;if(ownsCubic)try{cubicBuffer?.destroy?.();}catch(_){}if(spectralRec){spectralRec.users=Math.max(0,spectralRec.users-1);trimSpectralBuffers();}releaseUniformPair(uniformPair);}};
     }
     function encodeScratch(encoder,res,kind){const core=kind==='core',pass=encoder.beginRenderPass({colorAttachments:[{view:scratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});pass.setPipeline(res.copyBind?(core?coreCorridorPipeline:haloCorridorPipeline):(core?corePipeline:haloPipeline));pass.setBindGroup(0,core?res.core.bind:res.halo.bind);pass.setBindGroup(1,res.cubicBind);pass.setBindGroup(2,res.copyBind||identityCopyBind);pass.draw(4,res.instances);pass.end();}
     function encodeComposite(encoder,target,kind,cfg,loadOp='load'){const mode=kind==='core'?(sweepCoreBlendMode(cfg)):sweepGlowBlendMode(cfg),pass=encoder.beginRenderPass({colorAttachments:[{view:target,clearValue:{r:0,g:0,b:0,a:0},loadOp,storeOp:'store'}]});pass.setPipeline(compositePipelines[mode]||compositePipelines.normal||compositeOverPipeline);pass.setBindGroup(0,compositeBind);pass.draw(3);pass.end();}
@@ -153,7 +184,7 @@ struct V{@builtin(position) p:vec4<f32>};
             res=resources(prepared,ctx,cfg,lineWidth,visual,alpha,copies,alphas,frameCtx,footprint,layer);if(!res)return null;
             if(res.core&&res.halo){const enc=device.createCommandEncoder({label:prepared.spectral?'Somata Spectral Bézier Glint → Layer Scene':'Somata Precise Bézier Glint → Layer Scene'}),tv=targetView(targetTexture);
                 if(prepared.gpuMorphResource){const railOk=typeof spiroGpuPrepareMorphForLayerScene==='function'?spiroGpuPrepareMorphForLayerScene(frameCtx,prepared.gpuMorphResource,prepared.gpuMorphT,enc):(typeof prepared.gpuMorphResource.encodeCurrentCubics==='function'?prepared.gpuMorphResource.encodeCurrentCubics(enc,prepared.gpuMorphT):(typeof encodeSharedGpuMorphPath==='function'&&encodeSharedGpuMorphPath(enc,prepared.gpuMorphResource.layerIndex,prepared.gpuMorphT)));if(!railOk){res.destroy();return null;}}
-                if(res.halo){encodeScratch(enc,res,'halo');encodeComposite(enc,tv,'halo',cfg);}encodeScratch(enc,res,'core');encodeComposite(enc,tv,'core',cfg);stats.frames++;stats.deferredFrames++;stats.cubics+=prepared.cubicCount;stats.gpuSubsegments+=prepared.cubicCount*SUBDIV;
+                if(res.halo){encodeScratch(enc,res,'halo');encodeComposite(enc,tv,'halo',cfg);}encodeScratch(enc,res,'core');encodeComposite(enc,tv,'core',cfg);stats.frames++;stats.deferredFrames++;stats.cubics+=prepared.cubicCount;stats.gpuSubsegments+=prepared.cubicCount*(prepared.spectral===true?(prepared.cubicCount>450?6:(prepared.cubicCount>180?8:SUBDIV)):SUBDIV);
                 return{handled:true,commandBuffer:enc.finish(),onSubmitted:()=>{try{if(prepared.gpuMorphResource){if(typeof prepared.gpuMorphResource.encodeCurrentCubics==='function'){const fid=Number(frameCtx?.frameId)||0,tt=typeof prepared.gpuMorphResource.resolveMorphT==='function'?prepared.gpuMorphResource.resolveMorphT(prepared.gpuMorphT):Math.max(0,Math.min(1,Number(prepared.gpuMorphT)||0));prepared.gpuMorphResource.currentCubicsCommittedFrameId=fid;prepared.gpuMorphResource.currentCubicsCommittedT=tt;}else noteSharedGpuMorphPathSubmitted?.(prepared.gpuMorphResource,prepared.gpuMorphT,frameCtx?.frameId);}}catch(_){}res.destroy();}};
             }return{handled:true,commandBuffer:null,onSubmitted:()=>res?.destroy?.()};
         }catch(err){res?.destroy?.();lastError=String(err?.message||err);stats.failures++;return null;}}
@@ -161,8 +192,8 @@ struct V{@builtin(position) p:vec4<f32>};
     function render(prepared,ctx,cfg,lineWidth,visual,alpha,copies=null,alphas=null,frameCtx=null,footprint=1,layer=null){
         if(!warmup()||!ensureSize()||!(prepared?.cubicCount||prepared?.gpuCubicCount))return false;let res=null;try{if(prepared.gpuMorphResource){if(typeof prepared.gpuMorphResource.encodeCurrentCubics==='function'){const pre=device.createCommandEncoder({label:'Somata Bézier Glint retained Morph rail prerequisite'});if(!prepared.gpuMorphResource.encodeCurrentCubics(pre,prepared.gpuMorphT))return false;device.queue.submit([pre.finish()]);}else if(typeof dispatchSharedGpuMorphPath==='function')dispatchSharedGpuMorphPath(prepared.gpuMorphResource.layerIndex,prepared.gpuMorphT);}res=resources(prepared,ctx,cfg,lineWidth,visual,alpha,copies,alphas,frameCtx,footprint,layer);if(!res)return false;const drawStage=(kind)=>{const mode=kind==='core'?(sweepCoreBlendMode(cfg)):sweepGlowBlendMode(cfg),enc=device.createCommandEncoder({label:`Somata Bézier Glint ${kind}`});encodeScratch(enc,res,kind);let p=enc.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});// Direct path copies the already-unioned scratch to the hidden presentation canvas with Normal.
 
-                p.setPipeline(compositePipelines.normal||compositeOverPipeline);p.setBindGroup(0,compositeBind);p.draw(3);p.end();device.queue.submit([enc.finish()]);ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation=sweepBlendCanvasOperation(mode);ctx.filter='none';ctx.drawImage(canvas,0,0);ctx.restore();};drawStage('halo');drawStage('core');device.queue.onSubmittedWorkDone().then(()=>res.destroy()).catch(()=>res.destroy());stats.frames++;stats.directFrames++;stats.cubics+=prepared.cubicCount;stats.gpuSubsegments+=prepared.cubicCount*SUBDIV;return true;}catch(err){res?.destroy?.();lastError=String(err?.message||err);stats.failures++;return false;}}
-    function status(){warmup();return{available:ready,generation,lastError,width,height,subdivisionsPerCubic:SUBDIV,...stats,contract:'Somata 7.5 High/Chaotic/Spectral Glint accepts retained cubic Bézier controls from CPU sources or the shared topology-Morph GPU cubic buffer; GPU evaluates only a small fixed subdivision lattice per cubic. Core/Glow uniform buffers and external cubic/copy bind groups are pooled across frames instead of being recreated per draw. Halo and colored Core composite independently with the selected Glow/Core blend modes; Lightning preflash routes both stages through Glow. Spectral mode performs exactly one cycle-locked, seam-safe angular lap from the contour start; the sector never wraps onto already-visited geometry within the same lap.'};}
+                p.setPipeline(compositePipelines.normal||compositeOverPipeline);p.setBindGroup(0,compositeBind);p.draw(3);p.end();device.queue.submit([enc.finish()]);ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation=sweepBlendCanvasOperation(mode);ctx.filter='none';ctx.drawImage(canvas,0,0);ctx.restore();};drawStage('halo');drawStage('core');device.queue.onSubmittedWorkDone().then(()=>res.destroy()).catch(()=>res.destroy());stats.frames++;stats.directFrames++;stats.cubics+=prepared.cubicCount;stats.gpuSubsegments+=prepared.cubicCount*(prepared.spectral===true?(prepared.cubicCount>450?6:(prepared.cubicCount>180?8:SUBDIV)):SUBDIV);return true;}catch(err){res?.destroy?.();lastError=String(err?.message||err);stats.failures++;return false;}}
+    function status(){warmup();return{available:ready,generation,lastError,width,height,subdivisionsPerCubic:SUBDIV,adaptiveSpectralSubdivisions:{upTo180:12,upTo450:8,over450:6},...stats,contract:'Somata 7.5 High/Chaotic/Spectral Glint accepts retained cubic Bézier controls from CPU sources or the shared topology-Morph GPU cubic buffer; GPU evaluates only a small fixed subdivision lattice per cubic. Core/Glow uniform buffers and external cubic/copy bind groups are pooled across frames instead of being recreated per draw. Halo and colored Core composite independently with the selected Glow/Core blend modes; Lightning preflash routes both stages through Glow. Spectral mode rotates a constant-width periodic sector across the start angle without disappearing at cycle boundaries. Static contour GPU buffers are retained across frames; heavy rails use adaptive GPU subdivisions and conservative per-segment sector classification.'};}
     return{warmup,isReady:()=>warmup(),encodeToLayerScene,render,status};
 })();
 window.__spiroBezierSweepStatus=()=>WebGPUBezierSweepRenderer.status();
