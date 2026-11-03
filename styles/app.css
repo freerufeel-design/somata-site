@@ -4425,11 +4425,6 @@
                 overflow: hidden !important;
                 touch-action: none;
             }
-            body.mobile-parameter-focus > *:not(#mobileParameterFocusOverlay) {
-                visibility: hidden !important;
-                opacity: 0 !important;
-                pointer-events: none !important;
-            }
             #mobileParameterFocusOverlay.mobile-parameter-focus-active {
                 position: fixed;
                 inset: 0;
@@ -4438,7 +4433,7 @@
                 visibility: visible !important;
                 opacity: 1 !important;
                 pointer-events: auto !important;
-                background: var(--bg-dark);
+                background: transparent;
                 padding: 0;
                 margin: 0;
                 touch-action: manipulation;
@@ -7544,3 +7539,753 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
 #orangeMorphBindings .morph-route-row.disabled{opacity:.5;filter:grayscale(.55)}
 #morphProfileBindings .morph-route-row.disabled > input[type=checkbox],
 #orangeMorphBindings .morph-route-row.disabled > input[type=checkbox]{opacity:1;filter:none}
+
+
+/* ================================================================
+   MOBILE WORKSPACE V13.0.26 — touch-first Morph & settings overhaul
+   Desktop selectors are intentionally untouched. No DOM-dependent
+   hiding of the renderer while a mobile parameter is being edited.
+   ================================================================ */
+@media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
+  html,body { max-width:100%; }
+  /* The parameter focus layer is translucent, NOT an opaque replacement for
+     the canvas. The actual slider remains in the sidebar DOM and is mirrored
+     in the bottom dock so delegated handlers keep working. */
+  body.mobile-parameter-focus { touch-action:auto; }
+  #mobileParameterFocusOverlay.mobile-parameter-focus-active {
+    background:linear-gradient(to bottom,rgba(2,6,23,.02) 0%,rgba(2,6,23,.03) 60%,rgba(2,6,23,.22) 100%) !important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+  }
+  .mobile-parameter-focus-dock {
+    background:#101a30!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+    will-change:auto!important;
+    padding:12px 14px max(14px,env(safe-area-inset-bottom))!important;
+  }
+  .mobile-parameter-focus-range-slot .mobile-focus-proxy { touch-action:none; accent-color:#67e8f9; }
+
+  /* Tool categories as a horizontal, swipeable strip rather than a tall
+     vertical rail that escapes the viewport on short phones. */
+  #sidebarToolRail.sidebar-tool-rail {
+    position:fixed!important;
+    top:calc(50px + env(safe-area-inset-top))!important;
+    left:max(4px,env(safe-area-inset-left))!important;
+    right:max(4px,env(safe-area-inset-right))!important;
+    bottom:auto!important;
+    width:auto!important;
+    height:52px!important;
+    max-height:52px!important;
+    flex-flow:row nowrap!important;
+    align-items:center!important;
+    justify-content:flex-start!important;
+    gap:5px!important;
+    padding:4px 7px!important;
+    overflow-x:auto!important;
+    overflow-y:hidden!important;
+    overscroll-behavior-x:contain;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-width:none;
+    touch-action:pan-x;
+    border-radius:10px!important;
+    z-index:245!important;
+    box-sizing:border-box!important;
+  }
+  #sidebarToolRail::-webkit-scrollbar { display:none; }
+  #sidebarToolRail .sidebar-tool-btn {
+    flex:0 0 42px!important;
+    width:42px!important;height:42px!important;min-height:42px!important;
+    padding:6px!important;
+    touch-action:manipulation!important;
+  }
+  #sidebarToolRail .sidebar-tool-separator {
+    flex:0 0 1px!important;
+    width:1px!important;height:26px!important;
+    margin:0 3px!important;
+  }
+
+  /* The drawer uses the available width and has exactly one vertical scroll
+     container. Its title/actions and layer list are not allowed to grow past
+     the viewport height. */
+  aside#settingsSidebar,body.ui-easy aside#settingsSidebar {
+    position:fixed!important;
+    top:calc(107px + env(safe-area-inset-top))!important;
+    bottom:max(4px,env(safe-area-inset-bottom))!important;
+    left:max(4px,env(safe-area-inset-left))!important;
+    right:max(4px,env(safe-area-inset-right))!important;
+    width:auto!important;
+    max-width:none!important;
+    min-width:0!important;
+    height:auto!important;
+    padding:0!important;
+    display:flex!important;
+    flex-direction:column!important;
+    overflow:hidden!important;
+    box-sizing:border-box!important;
+    border-radius:12px 12px 0 0;
+  }
+  #settingsSidebar > .section-header {
+    position:relative!important;
+    display:flex!important;
+    flex-flow:row wrap!important;
+    align-items:center!important;
+    gap:5px 7px!important;
+    flex:0 0 auto!important;
+    width:100%!important;
+    min-height:0!important;
+    height:auto!important;
+    padding:7px!important;
+    overflow:visible!important;
+    box-sizing:border-box!important;
+  }
+  #settingsSidebar .sidebar-section-title {
+    flex:1 1 74px!important;
+    min-width:50px!important;
+    max-width:none!important;
+    font-size:12px!important;
+    white-space:normal!important;
+    overflow-wrap:anywhere;
+  }
+  #settingsSidebar .master-layer-btn {
+    flex:0 0 auto!important;
+    width:auto!important;
+    max-width:none!important;
+    min-height:38px!important;
+    height:38px!important;
+    padding:5px 7px!important;
+  }
+  #settingsSidebar .sidebar-layer-actions {
+    display:flex!important;
+    flex:1 1 100%!important;
+    order:5;
+    flex-flow:row wrap!important;
+    justify-content:flex-start!important;
+    gap:6px!important;
+    min-width:0!important;
+    width:100%!important;
+  }
+  #settingsSidebar .sidebar-layer-actions .btn-icon,
+  #settingsSidebar #btnToggleLayerList,
+  #settingsSidebar #btnMobileCloseSidebar {
+    display:inline-flex!important;
+    flex:0 0 40px!important;
+    width:40px!important;
+    min-width:40px!important;
+    max-width:40px!important;
+    height:40px!important;
+    min-height:40px!important;
+    padding:4px!important;
+    position:static!important;
+  }
+  #settingsSidebar #btnMobileCloseSidebar { margin-left:0!important; }
+  #settingsSidebar #layerCountBadge { min-width:25px!important;max-width:none!important;flex:0 0 auto!important; }
+  #settingsSidebar #layerList {
+    width:100%!important;
+    min-width:0!important;
+    max-height:min(22dvh,130px)!important;
+    flex:0 1 auto!important;
+    overflow-x:hidden!important;
+    overflow-y:auto!important;
+  }
+  #settingsSidebar .sidebar-content,body.ui-easy #settingsSidebar .sidebar-content {
+    width:100%!important;
+    min-width:0!important;
+    max-width:100%!important;
+    min-height:0!important;
+    flex:1 1 auto!important;
+    overflow-x:hidden!important;
+    overflow-y:auto!important;
+    overscroll-behavior-y:contain;
+    padding:9px 9px calc(26px + env(safe-area-inset-bottom))!important;
+    scrollbar-gutter:stable;
+    box-sizing:border-box!important;
+  }
+  #settingsSidebar .control-group,
+  #settingsSidebar .control-row,
+  #settingsSidebar .row-inputs,
+  #settingsSidebar .grid-2,
+  #settingsSidebar .profile-canvas-container {
+    min-width:0!important;max-width:100%!important;box-sizing:border-box!important;
+  }
+  #settingsSidebar .control-group { width:100%!important; }
+  #settingsSidebar .row-inputs { display:flex;flex-wrap:wrap;gap:7px; }
+  #settingsSidebar .row-inputs > input[type="range"] { flex:1 1 110px;min-width:0!important;max-width:100%!important; }
+  #settingsSidebar :is(select,input[type="number"],input[type="text"],input[type="range"],textarea) { max-width:100%!important; }
+  #settingsSidebar :is(.graffiti-range-with-multiplier,.graffiti-rotation-strength,.motion-slider-mult) {
+    min-width:0!important;max-width:100%!important;
+  }
+  #settingsSidebar .grid-2 { grid-template-columns:repeat(2,minmax(0,1fr))!important; }
+
+  /* Blue Morph is a viewport workspace: a horizontal category strip and
+     fully fluid parameter cards. Never force 520/760px desktop route rows. */
+  #morphSettingsPanel.morph-audio-routing-panel,
+  body.ui-easy #morphSettingsPanel.morph-audio-routing-panel {
+    position:fixed!important;
+    top:max(4px,env(safe-area-inset-top))!important;
+    bottom:max(4px,env(safe-area-inset-bottom))!important;
+    left:max(4px,env(safe-area-inset-left))!important;
+    right:max(4px,env(safe-area-inset-right))!important;
+    width:auto!important;
+    min-width:0!important;max-width:none!important;
+    max-height:none!important;
+    overflow:hidden!important;
+    display:flex;
+    flex-direction:column;
+    border-radius:12px;
+    box-sizing:border-box!important;
+    z-index:270!important;
+  }
+  #morphSettingsPanel .morph-settings-title,
+  #randomSettingsPanel .morph-settings-title {
+    position:relative!important;top:auto!important;
+    display:flex!important;flex-wrap:wrap!important;align-items:center!important;
+    width:100%!important;min-width:0!important;
+    height:auto!important;min-height:52px!important;
+    margin:0!important;padding:8px 10px!important;
+    gap:6px!important;
+    font-size:14px!important;line-height:1.2!important;
+    flex:0 0 auto!important;
+    box-sizing:border-box!important;
+  }
+  #morphSettingsPanel .morph-settings-title > span:first-child,
+  #randomSettingsPanel .morph-settings-title > span:first-child {flex:1 1 auto;min-width:0;}
+  #morphSettingsPanel .morph-settings-subtitle,
+  #randomSettingsPanel .morph-settings-subtitle {display:none!important;}
+  #morphSettingsPanel .mobile-panel-close,
+  #randomSettingsPanel .mobile-panel-close {
+    position:static!important;top:auto!important;right:auto!important;
+    flex:0 0 44px!important;width:44px!important;height:44px!important;
+    min-height:44px!important;margin:0 0 0 auto!important;
+  }
+  #morphSettingsPanel .morph-routing-layout {
+    display:flex!important;flex-direction:column!important;
+    flex:1 1 auto!important;min-height:0!important;min-width:0!important;
+    overflow:hidden!important;
+  }
+  #morphSettingsPanel .morph-routing-targets {
+    display:flex!important;align-items:stretch!important;flex-flow:row nowrap!important;
+    flex:0 0 auto!important;min-width:0!important;max-width:100%!important;
+    min-height:0!important;height:auto!important;max-height:64px!important;
+    gap:5px!important;padding:7px 9px!important;
+    overflow-x:auto!important;overflow-y:hidden!important;
+    scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x;
+    border-right:0!important;border-bottom:1px solid rgba(71,85,105,.58);
+  }
+  #morphSettingsPanel .morph-routing-targets::-webkit-scrollbar {display:none;}
+  #morphSettingsPanel .morph-routing-targets > * {
+    flex:0 0 auto!important;min-width:42px!important;min-height:44px!important;
+    max-width:min(48vw,175px)!important;width:auto!important;
+    padding:7px 9px!important;
+    white-space:nowrap;
+  }
+  #morphSettingsPanel .morph-routing-main {
+    flex:1 1 auto!important;min-height:0!important;min-width:0!important;
+    width:100%!important;max-width:100%!important;
+    padding:8px!important;
+    overflow-x:hidden!important;overflow-y:auto!important;
+    overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;
+    scrollbar-gutter:stable;
+    box-sizing:border-box!important;
+  }
+  #morphSettingsPanel :is(.morph-profile-toolbar,.morph-routing-preset-bar,.morph-speed-toolbar,.morph-routing-shell,.morph-routing-groups,.morph-routing-head,.morph-routing-tools-meta) {
+    min-width:0!important;max-width:100%!important;box-sizing:border-box!important;
+  }
+  #morphSettingsPanel .morph-profile-toolbar,
+  #morphSettingsPanel .morph-profile-toolbar.morph-routing-preset-bar {
+    display:flex!important;flex-flow:row wrap!important;gap:7px!important;
+    padding:8px!important;margin:0 0 8px!important;
+    overflow:visible!important;
+  }
+  #morphSettingsPanel .morph-profile-select-wrap {
+    flex:1 1 100%!important;width:100%!important;min-width:0!important;
+    display:flex!important;flex-wrap:wrap;
+  }
+  #morphSettingsPanel .morph-profile-select-wrap select {
+    flex:1 1 140px!important;width:100%!important;min-width:0!important;
+    max-width:100%!important;height:42px!important;min-height:42px!important;
+    font-size:16px!important;
+  }
+  #morphSettingsPanel .morph-profile-toolbar-flags {
+    display:flex!important;flex:1 1 100%!important;flex-wrap:wrap!important;
+    margin-left:0!important;gap:6px!important;
+  }
+  #morphSettingsPanel .morph-profile-toolbar-check {min-height:40px!important;height:auto!important;font-size:12px!important;}
+  #morphSettingsPanel .morph-profile-action {flex:0 0 auto!important;min-width:42px!important;min-height:42px!important;height:auto!important;font-size:13px!important;}
+  #morphSettingsPanel .morph-profile-reset {flex:1 1 110px!important;}
+  #morphSettingsPanel .morph-speed-toolbar {overflow:visible!important;}
+  #morphSettingsPanel .morph-top-cycle-row {
+    flex-wrap:wrap!important;align-items:center!important;
+    min-width:0!important;max-width:100%!important;
+  }
+  #morphSettingsPanel .morph-top-cycle-row > .morph-cycle-controls {
+    display:flex!important;flex-flow:row wrap!important;
+    width:100%!important;min-width:0!important;max-width:100%!important;
+    margin:0!important;justify-content:flex-start!important;
+    white-space:normal!important;gap:6px!important;
+  }
+  #morphSettingsPanel .morph-cycle-controls .morph-quick-btn {
+    min-width:42px!important;min-height:38px!important;
+    height:38px!important;flex:0 0 auto!important;
+  }
+  #morphSettingsPanel .morph-speed-toolbar-field {
+    min-width:0!important;width:100%!important;display:flex!important;
+    flex-flow:row wrap!important;gap:6px!important;
+  }
+  #morphSettingsPanel .morph-speed-toolbar-field select {
+    flex:1 1 130px!important;min-width:0!important;max-width:100%!important;
+    min-height:42px!important;font-size:16px!important;
+  }
+  #morphSettingsPanel .morph-compact-profile-controls {
+    display:flex!important;flex-flow:row wrap!important;
+    width:100%!important;min-width:0!important;gap:6px!important;
+  }
+  #morphSettingsPanel .morph-compact-profile-field {
+    flex:1 1 135px!important;min-width:0!important;max-width:100%!important;
+    min-height:42px!important;height:auto!important;flex-wrap:wrap!important;
+  }
+  #morphSettingsPanel .morph-compact-profile-field select {
+    width:100%!important;min-width:0!important;max-width:100%!important;
+    min-height:40px!important;height:auto!important;font-size:16px!important;
+  }
+  #morphSettingsPanel .morph-routing-visible-head,
+  #morphSettingsPanel .morph-routing-head {
+    display:flex!important;flex-wrap:wrap!important;align-items:center!important;
+    height:auto!important;gap:7px!important;
+  }
+  #morphSettingsPanel .morph-routing-groups,
+  #randomSettingsPanel .orange-routing-groups {
+    display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:7px!important;min-width:0!important;width:100%!important;
+  }
+  #morphSettingsPanel .morph-routing-groups .audio-route-group-btn,
+  #randomSettingsPanel .orange-routing-groups .audio-route-group-btn {
+    display:flex!important;min-width:0!important;min-height:44px!important;
+    height:auto!important;padding:7px!important;
+    white-space:normal!important;font-size:12px!important;
+    overflow-wrap:anywhere;
+  }
+  #morphSettingsPanel .morph-routing-tools-meta {flex-wrap:wrap;white-space:normal;}
+  #morphSettingsPanel #btnAddMorphParameter {width:100%!important;min-height:44px!important;font-size:13px!important;}
+  #morphSettingsPanel #morphParameterPicker {width:min(92vw,360px)!important;max-height:70dvh!important;}
+  #morphSettingsPanel #morphProfileBindings {display:flex!important;flex-direction:column!important;gap:9px!important;width:100%!important;min-width:0!important;}
+
+  /* Blue and Orange route rows use the same phone card vocabulary. All
+     optional and compound controls wrap instead of forcing horizontal scroll. */
+  #morphProfileBindings .morph-route-row,
+  #orangeMorphBindings .orange-route-row,
+  #morphProfileBindings .morph-route-row[data-morph-special="spiralLayers"],
+  #morphProfileBindings .morph-route-row[data-morph-special="spiralOrder"] {
+    display:flex!important;flex-flow:row wrap!important;align-items:center!important;
+    width:100%!important;min-width:0!important;max-width:100%!important;
+    height:auto!important;max-height:none!important;
+    padding:10px!important;gap:8px!important;
+    overflow:visible!important;box-sizing:border-box!important;
+    border-radius:10px!important;
+  }
+  #morphProfileBindings .morph-route-row > *,
+  #orangeMorphBindings .orange-route-row > * {max-width:100%!important;box-sizing:border-box;}
+  #morphProfileBindings .morph-route-compact-picker,
+  #orangeMorphBindings .morph-route-compact-picker {
+    flex:1 1 120px!important;min-width:0!important;max-width:none!important;
+    width:auto!important;
+  }
+  #morphProfileBindings .morph-route-compact-picker .audio-param-picker-button,
+  #orangeMorphBindings .morph-route-compact-picker .audio-param-picker-button {
+    width:100%!important;min-width:0!important;min-height:42px!important;
+    height:auto!important;font-size:13px!important;text-align:left;
+    white-space:normal!important;overflow-wrap:anywhere;
+  }
+  #morphProfileBindings .morph-route-drag-handle,
+  #orangeMorphBindings .morph-route-drag-handle {flex:0 0 16px!important;}
+  #morphProfileBindings .morph-route-row > input[type="checkbox"],
+  #orangeMorphBindings .orange-route-row > input[type="checkbox"] {
+    width:22px!important;height:22px!important;flex:0 0 22px!important;
+  }
+  #morphProfileBindings .morph-route-row-icon,
+  #orangeMorphBindings .morph-route-row-icon {width:20px!important;flex:0 0 20px!important;}
+  #morphProfileBindings .morph-route-number,
+  #orangeMorphBindings .morph-route-number {
+    width:clamp(55px,23%,90px)!important;min-width:0!important;
+    max-width:100%!important;flex:1 1 66px!important;
+    min-height:40px!important;height:40px!important;
+    font-size:16px!important;
+  }
+  #morphProfileBindings .morph-route-inline-control,
+  #morphProfileBindings .morph-route-inline-check,
+  #orangeMorphBindings .morph-route-inline-control,
+  #orangeMorphBindings .morph-route-inline-check {
+    flex:0 1 auto!important;min-width:0!important;max-width:100%!important;
+    height:auto!important;min-height:40px!important;white-space:normal!important;
+    padding:5px 7px!important;font-size:12px!important;gap:6px!important;
+  }
+  #morphProfileBindings .morph-route-inline-control > span,
+  #orangeMorphBindings .morph-route-inline-control > span {font-size:12px!important;}
+  #morphProfileBindings .morph-route-inline-number,
+  #orangeMorphBindings .morph-route-inline-number {
+    width:66px!important;max-width:100%!important;height:38px!important;
+    min-height:38px!important;font-size:16px!important;
+  }
+  #morphProfileBindings .morph-route-inline-select select,
+  #orangeMorphBindings .morph-route-inline-select select,
+  #morphProfileBindings .morph-route-palette-select select,
+  #orangeMorphBindings .morph-route-palette-select select {
+    max-width:100%!important;min-width:0!important;
+    min-height:40px!important;height:auto!important;font-size:16px!important;
+  }
+  #morphProfileBindings .morph-special-config-name,
+  #orangeMorphBindings .morph-special-config-name {
+    min-width:0!important;max-width:100%!important;flex:1 1 120px!important;
+    font-size:12px!important;white-space:normal!important;
+  }
+  #morphProfileBindings .morph-special-config-range,
+  #orangeMorphBindings .morph-special-config-range,
+  #morphProfileBindings .morph-spiral-compact-controls,
+  #orangeMorphBindings .morph-spiral-compact-controls {
+    min-width:0!important;max-width:100%!important;flex:1 1 100%!important;
+    flex-wrap:wrap!important;
+  }
+  #morphProfileBindings .morph-binding-remove,
+  #orangeMorphBindings .morph-binding-remove {
+    flex:0 0 42px!important;width:42px!important;height:42px!important;
+    min-height:42px!important;margin:0 0 0 auto!important;
+    order:99!important;font-size:20px!important;
+  }
+
+  /* Orange Morph uses the same tall-scroll workspace without nested overflow
+     containers or fixed-width 540px rows. */
+  #randomSettingsPanel.random-settings-panel,
+  body.ui-easy #randomSettingsPanel.random-settings-panel {
+    position:fixed!important;
+    top:max(4px,env(safe-area-inset-top))!important;
+    bottom:max(4px,env(safe-area-inset-bottom))!important;
+    left:max(4px,env(safe-area-inset-left))!important;
+    right:max(4px,env(safe-area-inset-right))!important;
+    display:flex;flex-direction:column;
+    width:auto!important;min-width:0!important;max-width:none!important;
+    max-height:none!important;overflow-x:hidden!important;overflow-y:auto!important;
+    -webkit-overflow-scrolling:touch;overscroll-behavior-y:contain;
+    border-radius:12px!important;z-index:265!important;
+  }
+  #randomSettingsPanel .orange-profile-toolbar {
+    display:flex!important;flex-flow:row wrap!important;
+    width:auto!important;min-width:0!important;max-width:100%!important;
+    margin:8px!important;padding:8px!important;gap:7px!important;
+    overflow:visible!important;
+  }
+  #randomSettingsPanel .orange-profile-toolbar .morph-profile-select-wrap {
+    flex:1 1 100%!important;min-width:0!important;width:100%!important;
+  }
+  #randomSettingsPanel .orange-profile-toolbar select {
+    flex:1 1 130px!important;width:100%!important;min-width:0!important;
+    max-width:100%!important;min-height:42px!important;font-size:16px!important;
+  }
+  #randomSettingsPanel .orange-profile-toolbar .morph-profile-action {min-width:42px!important;min-height:42px!important;}
+  #randomSettingsPanel .orange-routing-shell,
+  #randomSettingsPanel .orange-fixed-settings {min-width:0!important;max-width:100%!important;box-sizing:border-box!important;}
+  /* The original .morph-settings-grid has width:100%; with two 8px margins
+     this exceeded the panel by 16px and clipped the Orange footer. */
+  #randomSettingsPanel .orange-fixed-settings {
+    width:calc(100% - 16px)!important;
+    max-width:calc(100% - 16px)!important;
+    margin:0 8px 8px!important;
+    grid-template-columns:minmax(0,1fr)!important;
+  }
+  #randomSettingsPanel .orange-fixed-settings > * {min-width:0!important;max-width:100%!important;}
+  #randomSettingsPanel .orange-routing-shell {margin:8px!important;padding:8px!important;}
+  #randomSettingsPanel .orange-route-row {min-width:0!important;}
+  #randomSettingsPanel .orange-routing-head .hint-text {display:none!important;}
+  #randomSettingsPanel .orange-routing-rows {min-width:0!important;max-width:100%!important;}
+}
+@media (max-width:360px) {
+  #settingsSidebar .grid-2 {grid-template-columns:minmax(0,1fr)!important;}
+  #settingsSidebar .sidebar-section-title {flex:1 1 52px!important;}
+  #morphSettingsPanel .morph-profile-action,
+  #randomSettingsPanel .morph-profile-action {min-width:40px!important;}
+}
+@media (max-height:520px) and (hover:none) and (pointer:coarse) {
+  #sidebarToolRail.sidebar-tool-rail {top:calc(44px + env(safe-area-inset-top))!important;}
+  aside#settingsSidebar,body.ui-easy aside#settingsSidebar {top:calc(101px + env(safe-area-inset-top))!important;}
+  #morphSettingsPanel .morph-routing-targets {max-height:56px!important;}
+}
+
+@media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
+  /* Display the actual animation behind the focus dock. Temporarily conceal
+     the controls, not the GPU canvas or its parent. Original inputs stay live. */
+  body.mobile-parameter-focus :is(
+    header,
+    #settingsSidebar,
+    #sidebarToolRail,
+    #mobileSidebarBackdrop,
+    #btnMobileControls,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel,
+    #audioReactivePanel,
+    #audioRoutingPanel,
+    .floating-controls,
+    .info-pill
+  ) { visibility:hidden!important;pointer-events:none!important; }
+  body:has(#morphSettingsPanel:not(.hidden)) #btnMobileControls,
+  body:has(#randomSettingsPanel:not(.hidden)) #btnMobileControls {display:none!important;}
+  .mobile-parameter-focus-head {
+    display:grid;grid-template-columns:minmax(0,1fr) auto 38px;
+    gap:9px;align-items:center;margin-bottom:11px;min-width:0;
+  }
+  .mobile-parameter-focus-head .mobile-parameter-focus-title {
+    margin:0!important;text-align:left!important;font-size:13px!important;
+  }
+  .mobile-parameter-focus-value {
+    font:700 15px/1.1 ui-monospace,monospace;
+    color:#67e8f9;min-width:30px;max-width:76px;
+    overflow:hidden;text-overflow:ellipsis;text-align:right;
+  }
+  .mobile-parameter-focus-close {
+    display:inline-flex;align-items:center;justify-content:center;
+    width:38px!important;height:38px!important;min-height:38px!important;
+    min-width:38px!important;padding:0!important;
+    font-size:22px!important;border-radius:8px!important;
+  }
+  .mobile-parameter-focus-multiplier input[type="number"] {
+    width:88px!important;min-width:0!important;height:42px!important;
+    min-height:42px!important;text-align:center!important;font-size:16px!important;
+  }
+  .mobile-parameter-focus-controls {min-width:0!important;}
+}
+
+@media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
+  body:has(#morphSettingsPanel:not(.hidden)) .floating-controls,
+  body:has(#randomSettingsPanel:not(.hidden)) .floating-controls,
+  body:has(#settingsSidebar.mobile-open) .floating-controls {
+    visibility:hidden!important;pointer-events:none!important;
+  }
+  /* Numeric Morph bounds are a matched pair on their own line; the delete
+     action remains near the parameter name. This avoids a full-width 'max'
+     box stranded underneath a narrow 'min' input. */
+  #morphProfileBindings .morph-route-row > .morph-binding-remove,
+  #orangeMorphBindings .orange-route-row > .morph-binding-remove {order:1!important;}
+  #morphProfileBindings .morph-route-row > .morph-route-number,
+  #orangeMorphBindings .orange-route-row > .morph-route-number {
+    order:2!important;
+    flex:1 1 calc((100% - 34px) / 2)!important;
+    width:calc((100% - 34px) / 2)!important;
+    min-width:0!important;
+    max-width:calc((100% - 34px) / 2)!important;
+    text-align:center!important;
+  }
+  #morphProfileBindings .morph-route-row > .morph-route-range-sep,
+  #orangeMorphBindings .orange-route-row > .morph-route-range-sep {
+    order:2!important;
+    flex:0 0 16px!important;width:16px!important;
+    text-align:center!important;
+  }
+  #morphProfileBindings .morph-route-row > .morph-route-inline-control,
+  #orangeMorphBindings .orange-route-row > .morph-route-inline-control {order:3!important;}
+}
+
+/* 13.0.26 mobile refinement (round 2): keep the New Project button completely
+   outside the fixed ☰ launcher footprint, and use compact Morph route cards.
+   This is deliberately scoped to touch/mobile layouts; desktop route rows and
+   the model's generated DOM remain untouched. */
+@media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
+  /* The earlier .header-actions padding-left:44px was overridden later by
+     padding:0 0 3px. This left Quick New directly below the fixed hamburger. */
+  header .header-actions {
+    padding:0 0 3px 52px!important;
+    scroll-padding-inline-start:52px;
+    box-sizing:border-box!important;
+  }
+  header #projectChooserPanel #btnQuickNewProject {
+    position:relative!important;
+    flex:0 0 44px!important;
+    visibility:visible!important;
+  }
+
+  /* Header + actions occupy one flex line, details use short subsequent lines.
+     In particular, delete never becomes its own big empty trailing row. */
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row {
+    padding:8px!important;
+    gap:5px 6px!important;
+    align-content:start!important;
+    align-items:center!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-drag-handle {
+    flex:0 0 12px!important;
+    width:12px!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-row-icon {
+    flex:0 0 16px!important;
+    width:16px!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > :is(.morph-route-compact-picker,.morph-special-config-name,.morph-spiral-picker) {
+    flex:1 1 84px!important;
+    width:auto!important;
+    min-width:65px!important;
+    max-width:none!important;
+    margin:0!important;
+    order:0!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-binding-remove,
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-always-on-multiplier ~ .morph-binding-remove,
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-multiplier ~ .morph-binding-remove {
+    flex:0 0 36px!important;
+    order:0!important;
+    width:36px!important;
+    min-width:36px!important;
+    height:36px!important;
+    min-height:36px!important;
+    margin:0 0 0 auto!important;
+    padding:4px!important;
+    font-size:18px!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > :is(.morph-route-compact-picker,.morph-special-config-name) :is(.audio-param-picker-button,select) {
+    min-height:34px!important;
+    height:34px!important;
+    font-size:12px!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-inline-control,
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-inline-check {
+    min-height:32px!important;
+    padding:3px 6px!important;
+    font-size:11px!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-inline-select {
+    flex:1 1 100%!important;
+    width:100%!important;
+    max-width:100%!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-inline-select select {
+    min-height:36px!important;
+    height:36px!important;
+    width:auto!important;
+    max-width:100%!important;
+    font-size:15px!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-layer-coverage {
+    flex:0 0 auto!important;
+    min-height:32px!important;
+    height:32px!important;
+    width:auto!important;
+    max-width:100%!important;
+    padding:3px 6px!important;
+    justify-content:flex-start!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-profile-group-dropdown {
+    flex:0 1 235px!important;
+    width:min(100%,235px)!important;
+    max-width:100%!important;
+    min-width:0!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-special-config-range {
+    flex:1 1 100%!important;
+    width:100%!important;
+    min-width:0!important;
+    min-height:34px!important;
+    flex-wrap:wrap!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-number {
+    flex:0 1 78px!important;
+    width:78px!important;
+    max-width:calc((100% - 22px) / 2)!important;
+    min-width:0!important;
+    height:34px!important;
+    min-height:34px!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-range-sep {
+    flex:0 0 14px!important;
+    width:14px!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-inline-number {
+    height:34px!important;
+    min-height:34px!important;
+  }
+}
+/* Two shorter cards per row on tablet screens. At 320–599px
+   the single-column layout retains finger-sized controls. */
+@media (min-width:600px) and (max-width:760px) {
+  #morphSettingsPanel #morphProfileBindings,
+  #randomSettingsPanel #orangeMorphBindings {
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    align-items:start!important;
+    gap:8px!important;
+  }
+  #morphSettingsPanel #morphProfileBindings > .morph-route-row,
+  #randomSettingsPanel #orangeMorphBindings > .orange-route-row {
+    width:100%!important;
+    min-width:0!important;
+    max-width:100%!important;
+    margin:0!important;
+  }
+}
+
+/* Preserve visual grouping without relocating live input nodes: reserve an
+   explicit first line for [drag] [enabled] [icon] [name] [remove]. All other
+   generated controls begin below it in their original DOM order. */
+@media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > * {order:2!important;}
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > :is(
+    .morph-route-drag-handle,.morph-route-row-icon,.morph-route-compact-picker,
+    .morph-special-config-name,.morph-spiral-picker,.morph-binding-remove
+  ),
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > input[type="checkbox"],
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-always-on-multiplier ~ .morph-binding-remove,
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-multiplier ~ .morph-binding-remove {
+    order:0!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row::before {
+    content:"";order:1;flex:0 0 100%;height:0;margin:0;padding:0;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row:is(
+    [data-morph-special="shape"],[data-morph-special="orbits"],
+    [data-orange-special="shape"],[data-orange-special="orbits"]
+  ) > .morph-special-config-name {
+    flex:1 1 70px!important;
+    min-width:0!important;max-width:none!important;
+    width:auto!important;
+  }
+  :is(#morphProfileBindings,#orangeMorphBindings) .morph-route-row > .morph-route-compact-picker .audio-param-picker-button {
+    line-height:1.25!important;
+    overflow-wrap:anywhere!important;
+  }
+}
+/* On very narrow phones, the Morph title must not push Close onto a second
+   header row. Keep a visible 40px close target and let long text truncate. */
+@media (max-width:360px) {
+  #morphSettingsPanel .morph-settings-title {
+    flex-wrap:nowrap!important;
+    gap:4px!important;
+    padding:6px!important;
+    min-height:48px!important;
+  }
+  #morphSettingsPanel .morph-settings-title > span:first-child {
+    flex:1 1 105px!important;
+    min-width:0!important;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-size:12px!important;
+  }
+  #morphSettingsPanel .morph-settings-title .morph-header-master {
+    flex:0 0 auto!important;min-width:0!important;
+    padding:5px 7px!important;
+  }
+  #morphSettingsPanel .morph-settings-title .mobile-panel-close {
+    flex:0 0 40px!important;width:40px!important;min-width:40px!important;
+    height:40px!important;min-height:40px!important;
+    margin-left:0!important;
+  }
+}
+@media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
+  /* Make the newly unobstructed create-project icon distinguishable from the
+     other dark playlist buttons, including when the header is scrolled. */
+  header #projectChooserPanel #btnQuickNewProject {
+    color:#d9faff!important;
+    background:rgba(8,145,178,.24)!important;
+    border-color:rgba(34,211,238,.68)!important;
+  }
+  header #projectChooserPanel #btnQuickNewProject svg {
+    width:18px!important;height:18px!important;
+    fill:none!important;stroke:currentColor!important;
+    stroke-width:2.1!important;
+  }
+}

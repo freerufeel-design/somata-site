@@ -18685,7 +18685,7 @@ syncMorphProfileUI();
 
         (() => {
             const mobileParameterQuery = window.matchMedia('(max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse)');
-            const LONG_PRESS_MS = 520;
+            const LONG_PRESS_MS = 440;
             const MOVE_CANCEL_PX = 12;
             let pressTimer = 0;
             let pressPointerId = null;
@@ -18711,15 +18711,20 @@ syncMorphProfileUI();
             }
 
             function findNamedRangeContext(target) {
-                if (!mobileParameterQuery.matches || !target || isInteractiveTarget(target)) return null;
+                if (!mobileParameterQuery.matches || !target) return null;
                 if (target.closest?.('#mobileParameterFocusOverlay')) return null;
+                // The slider itself must be focusable by touch. Previously only the text label
+                // could activate the dock; dragging a range never reached the focus handler.
+                const touchedRange = target.closest?.('input[type="range"]');
+                if (!touchedRange && isInteractiveTarget(target)) return null;
+                if (touchedRange?.disabled || touchedRange?.classList.contains('blue-morph-dual')) return null;
 
-                const textNode = target.closest?.('span,label,strong,.hint-text,.audio-effect-title,.row-label,.tunnel-setting-head,.morph-setting-row');
+                const textNode = touchedRange || target.closest?.('span,label,strong,.hint-text,.audio-effect-title,.row-label,.tunnel-setting-head,.morph-setting-row');
                 if (!textNode || textNode.matches?.('.text-mono,.editable-number-value,.editable-mult-summary')) return null;
 
                 let row = target.closest?.(rowSelectors) || null;
-                let range = null;
-                if (row) {
+                let range = touchedRange || null;
+                if (row && !range) {
                     const rowRanges = [...(row.querySelectorAll?.('input[type="range"]') || [])]
                         .filter(input => !input.classList.contains('blue-morph-dual'));
                     if (rowRanges.length === 1) range = rowRanges[0];
@@ -18733,6 +18738,7 @@ syncMorphProfileUI();
                         if (ranges?.length > 1) break;
                     }
                 }
+                if (!row && touchedRange) row = touchedRange.closest('label,.control-group,.morph-sidebar-section') || touchedRange.parentElement;
                 if (!row || !range || range.closest('#mobileParameterFocusOverlay')) return null;
 
                 const valueNode = target.closest?.('.text-mono,.editable-number-value,.editable-mult-summary');
@@ -18754,7 +18760,7 @@ syncMorphProfileUI();
                 ];
                 for (const selector of preferred) {
                     const el = row.querySelector?.(selector);
-                    if (el && visibleText(el) && (el === target || el.contains(target) || target.contains?.(el))) {
+                    if (el && visibleText(el) && (touchedRange || el === target || el.contains(target) || target.contains?.(el))) {
                         nameEl = el;
                         break;
                     }
@@ -18764,9 +18770,10 @@ syncMorphProfileUI();
                     const t = target.closest?.('span,label,strong,.hint-text,.audio-effect-title');
                     if (t && row.contains(t) && visibleText(t) && !t.matches('.text-mono')) nameEl = t;
                 }
-                if (!nameEl) return null;
+                if (!nameEl && !touchedRange) return null;
 
-                const title = visibleText(nameEl).replace(/^[-+×\s]+|[-+×\s]+$/g, '') || range.getAttribute('aria-label') || 'Параметр';
+                const title = (touchedRange?.getAttribute('aria-label') || visibleText(nameEl) || 'Параметр')
+                    .replace(/^[-+×\s]+|[-+×\s]+$/g, '');
                 const numberInputs = [...row.querySelectorAll('input[type="number"]')];
                 const multiplier = numberInputs.find(input => {
                     const hay = `${input.id || ''} ${input.getAttribute('aria-label') || ''} ${input.title || ''}`;
@@ -18784,7 +18791,11 @@ syncMorphProfileUI();
                 overlay.setAttribute('aria-hidden', 'true');
                 overlay.innerHTML = `
                     <div class="mobile-parameter-focus-dock" role="dialog" aria-modal="true" aria-label="Быстрая настройка параметра">
-                        <div id="mobileParameterFocusTitle" class="mobile-parameter-focus-title"></div>
+                        <div class="mobile-parameter-focus-head">
+                            <div id="mobileParameterFocusTitle" class="mobile-parameter-focus-title"></div>
+                            <output id="mobileParameterFocusValue" class="mobile-parameter-focus-value" aria-live="off"></output>
+                            <button id="mobileParameterFocusClose" class="mobile-parameter-focus-close" type="button" aria-label="Вернуться к настройкам">×</button>
+                        </div>
                         <div class="mobile-parameter-focus-controls">
                             <button id="mobileParameterMinus" class="mobile-parameter-focus-step" type="button" aria-label="Уменьшить параметр">−</button>
                             <div id="mobileParameterRangeSlot" class="mobile-parameter-focus-range-slot"></div>
@@ -18802,23 +18813,51 @@ syncMorphProfileUI();
                     exitParameterFocus(true);
                 });
                 overlay.addEventListener('pointerdown', (event) => {
-                    if (!event.target.closest('.mobile-parameter-focus-dock')) event.preventDefault();
+                    if (event.target.closest('.mobile-parameter-focus-dock')) return;
+                    event.preventDefault();
+                    if (activeContext && performance.now() >= ignoreOverlayTapUntil) exitParameterFocus(true);
                 });
+                overlay.querySelector('#mobileParameterFocusClose')?.addEventListener('click', () => exitParameterFocus(true));
                 overlay.querySelector('#mobileParameterMinus')?.addEventListener('click', () => nudgeFocusedRange(-1));
                 overlay.querySelector('#mobileParameterPlus')?.addEventListener('click', () => nudgeFocusedRange(1));
                 return overlay;
             }
 
-            function placeholderFor(input) {
-                const marker = document.createComment(`mobile-focus:${input.id || input.type}`);
-                input.parentNode?.insertBefore(marker, input);
-                return marker;
-            }
-
-            function restoreAtPlaceholder(input, marker) {
-                if (!input || !marker?.parentNode) return;
-                marker.parentNode.insertBefore(input, marker);
-                marker.remove();
+            // Keep the real input in its original DOM subtree. Many parameter handlers rely
+            // on delegated input/change events, so moving the real node to the dock breaks
+            // live updates, sometimes rebuilding the row under the user's finger.
+            function createFocusProxy(input, kind, context) {
+                const proxy = input.cloneNode(false);
+                proxy.removeAttribute('id');
+                proxy.removeAttribute('name');
+                proxy.removeAttribute('data-log-multiplier');
+                proxy.classList.add('mobile-focus-proxy');
+                proxy.style.accentColor = window.getComputedStyle(input).accentColor;
+                proxy.value = input.value;
+                const sync = () => {
+                    if (proxy.isConnected && proxy.value !== input.value) proxy.value = input.value;
+                    if (kind === 'focusRange') context.updateFocusValue?.();
+                };
+                const relay = event => {
+                    // The mirrored control is UI only. Do not let its event reach
+                    // unrelated document-level delegated parameter handlers; they
+                    // must see the event only from the original input below.
+                    event.stopPropagation();
+                    if (input.disabled || !input.isConnected) return;
+                    input.value = proxy.value;
+                    input.dispatchEvent(new Event(event.type, { bubbles:true }));
+                    sync();
+                };
+                proxy.addEventListener('input', relay);
+                proxy.addEventListener('change', relay);
+                input.addEventListener('input', sync);
+                input.addEventListener('change', sync);
+                context.proxyCleanup.push(() => {
+                    input.removeEventListener('input', sync);
+                    input.removeEventListener('change', sync);
+                });
+                context[kind] = proxy;
+                return proxy;
             }
 
             function getRangeStep(range) {
@@ -18845,6 +18884,8 @@ syncMorphProfileUI();
                 range.value = decimals ? value.toFixed(decimals).replace(/0+$/, '').replace(/\.$/, '') : String(Math.round(value));
                 range.dispatchEvent(new Event('input', { bubbles: true }));
                 range.dispatchEvent(new Event('change', { bubbles: true }));
+                if (activeContext?.focusRange) activeContext.focusRange.value = range.value;
+                activeContext?.updateFocusValue?.();
                 try { navigator.vibrate?.(8); } catch (_) {}
             }
 
@@ -18856,19 +18897,22 @@ syncMorphProfileUI();
                 const rangeSlot = overlay.querySelector('#mobileParameterRangeSlot');
                 const multiplierWrap = overlay.querySelector('#mobileParameterMultiplierWrap');
                 const multiplierSlot = overlay.querySelector('#mobileParameterMultiplierSlot');
+                const output = overlay.querySelector('#mobileParameterFocusValue');
                 const sourceRect = context.row.getBoundingClientRect();
+                context.updateFocusValue = () => { if (output) output.textContent = context.range.value; };
 
-                context.rangePlaceholder = placeholderFor(context.range);
-                rangeSlot.appendChild(context.range);
+                context.proxyCleanup = [];
+                rangeSlot.replaceChildren(createFocusProxy(context.range, 'focusRange', context));
                 if (context.multiplier) {
-                    context.multiplierPlaceholder = placeholderFor(context.multiplier);
-                    multiplierSlot.appendChild(context.multiplier);
+                    multiplierSlot.replaceChildren(createFocusProxy(context.multiplier, 'focusMultiplier', context));
                     multiplierWrap.classList.remove('hidden');
                 } else {
+                    multiplierSlot.replaceChildren();
                     multiplierWrap.classList.add('hidden');
                 }
 
                 title.textContent = context.title;
+                context.updateFocusValue();
                 activeContext = context;
                 ignoreOverlayTapUntil = performance.now() + 420;
                 document.body.classList.add('mobile-parameter-focus');
@@ -18903,8 +18947,9 @@ syncMorphProfileUI();
                 const context = activeContext;
                 const overlay = document.getElementById('mobileParameterFocusOverlay');
                 const dock = overlay?.querySelector('.mobile-parameter-focus-dock');
-                restoreAtPlaceholder(context.range, context.rangePlaceholder);
-                restoreAtPlaceholder(context.multiplier, context.multiplierPlaceholder);
+                for (const cleanup of context.proxyCleanup || []) cleanup();
+                overlay?.querySelector('#mobileParameterRangeSlot')?.replaceChildren();
+                overlay?.querySelector('#mobileParameterMultiplierSlot')?.replaceChildren();
                 if (dock) {
                     dock.style.transition = '';
                     dock.style.transform = '';
@@ -18921,6 +18966,8 @@ syncMorphProfileUI();
 
             function exitParameterFocus(animated) {
                 if (!activeContext) return;
+                if (activeContext.exiting && animated) return;
+                activeContext.exiting = true;
                 const overlay = document.getElementById('mobileParameterFocusOverlay');
                 const dock = overlay?.querySelector('.mobile-parameter-focus-dock');
                 if (!animated || !dock) { finishExit(); return; }
@@ -18941,7 +18988,7 @@ syncMorphProfileUI();
             }
 
             document.addEventListener('pointerdown', (event) => {
-                if (!mobileParameterQuery.matches || activeContext || event.button > 0) return;
+                if (!mobileParameterQuery.matches || activeContext || event.button > 0 || event.pointerType === 'mouse') return;
                 const context = findNamedRangeContext(event.target);
                 if (!context) return;
                 clearPress();
