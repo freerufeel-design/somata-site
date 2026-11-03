@@ -8413,3 +8413,195 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
     height:44px!important;
   }
 }
+
+
+/* Somata 13.1 — mobile Layers and focus isolation.
+   The previous flex:0 1 auto allowed the long settings pane to squeeze
+   #layerList almost to zero, even when the user explicitly expanded it.
+   Preserve the layer list's natural height (up to a scrollable viewport cap)
+   and let ONLY the settings body consume the remaining drawer height. */
+@media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
+  #settingsSidebar:not(.mobile-layers-collapsed) #layerList {
+    flex:0 0 auto!important;
+    min-height:0!important;
+    max-height:min(42dvh, 320px)!important;
+    height:auto!important;
+    overflow-y:auto!important;
+    overscroll-behavior-y:contain;
+    -webkit-overflow-scrolling:touch;
+    scrollbar-gutter:stable;
+  }
+  #settingsSidebar #layerList .layer-item {
+    flex:0 0 auto!important;
+  }
+  #settingsSidebar .sidebar-content,
+  body.ui-easy #settingsSidebar .sidebar-content {
+    flex:1 1 0%!important;
+    min-height:0!important;
+    overflow-y:auto!important;
+  }
+  #settingsSidebar #btnToggleLayerList[aria-expanded="true"] {
+    color:#a5f3fc!important;
+    border-color:rgba(34,211,238,.72)!important;
+    background:rgba(8,145,178,.14)!important;
+  }
+
+  /* Android browsers may paint input[type=range] in a separate compositor
+     surface, disregarding visibility/opacity on an offscreen drawer.
+     Remove the drawer from layout/painting only during focus, not the GPU
+     scene: source range inputs remain in the DOM and keep firing input events. */
+  body.mobile-parameter-focus #settingsSidebar,
+  body.mobile-parameter-focus #sidebarToolRail,
+  body.mobile-parameter-focus #mobileSidebarBackdrop,
+  body.mobile-parameter-focus .floating-controls,
+  body.mobile-parameter-focus #btnMobileControls {
+    display:none!important;
+  }
+  body.mobile-parameter-focus #btnQuickNewProject {
+    display:none!important;
+  }
+  body.mobile-parameter-focus input[type="range"] {
+    visibility:hidden!important;
+    opacity:0!important;
+    pointer-events:none!important;
+  }
+  body.mobile-parameter-focus #mobileParameterFocusOverlay input[type="range"] {
+    display:block!important;
+    visibility:visible!important;
+    opacity:1!important;
+    pointer-events:auto!important;
+  }
+  /* A GPU frame must not be blurred as the slider is dragged. */
+  body.mobile-parameter-focus .mobile-parameter-focus-dock {
+    -webkit-backdrop-filter:none!important;
+    backdrop-filter:none!important;
+  }
+}
+
+/* Somata 13.1 — expanded touch focus: unified Morph/Audio routing,
+   discrete settings and the actual interactive profile editor. */
+@media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
+  #mobileParameterFocusOverlay .mobile-parameter-focus-head {
+    gap:5px!important;
+  }
+  #mobileParameterFocusOverlay .mobile-parameter-focus-head .mobile-parameter-focus-title {
+    flex:1 1 40px!important;
+    text-align:left!important;
+  }
+  #mobileParameterRouting.mobile-parameter-focus-routing {
+    display:flex!important;
+    flex:0 0 32px!important;
+    align-items:center;
+    justify-content:center;
+    width:32px!important;
+    height:36px!important;
+    min-width:32px!important;
+    min-height:36px!important;
+    padding:0!important;
+    border-radius:9px;
+    border:1px solid rgba(56,189,248,.55);
+    background:rgba(14,116,144,.2);
+    color:#67e8f9;
+    font-size:19px;
+    font-weight:700;
+    touch-action:manipulation;
+  }
+  #mobileParameterRouting.hidden {display:none!important;}
+  #mobileParameterFocusOverlay .mobile-parameter-focus-value.hidden,
+  #mobileParameterFocusOverlay .mobile-parameter-focus-controls.hidden,
+  #mobileParameterWidgetSlot.hidden,
+  #mobileParameterProfileSlot.hidden {display:none!important;}
+  #mobileParameterFocusOverlay .mobile-parameter-profile-slot,
+  #mobileParameterFocusOverlay .mobile-parameter-widget-slot {
+    box-sizing:border-box;
+    width:100%;
+    min-width:0;
+    max-height:min(64dvh,570px);
+    overflow:auto;
+    overscroll-behavior:contain;
+    -webkit-overflow-scrolling:touch;
+    touch-action:pan-y;
+  }
+  #mobileParameterFocusOverlay .mobile-parameter-focus-dock:has(.mobile-parameter-profile-slot:not(.hidden)) {
+    max-height:calc(100dvh - env(safe-area-inset-top) - 24px);
+    display:flex;
+    flex-direction:column;
+  }
+  #mobileParameterProfileSlot #profileSettingsGroup {
+    display:flex!important;
+    flex-direction:column;
+    min-width:0!important;
+    width:100%!important;
+    max-width:100%!important;
+    height:auto!important;
+    margin:0!important;
+    padding:4px 0!important;
+    border:0!important;
+    box-shadow:none!important;
+  }
+  #mobileParameterProfileSlot .control-group-title {margin:0 0 5px!important;}
+  #mobileParameterProfileSlot #profileCanvas {
+    display:block!important;
+    width:100%!important;
+    max-width:100%!important;
+    height:auto!important;
+    min-height:140px;
+    aspect-ratio:340 / 160;
+    touch-action:none!important;
+  }
+  #mobileParameterProfileSlot .profile-canvas-container {
+    width:100%!important;
+    max-width:100%!important;
+    min-width:0!important;
+  }
+  #mobileParameterProfileSlot .profile-library-tabs {
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    width:100%!important;
+  }
+  #mobileParameterProfileSlot .profile-library-tab {
+    font-size:11px!important;
+    min-height:30px;
+  }
+  #mobileParameterProfileSlot :is(button,select,input) {touch-action:manipulation;}
+  #mobileParameterProfileSlot input[type="range"],
+  #mobileParameterWidgetSlot input[type="range"] {
+    display:block!important;
+    visibility:visible!important;
+    opacity:1!important;
+    pointer-events:auto!important;
+  }
+  #mobileParameterWidgetSlot .mobile-focus-widget-copy {
+    display:flex!important;
+    flex-direction:column;
+    gap:8px;
+    width:100%!important;
+    min-width:0!important;
+    height:auto!important;
+    margin:0!important;
+    padding:6px 0!important;
+    border:0!important;
+    box-shadow:none!important;
+    background:transparent!important;
+  }
+  #mobileParameterWidgetSlot .mobile-focus-widget-copy :is(select,input,button) {
+    max-width:100%!important;
+    min-width:0;
+  }
+  #mobileParameterWidgetSlot .mobile-focus-widget-copy label {max-width:100%;}
+  /* The normal routing popup is body-ported. It must be above the active
+     dock, instead of hidden by the old 13.1 focus isolation rule. */
+  body.mobile-parameter-focus #parameterRoutingContextMenu:not(.hidden) {
+    z-index:2147483002!important;
+    visibility:visible!important;
+    opacity:1!important;
+    pointer-events:auto!important;
+    max-height:calc(100dvh - 20px);
+    overflow-y:auto;
+    -webkit-backdrop-filter:none!important;
+    backdrop-filter:none!important;
+  }
+  #settingsSidebar :is(.row-label,.control-group-title,label > span:first-child) {
+    -webkit-touch-callout:none;
+  }
+}

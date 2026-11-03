@@ -2881,6 +2881,8 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
         if(!window.__somataRoutingFrameContextCaptureInstalled){
             window.__somataRoutingFrameContextCaptureInstalled=true;
             document.addEventListener('contextmenu',ev=>{
+                // On touch the same long press is reserved for the bottom dock.
+                if(window.matchMedia('(max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse)').matches) return;
                 if(ev.target?.closest?.('.parameter-routing-context-menu'))return;
                 // Spiral order is a subsetting of the Spiral block. Resolve it
                 // before the parent row's generic parameter-routing capture.
@@ -18783,6 +18785,120 @@ syncMorphProfileUI();
                 return { row, range, multiplier, nameEl, title };
             }
 
+            // 13.1: A focused setting may be a range, a discrete control row,
+            // or the live profile editor. Only registered Morph parameters get
+            // access to the shared Blue / Orange / Audio routing menu.
+            function findProfileFocusContext(target) {
+                const group = target?.closest?.('#profileSettingsGroup');
+                if (!group || isInteractiveTarget(target)) return null;
+                const heading = group.querySelector('.control-group-title');
+                if (!heading?.contains(target)) return null;
+                return {kind:'profile', row:group, title:'Профиль отрезка'};
+            }
+
+            function findWidgetFocusContext(target) {
+                if (!target || isInteractiveTarget(target) || target.closest?.('#mobileParameterFocusOverlay')) return null;
+                const row = target.closest?.('.control-row,.tunnel-setting,.tap-setting-row,.audio-effect-row,.control-group-title,.geometry-circle-modes');
+                if (!row || row.closest('#profileSettingsGroup')) return null;
+                const named = target.closest?.('label,span,strong,.row-label,.audio-effect-title,.tunnel-setting-head,.geometry-circles-head,.control-group-title');
+                if (!named || !row.contains(named)) return null;
+                const controls = [...row.querySelectorAll('input,select,textarea,button')].filter(el => !el.matches('[type="hidden"]'));
+                if (!controls.length || controls.every(el => el.disabled)) return null;
+                // An ordinary slider keeps its existing two-row focus UI.
+                if (controls.some(el => el.matches('input[type="range"]')) && controls.filter(el => el.matches('input[type="range"]')).length === 1) return null;
+                const name = row.querySelector('.row-label > span:first-child,.control-group-title > span:first-child,.geometry-circles-head label span,label > span:first-of-type,.audio-effect-title,label,strong') || named;
+                const title = visibleText(name).replace(/[:：]$/, '').slice(0,90) || 'Настройка';
+                return {kind:'widgets',row,title};
+            }
+
+            function findFocusContext(target) {
+                if (!mobileParameterQuery.matches || !target || target.closest?.('#mobileParameterFocusOverlay')) return null;
+                return findProfileFocusContext(target) || findNamedRangeContext(target) || findWidgetFocusContext(target);
+            }
+
+            function routingIdForFocus(context) {
+                if (context?.kind === 'profile') return window.SomataParameterMatrix?.get?.('geometry.shape') ? 'geometry.shape' : null;
+                const defs = window.SomataParameterRegistry?.morphable?.() || [];
+                const eligible = def => def?.morph?.supported === true && def?.type !== 'boolean' && !morphAlwaysOnMultiplier(def.id);
+                const rangeId = context?.range?.id;
+                const exact = defs.find(def => eligible(def) && rangeId && def.ui?.mainId === rangeId);
+                if (exact) return exact.id;
+                const row = context?.row;
+                if (!row) return null;
+                // The registered visual host is more precise than matching labels.
+                const host = row.querySelector?.('[data-routing-param-id]');
+                if (host?.dataset.routingParamId && eligible(window.SomataParameterRegistry.get(host.dataset.routingParamId))) return host.dataset.routingParamId;
+                const matching = defs.filter(def => eligible(def) && def.ui?.mainId && [...row.querySelectorAll('[id]')].some(el => el.id === def.ui.mainId));
+                return matching.length === 1 ? matching[0].id : null;
+            }
+
+            // Mirror non-slider widgets to their *original* controls, keeping
+            // delegated handlers attached to the original settings tree.
+            function mountWidgetProxy(context, slot) {
+                const source = context.row;
+                const clone = source.cloneNode(true);
+                clone.removeAttribute('id');
+                clone.classList.add('mobile-focus-widget-copy');
+                for (const element of clone.querySelectorAll('[id]')) element.removeAttribute('id');
+                for (const element of clone.querySelectorAll('label[for]')) element.removeAttribute('for');
+                const orig = [...source.querySelectorAll('input,select,textarea,button')];
+                const copies = [...clone.querySelectorAll('input,select,textarea,button')];
+                const cleanups = [];
+                orig.forEach((control,i) => {
+                    const proxy = copies[i];
+                    if (!proxy) return;
+                    const isButton = control.tagName === 'BUTTON' || control.matches('input[type="button"],input[type="submit"]');
+                    const isCheck = control.matches('input[type="checkbox"],input[type="radio"]');
+                    const sync = () => {
+                        if (!proxy.isConnected) return;
+                        proxy.disabled = control.disabled;
+                        if (isCheck) proxy.checked = control.checked;
+                        else if (!isButton) proxy.value = control.value;
+                        if (control.getAttribute('aria-pressed') !== null) proxy.setAttribute('aria-pressed',control.getAttribute('aria-pressed'));
+                    };
+                    if (isButton) {
+                        proxy.addEventListener('click', event => {event.stopPropagation();control.click();queueMicrotask(sync);});
+                    } else if (isCheck) {
+                        proxy.addEventListener('change', event => {
+                            event.stopPropagation();
+                            if (!control.isConnected || control.disabled) return;
+                            if (control.checked !== proxy.checked) control.click();
+                            else control.dispatchEvent(new Event('change',{bubbles:true}));
+                            queueMicrotask(sync);
+                        });
+                    } else {
+                        for (const type of ['input','change']) proxy.addEventListener(type, event => {
+                            event.stopPropagation();
+                            if (!control.isConnected || control.disabled) return;
+                            control.value = proxy.value;
+                            control.dispatchEvent(new Event(type,{bubbles:true}));
+                            queueMicrotask(sync);
+                        });
+                    }
+                    for (const type of ['input','change']) control.addEventListener(type,sync);
+                    cleanups.push(() => {for (const type of ['input','change']) control.removeEventListener(type,sync);});
+                });
+                context.proxyCleanup.push(...cleanups);
+                slot.replaceChildren(clone);
+            }
+
+            function mountProfileEditor(context, slot) {
+                // Keep the REAL editor/canvas and its listeners; never clone a
+                // canvas or lose its WebGL/2D state. A marker restores its slot.
+                const editor = document.getElementById('profileSettingsGroup');
+                if (!editor?.parentNode) return false;
+                const marker = document.createComment('Somata profile editor restore point');
+                editor.parentNode.insertBefore(marker,editor);
+                context.restoreProfile = () => {
+                    if (marker.parentNode) marker.parentNode.insertBefore(editor,marker);
+                    marker.remove();
+                    renderProfileEditor();
+                };
+                slot.replaceChildren(editor);
+                renderProfileEditor();
+                return true;
+            }
+
             function ensureOverlay() {
                 let overlay = document.getElementById('mobileParameterFocusOverlay');
                 if (overlay) return overlay;
@@ -18793,6 +18909,7 @@ syncMorphProfileUI();
                     <div class="mobile-parameter-focus-dock" role="dialog" aria-modal="true" aria-label="Быстрая настройка параметра">
                         <div class="mobile-parameter-focus-head">
                             <div id="mobileParameterFocusTitle" class="mobile-parameter-focus-title"></div>
+                            <button id="mobileParameterRouting" class="mobile-parameter-focus-routing hidden" type="button" aria-label="Назначить морфинг и аудиосвязь" title="Синий Morph · Оранжевый Morph · Аудиосвязь">⇄</button>
                             <output id="mobileParameterFocusValue" class="mobile-parameter-focus-value" aria-live="off"></output>
                             <div id="mobileParameterMultiplierWrap" class="mobile-parameter-focus-multiplier hidden" aria-label="Множитель параметра">
                                 <span aria-hidden="true">×</span><span id="mobileParameterMultiplierSlot"></span>
@@ -18804,6 +18921,8 @@ syncMorphProfileUI();
                             <div id="mobileParameterRangeSlot" class="mobile-parameter-focus-range-slot"></div>
                             <button id="mobileParameterPlus" class="mobile-parameter-focus-step" type="button" aria-label="Увеличить параметр">+</button>
                         </div>
+                        <div id="mobileParameterWidgetSlot" class="mobile-parameter-widget-slot hidden"></div>
+                        <div id="mobileParameterProfileSlot" class="mobile-parameter-profile-slot hidden"></div>
                     </div>`;
                 document.body.appendChild(overlay);
 
@@ -18820,6 +18939,16 @@ syncMorphProfileUI();
                 overlay.querySelector('#mobileParameterFocusClose')?.addEventListener('click', () => exitParameterFocus(true));
                 overlay.querySelector('#mobileParameterMinus')?.addEventListener('click', () => nudgeFocusedRange(-1));
                 overlay.querySelector('#mobileParameterPlus')?.addEventListener('click', () => nudgeFocusedRange(1));
+                overlay.querySelector('#mobileParameterRouting')?.addEventListener('click', event => {
+                    event.preventDefault();event.stopPropagation();
+                    const id = activeContext?.routingId;
+                    if (!id) return;
+                    const button = event.currentTarget;
+                    const r = button.getBoundingClientRect();
+                    // Existing unified menu owns the actual Blue/Orange/Audio
+                    // state, its active profile and the list of Audio targets.
+                    openUnifiedParameterRoutingMenuForId(id, Math.max(8,r.right-290), Math.max(8,r.top-330));
+                });
                 return overlay;
             }
 
@@ -18890,7 +19019,9 @@ syncMorphProfileUI();
             }
 
             function enterParameterFocus(context) {
-                if (!mobileParameterQuery.matches || !context?.range || activeContext) return;
+                if (!mobileParameterQuery.matches || !context?.row || activeContext) return;
+                context.kind ||= 'range';
+                if (context.kind === 'range' && !context.range) return;
                 const overlay = ensureOverlay();
                 const dock = overlay.querySelector('.mobile-parameter-focus-dock');
                 const title = overlay.querySelector('#mobileParameterFocusTitle');
@@ -18899,18 +19030,38 @@ syncMorphProfileUI();
                 const multiplierSlot = overlay.querySelector('#mobileParameterMultiplierSlot');
                 const output = overlay.querySelector('#mobileParameterFocusValue');
                 const sourceRect = context.row.getBoundingClientRect();
-                context.updateFocusValue = () => { if (output) output.textContent = context.range.value; };
-
+                // The 13.1 Android focus mode removes the settings drawer from
+                // painting. Keep its last position for the exit animation.
+                context.sourceRect = sourceRect;
+                context.updateFocusValue = () => { if (output && context.range) output.textContent = context.range.value; };
                 context.proxyCleanup = [];
-                rangeSlot.replaceChildren(createFocusProxy(context.range, 'focusRange', context));
-                if (context.multiplier) {
-                    multiplierSlot.replaceChildren(createFocusProxy(context.multiplier, 'focusMultiplier', context));
-                    multiplierWrap.classList.remove('hidden');
-                } else {
-                    multiplierSlot.replaceChildren();
-                    multiplierWrap.classList.add('hidden');
+                const widgetSlot = overlay.querySelector('#mobileParameterWidgetSlot');
+                const profileSlot = overlay.querySelector('#mobileParameterProfileSlot');
+                const controls = overlay.querySelector('.mobile-parameter-focus-controls');
+                const routeButton = overlay.querySelector('#mobileParameterRouting');
+                context.routingId = routingIdForFocus(context);
+                routeButton.classList.toggle('hidden',!context.routingId);
+                routeButton.disabled = !context.routingId;
+                controls.classList.toggle('hidden',context.kind !== 'range');
+                output.classList.toggle('hidden',context.kind !== 'range');
+                widgetSlot.classList.toggle('hidden',context.kind !== 'widgets');
+                profileSlot.classList.toggle('hidden',context.kind !== 'profile');
+                rangeSlot.replaceChildren();
+                multiplierSlot.replaceChildren();
+                multiplierWrap.classList.add('hidden');
+                widgetSlot.replaceChildren();
+                profileSlot.replaceChildren();
+                if (context.kind === 'range') {
+                    rangeSlot.appendChild(createFocusProxy(context.range, 'focusRange', context));
+                    if (context.multiplier) {
+                        multiplierSlot.appendChild(createFocusProxy(context.multiplier, 'focusMultiplier', context));
+                        multiplierWrap.classList.remove('hidden');
+                    }
+                } else if (context.kind === 'widgets') {
+                    mountWidgetProxy(context,widgetSlot);
+                } else if (context.kind === 'profile') {
+                    if (!mountProfileEditor(context,profileSlot)) return;
                 }
-
                 title.textContent = context.title;
                 context.updateFocusValue();
                 activeContext = context;
@@ -18921,7 +19072,7 @@ syncMorphProfileUI();
 
                 const minus = overlay.querySelector('#mobileParameterMinus');
                 const plus = overlay.querySelector('#mobileParameterPlus');
-                const disabled = context.range.disabled;
+                const disabled = context.kind !== 'range' || context.range.disabled;
                 if (minus) minus.disabled = disabled;
                 if (plus) plus.disabled = disabled;
 
@@ -18948,8 +19099,13 @@ syncMorphProfileUI();
                 const overlay = document.getElementById('mobileParameterFocusOverlay');
                 const dock = overlay?.querySelector('.mobile-parameter-focus-dock');
                 for (const cleanup of context.proxyCleanup || []) cleanup();
+                context.restoreProfile?.();
                 overlay?.querySelector('#mobileParameterRangeSlot')?.replaceChildren();
                 overlay?.querySelector('#mobileParameterMultiplierSlot')?.replaceChildren();
+                overlay?.querySelector('#mobileParameterWidgetSlot')?.replaceChildren();
+                overlay?.querySelector('#mobileParameterProfileSlot')?.replaceChildren();
+                const menu = document.getElementById('parameterRoutingContextMenu');
+                menu?.classList.add('hidden');
                 if (dock) {
                     dock.style.transition = '';
                     dock.style.transform = '';
@@ -18971,7 +19127,7 @@ syncMorphProfileUI();
                 const overlay = document.getElementById('mobileParameterFocusOverlay');
                 const dock = overlay?.querySelector('.mobile-parameter-focus-dock');
                 if (!animated || !dock) { finishExit(); return; }
-                const rect = activeContext.row?.getBoundingClientRect?.();
+                const rect = activeContext.sourceRect || activeContext.row?.getBoundingClientRect?.();
                 const dockRect = dock.getBoundingClientRect();
                 const targetY = rect ? Math.min(0, (rect.top + rect.height / 2) - (dockRect.top + dockRect.height / 2)) : 80;
                 dock.style.transition = 'transform .24s cubic-bezier(.4,0,.2,1), opacity .18s ease';
@@ -18989,7 +19145,7 @@ syncMorphProfileUI();
 
             document.addEventListener('pointerdown', (event) => {
                 if (!mobileParameterQuery.matches || activeContext || event.button > 0 || event.pointerType === 'mouse') return;
-                const context = findNamedRangeContext(event.target);
+                const context = findFocusContext(event.target);
                 if (!context) return;
                 clearPress();
                 pendingContext = context;
@@ -19012,7 +19168,7 @@ syncMorphProfileUI();
 
             document.addEventListener('contextmenu', (event) => {
                 if (!mobileParameterQuery.matches) return;
-                if (activeContext || findNamedRangeContext(event.target)) {
+                if (activeContext || findFocusContext(event.target)) {
                     event.preventDefault();
                     event.stopImmediatePropagation();
                 }
