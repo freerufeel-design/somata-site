@@ -3229,13 +3229,31 @@ syncMorphProfileUI();
             if(state.masterLayerEdit!==true&&!hasMultiLayerSelection())return;
             const sourceId=tx?.sourceId||state.activeLayerId;
             const source=state.layers.find(l=>l.id===sourceId);if(!source)return;
-            const after=masterLayerSnapshot(source),sourcePaths=collectMasterChangedPaths(beforeSnapshot||{},after);
+            let after=masterLayerSnapshot(source);
+            const sourcePaths=collectMasterChangedPaths(beforeSnapshot||{},after);
             const controlId=String(tx?.controlId||'');
+            const ownedPaths=SomataMasterBroadcastCore.controlPaths(controlId,after,tx?.controlDataset);
+            // These editor panels still hydrate several form fields on each event.
+            // An interaction with a single slider/color/selector must never
+            // turn those incidental writes into edits to other layer properties.
+            const strictFieldEdit=/^(?:sweep|particle|lamp|web)[A-Z]/.test(controlId)
+                && (tx?.eventType==='input'||tx?.eventType==='change')
+                && tx?.directFanout!==true && ownedPaths.length>0;
+            let sourceRolledBackExtras=0;
+            if(strictFieldEdit){
+                const owned=new Set(ownedPaths);
+                for(const path of sourcePaths){
+                    if(owned.has(path))continue;
+                    applyMasterPath(source,path,masterPathValue(beforeSnapshot,path));
+                    sourceRolledBackExtras++;
+                }
+                if(sourceRolledBackExtras)after=masterLayerSnapshot(source);
+            }
             // Master mirrors the user-facing field, not an implementation detail that happens
             // to share storage with it. Fill opacity/RGB are packed into fillColor, and
             // fill-match derives RGB from each layer's own stroke color, so these controls need
             // field semantics rather than blind object/string copying.
-            let paths=sourcePaths.slice();
+            let paths=strictFieldEdit?ownedPaths.slice():sourcePaths.slice();
             if(controlId==='showSweep'||controlId==='showLightning')paths=paths.filter(path=>path!=='sweep.enabled');
             // Also apply the explicitly edited field when it already had this
             // value on the source. A no-op source edit is still an all-layer
@@ -3298,6 +3316,11 @@ syncMorphProfileUI();
                     cfg.effectType=controlId==='showLightning'?'lightning':'glint';
                     if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'master-sweep-switch');
                 }
+                if(['webInside','webOutsideStraight','webOutsideArc'].includes(controlId)&&layer.web){
+                    layer.web.region=layer.web.inside
+                        ?(layer.web.outsideStraight||layer.web.outsideArc?'combined':'inside')
+                        :(layer.web.outsideStraight||layer.web.outsideArc?'outside':'inside');
+                }
                 if(controlId==='paramFillMatchStroke'&&paths.includes('fillMatchStroke')&&layer.fillMatchStroke===true&&typeof syncLayerFillColorToStroke==='function')syncLayerFillColorToStroke(layer,true);
                 if((controlId==='paramStrokeColor'||paths.includes('strokeColor'))&&layer.fillMatchStroke===true&&typeof syncLayerFillColorToStroke==='function')syncLayerFillColorToStroke(layer,true);
                 if(controlId==='paramEnableFill'&&paths.includes('fill')&&layer.fill===true&&getFillOpacityPercent(layer.fillColor,0)<=.001)layer.fillColor=setFillOpacityPercent(layer.fillColor||layer.strokeColor,DEFAULT_FILL_OPACITY_PERCENT,layer.strokeColor||'#4f46e5');
@@ -3315,9 +3338,17 @@ syncMorphProfileUI();
                 if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(source,roots,'master-source');
                 syncMasterPathsIntoBlueRuntime(source,paths,after);
             }
+            if(sourceRolledBackExtras){
+                // Re-hydrate stale controls after discarding accidental panel-wide
+                // changes. These sync functions only update the DOM, not layer data.
+                if(controlId.startsWith('sweep'))syncSweepUI();
+                else if(controlId.startsWith('lamp'))syncLampSettingsUI();
+                else if(controlId.startsWith('particle'))syncParticleUI();
+                else if(controlId.startsWith('web'))syncWebOutlineUI();
+            }
             window.__spiroLastMasterBroadcast={
                 sourceId,controlId:String(tx?.controlId||''),eventType:String(tx?.eventType||''),
-                paths:paths.slice(),sourcePaths:sourcePaths.slice(),rolledBackExtras,directFanoutChanges,at:performance.now()
+                paths:paths.slice(),sourcePaths:sourcePaths.slice(),rolledBackExtras,sourceRolledBackExtras,directFanoutChanges,at:performance.now()
             };
             if(paths.length||rolledBackExtras||directFanoutChanges){updateLayerListUI();requestMainCanvasRender();}
         }
@@ -12731,7 +12762,7 @@ syncMorphProfileUI();
             ['particleStyle','particleMode','particleColorMode','particlePalette'].forEach(id=>document.getElementById(id)?.addEventListener('change',()=>updateParticlesFromUI(id)));
             ['particleDensity','particleDensityMultiplier','particleSize','particleScatter','particleScatterMultiplier','particleSizeVariation','particleSizeVariationMultiplier','particleSpeed','particleSpeedMultiplier','particleOpacity','particleTwinkle','particleSpiralRadius','particleSpiralRadiusMultiplier','particleSpiralTurns'].forEach(id=>document.getElementById(id)?.addEventListener('input',()=>updateParticlesFromUI(id)));
             const updateSweepFromUI=(ev)=>{
-                const active=getActiveEffectLayer();if(!active)return;const sweep=getLayerSweepConfig(active);normalizeSweepConfig(sweep);const previousEffect=sweep.effectType,changedId=ev?.currentTarget?.id||'';
+                const active=getActiveEffectLayer();if(!active)return;const originalSweep=getLayerSweepConfig(active);const sweep=cloneEffectConfig(originalSweep);normalizeSweepConfig(sweep);const previousEffect=sweep.effectType,changedId=ev?.currentTarget?.id||'';
                 if(changedId==='sweepEffectType'){const effect=document.getElementById('sweepEffectType')?.value;sweep.effectType=effect==='lightning'?'lightning':'glint';if(sweep.enabled===true){sweep.glintEnabled=sweep.effectType==='glint';sweep.lightningEnabled=sweep.effectType==='lightning';}}
                 sweep.profileShape='current';sweep.coreBlendMode=normalizeSweepBlendMode(document.getElementById('sweepCoreBlendMode')?.value);sweep.glowBlendMode=normalizeSweepBlendMode(document.getElementById('sweepGlowBlendMode')?.value);sweep.lightningBlendMode=normalizeLightningLampBlendMode(document.getElementById('sweepLightningBlendMode')?.value);
                 sweep.flashMode=normalizeSweepFlashMode(document.getElementById('sweepFlashMode')?.value);{const v=document.getElementById('sweepGlintPrecision')?.value;sweep.flashType=normalizeGlintPrecisionValue(v??sweep.flashType??sweep.glintPrecision);if(sweep.flashType==='spectral')sweep.flashType='high';sweep.glintPrecision=sweep.flashType;}
@@ -12752,7 +12783,29 @@ syncMorphProfileUI();
                 {const v=Number(document.getElementById('sweepLightningRatePercent')?.value);sweep.lightningRatePercent=Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}{const v=Number(document.getElementById('sweepLightningRateMultiplier')?.value);sweep.lightningRateMultiplier=Number.isFinite(v)&&v>0?v:1;}if(lightningRateSyncEnabled())syncLightningRateValuesFrom(sweep);sweep.lightningDurationMs=Math.max(30,Math.min(700,Number(document.getElementById('sweepLightningDuration')?.value)||480));{const v=Number(document.getElementById('sweepLightningDurationMultiplier')?.value);sweep.lightningDurationMultiplier=Number.isFinite(v)&&v>0?v:1;}sweep.lightningWidthPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLightningWidthPercent')?.value)||64));{const v=Number(document.getElementById('sweepLightningWidthMultiplier')?.value);sweep.lightningWidthMultiplier=Number.isFinite(v)?Math.max(0,v):1;}
                 {sweep.lightningGlow=Math.max(0,Number(document.getElementById('sweepLightningGlow')?.value)||0);{const v=Number(document.getElementById('sweepLightningGlowMultiplier')?.value);sweep.lightningGlowMultiplier=Number.isFinite(v)?Math.max(0,v):1;}{const v=Number(document.getElementById('sweepLightningGlowIntensity')?.value);sweep.lightningGlowIntensity=Number.isFinite(v)?Math.max(0,Math.min(400,v)):100;}{const v=Number(document.getElementById('sweepLightningGlowIntensityMultiplier')?.value);sweep.lightningGlowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;}sweep.lightningSoftness=Math.max(0,Math.min(150,Number(document.getElementById('sweepLightningSoftness')?.value)||0));{const v=Number(document.getElementById('sweepLightningSoftnessMultiplier')?.value);sweep.lightningSoftnessMultiplier=Number.isFinite(v)?Math.max(0,v):1;}}
                 sweep.lightningPrecision='exact';sweep.lightningSmoothLighting=true;sweep.lightningShowLines=document.getElementById('sweepLightningShowLines')?.checked!==false;sweep.lightningLineOpacity=Math.max(0,Math.min(100,Number(document.getElementById('sweepLightningLineOpacity')?.value)||100));sweep.lightningAfterglow=false;sweep.lightningAfterglowMs=0;{const v=Number(document.getElementById('sweepLightningMicroStrikes')?.value);sweep.lightningMicroStrikes=Number.isFinite(v)?Math.max(0,Math.round(v)):0;}
-                normalizeSweepConfig(sweep);if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(active,'sweep-ui');if(state.masterLayerEdit===true||hasMultiLayerSelection()){for(const layer of getLayerEditTargets()){if(layer===active)continue;ensureLayerEffectState(layer);layer.sweep=cloneEffectConfig(sweep);if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'sweep-ui');}}if(lightningRateSyncEnabled())syncLightningRateValuesFrom(sweep);syncSweepUI();ensureSweepAnimation();requestMainCanvasRender();
+                normalizeSweepConfig(sweep);
+                // Form controls are not a serialisation source: only the field
+                // explicitly edited by this event is committed. Previously all
+                // visible controls were reread and the entire sweep object was
+                // cloned onto every Master layer (resetting independent colours,
+                // core opacity, halo brightness and other per-layer settings).
+                const editedSweepKeys=new Set(SomataMasterBroadcastCore.controlPaths(changedId,{sweep})
+                    .filter(path=>path.startsWith('sweep.')).map(path=>path.slice('sweep.'.length)));
+                if(changedId==='sweepEffectType'&&sweep.effectType!==previousEffect){
+                    for(const key of ['phase','lastUpdate','currentVelocity','cycleCount','lightningPhase','lightningLastUpdate','lightningCycleCount'])editedSweepKeys.add(key);
+                }
+                if(lightningRateSyncEnabled()&&['sweepLightningRatePercent','sweepLightningRateMultiplier'].includes(changedId)){
+                    editedSweepKeys.add('lightningRatePercent');editedSweepKeys.add('lightningRateMultiplier');
+                }
+                if(!editedSweepKeys.size)return;
+                const affectedLayers=(state.masterLayerEdit===true||hasMultiLayerSelection())?getLayerEditTargets():[active];
+                for(const layer of affectedLayers){
+                    const config=layer===active?originalSweep:getLayerSweepConfig(layer);
+                    for(const key of editedSweepKeys)if(Object.prototype.hasOwnProperty.call(sweep,key))config[key]=cloneMasterLayerValue(sweep[key]);
+                    if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'sweep-ui');
+                }
+                if(lightningRateSyncEnabled()&&['sweepLightningRatePercent','sweepLightningRateMultiplier'].includes(changedId))syncLightningRateValuesFrom(originalSweep);
+                syncSweepUI();ensureSweepAnimation();requestMainCanvasRender();
             };
             ['sweepEffectType','sweepCoreBlendMode','sweepGlowBlendMode','sweepLightningBlendMode','sweepFlashMode','sweepGlintPrecision','sweepSpectralSectorDegrees','sweepSpectralAngularSpeed','sweepMode','sweepEveryN','sweepLightningTriggerMode','sweepLightningBehavior','sweepLightningPrecision','sweepLightningMode','sweepLightningEveryN','sweepLightningRandomPosition','sweepDirection','sweepSyncMusic','sweepSpeed','sweepSpeedMultiplier','sweepLength','sweepWidthPercent','sweepColor','sweepHaloColor','sweepOpacity','sweepBrightness','sweepGlow','sweepGlowMultiplier','sweepGlowIntensity','sweepGlowIntensityMultiplier','sweepSoftness','sweepSoftnessMultiplier','sweepLightningColor','sweepLightningSecondaryColor','sweepLightningSegmentPercent','sweepLightningRatePercent','sweepLightningRateMultiplier','sweepLightningDuration','sweepLightningDurationMultiplier','sweepLightningWidthPercent','sweepLightningWidthMultiplier','sweepLightningGlow','sweepLightningGlowMultiplier','sweepLightningGlowIntensity','sweepLightningGlowIntensityMultiplier','sweepLightningSoftness','sweepLightningSoftnessMultiplier','sweepLightningShowLines','sweepLightningLineOpacity','sweepLightningMicroStrikes'].forEach(id=>{document.getElementById(id)?.addEventListener('input',updateSweepFromUI);document.getElementById(id)?.addEventListener('change',updateSweepFromUI);});
             document.getElementById('sweepLightningRateSync')?.addEventListener('change',e=>{const active=getActiveEffectLayer();if(!active)return;const cfg=getLayerSweepConfig(active);setLightningRateSynchronization(e.target.checked===true,cfg,state.layers.indexOf(active));syncSweepUI();ensureSweepAnimation();requestMainCanvasRender();});

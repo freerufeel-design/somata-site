@@ -82,6 +82,8 @@ const SomataMasterBroadcastCore=(()=>{
         lineMotionFxSpeed:['lineMotionFx.speedPercent'],
         lineMotionFxWidth:['lineMotionFx.widthPercent'],
         sweepLength:['sweep.lengthPercent'],
+        sweepEffectType:['sweep.effectType','sweep.glintEnabled','sweep.lightningEnabled'],
+        sweepGlintPrecision:['sweep.glintPrecision','sweep.flashType'],
         sweepLightningDuration:['sweep.lightningDurationMs'],
         particlePalette:['particles.paletteKey'],particleSize:['particles.sizePx'],
         particleSpeed:['particles.speedPercent'],particleSpiralRadius:['particles.spiralRadiusPx'],

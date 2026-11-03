@@ -613,6 +613,26 @@ window.__spiroGeometryFrameSnapshot = (layerIndex=0) => {
     return out;
 };
 
+// An enabled Glint must not depend on the Base/Line being visible. With several
+// line-hidden layers the shared deferred GPU Frame Scene may lose a later
+// effect-only layer when its scene is recycled before final presentation.
+// Present each such *completed* Layer Scene as a transparent composited image
+// before advancing to the next layer. Other layers retain the normal fast GPU
+// frame-scene path, and strict Spiral retains its GPU-only presentation policy.
+const somataHiddenGlintComposeStats={attempts:0,presented:0,failed:0,lastLayerId:null};
+function somataNeedsIsolatedHiddenGlintPresentation(frameCtx){
+    if(!frameCtx?.frame||frameCtx.lineDisplayEnabled!==false||Number(frameCtx.frame.renderLayerCount||0)<2)return false;
+    // A frame containing any strict GPU-only Spiral cannot be materialized into
+    // Canvas2D, even if this particular layer is not strict.
+    if(frameCtx.frame.strictSpiralEntryIntent===true||frameCtx.frame.strictSpiralGpuPresentRequired===true)return false;
+    if(typeof SomataGeometryPolicy!=='undefined'&&SomataGeometryPolicy.isStrict(frameCtx))return false;
+    const sweep=frameCtx.effectsPlan?.sweep;
+    return sweep?.enabled===true&&(Array.isArray(sweep.instances)&&sweep.instances.length
+        ? sweep.instances.some(effect=>effect?.enabled===true&&effect?.cfg?.effectType!=='lightning')
+        : sweep.cfg?.effectType!=='lightning');
+}
+window.__somataHiddenGlintComposeStatus=()=>({...somataHiddenGlintComposeStats,policy:'isolated completed GPU Layer Scene per line-hidden Glint layer'});
+
 function renderPreparedMainLayer(frameCtx) {
     if (!frameCtx?.prepared || !frameCtx.layer) return;
 
@@ -712,6 +732,24 @@ function renderPreparedMainLayer(frameCtx) {
             frameCtx._spiralBezierFrameSceneCounted=true;
             frameCtx.frame.gpuFrameSceneLayers=(Number(frameCtx.frame.gpuFrameSceneLayers)||0)+1;
             if(frameCtx.frame.gpuFrameSceneLayers===frameCtx.frame.renderLayerCount)frameCtx.frame.gpuMainSceneEmpty=frameCtx.frame.gpuMainCanvasHasContent!==true;
+        }
+
+        // Do not make one invisible Base the implicit presentation anchor for
+        // multiple independent Glints. Every hidden-line Glint owns a completed
+        // transparent scene, even when other visible layers use the frame GPU path.
+        if(somataNeedsIsolatedHiddenGlintPresentation(frameCtx)&&frameCtx.frame?.gpuLayerSceneDeferred===true){
+            somataHiddenGlintComposeStats.attempts++;
+            somataHiddenGlintComposeStats.lastLayerId=frameCtx.layer?.id||null;
+            const presented=recordStep('hiddenGlint.presentLayerScene',()=>materializeDeferredLayerScene(frameCtx));
+            if(presented){
+                somataHiddenGlintComposeStats.presented++;
+                SomataLayerSceneService.markMainCanvasContent(frameCtx,true);
+                renderBackendTelemetry.mark('sweep','gpu','isolated hidden-line Glint Layer Scene');
+            }else{
+                somataHiddenGlintComposeStats.failed++;
+                somataGpuDiagnosticError('sweep','hidden-glint-layer-presentation','Independent Glint Layer Scene could not be presented',frameCtx,{fallback:'retry-independent-glint-presentation',recovered:false});
+                try{requestMainCanvasRender?.();}catch(_){}
+            }
         }
 
         if(frameCtx.frame?.gpuLayerSceneDeferred&&Number(frameCtx.frame.renderLayerCount||0)>1){
