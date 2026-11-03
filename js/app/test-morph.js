@@ -4,7 +4,7 @@ window.__spiroRegisterModule?.('js/app/test-morph');
 // only after the authored geometry is edited, and stops at the exact new authored
 // state. Blue/Orange/Green remain the authoritative owners during Morph.
 const SomataTestMorph=(()=>{
-    const defaults=Object.freeze({enabled:true,mode:'circleSlide',slide:'sector',spiralSlide:'standard',spiralType:'phaseCircle',duration:1});
+    const defaults=Object.freeze({enabled:true,mode:'circleSlide',slide:'minimal',spiralSlide:'standard',spiralType:'phaseCircle',duration:1});
     // Honest Corridor is one choreographed animation: 80% original geometric
     // trajectory, 20% additional copies, all inside Geometry > Duration.
     const HONEST_CORRIDOR_FRACTION=.2;

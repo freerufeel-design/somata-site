@@ -417,7 +417,7 @@ window.__spiroRegisterModule?.('js/core/state');
                 mode: 'circleSlide',
                 fadePercent: 0,
                 circleProfileOverflow: true,
-                slideType: 'sector',
+                slideType: 'minimal',
                 lightningWhite: true,
                 lightningRandom: false,
                 lightningColor: '#ffffff',

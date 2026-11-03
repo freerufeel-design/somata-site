@@ -8733,3 +8733,13 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
     transition:opacity .12s linear!important;
   }
 }
+
+/* 13.1.3: direct-edit taps and hold-to-scrub mobile number counters. */
+@media (pointer: coarse) {
+  input[type="number"].somata-scrubbable-number { touch-action: none; }
+}
+input[type="number"].somata-number-is-scrubbing {
+  outline: 2px solid var(--accent, #38bdf8);
+  outline-offset: 1px;
+  user-select: none;
+}

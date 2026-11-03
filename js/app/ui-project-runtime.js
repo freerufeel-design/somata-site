@@ -1558,7 +1558,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 const mode=getSpiralMorphType();
                 return mode==='torn'||mode==='minimalTurn'?'minimalSpiral':'phase';
             }
-            return state.morph?.slideType||'sector';
+            return state.morph?.slideType||'minimal';
         }
         function getEffectiveSpiralMorphTransport(){
             // Selected spiral type alone governs transport. No polygon slide mode
@@ -8448,7 +8448,7 @@ syncMorphProfileUI();
             const estimateCirclePlanRotationDeltaDegrees = (sourceLayer,targetLayer,slideTypeOverride=null) => {
                 if(typeof getCircleMorphPlan!=='function')return NaN;
                 try{
-                    const slideType=slideTypeOverride||((typeof getEffectiveCircleSlideType==='function')?getEffectiveCircleSlideType():(state.morph?.slideType||'sector'));
+                    const slideType=slideTypeOverride||((typeof getEffectiveCircleSlideType==='function')?getEffectiveCircleSlideType():(state.morph?.slideType||'minimal'));
                     const plan=getCircleMorphPlan(sourceLayer,targetLayer,slideType);
 
                     let sx=0,sy=0,count=0;
@@ -8497,7 +8497,7 @@ syncMorphProfileUI();
 
                     const tip=estimateSpiralOuterTipRotationDeltaDegrees(sourceLayer,targetLayer);
                     if(Number.isFinite(tip))return tip;
-                    const planned=estimateCirclePlanRotationDeltaDegrees(sourceLayer,targetLayer,state.morph?.slideType||'sector');
+                    const planned=estimateCirclePlanRotationDeltaDegrees(sourceLayer,targetLayer,state.morph?.slideType||'minimal');
                     return Number.isFinite(planned)?planned:wrapSignedDegreesForSpiralCompensation(authoredDelta,360);
                 }
                 if(type==='minimalTurn'){
@@ -11339,7 +11339,7 @@ syncMorphProfileUI();
             document.getElementById('morphFadePercentValue')?.addEventListener('change', (e) => syncMorphFadePercent(e.target.value));
 
             document.getElementById('morphSlideType')?.addEventListener('change', (e) => {
-                state.morph.slideType = e.target.value || 'sector';
+                state.morph.slideType = e.target.value || 'minimal';
                 rebaseMorphCycle();
                 requestMainCanvasRender();
             });
@@ -13318,7 +13318,7 @@ syncMorphProfileUI();
             runtimeState.morph.pauseStartedAt = 0;
             state.morphPlayback.lastType = null;
             state.randomOptions = { orbitBindingEnabled:false, orbitsAdded:false, byShape: true, onlyLine: false, byVertices: true, bySteps: true, byRounding: true, bySize: true, byColor: true, lineColorPalette: 'standard', cyclePalettes: false, fixedColors: false, bySpiralLayers: false, spiralLayersMin: 0, spiralLayersMax: 1 };
-            state.morph.slideType = 'sector';
+            state.morph.slideType = 'minimal';
             state.morph.mode = 'circleSlide';
             state.morph.fadePercent = 0;
             state.morph.vertexMin = 4;
@@ -15877,7 +15877,7 @@ syncMorphProfileUI();
             state.morph.mode = (legacyNormalizedMode || m.mode==='lightning' || m.mode==='lamp') ? 'circleSlide' : (['topology','calm','circleSlide','topoCircle','fade','light'].includes(m.mode) ? m.mode : state.morph.mode);
             if (Number.isFinite(Number(m.fadePercent))) state.morph.fadePercent = Math.round(Math.max(0, Math.min(100, Number(m.fadePercent))));
             if (typeof m.circleProfileOverflow === 'boolean') state.morph.circleProfileOverflow = m.circleProfileOverflow;
-            state.morph.slideType = legacyNormalizedMode ? 'phase' : (['minimal','sector','phase'].includes(m.slideType) ? m.slideType : 'sector');
+            state.morph.slideType = legacyNormalizedMode ? 'phase' : (['minimal','sector','phase'].includes(m.slideType) ? m.slideType : 'minimal');
             state.morph.speedType = m.speedType || state.morph.speedType;
             if (typeof m.lightningWhite === 'boolean') state.morph.lightningWhite = m.lightningWhite;
             if (typeof m.lightningRandom === 'boolean') state.morph.lightningRandom = m.lightningRandom;
@@ -16555,7 +16555,7 @@ syncMorphProfileUI();
         });
         document.getElementById('btnSaveShape').addEventListener('click', saveCurrentShape);
 
-        const FACTORY_MORPH_SETTINGS = {intervalSec:5,intervalMultiplier:1,splinePoints:12,profileModeTransition:'phase',profileModeTransitionPercent:20,defaultActive:false,spiralOrderMin:-1,spiralOrderMax:1,spiralOrderLinked:false,spiralLayersMin:0,spiralLayersMax:1,spiralTangentialChance:50,chaosMorphEnabled:false,chaosMorphStepSpread:1,chaosMorphClosuresMax:3,preserveSpiralContinuity:true,spiralMorphType:'phaseCircle',spiralRotationCompensation:false,pauseOnSpace:false,diversity:false,vertexMin:4,vertexMax:19,vertexMultiplier:1,roundingMin:0,roundingMax:30,stepMin:0,stepMax:100,monoOrbitTransforms:true,orbitPercentMin:0,orbitPercentMax:0,strokeWidthMin:.5,strokeWidthMax:2,opacityMin:70,opacityMax:100,fillLayersMin:0,fillLayersMax:1,fillHueMin:-15,fillHueMax:15,fillHueReset:true,fillHueHarmony:'native',lineColorPalette:'standard',cyclePalettes:false,fixedColors:false,syncPalettesBetweenMorphs:true,morphGlobalHueOffset:false,globalHueOffsetRange:180,sizeVariation:100,sizeVariationMultiplier:1,radiusMin:20,radiusMax:500,normalizeSizes:true,rotationMinPercent:0,rotationMaxPercent:50,rotationMultiplier:1,rotationRandomDirection:true,fillOpacityMin:10,fillOpacityMax:10,mode:'circleSlide',fadePercent:0,circleProfileOverflow:true,slideType:'sector',speedType:'linear',lightningWhite:true,lightningRandom:false,lightningColor:'#ffffff',lightningSegmentPercent:30,lightningGlow:18,options:{byShape:true,byVertices:true,bySteps:true,byRounding:false,byStrokeWidth:true,bySize:true,byColor:true,byFillColor:true,byOpacity:false,byRotation:true,bySpiralOrder:false,bySpiralLayers:false},shapeOptions:{noLoops:true,loops:false,closed:false,open:false,family:'mix',profileGroups:['standard'],profileGroup:'standard',standardOnly:true}};
+        const FACTORY_MORPH_SETTINGS = {intervalSec:5,intervalMultiplier:1,splinePoints:12,profileModeTransition:'phase',profileModeTransitionPercent:20,defaultActive:false,spiralOrderMin:-1,spiralOrderMax:1,spiralOrderLinked:false,spiralLayersMin:0,spiralLayersMax:1,spiralTangentialChance:50,chaosMorphEnabled:false,chaosMorphStepSpread:1,chaosMorphClosuresMax:3,preserveSpiralContinuity:true,spiralMorphType:'phaseCircle',spiralRotationCompensation:false,pauseOnSpace:false,diversity:false,vertexMin:4,vertexMax:19,vertexMultiplier:1,roundingMin:0,roundingMax:30,stepMin:0,stepMax:100,monoOrbitTransforms:true,orbitPercentMin:0,orbitPercentMax:0,strokeWidthMin:.5,strokeWidthMax:2,opacityMin:70,opacityMax:100,fillLayersMin:0,fillLayersMax:1,fillHueMin:-15,fillHueMax:15,fillHueReset:true,fillHueHarmony:'native',lineColorPalette:'standard',cyclePalettes:false,fixedColors:false,syncPalettesBetweenMorphs:true,morphGlobalHueOffset:false,globalHueOffsetRange:180,sizeVariation:100,sizeVariationMultiplier:1,radiusMin:20,radiusMax:500,normalizeSizes:true,rotationMinPercent:0,rotationMaxPercent:50,rotationMultiplier:1,rotationRandomDirection:true,fillOpacityMin:10,fillOpacityMax:10,mode:'circleSlide',fadePercent:0,circleProfileOverflow:true,slideType:'minimal',speedType:'linear',lightningWhite:true,lightningRandom:false,lightningColor:'#ffffff',lightningSegmentPercent:30,lightningGlow:18,options:{byShape:true,byVertices:true,bySteps:true,byRounding:false,byStrokeWidth:true,bySize:true,byColor:true,byFillColor:true,byOpacity:false,byRotation:true,bySpiralOrder:false,bySpiralLayers:false},shapeOptions:{noLoops:true,loops:false,closed:false,open:false,family:'mix',profileGroups:['standard'],profileGroup:'standard',standardOnly:true}};
 
         function resetMorphSettingsToFactory(){
             delete state.morph.orbitCountMin;
@@ -18269,39 +18269,196 @@ syncMorphProfileUI();
             let next=v+(up?step:-step);if(next<0)next=0;
             const decimals=step<.1?2:step<1?1:0;return Number(next.toFixed(decimals));
         }
+        // One interaction policy for all numeric counters. Empty or intermediate
+        // out-of-range text is an EDITING state, not a value to commit to geometry.
+        // This lets users replace "1" with "5" and type "0.5" in a field min=0.1.
         function installLogarithmicNumberSteppers(){
-            const prepare=el=>{if(!(el instanceof HTMLInputElement)||el.type!=='number')return;if(isMultiplierNumberInput(el)||el.dataset.logStep==='time'){el.removeAttribute('max');el.step='any';if(isMultiplierNumberInput(el))el.dataset.logMultiplier='1';}};
+            const prepare=el=>{
+                if(!(el instanceof HTMLInputElement)||el.type!=='number')return;
+                if(isMultiplierNumberInput(el)||el.dataset.logStep==='time'){
+                    el.step='any';
+                    // Multiplier inputs intentionally have no upper bound. Other
+                    // time counters (notably Animation 0.1–60s) KEEP their max.
+                    if(isMultiplierNumberInput(el)){
+                        el.removeAttribute('max');el.dataset.logMultiplier='1';
+                    }
+                }
+                el.classList.add('somata-scrubbable-number');
+            };
             document.querySelectorAll('input[type="number"]').forEach(prepare);
             if(installLogarithmicNumberSteppers._installed)return;
             installLogarithmicNumberSteppers._installed=true;
-
-            const observer=new MutationObserver(records=>{for(const rec of records)for(const node of rec.addedNodes){if(!(node instanceof Element))continue;if(node.matches?.('input[type="number"]'))prepare(node);node.querySelectorAll?.('input[type="number"]').forEach(prepare);}});
+            const observer=new MutationObserver(records=>{for(const rec of records)for(const node of rec.addedNodes){
+                if(!(node instanceof Element))continue;
+                if(node.matches?.('input[type="number"]'))prepare(node);
+                node.querySelectorAll?.('input[type="number"]').forEach(prepare);
+            }});
             observer.observe(document.body,{childList:true,subtree:true});
-            const stepInput=(el,direction)=>{
-                if(el.dataset.binaryMultiplier==='1'){
-                    const cur=Math.max(0.015625,Number(el.value)||1);
-                    const next=direction>0?cur*2:cur/2;
-                    el.value=String(Math.max(0.015625,Math.min(64,next)));
-                }else if(el.id==='sweepLightningRateMultiplier'||el.id==='sweepLightningDurationMultiplier'){
-                    // Small lightning factors use true logarithmic stepping all the way below 1/4096.
-                    const v=Number(el.value),current=Number.isFinite(v)&&v>0?v:1;
-                    el.value=String(direction>0?current*2:Math.max(Number.MIN_VALUE,current/2));
-                }else el.value=String(logarithmicStep(el.value,direction));
-                el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));
+            const validPrevious=new WeakMap();
+            const isNumber=el=>el instanceof HTMLInputElement&&el.type==='number';
+            const hasNonZeroMin=el=>el.hasAttribute('min')&&Number(el.min)>0;
+            const isIntermediate=el=>el.value===''||el.validity.badInput||
+                (hasNonZeroMin(el)&&Number.isFinite(el.valueAsNumber)&&el.valueAsNumber<Number(el.min));
+            const safePrevious=el=>{
+                const v=validPrevious.get(el);
+                if(v!=null&&v!==''&&Number.isFinite(Number(v))&&(!hasNonZeroMin(el)||Number(v)>=Number(el.min)))return v;
+                if(hasNonZeroMin(el))return el.min;
+                return '0';
             };
-            document.addEventListener('keydown',e=>{const el=e.target;if(!(el instanceof HTMLInputElement)||el.type!=='number'||(!isMultiplierNumberInput(el)&&el.dataset.logStep!=='time'))return;if(e.key!=='ArrowUp'&&e.key!=='ArrowDown')return;e.preventDefault();stepInput(el,e.key==='ArrowUp'?1:-1);});
-            document.addEventListener('wheel',e=>{const el=e.target;if(!(el instanceof HTMLInputElement)||el.type!=='number'||document.activeElement!==el||(!isMultiplierNumberInput(el)&&el.dataset.logStep!=='time'))return;e.preventDefault();stepInput(el,e.deltaY<0?1:-1);},{passive:false});
+            document.addEventListener('focusin',e=>{
+                const el=e.target;if(isNumber(el))validPrevious.set(el,el.value);
+            },true);
+            document.addEventListener('input',e=>{
+                const el=e.target;
+                if(!isNumber(el)||document.activeElement!==el||e.isComposing)return;
+                if(isIntermediate(el)){
+                    // Other input handlers clamp and rerender on every keystroke.
+                    // Keep this incomplete edit local until it becomes valid.
+                    e.stopImmediatePropagation();
+                }else validPrevious.set(el,el.value);
+            },true);
+            document.addEventListener('change',e=>{
+                const el=e.target;if(!isNumber(el))return;
+                if(isIntermediate(el)){
+                    el.value=safePrevious(el);
+                    e.stopImmediatePropagation();
+                }else validPrevious.set(el,el.value);
+            },true);
+            document.addEventListener('focusout',e=>{
+                const el=e.target;
+                if(isNumber(el)){
+                    if(isIntermediate(el))el.value=safePrevious(el);
+                    validPrevious.delete(el);
+                }
+            },true);
+            const clampToLimits=(el,v)=>{
+                const lo=el.min!==''?Number(el.min):-Infinity,hi=el.max!==''?Number(el.max):Infinity;
+                return Math.max(Number.isFinite(lo)?lo:-Infinity,Math.min(Number.isFinite(hi)?hi:Infinity,v));
+            };
+            const nextValue=(el,current,direction)=>{
+                if(el.dataset.binaryMultiplier==='1'){
+                    const v=Math.max(.015625,Number(current)||1);
+                    return Math.max(.015625,Math.min(64,direction>0?v*2:v/2));
+                }
+                if(el.id==='sweepLightningRateMultiplier'||el.id==='sweepLightningDurationMultiplier'){
+                    const v=Number(current),n=Number.isFinite(v)&&v>0?v:1;
+                    return direction>0?n*2:Math.max(Number.MIN_VALUE,n/2);
+                }
+                if(isMultiplierNumberInput(el)||el.dataset.logStep==='time'||el.step==='any')return logarithmicStep(current,direction);
+                const n=Number(current),v=Number.isFinite(n)?n:0;
+                const step=Number(el.step);
+                return Number((v+direction*(step>0?step:1)).toPrecision(12));
+            };
+            const stepInput=(el,direction,count=1)=>{
+                if(!isNumber(el)||el.disabled||el.readOnly)return;
+                let value=el.value===''?Number(safePrevious(el)):el.valueAsNumber;
+                if(!Number.isFinite(value))value=Number(safePrevious(el))||0;
+                for(let i=0;i<Math.min(40,count);i++){
+                    const next=clampToLimits(el,nextValue(el,value,direction));
+                    if(next===value)break;
+                    value=next;
+                }
+                if(String(value)===el.value)return;
+                el.value=String(value);validPrevious.set(el,el.value);
+                el.dispatchEvent(new Event('input',{bubbles:true}));
+                el.dispatchEvent(new Event('change',{bubbles:true}));
+            };
+            document.addEventListener('keydown',e=>{
+                const el=e.target;
+                if(!isNumber(el)||el.disabled||el.readOnly)return;
+                if(e.key!=='ArrowUp'&&e.key!=='ArrowDown')return;
+                e.preventDefault();stepInput(el,e.key==='ArrowUp'?1:-1);
+            },true);
+            // Wheel changes the numeric input UNDER THE POINTER (focus not needed).
+            // Trackpads accumulate small deltas; conventional wheel notches act immediately.
+            const wheelSteps=new WeakMap();
+            document.addEventListener('wheel',e=>{
+                const el=e.target;if(!isNumber(el)||el.disabled||el.readOnly||e.ctrlKey)return;
+                e.preventDefault();e.stopImmediatePropagation();
+                const delta=e.deltaY*(e.deltaMode===1?16:e.deltaMode===2?360:1);
+                const prior=wheelSteps.get(el)||0;
+                const accumulated=Math.sign(prior)!==Math.sign(delta)?delta:prior+delta;
+                let count=0,remainder=accumulated;
+                if(Math.abs(delta)>=60){count=Math.min(12,Math.max(1,Math.round(Math.abs(delta)/100)));remainder=0;}
+                else if(Math.abs(accumulated)>=36){count=Math.min(12,Math.floor(Math.abs(accumulated)/36));remainder=accumulated-Math.sign(accumulated)*count*36;}
+                wheelSteps.set(el,remainder);
+                if(count)stepInput(el,accumulated<0?1:-1,count);
+            },{passive:false,capture:true});
 
+            // Mobile: a short tap still opens the keyboard for direct editing.
+            // Hold a numeric field, then move the finger vertically to scrub.
+            // No repeat on stationary hold, and no accidental change on tap.
+            let touchScrub=null;
+            let suppressTouchClick=null;
+            document.addEventListener('click',e=>{
+                if(suppressTouchClick&&e.target===suppressTouchClick){
+                    e.preventDefault();e.stopImmediatePropagation();suppressTouchClick=null;
+                }
+            },true);
+            const clearTouchScrub=()=>{
+                if(!touchScrub)return;
+                clearTimeout(touchScrub.timer);
+                touchScrub.el.classList.remove('somata-number-is-scrubbing');
+                touchScrub=null;
+            };
+            document.addEventListener('pointerdown',e=>{
+                if(e.pointerType!=='touch'&&e.pointerType!=='pen')return;
+                const el=e.target;if(!isNumber(el)||el.disabled||el.readOnly)return;
+                clearTouchScrub();
+                const item={el,id:e.pointerId,startY:e.clientY,lastY:e.clientY,active:false,timer:0};
+                touchScrub=item;
+                item.timer=setTimeout(()=>{
+                    if(touchScrub!==item)return;
+                    item.active=true;item.lastY=item.startY;
+                    el.classList.add('somata-number-is-scrubbing');
+                    // Stop a keyboard opened by the initial touch; now gesture mode.
+                    if(document.activeElement===el)el.blur();
+                },360);
+            },true);
+            document.addEventListener('pointermove',e=>{
+                const item=touchScrub;if(!item||e.pointerId!==item.id)return;
+                if(!item.active){
+                    if(Math.abs(e.clientY-item.startY)>9)clearTouchScrub();
+                    return;
+                }
+                e.preventDefault();
+                const diff=item.lastY-e.clientY,unit=18;
+                const count=Math.min(30,Math.floor(Math.abs(diff)/unit));
+                if(!count)return;
+                item.lastY-=Math.sign(diff)*count*unit;
+                stepInput(item.el,diff>0?1:-1,count);
+            },{capture:true,passive:false});
+            document.addEventListener('pointerup',e=>{
+                if(touchScrub?.id!==e.pointerId)return;
+                if(touchScrub.active){
+                    // Long-press scrub must not synthesize a tap opening the keyboard.
+                    suppressTouchClick=touchScrub.el;
+                    setTimeout(()=>{suppressTouchClick=null;},250);
+                    e.preventDefault();
+                }
+                clearTouchScrub();
+            },true);
+            document.addEventListener('pointercancel',e=>{if(touchScrub?.id===e.pointerId)clearTouchScrub();},true);
+            window.addEventListener('blur',clearTouchScrub);
+
+            // Preserve the existing desktop spinner hold behavior, but apply the
+            // same stepping/min-max rules used by wheel, touch and keyboard.
             let spinnerHoldDelay=0,spinnerHoldRepeat=0;
-            const stopSpinnerHold=()=>{if(spinnerHoldDelay){clearTimeout(spinnerHoldDelay);spinnerHoldDelay=0;}if(spinnerHoldRepeat){clearInterval(spinnerHoldRepeat);spinnerHoldRepeat=0;}};
+            const stopSpinnerHold=()=>{
+                if(spinnerHoldDelay){clearTimeout(spinnerHoldDelay);spinnerHoldDelay=0;}
+                if(spinnerHoldRepeat){clearInterval(spinnerHoldRepeat);spinnerHoldRepeat=0;}
+            };
             document.addEventListener('pointerup',stopSpinnerHold,true);
             document.addEventListener('pointercancel',stopSpinnerHold,true);
             window.addEventListener('blur',stopSpinnerHold);
             document.addEventListener('pointerdown',e=>{
-                const el=e.target;if(e.pointerType!=='mouse'||!(el instanceof HTMLInputElement)||el.type!=='number'||(!isMultiplierNumberInput(el)&&el.dataset.logStep!=='time')||el.disabled||el.readOnly)return;
+                const el=e.target;
+                if(e.pointerType!=='mouse'||!isNumber(el)||el.disabled||el.readOnly||
+                   (!isMultiplierNumberInput(el)&&el.dataset.logStep!=='time'))return;
                 const r=el.getBoundingClientRect(),spinnerWidth=Math.min(22,Math.max(16,r.width*.28));
                 if(e.clientX<r.right-spinnerWidth)return;
-                e.preventDefault();e.stopPropagation();try{el.focus({preventScroll:true});}catch(_){el.focus();}
+                e.preventDefault();e.stopPropagation();
+                try{el.focus({preventScroll:true});}catch(_){el.focus();}
                 const direction=e.clientY<r.top+r.height/2?1:-1;
                 stopSpinnerHold();stepInput(el,direction);
                 spinnerHoldDelay=setTimeout(()=>{spinnerHoldRepeat=setInterval(()=>stepInput(el,direction),75);},330);
@@ -18422,7 +18579,7 @@ syncMorphProfileUI();
             };
             state.morph.intervalSec = 5;
             state.morph.intervalMultiplier = 1;
-            state.morph.slideType = 'sector';
+            state.morph.slideType = 'minimal';
             state.morph.mode = 'circleSlide';
             state.morph.fadePercent = 0;
             state.morph.vertexMin = 4;

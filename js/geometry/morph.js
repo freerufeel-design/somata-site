@@ -755,7 +755,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return `${keyPart(sourceLayer)}>${keyPart(targetLayer)}|${slideType}|sm:${spiralType}`;
         }
 
-        function getCircleMorphPlan(sourceLayer, targetLayer, slideType) {
+        function getCircleMorphPlan(sourceLayer, targetLayer, slideType = 'minimal') {
             const key = circleMorphPlanKey(sourceLayer, targetLayer, slideType);
             const cached = circleMorphPlanCache.get(key);
             if (cached) return cached;
@@ -851,7 +851,7 @@ window.__spiroRegisterModule?.('js/geometry/morph');
             return buildChaosVertexIndices(layer,N,K).map(idx=>rot+idx*step);
         }
 
-        function getChaosCircleMorphPlan(sourceLayer,targetLayer,slideType='sector') {
+        function getChaosCircleMorphPlan(sourceLayer,targetLayer,slideType='minimal') {
             const key=chaosCircleMorphPlanKey(sourceLayer,targetLayer,slideType);
             const cached=chaosCircleMorphPlanCache.get(key);
             if(cached)return cached;

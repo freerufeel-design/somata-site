@@ -415,7 +415,7 @@ const SomataMorphParameterRouting=(()=>{
         }),
         Object.freeze({
             id:'builtin-crystal',name:'Кристалл',
-            settings:{intervalSec:4.5,speedType:'accelerateDecelerate',mode:'circleSlide',slideType:'sector',diversity:true,
+            settings:{intervalSec:4.5,speedType:'accelerateDecelerate',mode:'circleSlide',slideType:'minimal',diversity:true,
                 vertexMin:4,vertexMax:18,stepMin:15,stepMax:95,rotationMinPercent:5,rotationMaxPercent:38,
                 strokeWidthMin:.5,strokeWidthMax:2.2,fillOpacityMin:2,fillOpacityMax:20,
                 roundingMin:0,roundingMax:8},
@@ -444,7 +444,7 @@ const SomataMorphParameterRouting=(()=>{
         }),
         Object.freeze({
             id:'builtin-singularity',name:'Сингулярность',
-            settings:{intervalSec:3.2,speedType:'anticipateOvershoot',mode:'circleSlide',slideType:'sector',diversity:true,
+            settings:{intervalSec:3.2,speedType:'anticipateOvershoot',mode:'circleSlide',slideType:'minimal',diversity:true,
                 vertexMin:3,vertexMax:28,stepMin:0,stepMax:100,radiusMin:20,radiusMax:500,
                 rotationMinPercent:0,rotationMaxPercent:100,roundingMin:0,roundingMax:180,
                 strokeWidthMin:.5,strokeWidthMax:6,opacityMin:45,opacityMax:100,fillOpacityMin:0,fillOpacityMax:78,

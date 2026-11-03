@@ -1162,7 +1162,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const makeKey=(p,pathIndex,keyIndex,side)=>({x:Number(p?.x)||0,y:Number(p?.y)||0,keyIndex,lampSeed:lampHash32(`${layerKey}:${side}:${pathIndex}:${keyIndex}`)});
 
             if(((state.morph.mode==='circleSlide'||state.morph.mode==='topoCircle'))){
-                const plan=isChaosCircleMorphPair(layerIndex)?getChaosCircleMorphPlan(src,dst,state.morph.slideType||'sector'):getCircleMorphPlan(src,dst,state.morph.slideType||'sector');
+                const plan=isChaosCircleMorphPair(layerIndex)?getChaosCircleMorphPlan(src,dst,state.morph.slideType||'minimal'):getCircleMorphPlan(src,dst,state.morph.slideType||'minimal');
                 const rs=getEffectiveLayerRadius(src,220),rd=getEffectiveLayerRadius(dst,rs),R=rs+(rd-rs)*u;
                 for(let pathIndex=0;pathIndex<(plan?.pathPlans?.length||0);pathIndex++){
                     const pp=plan.pathPlans[pathIndex],from=pp.from||[],delta=pp.delta||[];if(!from.length)continue;
@@ -1378,7 +1378,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const src=runtimeState.morph.renderSourceLayers?.[layerIndex] || { ...base, ...(runtimeState.morph.sourceVisuals?.[layerIndex]||{}) };
             const dst=runtimeState.morph.renderTargetLayers?.[layerIndex] || { ...base, ...(runtimeState.morph.targetVisuals?.[layerIndex]||{}) };
             if(!src||!dst)return[];
-            const plan=getChaosCircleMorphPlan(src,dst,state.morph.slideType||'sector');
+            const plan=getChaosCircleMorphPlan(src,dst,state.morph.slideType||'minimal');
             if(!plan?.pathPlans?.length)return[];
             const u=Math.max(0,Math.min(1,Number(t)||0));
             const rs=getEffectiveLayerRadius(src,220),rd=getEffectiveLayerRadius(dst,rs),R=rs+(rd-rs)*u;
@@ -1406,7 +1406,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const dst=runtimeState.morph.renderTargetLayers?.[layerIndex] || { ...base, ...(runtimeState.morph.targetVisuals?.[layerIndex]||{}) };
             if(!src||!dst)return[];
 
-            const plan=getCircleMorphPlan(src,dst,state.morph.slideType||'sector');
+            const plan=getCircleMorphPlan(src,dst,state.morph.slideType||'minimal');
             if(!plan?.pathPlans?.length)return[];
             const u=Math.max(0,Math.min(1,Number(t)||0));
             const rs=getEffectiveLayerRadius(src,220),rd=getEffectiveLayerRadius(dst,rs),R=rs+(rd-rs)*u;
@@ -3094,13 +3094,13 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
         }
 
         function buildCurrentChaosCircleMorphPaths(layerIndex,t){
-            const cacheKey=`chaos-circle|${frameMorphCacheKey(layerIndex,t)}|${state.morph.slideType||'sector'}`;
+            const cacheKey=`chaos-circle|${frameMorphCacheKey(layerIndex,t)}|${state.morph.slideType||'minimal'}`;
             if(frameGeometryRuntime.active){const hit=frameGeometryRuntime.circlePaths.get(cacheKey);if(hit){frameGeometryRuntime.stats.circleHits++;return hit;}}
             const base=state.layers[layerIndex];
             const src=runtimeState.morph.renderSourceLayers?.[layerIndex] || { ...base, ...(runtimeState.morph.sourceVisuals?.[layerIndex]||{}) };
             const dst=runtimeState.morph.renderTargetLayers?.[layerIndex] || { ...base, ...(runtimeState.morph.targetVisuals?.[layerIndex]||{}) };
             if(!src||!dst)return[];
-            const plan=getChaosCircleMorphPlan(src,dst,state.morph.slideType||'sector');
+            const plan=getChaosCircleMorphPlan(src,dst,state.morph.slideType||'minimal');
             if(!plan?.pathPlans?.length)return[];
             const u=Number.isFinite(Number(t))?Number(t):0;
             const closurePlan=getMorphClosureTransitionPlan(plan.srcClosed,plan.dstClosed,u);
@@ -3159,7 +3159,7 @@ window.__spiroRegisterModule?.('js/app/lamp-audio-core');
             const src=runtimeState.morph.renderSourceLayers?.[layerIndex] || { ...base, ...(runtimeState.morph.sourceVisuals?.[layerIndex]||{}) };
             const dst=runtimeState.morph.renderTargetLayers?.[layerIndex] || { ...base, ...(runtimeState.morph.targetVisuals?.[layerIndex]||{}) };
             if(!src||!dst)return[];
-            const plan=getCircleMorphPlan(src,dst,state.morph.slideType||'sector');
+            const plan=getCircleMorphPlan(src,dst,state.morph.slideType||'minimal');
             if(!plan?.pathPlans?.length)return[];
             const u=Number.isFinite(Number(t))?Number(t):0;
             const closurePlan=getMorphClosureTransitionPlan(plan.srcClosed,plan.dstClosed,u);
