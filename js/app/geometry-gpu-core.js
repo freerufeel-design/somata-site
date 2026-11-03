@@ -316,39 +316,178 @@ window.__spiroRegisterModule?.('js/app/geometry-gpu-core');
             }
         });
 
+        // 13.1.2: A touch is not a synthetic mouse-down until it MOVES.
+        // This keeps taps, long stationary holds and drags unambiguous.
+        const PROFILE_TOUCH_HOLD_MS = 570;
+        const PROFILE_TOUCH_MOVE_PX = 7;
+        let profileTouchGesture = null;
+
         function dispatchProfileTouchAsMouse(type, touch) {
             if (!touch) return;
             const target = type === 'mouseup' ? window : profileCanvas;
             target.dispatchEvent(new MouseEvent(type, {
-                clientX: touch.clientX,
-                clientY: touch.clientY,
-                bubbles: true,
-                cancelable: true,
-                button: 0,
+                clientX: touch.clientX, clientY: touch.clientY,
+                bubbles: true, cancelable: true, button: 0,
                 buttons: type === 'mouseup' ? 0 : 1
             }));
         }
 
-        profileCanvas.addEventListener('touchstart', (e) => {
-            if (e.touches.length !== 1) return;
-            e.preventDefault();
-            dispatchProfileTouchAsMouse('mousedown', e.touches[0]);
-        }, { passive: false });
+        function profileCanvasPointForTouch(touch) {
+            const rect = profileCanvas.getBoundingClientRect();
+            if (!rect.width || !rect.height) return null;
+            return {
+                x: (touch.clientX - rect.left) * profileCanvas.width / rect.width,
+                y: (touch.clientY - rect.top) * profileCanvas.height / rect.height,
+                scaleX: rect.width / profileCanvas.width,
+                scaleY: rect.height / profileCanvas.height
+            };
+        }
 
-        profileCanvas.addEventListener('touchmove', (e) => {
-            if (e.touches.length !== 1) return;
-            e.preventDefault();
-            dispatchProfileTouchAsMouse('mousemove', e.touches[0]);
-        }, { passive: false });
+        function profileTouchedNodeIndex(layer, touch) {
+            const cp = profileCanvasPointForTouch(touch);
+            if (!cp) return -1;
+            let index = -1, distance = 19; // 19 CSS px finger target.
+            (layer.profileNodes || []).forEach((node,i) => {
+                const n = profileToCanvasCoords(node,profileCanvas.width,profileCanvas.height);
+                const d = Math.hypot((cp.x-n.x)*cp.scaleX,(cp.y-n.y)*cp.scaleY);
+                if (d < distance) {distance=d;index=i;}
+            });
+            return index;
+        }
 
-        profileCanvas.addEventListener('touchend', (e) => {
-            e.preventDefault();
-            dispatchProfileTouchAsMouse('mouseup', e.changedTouches[0]);
-        }, { passive: false });
+        function editTouchedProfileNode(layer, index, reason) {
+            if (!layer || index < 0 || layer.profileNodes.length <= 2) return false;
+            layer.profileNodes.splice(index,1);
+            setPreSampledSplineLayer(layer,false);
+            if (typeof invalidateLayerGeometry === 'function') invalidateLayerGeometry(layer,reason);
+            renderProfileEditor();
+            syncSidebarInputs();
+            renderMainCanvas();
+            activeRebaseMorphing();
+            return true;
+        }
 
-        profileCanvas.addEventListener('touchcancel', (e) => {
-            dispatchProfileTouchAsMouse('mouseup', e.changedTouches[0]);
-        }, { passive: false });
+        // Insert ONLY if the finger actually landed on the visible profile line.
+        // Do not use the old x-only test: it breaks looping/backtracking profiles.
+        function insertTouchedProfileNode(layer,touch) {
+            if (!layer || layer.profileMode === 'freehand_raw') return false;
+            const cp = profileCanvasPointForTouch(touch);
+            if (!cp) return false;
+            const path = getInterpolatedProfilePoints(layer);
+            if (path.length < 2) return false;
+            let best = null;
+            for (let i=0; i<path.length-1; i++) {
+                const a=profileToCanvasCoords(path[i],profileCanvas.width,profileCanvas.height);
+                const b=profileToCanvasCoords(path[i+1],profileCanvas.width,profileCanvas.height);
+                const ax=a.x*cp.scaleX,ay=a.y*cp.scaleY;
+                const dx=(b.x-a.x)*cp.scaleX,dy=(b.y-a.y)*cp.scaleY;
+                const len2=dx*dx+dy*dy;
+                const t=len2>1e-10 ? Math.max(0,Math.min(1,((cp.x*cp.scaleX-ax)*dx+(cp.y*cp.scaleY-ay)*dy)/len2)) : 0;
+                const distance=Math.hypot(cp.x*cp.scaleX-ax-t*dx,cp.y*cp.scaleY-ay-t*dy);
+                if (!best || distance<best.distance) {
+                    best={distance,point:{x:path[i].x+t*(path[i+1].x-path[i].x),y:path[i].y+t*(path[i+1].y-path[i].y)}};
+                }
+            }
+            if (!best || best.distance > 16) return false;
+            const nodes=layer.profileNodes;
+            let insertAt=nodes.length-1, bestDistance=Infinity;
+            for (let i=0; i<nodes.length-1; i++) {
+                const a=nodes[i],b=nodes[i+1],dx=b.x-a.x,dy=b.y-a.y;
+                const t=(dx*dx+dy*dy)>1e-10?Math.max(0,Math.min(1,((best.point.x-a.x)*dx+(best.point.y-a.y)*dy)/(dx*dx+dy*dy))):0;
+                const d=Math.hypot(best.point.x-a.x-t*dx,best.point.y-a.y-t*dy);
+                if (d<bestDistance) {bestDistance=d;insertAt=i+1;}
+            }
+            nodes.splice(insertAt,0,best.point);
+            setPreSampledSplineLayer(layer,false);
+            if (typeof invalidateLayerGeometry==='function') invalidateLayerGeometry(layer,'profile-touch-insert');
+            renderProfileEditor();
+            syncSidebarInputs();
+            renderMainCanvas();
+            activeRebaseMorphing();
+            return true;
+        }
+
+        function setProfileTouchDragPeek(visible) {
+            document.getElementById('mobileParameterFocusOverlay')?.classList.toggle('mobile-profile-drag-peek',visible);
+        }
+
+        function finishProfileTouchGesture(touch,cancelled=false) {
+            const gesture=profileTouchGesture;
+            if (!gesture) return;
+            profileTouchGesture=null;
+            clearTimeout(gesture.timer);
+            setProfileTouchDragPeek(false);
+            if (gesture.startedMouse) dispatchProfileTouchAsMouse('mouseup',touch||gesture.lastTouch);
+            if (cancelled || gesture.startedMouse || gesture.nodeIndex<0 && gesture.freehand) return;
+            const layer=state.layers.find(l=>l.id===gesture.layerId);
+            if (!layer || !touch || layer.profileMode==='freehand_raw') return;
+            const held=gesture.longHeld || performance.now()-gesture.startTime>=PROFILE_TOUCH_HOLD_MS;
+            if (gesture.nodeIndex>=0) {
+                if (held && editTouchedProfileNode(layer,gesture.nodeIndex,'profile-touch-delete')) {
+                    try {navigator.vibrate?.(15);} catch(_){}
+                }
+            } else if (!held) {
+                insertTouchedProfileNode(layer,touch);
+            }
+        }
+
+        profileCanvas.addEventListener('touchstart',(e)=>{
+            if (e.touches.length!==1) {finishProfileTouchGesture(null,true);return;}
+            e.preventDefault();
+            finishProfileTouchGesture(null,true);
+            const layer=state.layers.find(l=>l.id===state.activeLayerId);
+            if (!layer) return;
+            const touch=e.touches[0];
+            const gesture={
+                touchId:touch.identifier, layerId:layer.id,
+                startX:touch.clientX,startY:touch.clientY,startTime:performance.now(),
+                nodeIndex:layer.profileMode==='freehand_raw'?-1:profileTouchedNodeIndex(layer,touch),
+                freehand:layer.profileMode==='freehand_raw',
+                lastTouch:touch,startedMouse:false,longHeld:false,timer:0
+            };
+            profileTouchGesture=gesture;
+            if (gesture.freehand) {
+                dispatchProfileTouchAsMouse('mousedown',touch);
+                gesture.startedMouse=true;
+            } else if (gesture.nodeIndex>=0) {
+                gesture.timer=window.setTimeout(()=>{
+                    if (profileTouchGesture===gesture) gesture.longHeld=true;
+                },PROFILE_TOUCH_HOLD_MS);
+            }
+        },{passive:false});
+
+        profileCanvas.addEventListener('touchmove',(e)=>{
+            const gesture=profileTouchGesture;
+            if (!gesture) return;
+            const touch=Array.from(e.touches).find(t=>t.identifier===gesture.touchId);
+            if (!touch || e.touches.length!==1) {finishProfileTouchGesture(null,true);return;}
+            e.preventDefault();
+            gesture.lastTouch=touch;
+            const moved=Math.hypot(touch.clientX-gesture.startX,touch.clientY-gesture.startY);
+            if (!gesture.startedMouse && moved>PROFILE_TOUCH_MOVE_PX) {
+                clearTimeout(gesture.timer);
+                // If the touch began on a point and held before moving,
+                // keep the complete panel at 20% opacity until release.
+                if (gesture.nodeIndex>=0 && gesture.longHeld) setProfileTouchDragPeek(true);
+                dispatchProfileTouchAsMouse('mousedown',{clientX:gesture.startX,clientY:gesture.startY});
+                gesture.startedMouse=true;
+            }
+            if (gesture.startedMouse) dispatchProfileTouchAsMouse('mousemove',touch);
+        },{passive:false});
+
+        profileCanvas.addEventListener('touchend',(e)=>{
+            const gesture=profileTouchGesture;
+            if (!gesture) return;
+            const touch=Array.from(e.changedTouches).find(t=>t.identifier===gesture.touchId);
+            if (!touch) return;
+            e.preventDefault();
+            finishProfileTouchGesture(touch);
+        },{passive:false});
+
+        profileCanvas.addEventListener('touchcancel',(e)=>{
+            e.preventDefault();
+            finishProfileTouchGesture(null,true);
+        },{passive:false});
 
         window.addEventListener('mouseup', () => {
             if (isProfilePanning) {

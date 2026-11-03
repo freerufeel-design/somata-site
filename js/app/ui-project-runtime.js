@@ -18895,6 +18895,83 @@ syncMorphProfileUI();
                     renderProfileEditor();
                 };
                 slot.replaceChildren(editor);
+                // Hide rarely used profile options behind an accessible disclosure.
+                // Keep the live controls (IDs, listeners and state) untouched.
+                const profileCanvasBox=editor.querySelector('.profile-canvas-container');
+                if (profileCanvasBox) {
+                    const extra=document.createElement('details');
+                    extra.className='mobile-profile-extras';
+                    const summary=document.createElement('summary');
+                    summary.textContent='Дополнительные настройки';
+                    extra.append(summary);
+                    while (profileCanvasBox.nextSibling) extra.append(profileCanvasBox.nextSibling);
+                    profileCanvasBox.after(extra);
+                    const onMode=event=>{
+                        if (event.target.closest('[data-mode="freehand_raw"]')) extra.open=true;
+                    };
+                    editor.addEventListener('click',onMode);
+                    const previousRestore=context.restoreProfile;
+                    context.restoreProfile=()=>{
+                        editor.removeEventListener('click',onMode);
+                        // Restore original child order, including every text node.
+                        for(const child of [...extra.childNodes].filter(n=>n!==summary)) editor.insertBefore(child,extra);
+                        extra.remove();
+                        previousRestore();
+                    };
+                }
+                // 13.1.2: the profile group selector is a compact dropdown,
+                // not five persistent two-column tiles. The REAL checkbox
+                // controls stay mounted and keep their existing handlers.
+                const firstRow=editor.querySelector('.control-row');
+                const tabs=editor.querySelector('#profileLibraryTabs');
+                const reset=editor.querySelector('#btnResetProfile');
+                if (firstRow && tabs && reset) {
+                    const resetMarker=document.createComment('profile reset restore point');
+                    reset.parentNode.insertBefore(resetMarker,reset);
+                    const toolbar=document.createElement('div');
+                    toolbar.className='mobile-profile-toolbar';
+                    const toggle=document.createElement('button');
+                    toggle.type='button';
+                    toggle.className='mobile-profile-library-toggle';
+                    toggle.setAttribute('aria-controls','profileLibraryTabs');
+                    toggle.setAttribute('aria-expanded','false');
+                    toolbar.append(toggle,reset);
+                    firstRow.insertBefore(toolbar,tabs);
+                    const updateLabel=()=>{
+                        const active=tabs.querySelector('.profile-library-tab.active > span');
+                        toggle.textContent=`Профили · ${active?.textContent?.replace(/^\d+\s*/, '') || 'Стандарт'} ▾`;
+                    };
+                    const close=()=>{
+                        tabs.classList.remove('mobile-profile-groups-open');
+                        toggle.setAttribute('aria-expanded','false');
+                    };
+                    toggle.addEventListener('click',()=>{
+                        const open=tabs.classList.toggle('mobile-profile-groups-open');
+                        toggle.setAttribute('aria-expanded',String(open));
+                        updateLabel();
+                    });
+                    tabs.addEventListener('click',e=>{
+                        // A checkbox changes Morph participation without closing
+                        // the list, so several groups can be checked in one pass.
+                        if (!e.target.closest('[data-morph-profile-group]')) {
+                            queueMicrotask(()=>{updateLabel();close();});
+                        }
+                    });
+                    const outside=e=>{
+                        if (!toolbar.contains(e.target) && !tabs.contains(e.target)) close();
+                    };
+                    document.addEventListener('pointerdown',outside,true);
+                    updateLabel();
+                    const previousRestore=context.restoreProfile;
+                    context.restoreProfile=()=>{
+                        document.removeEventListener('pointerdown',outside,true);
+                        close();
+                        if (resetMarker.parentNode) resetMarker.parentNode.insertBefore(reset,resetMarker);
+                        resetMarker.remove();
+                        toolbar.remove();
+                        previousRestore();
+                    };
+                }
                 renderProfileEditor();
                 return true;
             }

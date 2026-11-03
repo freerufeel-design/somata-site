@@ -8605,3 +8605,131 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
     -webkit-touch-callout:none;
   }
 }
+
+/* Somata 13.1.2 — compact, genuinely touch-editable mobile profile dock. */
+@media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
+  #mobileParameterFocusOverlay .mobile-parameter-focus-dock:has(#mobileParameterProfileSlot:not(.hidden)) {
+    width:auto!important;
+    height:auto!important;
+    max-height:min(42dvh, 340px)!important;
+    padding:8px 10px max(9px,env(safe-area-inset-bottom))!important;
+    overflow:visible!important;
+  }
+  #mobileParameterFocusOverlay .mobile-parameter-focus-dock:has(#mobileParameterProfileSlot:not(.hidden)) .mobile-parameter-focus-head {
+    margin-bottom:4px!important;
+  }
+  #mobileParameterFocusOverlay .mobile-parameter-profile-slot {
+    max-height:none!important;
+    min-height:0!important;
+    flex:1 1 auto!important;
+    overflow-y:auto!important;
+    overflow-x:hidden!important;
+    scrollbar-width:thin;
+  }
+  #mobileParameterProfileSlot #profileSettingsGroup {
+    gap:4px!important;
+    padding:0!important;
+  }
+  /* The dock already labels the editor; a repeated heading wastes space. */
+  #mobileParameterProfileSlot #profileSettingsGroup > .control-group-title {
+    display:none!important;
+  }
+  #mobileParameterProfileSlot #profileSettingsGroup > .control-row {
+    position:relative!important;
+    margin:0!important;
+    padding:0!important;
+    min-width:0!important;
+    overflow:visible!important;
+  }
+  #mobileParameterProfileSlot .mobile-profile-toolbar {
+    width:100%; display:grid; grid-template-columns:minmax(0,1fr) auto;
+    align-items:center;gap:5px;margin:0 0 3px;min-width:0;
+  }
+  #mobileParameterProfileSlot .mobile-profile-library-toggle {
+    width:100%;min-width:0;min-height:32px;height:32px;
+    text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    background:#152740;border:1px solid rgba(56,189,248,.5);
+    border-radius:7px;padding:4px 9px;font-size:12px;color:#bdeaff;
+  }
+  #mobileParameterProfileSlot #btnResetProfile {
+    height:32px!important;min-height:32px!important;
+    padding:3px 10px!important;font-size:11px!important;
+  }
+  #mobileParameterProfileSlot .profile-library-tabs {
+    display:none!important;
+    position:absolute!important;
+    z-index:50!important;
+    top:34px;left:0;right:0;
+    width:100%!important;
+    max-height:min(49dvh,260px);
+    overflow-y:auto;
+    grid-template-columns:1fr!important;
+    gap:3px!important;
+    padding:5px!important;
+    margin:0!important;
+    border:1px solid rgba(56,189,248,.55);
+    border-radius:8px;
+    background:#101d32;
+    box-shadow:0 12px 28px rgba(0,0,0,.6);
+    box-sizing:border-box;
+  }
+  #mobileParameterProfileSlot .profile-library-tabs.mobile-profile-groups-open {
+    display:grid!important;
+  }
+  #mobileParameterProfileSlot .profile-library-tab {
+    display:flex!important;justify-content:flex-start!important;
+    min-height:35px!important;text-align:left!important;
+    padding:5px 10px!important;font-size:12px!important;gap:8px!important;
+  }
+  #mobileParameterProfileSlot .profile-library-tab input[type=checkbox] {
+    width:18px!important;height:18px!important;flex:0 0 18px!important;
+  }
+  #mobileParameterProfileSlot .profile-preset-row {
+    display:grid!important;grid-template-columns:34px minmax(0,1fr) 34px!important;
+    gap:4px!important;margin:0!important;
+  }
+  #mobileParameterProfileSlot .profile-preset-row :is(select,button) {
+    height:34px!important;min-height:34px!important;padding:3px 5px!important;
+    box-sizing:border-box!important;font-size:12px!important;
+  }
+  #mobileParameterProfileSlot .profile-family-legend {display:none!important;}
+  #mobileParameterProfileSlot .btn-group-toggle:has(.profile-mode-btn) {
+    display:grid!important;
+    grid-template-columns:repeat(3,minmax(0,1fr))!important;
+    gap:3px!important;padding:2px!important;margin:0!important;
+    width:100%!important;min-height:36px!important;
+  }
+  #mobileParameterProfileSlot .profile-mode-btn {
+    display:block!important;box-sizing:border-box!important;
+    width:100%!important;min-width:0!important;
+    min-height:34px!important;height:34px!important;
+    padding:4px 1px!important;
+    font-size:12px!important;white-space:nowrap!important;
+  }
+  #mobileParameterProfileSlot .profile-canvas-container {margin:0!important;}
+  #mobileParameterProfileSlot .mobile-profile-extras {
+    display:block;width:100%;min-width:0;margin:0;
+    border:1px solid rgba(71,85,105,.65);border-radius:7px;
+    background:rgba(12,22,40,.65);
+  }
+  #mobileParameterProfileSlot .mobile-profile-extras > summary {
+    list-style:revert;cursor:pointer;box-sizing:border-box;
+    padding:6px 10px;font-size:11px;min-height:27px;color:#a6c5dd;
+    touch-action:manipulation;
+  }
+  #mobileParameterProfileSlot .mobile-profile-extras > :not(summary) {
+    margin-left:5px!important;margin-right:5px!important;
+  }
+  #mobileParameterProfileSlot #profileCanvas {
+    min-height:118px!important;
+    height:118px!important;
+    aspect-ratio:auto!important;
+    touch-action:none!important;
+  }
+  /* The panel is still fully interactive while transparent. Finger and
+     active point remain visible through it, allowing scene preview. */
+  #mobileParameterFocusOverlay.mobile-profile-drag-peek .mobile-parameter-focus-dock {
+    opacity:.2!important;
+    transition:opacity .12s linear!important;
+  }
+}
