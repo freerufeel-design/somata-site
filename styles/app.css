@@ -2216,6 +2216,26 @@
             padding: 7px !important;
         }
 
+        /* The tool rail already owns the collapse button. Do not reserve an
+           extra 42px settings strip beside it when the drawer is closed. */
+        @media (min-width: 761px) {
+            .app-container > #settingsSidebar.desktop-collapsed,
+            body.ui-easy .app-container > #settingsSidebar.desktop-collapsed {
+                flex: 0 0 0px !important;
+                flex-basis: 0px !important;
+                width: 0px !important;
+                min-width: 0px !important;
+                max-width: 0px !important;
+                padding: 0 !important;
+                border: 0 !important;
+                box-shadow: none !important;
+                overflow: hidden !important;
+                visibility: hidden;
+                pointer-events: none;
+            }
+            #settingsSidebar.desktop-collapsed > .section-header {display:none!important;}
+        }
+
         /* MOBILE / TOUCH LAYOUT */
         html, body {
             min-height: 100%;
@@ -3353,6 +3373,11 @@
         .lightning-glow-box-title { font-size:9px; font-weight:700; color:#bae6fd; letter-spacing:.02em; }
         .sweep-subsection { display:grid; gap:7px; padding:8px; border:1px solid rgba(125,211,252,.22); border-radius:7px; background:rgba(14,116,144,.045); }
         .sweep-subsection-title { font-size:9px; font-weight:700; color:#bae6fd; letter-spacing:.02em; }
+        .sweep-appearance-section { display:grid; gap:8px; min-width:0; padding:9px; border:1px solid rgba(125,211,252,.3); border-radius:8px; background:rgba(15,23,42,.42); }
+        .sweep-appearance-section .control-row { min-width:0; margin:0; }
+        .sweep-appearance-title { font-size:10px; font-weight:700; color:#d8f2ff; padding-bottom:4px; border-bottom:1px solid rgba(125,211,252,.17); }
+        #sweepCoreAppearance { border-color:rgba(148,163,184,.36); }
+        #sweepHaloAppearance { border-color:rgba(125,211,252,.39); }
         .sweep-check-row { justify-content:flex-start !important; gap:7px; }
         .sweep-inline-meta { display:flex; align-items:center; gap:8px; }
         .sweep-mini-check { display:inline-flex; align-items:center; gap:4px; font-size:9px; white-space:nowrap; }
@@ -8743,3 +8768,10 @@ input[type="number"].somata-number-is-scrubbing {
   outline-offset: 1px;
   user-select: none;
 }
+
+/* 13.1.3: canonical outline catalog routing, same frame vocabulary as all controls. */
+.line-outline-head label.parameter-routing-capable{padding:4px 6px;border-radius:6px;min-height:24px}
+.line-outline-modes.parameter-routing-capable{padding:5px;border-radius:7px}
+.line-outline-control .generic-morph-range-host{min-width:0;width:100%;display:grid}
+.line-outline-control .generic-morph-range-host.parameter-routing-capable{min-width:0}
+.line-outline-head input[type="color"].parameter-routing-capable{border:1px solid var(--routing-border)!important;border-radius:5px;box-shadow:0 0 0 1px var(--routing-border)!important}

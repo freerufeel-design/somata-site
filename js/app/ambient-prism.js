@@ -27,6 +27,7 @@ const SomataAmbientPrism=(()=>{
     // Small reusable luminance mask for color-channel splitting and energy halos.
     let edgeSource=null,edgeCtx=null,edgeTint=null,edgeTintCtx=null,edgeWidth=0,edgeHeight=0;
     const ambientTextureCache=new Map();
+    const cloudMaskCache=new Map(); // hue changes tint cached masks; never rebuild cloud noise every frame
 
     const clamp=(v,min,max,fallback=min)=>Math.max(min,Math.min(max,Number.isFinite(Number(v))?Number(v):fallback));
     const read=(obj,k,fallback)=>obj?.[k]===undefined?fallback:obj[k];
@@ -157,50 +158,102 @@ const SomataAmbientPrism=(()=>{
         }
         ctx.stroke();ctx.restore();
     }
-    function buildCloudTexture(tone,seed,alphaScale=1){
-        const key=`cloud:${tone}:${seed}:${alphaScale}`;
-        return textureCache(key,()=>{
-            const canvas=document.createElement('canvas');
-            const w=192,h=108;canvas.width=w;canvas.height=h;
+    // Periodic smooth value noise. A repeating *scalar field*, rather than a
+    // collection of overlapping rectangular sprites, gives the cloud overlay
+    // exact continuity on both screen axes as it drifts. There are no rows,
+    // feathered tile borders or large off-screen blanks to reveal.
+    function cloudValueNoise(x,y,periodX,periodY,seed){
+        const ix=Math.floor(x),iy=Math.floor(y),fx=x-ix,fy=y-iy;
+        const hash=(u,v)=>{
+            const xx=((u%periodX)+periodX)%periodX;
+            const yy=((v%periodY)+periodY)%periodY;
+            let h=(Math.imul(xx,374761393)+Math.imul(yy,668265263)+Math.imul(seed,1442695041))|0;
+            h=Math.imul(h^(h>>>13),1274126177);
+            return ((h^(h>>>16))>>>0)/4294967295;
+        };
+        const u=smoothstep(fx),v=smoothstep(fy);
+        return lerp(lerp(hash(ix,iy),hash(ix+1,iy),u),lerp(hash(ix,iy+1),hash(ix+1,iy+1),u),v);
+    }
+    function cloudFbm(u,v,seed,baseX,baseY,octaves){
+        let sum=0,weight=0,amp=.58,periodX=baseX,periodY=baseY;
+        for(let i=0;i<octaves;i++){
+            sum+=amp*cloudValueNoise(u*periodX,v*periodY,periodX,periodY,seed+i*29);
+            weight+=amp;amp*=.51;periodX*=2;periodY*=2;
+        }
+        return sum/weight;
+    }
+    function buildCloudTexture(tone,seed){
+        let mask=cloudMaskCache.get(seed);
+        if(!mask){
+            // The costly cloud geometry is independent of its color. In a
+            // hue Morph only inexpensive tinting occurs, not procedural noise
+            // generation for every new hue on every frame.
+            const canvas=document.createElement('canvas'),w=256,h=192;
+            canvas.width=w;canvas.height=h;
             const c=canvas.getContext('2d',{alpha:true});
             const img=c.createImageData(w,h);
-            const m=String(tone).match(/^#([\da-f]{6})$/i),v=m?parseInt(m[1],16):0xffffff;
-            const r=v>>16,g=(v>>8)&255,b=v&255;
             for(let y=0;y<h;y++)for(let x=0;x<w;x++){
                 const nx=x/w,ny=y/h;
-                const base=fbmNoise(nx*3.2+seed*.13,ny*2.1+seed*.19,seed,5);
-                const wisps=fbmNoise(nx*7.4+seed*.31,ny*4.8+seed*.11,seed+19,3);
-                const ridge=1-Math.abs(fbmNoise(nx*4.7+seed*.07,ny*3.4+seed*.23,seed+7,4)*2-1);
-                const shape=Math.max(0,base*.72+wisps*.18+ridge*.25-(0.50+Math.abs(ny-.45)*.22));
-                const alpha=Math.max(0,Math.min(1,shape*1.9));
+                // The warp is periodic too: the right/left and bottom/top
+                // edges meet without any seams even during diagonal drift.
+                const wx=(cloudValueNoise(nx*2,ny*2,2,2,seed+61)-.5)*.16;
+                const wy=(cloudValueNoise(nx*2,ny*2,2,2,seed+79)-.5)*.16;
+                const u=nx+wx,v=ny+wy;
+                const shape=cloudFbm(u,v,seed,4,3,4);
+                const filament=cloudFbm(u,v,seed+113,9,7,3);
+                const broad=cloudValueNoise(u*2,v*2,2,2,seed+37);
+                const volume=shape*.66+filament*.14+broad*.20;
+                // Hollow transparent areas and gently rolling wisps, without
+                // straight horizontal contours or hard cloud silhouettes.
+                const body=smoothstep(clamp((volume-.435)/.205,0,1));
+                const highlights=smoothstep(clamp((volume-.535)/.145,0,1));
+                const a=Math.pow(body,1.18)*(.67+.33*highlights);
+                const shade=.77+.23*highlights;
                 const i=(y*w+x)*4;
-                img.data[i]=r;img.data[i+1]=g;img.data[i+2]=b;img.data[i+3]=Math.round(255*Math.pow(alpha,1.35)*alphaScale);
+                img.data[i]=255;img.data[i+1]=255;img.data[i+2]=255;
+                img.data[i+3]=Math.round(255*a*shade);
             }
             c.putImageData(img,0,0);
-            return canvas;
+            mask=canvas;cloudMaskCache.set(seed,mask);
+        }
+        const key=`cloud-tint-v3:${tone}:${seed}`;
+        return textureCache(key,()=>{
+            const colored=document.createElement('canvas');
+            colored.width=mask.width;colored.height=mask.height;
+            const c=colored.getContext('2d',{alpha:true});
+            c.drawImage(mask,0,0);
+            c.globalCompositeOperation='source-in';
+            c.fillStyle=tone;c.fillRect(0,0,colored.width,colored.height);
+            return colored;
         });
     }
     function clouds(ctx,cfg,time){
-        const density=Math.max(0,Number(cfg.density)||0);
-        const layers=Math.max(0,Math.min(6,Math.round(1+density/18)));
-        if(!layers)return;
-        const alpha=clamp(cfg.opacity,0,100)/100;
+        const density=clamp(cfg.density,0,100);
+        const opacity=clamp(cfg.opacity,0,100)/100;
+        if(density<=0||opacity<=0)return;
         const velocity=Math.max(0,Number(cfg.speed)||0);
-        const floatTime=time*velocity/12; // 0 speed must freeze drift AND vertical float
-        const tone=hueShift(cfg.color,cfg.hue||0);
-        ctx.save();
-        ctx.globalCompositeOperation='screen';
+        const tone=hueShift(String(cfg.color||'#acc5e7'),cfg.hue||0);
+        const layers=density<25?1:density<65?2:3;
+        ctx.save();ctx.globalCompositeOperation='screen';
+        ctx.imageSmoothingEnabled=true;
         for(let i=0;i<layers;i++){
-            const tex=buildCloudTexture(tone,i+1,.45+.1*i);
-            const scale=1.02+i*.18+(density/100)*.25;
-            const drawW=width*scale*1.15,drawH=height*(.58+i*.08);
-            const drift=((time*velocity*(4+i*1.7))%(drawW*.8));
-            const baseX=-drawW*.15-drift;
-            const baseY=height*(.04+.08*i/layers)+Math.sin(floatTime*.2+i)*height*.03;
-            ctx.globalAlpha=alpha*(.15+.12*i);
-            ctx.drawImage(tex,baseX,baseY,drawW,drawH);
-            ctx.drawImage(tex,baseX+drawW*.78,baseY+8*Math.sin(floatTime*.15+i),drawW,drawH);
-            ctx.drawImage(tex,baseX-drawW*.78,baseY-6*Math.cos(floatTime*.11+i),drawW,drawH);
+            const tex=buildCloudTexture(tone,41+i*67);
+            // A single seamless texture repeats in BOTH axes. Each field is
+            // larger than the viewport, so its repeating motifs aren't visible
+            // at normal zoom; other fields have independent phases and scales.
+            const tileW=width*(1.50+.24*i);
+            const tileH=height*(1.46+.19*i);
+            const driftX=time*velocity*(i%2===0?1:-1)*(.080+.027*i);
+            const driftY=time*velocity*(i%2===0?.016:-.024);
+            const phaseX=i*tileW*.37,phaseY=i*tileH*.29;
+            const offsetX=((driftX+phaseX)%tileW+tileW)%tileW;
+            const offsetY=((driftY+phaseY)%tileH+tileH)%tileH;
+            ctx.globalAlpha=opacity*(.52+.23*density/100)*(i===0?.73:.62);
+            for(let x=offsetX-tileW;x<width;x+=tileW){
+                for(let y=offsetY-tileH;y<height;y+=tileH){
+                    ctx.drawImage(tex,x,y,tileW,tileH);
+                }
+            }
         }
         ctx.restore();
     }

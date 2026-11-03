@@ -9,15 +9,75 @@ function resetOutlineEffectPlan(plan){
     return p;
 }
 
+// An authored count selects N *random* scene layers, never the first N.
+// The seed is generated only once per project and saved with lineOutline. A
+// stable shuffle avoids flickering on every GPU frame / every Audio sample.
+function somataOutlineSelectionSeed(){
+    const cfg=state.lineOutline||(state.lineOutline={enabled:false});
+    if(!Number.isFinite(Number(cfg.selectionSeed))||cfg.selectionSeed==null){
+        cfg.selectionSeed=Math.floor(Math.random()*0x100000000)>>>0;
+    }
+    return Number(cfg.selectionSeed)>>>0;
+}
+function somataOutlineRandomRank(id,seed){
+    const text=String(id||'');let hash=(2166136261^(seed>>>0))>>>0;
+    for(let i=0;i<text.length;i++){hash=Math.imul(hash^text.charCodeAt(i),16777619)>>>0;}
+    hash^=hash>>>16;hash=Math.imul(hash,0x7feb352d)>>>0;
+    hash^=hash>>>15;hash=Math.imul(hash,0x846ca68b)>>>0;
+    return(hash^(hash>>>16))>>>0;
+}
+let somataOutlineSelectionCache={key:null,ids:null};
+function somataOutlineRandomLayerIds(){
+    const seed=somataOutlineSelectionSeed();
+    const layers=state.layers||[];
+    const key=`${seed}|${layers.map((layer,index)=>String(layer?.id??`layer-index-${index}`)).join('\u001f')}`;
+    if(somataOutlineSelectionCache.key===key)return somataOutlineSelectionCache.ids;
+    const ids=layers.map((layer,index)=>({
+        id:String(layer?.id??`layer-index-${index}`),
+        rank:somataOutlineRandomRank(layer?.id??`layer-index-${index}`,seed)
+    })).sort((a,b)=>a.rank-b.rank||a.id.localeCompare(b.id)).map(row=>row.id);
+    somataOutlineSelectionCache={key,ids};
+    return ids;
+}
+function somataOutlineEffectiveLayerCount(){
+    const total=(state.layers||[]).length;
+    const authored=state.lineOutline?.layerCount!=null&&Number.isFinite(Number(state.lineOutline.layerCount))?Number(state.lineOutline.layerCount):total;
+    const morphed=window.SomataMorphParameterRouting?.resolveGlobalValue?.('outline.layerCount',authored)??authored;
+    // This parameter is global: calculate one N, not one independent N per layer.
+    const modulated=typeof audioApplyNumeric==='function'?audioApplyNumeric('outline.layerCount',morphed,-1):morphed;
+    return Math.max(0,Math.min(total,Math.round(Number.isFinite(Number(modulated))?Number(modulated):authored)));
+}
+window.somataOutlineLayerEnabled=function(layerIndex){
+    if(state.lineOutline?.enabled!==true)return false;
+    const idx=Math.floor(Number(layerIndex));
+    const layers=state.layers||[];
+    if(!Number.isInteger(idx)||idx<0||idx>=layers.length)return false;
+    const count=somataOutlineEffectiveLayerCount();
+    if(count===0)return false;
+    if(count>=layers.length)return true;
+    const id=String(layers[idx]?.id??`layer-index-${idx}`);
+    return somataOutlineRandomLayerIds().slice(0,count).includes(id);
+};
+window.__somataOutlineRandomSelection=()=>({
+    seed:somataOutlineSelectionSeed(),
+    count:somataOutlineEffectiveLayerCount(),
+    selected:somataOutlineRandomLayerIds().slice(0,somataOutlineEffectiveLayerCount())
+});
 function resolveLayerOutlineEffectProvider(frameCtx,plan){
     const layer=frameCtx.layer;
-    plan.enabled=state.lineOutline?.enabled===true&&getLayerLineVisible(frameCtx.effectLayer||liveEffectOwnerForFrameLayer(layer))&&frameCtx.geometryPlan?.kind!=='lightning';
+    // Outline count, width, color and placement share canonical routing IDs.
+    const blue=window.SomataMorphParameterRouting;
+    const morphValue=(id,authored)=>blue?.resolveGlobalValue?.(id,authored)??authored;
+    plan.enabled=window.somataOutlineLayerEnabled?.(frameCtx.layerIndex)===true
+        &&getLayerLineVisible(frameCtx.effectLayer||liveEffectOwnerForFrameLayer(layer))&&frameCtx.geometryPlan?.kind!=='lightning';
     plan.tunnelActive=state.tunnel.active===true;
     if(!plan.enabled)return plan;
     plan.baseLineWidth=Math.max(.001,frameCtx.strokeWidth);
-    plan.extra=Math.max(.1,Math.min(30,audioApplyNumeric('outline.width',Number(state.lineOutline.width)||1.5,frameCtx.layerIndex)));
-    plan.color=state.lineOutline.color||'#ffffff';
-    plan.mode=['outer','inner','median'].includes(state.lineOutline?.mode)?state.lineOutline.mode:'outer';
+    plan.extra=Math.max(.1,Math.min(30,audioApplyNumeric('outline.width',morphValue('outline.width',Number(state.lineOutline.width)||1.5),frameCtx.layerIndex)));
+    plan.color=audioShiftHexHue('outline.color',SomataParameterRegistry.shiftHexHue(state.lineOutline.color||'#ffffff',morphValue('outline.color',0)),frameCtx.layerIndex);
+    const outlineModes=['outer','inner','median'];
+    const baseMode=Math.max(0,outlineModes.indexOf(state.lineOutline?.mode));
+    plan.mode=outlineModes[Math.max(0,Math.min(2,Math.round(audioApplyNumeric('outline.mode',morphValue('outline.mode',baseMode),frameCtx.layerIndex))))];
     plan.outerAdd=plan.mode==='outer'?plan.extra:(plan.mode==='median'?plan.extra*.5:0);
     plan.coreInset=plan.mode==='inner'?plan.extra:(plan.mode==='median'?plan.extra*.5:0);
     plan.join=(layer.lineJoinType||'rounded')==='straight'?'miter':'round';

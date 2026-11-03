@@ -1037,6 +1037,10 @@
                                 <div class="row-label"><span>Длина хвоста</span><span id="lampFreezeTailText" class="text-mono">1.5 с</span></div>
                                 <input id="lampFreezeTailSec" type="range" min="0.05" max="30" step="0.05" value="1.5" aria-label="Длина хвоста FreezeLight в секундах">
                             </div>
+                            <div id="lampFreezeIntensityRow" class="control-row lamp-freeze-row" title="Яркость светового хвоста FreezeLight, независимо от яркости текущих лампочек">
+                                <div class="row-label"><span>Интенсивность хвоста</span><span id="lampFreezeIntensityText" class="text-mono">100%</span></div>
+                                <input id="lampFreezeIntensity" type="range" min="0" max="100" step="1" value="100" aria-label="Интенсивность хвоста FreezeLight">
+                            </div>
                             <div id="lampFreezeHardnessRow" class="control-row lamp-freeze-row" title="50% — линейное затухание; выше — хвост дольше остаётся плотным; 100% — постоянная прозрачность до конца времени; 0% — след не виден">
                                 <div class="row-label"><span>Жёсткость</span><span id="lampFreezeHardnessText" class="text-mono">50%</span></div>
                                 <input id="lampFreezeHardness" type="range" min="0" max="100" step="1" value="50" aria-label="Жёсткость FreezeLight">
@@ -1236,13 +1240,20 @@
                                     <div class="control-row"><div class="row-label"><span>Угловая скорость</span><span id="sweepSpectralAngularSpeedText" class="text-mono">90°/с</span></div><input id="sweepSpectralAngularSpeed" type="range" min="-720" max="720" step="1" value="90"></div>
                                 </div>
                                 <div class="sweep-subsection-title">Внешний вид проблеска</div>
-                                <div class="control-row" id="sweepColorRow"><div class="row-label"><span>Цвет</span><input id="sweepColor" type="color" value="#ffffff" aria-label="Цвет проблеска"></div></div>
-                                <div class="control-row"><div class="row-label"><span>Прозрачность Core</span><span id="sweepOpacityText" class="text-mono">100%</span></div><input id="sweepOpacity" type="range" min="0" max="100" step="1" value="100" aria-label="Прозрачность Core проблеска"></div>
-                                <div class="control-row" id="sweepWidthRow"><div class="row-label"><span>Толщина проблеска</span><span id="sweepWidthText" class="text-mono">75%</span></div><input id="sweepWidthPercent" type="range" min="0" max="200" step="1" value="75"></div>
-                                <div class="control-row"><div class="row-label"><span>Яркость ореола</span><span id="sweepBrightnessText" class="text-mono">100%</span></div><input id="sweepBrightness" type="range" min="0" max="200" step="1" value="100"></div>
+                                <div class="sweep-appearance-section" id="sweepCoreAppearance" aria-label="Настройки ядра проблеска">
+                                    <div class="sweep-appearance-title">Настройки ядра</div>
+                                <div class="control-row" id="sweepColorRow"><div class="row-label"><span>Цвет проблеска</span><input id="sweepColor" type="color" value="#ffffff" aria-label="Цвет проблеска"></div></div>
+                                <div class="control-row"><div class="row-label"><span>Прозрачность ядра</span><span id="sweepOpacityText" class="text-mono">100%</span></div><input id="sweepOpacity" type="range" min="0" max="100" step="1" value="100" aria-label="Прозрачность Core проблеска"></div>
+                                <div class="control-row" id="sweepWidthRow"><div class="row-label"><span>Толщина проблеска</span><span id="sweepWidthText" class="text-mono">105%</span></div><input id="sweepWidthPercent" type="range" min="0" max="200" step="1" value="105"></div>
+                                </div>
+                                <div class="sweep-appearance-section" id="sweepHaloAppearance" aria-label="Настройки ореола проблеска">
+                                    <div class="sweep-appearance-title">Настройки ореола</div>
+                                    <div class="control-row" id="sweepHaloColorRow"><div class="row-label"><span>Цвет ореола</span><input id="sweepHaloColor" type="color" value="#ffffff" aria-label="Цвет ореола проблеска"></div></div>
+                                <div class="control-row"><div class="row-label"><span>Яркость ореола</span><span id="sweepBrightnessText" class="text-mono">77%</span></div><input id="sweepBrightness" type="range" min="0" max="200" step="1" value="77"></div>
                                 <div class="control-row" id="sweepGlowIntensityRow"><div class="row-label"><span>Интенсивность</span><span id="sweepGlowIntensityText" class="text-mono">100% × 1</span></div><div class="row-inputs"><input id="sweepGlowIntensity" type="range" min="0" max="200" step="1" value="100"><span>×</span><input id="sweepGlowIntensityMultiplier" type="number" min="0" step="any" value="1" style="width:58px" data-log-multiplier="1"></div></div>
-                                <div class="control-row" id="sweepGlowRow"><div class="row-label"><span>Размер свечения</span><span id="sweepGlowText" class="text-mono">18 px × 1</span></div><div class="row-inputs"><input id="sweepGlow" type="range" min="0" max="50" step="0.5" value="18"><span>×</span><input id="sweepGlowMultiplier" type="number" min="0" step="any" value="1" style="width:58px" data-log-multiplier="1"></div></div>
+                                <div class="control-row" id="sweepGlowRow"><div class="row-label"><span>Размер свечения</span><span id="sweepGlowText" class="text-mono">14.5 px × 1</span></div><div class="row-inputs"><input id="sweepGlow" type="range" min="0" max="50" step="0.5" value="14.5"><span>×</span><input id="sweepGlowMultiplier" type="number" min="0" step="any" value="1" style="width:58px" data-log-multiplier="1"></div></div>
                                 <div class="control-row"><div class="row-label"><span>Мягкость</span><span id="sweepSoftnessText" class="text-mono">100% × 1</span></div><div class="row-inputs"><input id="sweepSoftness" type="range" min="0" max="150" step="1" value="100"><span>×</span><input id="sweepSoftnessMultiplier" type="number" min="0" step="any" value="1" style="width:58px" data-log-multiplier="1"></div></div>
+                                </div>
                             </div>
                         </div>
                         
@@ -1900,6 +1911,8 @@
                             <label><input id="paramLineOutlineEnabled" type="checkbox"><span>Обводка</span></label>
                             <input id="paramLineOutlineColor" type="color" value="#ffffff" aria-label="Цвет обводки линий">
                         </div>
+                        <div class="row-label"><span>Обводка · число слоёв</span><span id="lineOutlineLayerCountText" class="text-mono">Все слои</span></div>
+                        <input id="paramLineOutlineLayerCount" type="range" min="0" max="3" step="1" value="3" aria-label="Число слоёв с обводкой">
                         <div class="row-label"><span>Толщина обводки</span><span id="lineOutlineWidthText" class="text-mono">1.5 px</span></div>
                         <div class="line-outline-control"><input id="paramLineOutlineWidth" type="range" min="0.5" max="12" step="0.5" value="1.5"><input id="numLineOutlineWidth" type="number" min="0.5" max="12" step="0.5" value="1.5" inputmode="decimal" aria-label="Толщина обводки"></div>
                         <div class="line-outline-modes" aria-label="Расположение обводки">

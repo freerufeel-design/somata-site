@@ -18,7 +18,7 @@ function shouldPrepareDynamicVectorMaster(frameCtx){
     renderConsumerDemandRuntime.vectorMasterRequested++;
     const nativeBase=Boolean(!frameCtx.lineProfileStrokeOnly&&SomataGeometryRoleService?.canRenderRole?.(frameCtx,'base'));
     if(nativeBase){renderConsumerDemandRuntime.vectorMasterSkipped++;return false;}
-    return Boolean((state.tunnel.active&&frameCtx.visibleInstances?.copies?.length)||(!state.tunnel.active&&frameCtx.glow>0)||state.lineOutline?.enabled===true);
+    return Boolean((state.tunnel.active&&frameCtx.visibleInstances?.copies?.length)||(!state.tunnel.active&&frameCtx.glow>0)||window.somataOutlineLayerEnabled?.(frameCtx.layerIndex)===true);
 }
 function beginRenderConsumerDemandFrame(){renderConsumerDemandRuntime.frames++;if(typeof beginSpiroRenderGraphFrame==='function')beginSpiroRenderGraphFrame();}
 window.__spiroConsumerDemandStatus=()=>({...renderConsumerDemandRuntime,last:renderConsumerDemandRuntime.last?{...renderConsumerDemandRuntime.last,roles:{...renderConsumerDemandRuntime.last.roles}}:null,contract:'Consumer demand is derived only from generic render-graph capability bits; it contains no effect-specific fallback logic.'});

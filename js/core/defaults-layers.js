@@ -2,7 +2,7 @@
 
 window.__spiroRegisterModule?.('js/core/defaults-layers');
         const DEFAULT_WEB_CONFIG = Object.freeze({ type:'bevel', style:'web', region:'inside', inside:true, outsideStraight:false, outsideArc:false, placementMode:'selfIntersection', oscillating:false, oscillationStrength:10, oscillationStrengthMultiplier:1, oscillationMultiplier:1, angleThreshold:60, width:0.6, widthRelative:false, widthPercent:40, matchLineColor:false, color:'#ffffff', secondaryColor:'#00ffff', sunDegrees:20, distance:30, depthMultiplier:1, spacing:10, angleVariation:6 });
-        const DEFAULT_SWEEP_CONFIG = Object.freeze({ enabled:false, glintEnabled:false, lightningEnabled:false, effectType:'lightning', profileShape:'current', coreBlendMode:'normal', glowBlendMode:'normal', flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode:'perPath', direction:'forward', speed:0.25, speedMultiplier:1, syncMusic:true, lengthPercent:3, widthPercent:75, everyN:2, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningBlendMode:'lighter', lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:false, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', lightningSegmentPercent:100, lightningTriggerMode:'morph', lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningDurationMultiplier:1, lightningWidthPercent:64, lightningWidthMultiplier:1, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:false, lightningAfterglowMs:0, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase:0, currentVelocity:0, lastUpdate:0, cycleCount:0 });
+        const DEFAULT_SWEEP_CONFIG = Object.freeze({ enabled:false, glintEnabled:false, lightningEnabled:false, effectType:'lightning', profileShape:'current', coreBlendMode:'normal', glowBlendMode:'normal', flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, mode:'perPath', direction:'forward', speed:0.25, speedMultiplier:1, syncMusic:true, lengthPercent:3, widthPercent:105, everyN:2, color:'#ffffff', haloColor:'#ffffff', opacity:100, brightness:77, glow:14.5, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, lightningBlendMode:'lighter', lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningEveryN:2, lightningRandomPosition:false, lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', lightningSegmentPercent:100, lightningTriggerMode:'morph', lightningRatePercent:100, lightningRateMultiplier:1, lightningDurationMs:480, lightningDurationMultiplier:1, lightningWidthPercent:64, lightningWidthMultiplier:1, lightningBrightness:100, lightningGlow:16, lightningGlowMultiplier:1, lightningGlowIntensity:100, lightningGlowIntensityMultiplier:1, lightningSoftness:100, lightningSoftnessMultiplier:1, lightningSmoothLighting:true, lightningShowLines:true, lightningLineOpacity:100, lightningAfterglow:false, lightningAfterglowMs:0, lightningMicroStrikes:2, lightningPhase:0, lightningLastUpdate:0, lightningCycleCount:0, phase:0, currentVelocity:0, lastUpdate:0, cycleCount:0 });
 
         function normalizeSweepFlashMode(value){return value==='spectral'?'spectral':'moving';}
         function compactSweepPixelValue(value,multiplier=1,maxBase=50){
@@ -26,9 +26,10 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             cfg.lightningTriggerMode=['timer','morph','glint'].includes(cfg.lightningTriggerMode)?cfg.lightningTriggerMode:'morph';
             cfg.flashMode=normalizeSweepFlashMode(cfg.flashMode);
             cfg.lengthPercent=Math.max(1,Math.min(100,Number.isFinite(Number(cfg.lengthPercent))?Number(cfg.lengthPercent):3));
-            cfg.widthPercent=Math.max(0,Math.min(200,Number.isFinite(Number(cfg.widthPercent))?Number(cfg.widthPercent):75));
+            cfg.widthPercent=Math.max(0,Math.min(200,Number.isFinite(Number(cfg.widthPercent))?Number(cfg.widthPercent):105));
             cfg.opacity=Math.max(0,Math.min(100,Number.isFinite(Number(cfg.opacity))?Number(cfg.opacity):100));
             cfg.color=/^#[0-9a-f]{6}$/i.test(cfg.color||'')?cfg.color:'#ffffff';
+            cfg.haloColor=/^#[0-9a-f]{6}$/i.test(cfg.haloColor||'')?cfg.haloColor:cfg.color;
             cfg.spectralSectorDegrees=Math.max(1,Math.min(360,Number.isFinite(Number(cfg.spectralSectorDegrees))?Number(cfg.spectralSectorDegrees):45));
             cfg.spectralAngularSpeed=Math.max(-720,Math.min(720,Number.isFinite(Number(cfg.spectralAngularSpeed))?Number(cfg.spectralAngularSpeed):90));
             return cfg;
@@ -390,6 +391,8 @@ window.__spiroRegisterModule?.('js/core/defaults-layers');
             delete owner.lamps.rasterized;
             delete owner.lamps.hd;
             if(typeof owner.lamps.freezeLight!=='boolean') owner.lamps.freezeLight=false;
+            if(!Number.isFinite(Number(owner.lamps.freezeIntensity)))owner.lamps.freezeIntensity=100;
+            owner.lamps.freezeIntensity=Math.max(0,Math.min(100,Number(owner.lamps.freezeIntensity)));
             if(!Number.isFinite(Number(owner.lamps.freezeTailSec)))owner.lamps.freezeTailSec=1.5;
             owner.lamps.freezeTailSec=Math.max(.05,Math.min(30,Number(owner.lamps.freezeTailSec)||1.5));
             owner.lamps.freezeHardness=Math.max(0,Math.min(100,Number.isFinite(Number(owner.lamps.freezeHardness))?Number(owner.lamps.freezeHardness):50));

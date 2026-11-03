@@ -129,9 +129,13 @@ function renderLayerSweepInstance(frameCtx,effectOverride=null){
 
     const useCurrentProfile=sweepProfileMode(cfg)==='current';
     if(useCurrentProfile&&SomataProfileSweepAdapter.isCurrentCarrier(frameCtx)){
+        // An invisible base Line must never suppress an independently enabled
+        // Glint merely because an optional profile surface was not allocated.
+        // The profile adapter now opens a standalone GPU Layer Scene in this
+        // case, and the prepared canonical carrier remains the fallback.
         frameCtx._profileSweepAttempted=false;
         if(SomataProfileSweepAdapter.renderCurrent(frameCtx,effect,baseAlpha,visibleInstances))return;
-        if(frameCtx._profileSweepAttempted===true)return reportSweepGpuIssue(frameCtx,'profile-carrier-encode','Current-profile Sweep could not encode the active line-profile carrier; thin-line substitution is intentionally blocked',{effectType:cfg.effectType,profileShape:'current'});
+        if(frameCtx._profileSweepAttempted===true&&frameCtx.lineDisplayEnabled!==false)return reportSweepGpuIssue(frameCtx,'profile-carrier-encode','Current-profile Sweep could not encode the active line-profile carrier; thin-line substitution is intentionally blocked',{effectType:cfg.effectType,profileShape:'current'});
     }
 
     if(SomataProfileSweepAdapter.hasActiveOverlay(frameCtx)){

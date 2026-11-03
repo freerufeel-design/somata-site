@@ -324,7 +324,8 @@ function prepareMainLayerVectorMaster(frameCtx) {
     let frameVectorMasterScale = 1;
     const tunnelCanUseMaster = state.tunnel.active;
     const topologyGpuLazy=frameCtx._topologyMorphGpuLazy===true&&SomataGeometryRoleService.backendEligible(frameCtx,'topology','base')===true;
-    const greenProjectGpuNative=SomataGeometryRoleService.backendEligible(frameCtx,'green','base')===true&&state.lineOutline?.enabled!==true;
+    const outlineVisible=window.somataOutlineLayerEnabled?.(frameCtx.layerIndex)===true;
+    const greenProjectGpuNative=SomataGeometryRoleService.backendEligible(frameCtx,'green','base')===true&&!outlineVisible;
 
     // Retained Spiral GPURenderer supports both static and Morph frames.  Do
     // not rebuild the same CPU vector master for Glow if *both* active roles
@@ -350,7 +351,7 @@ function prepareMainLayerVectorMaster(frameCtx) {
     const shouldRecordDynamicVector = (topologyGpuLazy||greenProjectGpuNative||spiralBezierGpuNative)?false:(typeof shouldPrepareDynamicVectorMaster==='function'
         ? shouldPrepareDynamicVectorMaster(frameCtx)
         : Boolean(frameCtx.geometryMorphEnabled && frameCtx.geometryPlan?.kind !== 'lightning' && typeof Path2D !== 'undefined' && !state.showRoundingGuides &&
-            ((tunnelCanUseMaster && frameCtx.visibleInstances.copies.length) || (!state.tunnel.active && frameCtx.glow > 0) || state.lineOutline?.enabled === true)));
+            ((tunnelCanUseMaster && frameCtx.visibleInstances.copies.length) || (!state.tunnel.active && frameCtx.glow > 0) || outlineVisible)));
     if (shouldRecordDynamicVector) {
         frameVectorMasterScale = state.tunnel.active ? frameCtx.visibleInstances.maxScale : 1;
         try {

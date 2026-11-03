@@ -10061,6 +10061,9 @@ fn markerSd(p:vec2<f32>)->f32{
             if(Number.isFinite(def.min))out=Math.max(def.min,out);if(Number.isFinite(def.max))out=Math.min(def.max,out);return out;
         }
         function audioShiftHexHue(key,color,layerIndex=-1){
+            // Outline shares one colour-routing contract with Blue/Orange;
+            // even an authored white outline can acquire an automated hue.
+            if(key==='outline.color')return window.SomataParameterRegistry?.shiftHexHue?.(color,audioApplyRawNumeric(key,0,layerIndex))||color;
             const raw=String(color||''),m=/^#([0-9a-f]{6})$/i.exec(raw);if(!m)return raw;
             const n=parseInt(m[1],16),r=((n>>16)&255)/255,g=((n>>8)&255)/255,b=(n&255)/255,max=Math.max(r,g,b),min=Math.min(r,g,b),d=max-min;
             let h=0,s=0,l=(max+min)/2;if(d>1e-9){s=d/(1-Math.abs(2*l-1));if(max===r)h=60*(((g-b)/d)%6);else if(max===g)h=60*((b-r)/d+2);else h=60*((r-g)/d+4);if(h<0)h+=360;}
@@ -10089,7 +10092,7 @@ fn markerSd(p:vec2<f32>)->f32{
                     layer.customSuborbits=count<maxOrbits?count:null;
                     continue;
                 }
-                const def=R.get(audioDef.parameterId);if(!def)continue;
+                const def=R.get(audioDef.parameterId);if(!def||audioDef.frameTarget==='global')continue;
                 const target=audioDef.frameTarget==='layer'?frameCtx.layer:frameCtx.effectLayer;if(!target)continue;
                 const base=R.valueAt(target,audioDef.framePath);if(base==null)continue;
                 let value=base;
@@ -10171,7 +10174,7 @@ fn markerSd(p:vec2<f32>)->f32{
             return target==='master'?routes.master:(routes.layers[target]||(routes.layers[target]=[]));
         }
         function audioDefinitionForParameterId(paramId){
-            const id=String(paramId||'');return AUDIO_PARAM_DEFS.find(d=>String(d.parameterId||'')===id)||AUDIO_PARAM_DEFS.find(d=>String(d.key||'')===id)||null;
+            const id=String(paramId||'');return AUDIO_PARAM_BY_KEY.get(id)||AUDIO_PARAM_DEFS.find(d=>String(d.parameterId||'')===id)||null;
         }
         function audioRowsForTargetId(targetId){
             const routes=ensureAudioRoutingState(),id=String(targetId||'master');
@@ -10249,11 +10252,16 @@ fn markerSd(p:vec2<f32>)->f32{
             const items=[],seen=new Set();
             const append=(key,label,group)=>{
                 if(!key||seen.has(key)||!AUDIO_PARAM_BY_KEY.has(key))return;
+                // A multiplier already has a corresponding artistic parameter.
+                // Keep it in the registry for old saved routes and live controls,
+                // but never offer both as distinct audio-automation parameters.
+                const parent=matrix?.parentId?.(key)||String(key).replace(/Multiplier$/,'');
+                if(/Multiplier$/.test(key)&&parent!==key&&AUDIO_PARAM_BY_KEY.has(parent))return;
                 seen.add(key);
                 items.push({key,label,group});
             };
-            for(const def of roots){
-                const group=def.morph?.group||def.group;
+            for(let i=0;i<roots.length;i++){
+                const def=roots[i],group=def.morph?.group||def.group;
                 if(groupFilter&&group!==groupFilter)continue;
                 const key=def.key||def.id;
                 append(key,def.label,group);
@@ -10483,6 +10491,23 @@ fn markerSd(p:vec2<f32>)->f32{
                 b.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.audio-route-group-menu').forEach(other=>{if(other!==m)other.classList.add('hidden');});m.classList.toggle('hidden');if(!m.classList.contains('hidden')){fill();positionViewportPopup(m,b);}});
                 b.addEventListener('contextmenu',e=>{e.preventDefault();e.stopPropagation();document.querySelectorAll('.audio-route-group-menu').forEach(other=>other.classList.add('hidden'));toggleAudioRouteGroupWithMemory(spec);});
             }
+            // Close portaled Audio menus even when the click is consumed by an
+            // underlying slider/panel. A pointer press inside the active menu
+            // or on its trigger is not considered an outside press.
+            document.addEventListener('pointerdown',e=>{
+                if(panel?.classList.contains('hidden'))return;
+                for(const menu of document.querySelectorAll('.audio-param-menu:not(.hidden),.audio-route-group-menu:not(.hidden)')){
+                    const owner=menu._viewportOwnerPanelId||menu._viewportTrigger?.closest?.('#audioRoutingPanel')?.id;
+                    if(owner!=='audioRoutingPanel')continue;
+                    if(menu.contains(e.target)||menu._viewportTrigger?.contains?.(e.target))continue;
+                    menu.classList.add('hidden');
+                }
+            },true);
+            document.addEventListener('keydown',e=>{
+                if(e.key!=='Escape')return;
+                const open=document.querySelectorAll('#audioViewportPopupPortal .audio-param-menu:not(.hidden),#audioViewportPopupPortal .audio-route-group-menu:not(.hidden)');
+                for(const menu of open)if(menu._viewportOwnerPanelId==='audioRoutingPanel')menu.classList.add('hidden');
+            },true);
             document.addEventListener('click',e=>{const inAudioPopup=Boolean(e.target?.closest?.('#audioViewportPopupPortal'));if(!inAudioPopup&&!panel?.classList.contains('hidden')&&!panel.contains(e.target)&&e.target!==btn&&!btn?.contains(e.target))setOpen(false);if(!inAudioPopup)document.querySelectorAll('.audio-param-menu,.audio-route-group-menu').forEach(m=>m.classList.add('hidden'));});
             document.addEventListener('contextmenu',e=>{
                 if(e.target?.closest?.('#audioRoutingLayers .audio-routing-layer[data-audio-layer-id]')){e.preventDefault();e.stopPropagation();}

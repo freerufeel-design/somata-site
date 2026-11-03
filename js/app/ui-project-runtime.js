@@ -2317,6 +2317,12 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 if(def.id==='tunnel.vignette')return Number(state.tunnel?.vignetteAmount)||0;
                 if(def.id==='tunnel.vignetteMultiplier')return Number(state.tunnel?.vignetteMultiplier)||1;
                 if(def.id==='palette.hueOffset')return Number(state.playlistPaletteHueOffset)||0;
+                if(def.id==='outline.layerCount')return state.lineOutline?.layerCount!=null&&Number.isFinite(Number(state.lineOutline.layerCount))?Number(state.lineOutline.layerCount):(state.layers||[]).length;
+                if(def.id==='outline.width')return Number(state.lineOutline?.width)||1.5;
+                if(def.id==='outline.mode')return Math.max(0,['outer','inner','median'].indexOf(state.lineOutline?.mode));
+                if(def.id==='outline.color')return NaN; // Hue-offset range, not the #RRGGBB string
+                if(def.id==='lamps.freezeTailSec')return Number(state.lamps?.freezeTailSec)||1.5;
+                if(def.id==='lamps.freezeIntensity')return Number.isFinite(Number(state.lamps?.freezeIntensity))?Number(state.lamps.freezeIntensity):100;
                 return NaN;
             }
             const layer=state.layers.find(l=>l.id===state.activeLayerId)||state.layers[0];if(!layer)return NaN;
@@ -2324,7 +2330,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const v=window.SomataParameterRegistry?.valueAt?.(root,def.morph?.framePath);return Number(v);
         }
         function defaultMorphBindingRange(def){
-            const currentRaw=morphBindingCurrentValue(def),ui=document.getElementById(def?.ui?.mainId),uiMin=Number(ui?.min),uiMax=Number(ui?.max),defMin=Number(def?.min),defMax=Number(def?.max),min=Number.isFinite(uiMin)?uiMin:defMin,max=Number.isFinite(uiMax)?uiMax:defMax,span=Number(def?.audio?.span),step=Math.max(1e-9,Number(ui?.step)||Number(def?.step)||1);
+            const currentRaw=morphBindingCurrentValue(def),ui=document.getElementById(def?.ui?.mainId),numericUi=ui&&['number','range'].includes(ui.type),uiMin=numericUi&&ui.min!==''?Number(ui.min):NaN,uiMax=numericUi&&ui.max!==''?Number(ui.max):NaN,defMin=Number(def?.min),defMax=Number(def?.max),min=Number.isFinite(uiMin)?uiMin:defMin,max=Number.isFinite(uiMax)?uiMax:defMax,span=Number(def?.audio?.span),step=Math.max(1e-9,Number(numericUi?ui.step:NaN)||Number(def?.step)||1);
             if(Number.isFinite(currentRaw)){
                 const current=Math.max(Number.isFinite(min)?min:-Infinity,Math.min(Number.isFinite(max)?max:Infinity,currentRaw));let delta=Number.isFinite(span)&&span>0?span:Math.max(Math.abs(current)*.35,step*4);
                 if(def?.audio?.mode==='positiveFactor'||def?.audio?.mode==='centerFactor'||def?.audio?.mode==='fadeFactor')delta=Math.max(Math.abs(current)*.45,delta*.25);
@@ -2519,7 +2525,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
             const toggle=document.createElement('label');toggle.className='morph-route-compound-toggle';const cb=document.createElement('input');cb.type='checkbox';cb.checked=enabled;cb.title=`Включить / выключить «${label||def.label}» в этом профиле`;const text=document.createElement('span');text.textContent=label||MORPH_COMPOUND_CHILD_LABELS[paramId]||def.label;toggle.append(cb,text);wrap.appendChild(toggle);
             cb.addEventListener('change',()=>{setMorphParameterRouteActive(paramId,cb.checked);renderMorphProfileBindings();renderMorphRoutingGroups();syncMorphRouteDecorations();});
             if(enabled&&binding){
-                const numeric=['number','integer','angle','multiplier'].includes(def.type);
+                const numeric=['number','integer','angle','multiplier'].includes(def.type)||def.id==='outline.color';
                 if(numeric){
                     const range=document.createElement('span');range.className='morph-route-compound-range';const rangeLabel=document.createElement('span');rangeLabel.className='morph-route-compound-caption';rangeLabel.textContent='Диапазон';range.appendChild(rangeLabel);
                     const lo=document.createElement('input'),hi=document.createElement('input');for(const [el,key] of [[lo,'min'],[hi,'max']]){el.type='number';el.className='morph-route-inline-number morph-route-compound-number';el.step=String(window.SomataParameterMatrix?.stepFor?.(def)?.step||def.step||'any');if(Number.isFinite(Number(def.min)))el.min=String(def.min);if(Number.isFinite(Number(def.max)))el.max=String(def.max);el.value=String(Number(binding[key]));el.setAttribute('aria-label',`${label||def.label}: ${key==='min'?'минимум':'максимум'}`);}const sep=document.createElement('span');sep.className='morph-route-inline-range-sep';sep.textContent='—';const commit=()=>commitMorphBindingRange(def,binding,lo,hi);lo.addEventListener('change',commit);hi.addEventListener('change',commit);range.append(lo,sep,hi);wrap.appendChild(range);
@@ -2782,7 +2788,7 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
                 const cb=morphRowCheckbox(row,binding.enabled!==false,on=>{setMorphRouteBindingActive(def,binding,on);commitMorphRouteActivationChange();});cb.id=`morphRouteEnabled_${def.id.replace(/[^a-zA-Z0-9_-]/g,'_')}`;
                 row.appendChild(createMorphRoutingGroupIcon(morphUiGroup(def),true));
                 const picker=document.createElement('div');picker.className='audio-param-picker morph-route-compact-picker';const pickBtn=document.createElement('button');pickBtn.type='button';pickBtn.className='audio-param-picker-button';pickBtn.textContent=def.label;pickBtn.title=`${morphUiGroup(def)} › ${def.label}`;const menu=document.createElement('div');menu.className='audio-param-menu hidden';pickBtn.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.audio-param-menu').forEach(m=>{if(m!==menu)m.classList.add('hidden')});menu.classList.toggle('hidden');if(!menu.classList.contains('hidden')){buildMorphParameterMenu(menu,def.id,nextId=>{if(nextId===def.id){menu.classList.add('hidden');return;}setMorphParameterBinding(def.id,false);if(window.SomataParameterMatrix.get(nextId)?.kind)setMorphSpecialEnabled(window.SomataParameterMatrix.get(nextId).kind,true);else setMorphParameterBinding(nextId,true);menu.classList.add('hidden');renderMorphProfileBindings();});positionViewportPopup(menu,pickBtn);}});picker.append(pickBtn,menu);row.appendChild(picker);
-                const numeric=['number','integer','angle','multiplier'].includes(def.type);
+                const numeric=['number','integer','angle','multiplier'].includes(def.type)||def.id==='outline.color';
                 if((numeric&&def.morph?.minKey&&def.morph?.maxKey)||(numeric&&def.morph?.legacy!==true)){
                     appendSharedMorphBindingRange(row,def,binding,(lo,hi)=>commitMorphBindingRange(def,binding,lo,hi),key=>def.morph?.legacy===true?morphLegacyRangeValue(def,key):binding[key]);
                 }
@@ -2821,7 +2827,13 @@ window.__spiroRegisterModule?.('js/app/ui-project-runtime');
 
         const parameterRoutingRows=new WeakMap();
         let parameterRoutingPopup=null,parameterRoutingPopupId='';
-        function parameterRoutingVisualHost(def,el){return el?.closest?.('.blue-morph-range-host')||el;}
+        function parameterRoutingVisualHost(def,el){
+            // Routing borders surround the semantic field, not a 13px checkbox.
+            // The four outline controls retain their own, independent routes.
+            if(def?.id==='outline.layerCount')return el?.closest?.('.blue-morph-range-host')||el;
+            if(def?.id==='outline.mode')return el?.closest?.('.line-outline-modes')||el;
+            return el?.closest?.('.blue-morph-range-host')||el;
+        }
         function setParameterRoutingVisualState(host,morphOn,audioOn,orangeOn=false){
             if(!host)return;host.classList.add('parameter-routing-capable');
             const n=(morphOn?1:0)+(audioOn?1:0)+(orangeOn?1:0);
@@ -3143,7 +3155,9 @@ syncMorphProfileUI();
                 for(const prop of props){if(Object.prototype.hasOwnProperty.call(source,prop))layer[prop]=cloneMasterLayerValue(source[prop]);}
                 if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,props,'master-mirror');
                 else if(props.some(prop=>MASTER_GEOMETRY_PROPS.has(prop)))invalidateLayerGeometry(layer,'master-mirror');
+                syncMasterPathsIntoBlueRuntime(layer,props,masterLayerSnapshot(layer));
             }
+            syncMasterPathsIntoBlueRuntime(source,props,masterLayerSnapshot(source));
             updateLayerListUI();requestMainCanvasRender();
         }
 
@@ -3222,6 +3236,13 @@ syncMorphProfileUI();
             // fill-match derives RGB from each layer's own stroke color, so these controls need
             // field semantics rather than blind object/string copying.
             let paths=sourcePaths.slice();
+            if(controlId==='showSweep'||controlId==='showLightning')paths=paths.filter(path=>path!=='sweep.enabled');
+            // Also apply the explicitly edited field when it already had this
+            // value on the source. A no-op source edit is still an all-layer
+            // assignment in Master (e.g. Glow: 9 / 1 / 4 -> 9 / 9 / 9).
+            for(const field of SomataMasterBroadcastCore.controlPaths(controlId,after,tx?.controlDataset)){
+                if(!paths.includes(field))paths.push(field);
+            }
             if(controlId==='paramFillMatchStroke')paths=paths.filter(path=>path==='fillMatchStroke');
             else if(controlId==='paramEnableFill')paths=paths.filter(path=>path==='fill');
             else if((controlId==='paramStrokeColor'||sourcePaths.includes('strokeColor'))&&after.fillMatchStroke===true&&sourcePaths.includes('fillColor'))paths=paths.filter(path=>path!=='fillColor');
@@ -3234,7 +3255,7 @@ syncMorphProfileUI();
             // This makes "Master" mean: edit one field on the active layer -> same field/value on
             // every layer; unrelated per-layer state must survive the interaction unchanged.
             const beforeTargets=tx?.beforeTargets instanceof Map?tx.beforeTargets:null;
-            let rolledBackExtras=0;
+            let rolledBackExtras=0,directFanoutChanges=0;
             for(const layer of getLayerBroadcastTargets()){
                 if(layer===source)continue;
                 ensureLayerEffectState(layer);
@@ -3244,8 +3265,17 @@ syncMorphProfileUI();
                     const targetChanged=collectMasterChangedPaths(beforeTarget,targetNow);
                     for(const path of targetChanged){
                         if(pathSet.has(path))continue;
+                        // These button handlers explicitly edit ALL target layers.
+                        // Do not undo their dependent mode fields just because the
+                        // source was already in that mode (line Point/Sprite was
+                        // particularly affected by the old rollback).
+                        if(tx?.directFanout===true){directFanoutChanges++;continue;}
                         applyMasterPath(layer,path,masterPathValue(beforeTarget,path));
                         rolledBackExtras++;
+                    }
+                    if(tx?.directFanout===true&&targetChanged.length){
+                        if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(layer,[...new Set(targetChanged.map(path=>path.split('.')[0]))],'master-direct-fanout');
+                        syncMasterPathsIntoBlueRuntime(layer,targetChanged,masterLayerSnapshot(layer));
                     }
                 }
                 for(const path of paths){
@@ -3259,6 +3289,15 @@ syncMorphProfileUI();
                         layer.fillColor=setFillOpacityPercent(rgb,pct,rgb);
                     }else applyMasterPath(layer,path,masterPathValue(after,path));
                 }
+                // Glint and Lightning share an effective sweep.enabled flag.
+                // It is computed per destination from BOTH switches, not copied
+                // from the source (the other switch may differ on each layer).
+                if(controlId==='showSweep'||controlId==='showLightning'){
+                    const cfg=getLayerSweepConfig(layer);
+                    cfg.enabled=cfg.glintEnabled===true||cfg.lightningEnabled===true;
+                    cfg.effectType=controlId==='showLightning'?'lightning':'glint';
+                    if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'master-sweep-switch');
+                }
                 if(controlId==='paramFillMatchStroke'&&paths.includes('fillMatchStroke')&&layer.fillMatchStroke===true&&typeof syncLayerFillColorToStroke==='function')syncLayerFillColorToStroke(layer,true);
                 if((controlId==='paramStrokeColor'||paths.includes('strokeColor'))&&layer.fillMatchStroke===true&&typeof syncLayerFillColorToStroke==='function')syncLayerFillColorToStroke(layer,true);
                 if(controlId==='paramEnableFill'&&paths.includes('fill')&&layer.fill===true&&getFillOpacityPercent(layer.fillColor,0)<=.001)layer.fillColor=setFillOpacityPercent(layer.fillColor||layer.strokeColor,DEFAULT_FILL_OPACITY_PERCENT,layer.strokeColor||'#4f46e5');
@@ -3269,12 +3308,18 @@ syncMorphProfileUI();
                     syncMasterPathsIntoBlueRuntime(layer,paths,masterLayerSnapshot(layer));
                 }
             }
-            if(paths.length)syncMasterPathsIntoBlueRuntime(source,paths,after);
+            if(paths.length){
+                // A few legacy source controls update their field without a
+                // matching dirty-domain notification. Master must invalidate
+                // all physical render owners, including the source layer.
+                if(typeof invalidateLayerProperties==='function')invalidateLayerProperties(source,roots,'master-source');
+                syncMasterPathsIntoBlueRuntime(source,paths,after);
+            }
             window.__spiroLastMasterBroadcast={
                 sourceId,controlId:String(tx?.controlId||''),eventType:String(tx?.eventType||''),
-                paths:paths.slice(),sourcePaths:sourcePaths.slice(),rolledBackExtras,at:performance.now()
+                paths:paths.slice(),sourcePaths:sourcePaths.slice(),rolledBackExtras,directFanoutChanges,at:performance.now()
             };
-            if(paths.length||rolledBackExtras){updateLayerListUI();requestMainCanvasRender();}
+            if(paths.length||rolledBackExtras||directFanoutChanges){updateLayerListUI();requestMainCanvasRender();}
         }
         function setLayerN(val) {
             const layer = state.layers.find(l => l.id === state.activeLayerId);
@@ -5093,7 +5138,7 @@ syncMorphProfileUI();
             const text=document.createElement('span');text.textContent=label||MORPH_COMPOUND_CHILD_LABELS[paramId]||def.label;
             toggle.append(cb,text);wrap.appendChild(toggle);
             cb.addEventListener('change',()=>setOrangeParameterRouteActive(paramId,cb.checked));
-            if(enabled&&binding&&['number','integer','angle','multiplier'].includes(def.type)){
+            if(enabled&&binding&&(['number','integer','angle','multiplier'].includes(def.type)||def.id==='outline.color')){
                 const range=document.createElement('span');range.className='morph-route-compound-range';
                 const caption=document.createElement('span');caption.className='morph-route-compound-caption';caption.textContent='Диапазон';range.appendChild(caption);
                 const lo=document.createElement('input'),hi=document.createElement('input');
@@ -5243,7 +5288,7 @@ syncMorphProfileUI();
                 morphRowCheckbox(row,binding.enabled!==false,on=>setOrangeParameterRouteActive(def.id,on),'Включить / выключить параметр в генерации Orange');
                 row.appendChild(createMorphRoutingGroupIcon(morphUiGroup(def),true));
                 const picker=document.createElement('div');picker.className='audio-param-picker morph-route-compact-picker orange-route-picker';const pickBtn=document.createElement('button');pickBtn.type='button';pickBtn.className='audio-param-picker-button';pickBtn.textContent=def.label;pickBtn.title=`${morphUiGroup(def)} › ${def.label}`;const menu=document.createElement('div');menu.className='audio-param-menu hidden';menu.dataset.orangeBindingMenu='1';pickBtn.addEventListener('click',e=>{e.stopPropagation();document.querySelectorAll('.audio-param-menu').forEach(m=>{if(m!==menu)m.classList.add('hidden')});menu.classList.toggle('hidden');if(!menu.classList.contains('hidden')){buildMorphParameterMenu(menu,def.id,nextId=>{if(nextId!==def.id)replaceOrangeParameterBinding(def.id,nextId);menu.classList.add('hidden');});positionViewportPopup(menu,pickBtn);}});picker.append(pickBtn,menu);row.appendChild(picker);
-                const numeric=['number','integer','angle','multiplier'].includes(def.type);
+                const numeric=['number','integer','angle','multiplier'].includes(def.type)||def.id==='outline.color';
                 if(numeric){
                     appendSharedMorphBindingRange(row,def,binding,(lo,hi)=>commitOrangeMorphBindingRange(def.id,lo,hi),key=>Number.isFinite(Number(binding[key]))?binding[key]:defaultMorphBindingRange(def)[key]);
                 }
@@ -6050,27 +6095,53 @@ syncMorphProfileUI();
                 updateLayerListUI();syncSidebarInputs();syncWebOutlineUI();syncSweepUI();syncSidebarToolStates();renderProfileEditor();requestMainCanvasRender();
             });
 
-            const masterMirrorEvents=new WeakSet();
-            const masterMirrorHandler=(e)=>{
+            // One Master transaction per user event. Capture the source and every
+            // destination BEFORE the control handler, then commit AFTER all of its
+            // handlers, while the event is still dispatching. Previously the
+            // double-microtask mirror meant sliders (notably Line > Glow) changed
+            // only the active layer synchronously; the other layers were updated
+            // at a later checkpoint, after some render consumers had read them.
+            const masterMirrorTransactions=new WeakMap();
+            const masterDataSelector='[data-rounding-mode],[data-spline-render-mode],[data-spiral-layerwise-rotation],[data-join],[data-line-main-mode],[data-line-marker-type],[data-graffiti-nib],[data-line-sprite-type],[data-lamp-position],[data-lamp-motion],[data-lamp-color-mode],[data-lamp-color]';
+            // These controls already perform an explicit per-target multi-field edit.
+            // Retain those intentional dependent edits rather than rolling them back.
+            const masterDirectFanoutSelector='[data-line-main-mode],[data-line-marker-type],[data-graffiti-nib],[data-line-sprite-type],[data-lamp-position],[data-lamp-motion],[data-lamp-color-mode],[data-lamp-color]';
+            const masterMirrorHandler=e=>{
                 if(state.masterLayerEdit!==true&&!hasMultiLayerSelection())return;
-                if(masterMirrorEvents.has(e))return;
+                if(masterMirrorTransactions.has(e))return;
                 const source=state.layers.find(l=>l.id===state.activeLayerId);if(!source)return;
-                masterMirrorEvents.add(e);
-                const before=masterLayerSnapshot(source);
-                const beforeTargets=new Map();
-                for(const layer of getLayerBroadcastTargets())if(layer&&layer!==source)beforeTargets.set(layer.id,masterLayerSnapshot(layer));
-                const tx={sourceId:source.id,beforeTargets,controlId:e?.target?.id||e?.target?.closest?.('[id]')?.id||'',eventType:e?.type||'',controlValue:e?.target?.value,controlChecked:e?.target?.checked};
-
-                queueMicrotask(()=>queueMicrotask(()=>mirrorMasterLayerDiff(before,tx)));
+                const before=masterLayerSnapshot(source),beforeTargets=new Map();
+                for(const layer of getLayerBroadcastTargets()){
+                    if(layer&&layer!==source)beforeTargets.set(layer.id,masterLayerSnapshot(layer));
+                }
+                const dataControl=e.target?.closest?.(masterDataSelector);
+                const tx={sourceId:source.id,beforeTargets,controlId:e?.target?.id||e?.target?.closest?.('[id]')?.id||'',eventType:e.type||'',controlValue:e?.target?.value,controlChecked:e?.target?.checked,
+                    controlDataset:dataControl?{...dataControl.dataset}:null,
+                    directFanout:!!e.target?.closest?.(masterDirectFanoutSelector),before,committed:false};
+                masterMirrorTransactions.set(e,tx);
+                // stopPropagation() is used by a few custom controls. They cannot
+                // reach the window bubble listener, so preserve a fallback commit.
+                queueMicrotask(()=>{if(!tx.committed)queueMicrotask(()=>commitMasterMirror(e));});
             };
-            // Capture all physical UI field interactions, not only controls that happen to
-            // live inside settingsSidebar. The handler snapshots before the target listener
-            // runs, then mirrors the exact source-layer paths changed by that interaction.
-            // This is the physical Master contract: choose any source layer, edit a field,
-            // and the same field/value appears on every layer immediately.
-            document.addEventListener('input',masterMirrorHandler,true);
-            document.addEventListener('change',masterMirrorHandler,true);
-            document.addEventListener('click',masterMirrorHandler,true);
+            const commitMasterMirror=e=>{
+                const tx=masterMirrorTransactions.get(e);
+                if(!tx||tx.committed)return;
+                tx.committed=true;
+                mirrorMasterLayerDiff(tx.before,tx);
+            };
+            // Capture runs before field listeners. Window bubble runs AFTER target
+            // and document listeners, so the changed-path fan-out finishes before
+            // dispatchEvent() returns and before the next render frame is built.
+            // This central route covers sliders, numbers, selects, checkboxes,
+            // buttons, palette controls and synthetic input/change events.
+            for(const type of ['input','change','click']){
+                document.addEventListener(type,masterMirrorHandler,true);
+                window.addEventListener(type,commitMasterMirror,false);
+            }
+            // Direct pointer editors may commit values on release without firing
+            // an input/change event (the regular fields still use the routes above).
+            document.addEventListener('pointerup',masterMirrorHandler,true);
+            window.addEventListener('pointerup',commitMasterMirror,false);
             const masterProfileCanvas=document.getElementById('profileCanvas');
             const mirrorProfileCanvas=()=>{if(state.masterLayerEdit===true||hasMultiLayerSelection())queueMicrotask(()=>mirrorMasterLayerProps(['profileMode','profileNodes']));};
             masterProfileCanvas?.addEventListener('pointerup',mirrorProfileCanvas);
@@ -12001,7 +12072,9 @@ syncMorphProfileUI();
                     const values=Array.isArray(def.values)?def.values:[];
                     return values.length?values[Math.floor(Math.random()*values.length)]:undefined;
                 }
-                if(def.type==='color')return undefined;
+                // Outline colour is a routed hue-offset in degrees; other
+                // palette colours retain their existing independent generator.
+                if(def.type==='color'&&def.id!=='outline.color')return undefined;
                 let lo=Number(binding.min),hi=Number(binding.max);
                 if(!Number.isFinite(lo))lo=Number(def.min);if(!Number.isFinite(hi))hi=Number(def.max);
                 if(!Number.isFinite(lo)||!Number.isFinite(hi))return undefined;if(lo>hi)[lo,hi]=[hi,lo];
@@ -12045,13 +12118,30 @@ syncMorphProfileUI();
                 if(def.id==='tunnel.vignette')return Math.max(0,Math.min(1200,Number(state.tunnel?.vignetteAmount)||0));
                 if(def.id==='tunnel.vignetteMultiplier')return Math.max(.125,Number(state.tunnel?.vignetteMultiplier)||1);
                 if(def.id==='palette.hueOffset')return Number(state.playlistPaletteHueOffset)||0;
+                if(def.id==='outline.layerCount')return state.lineOutline?.layerCount!=null&&Number.isFinite(Number(state.lineOutline.layerCount))?Number(state.lineOutline.layerCount):(state.layers||[]).length;
+                if(def.id==='outline.width')return Number(state.lineOutline?.width)||1.5;
+                if(def.id==='outline.mode')return Math.max(0,['outer','inner','median'].indexOf(state.lineOutline?.mode));
+                if(def.id==='outline.color')return 0; // colour uses hue-offset degrees
+                if(def.id==='lamps.freezeTailSec')return Number(state.lamps?.freezeTailSec)||1.5;
+                if(def.id==='lamps.freezeIntensity')return Number.isFinite(Number(state.lamps?.freezeIntensity))?Number(state.lamps.freezeIntensity):100;
                 return undefined;
             }
             function applyOrangeGlobalTargets(targets){
                 if(!targets||typeof targets!=='object')return false;let changed=false;
                 for(const [id,raw] of Object.entries(targets)){
                     const value=Number(raw);if(!Number.isFinite(value))continue;
-                    if(id==='tunnel.speed'){state.tunnel.speedStrength=Math.max(-1,Math.min(1,value/100));changed=true;}
+                    if(id==='outline.layerCount'){state.lineOutline.layerCount=Math.max(0,Math.min((state.layers||[]).length,Math.round(value)));changed=true;}
+                    else if(id==='outline.width'){state.lineOutline.width=Math.max(.5,Math.min(12,value));changed=true;}
+                    else if(id==='outline.mode'){state.lineOutline.mode=['outer','inner','median'][Math.max(0,Math.min(2,Math.round(value)))];changed=true;}
+                    else if(id==='outline.color'){state.lineOutline.color=window.SomataParameterRegistry.shiftHexHue(state.lineOutline.color||'#ffffff',value);changed=true;}
+                    else if(id==='lamps.freezeTailSec'||id==='lamps.freezeIntensity'){
+                        const field=id==='lamps.freezeTailSec'?'freezeTailSec':'freezeIntensity';
+                        const next=field==='freezeTailSec'?Math.max(.05,Math.min(30,value)):Math.max(0,Math.min(100,Math.round(value)));
+                        state.lamps[field]=next;
+                        for(const layer of state.layers||[])if(layer?.lamps)layer.lamps[field]=next;
+                        changed=true;
+                    }
+                    else if(id==='tunnel.speed'){state.tunnel.speedStrength=Math.max(-1,Math.min(1,value/100));changed=true;}
                     else if(id==='tunnel.spacing'){state.tunnel.spacingStrength=Math.max(.2,Math.min(20,value/100));changed=true;}
                     else if(id==='tunnel.depthCurve'){state.tunnel.depthCurve=Math.max(-100,Math.min(100,value));changed=true;}
                     else if(id==='tunnel.depthCurveMultiplier'){state.tunnel.depthCurveMultiplier=Math.max(0,Math.min(10,value));changed=true;}
@@ -12064,7 +12154,7 @@ syncMorphProfileUI();
                     }
                     else if(id==='palette.hueOffset'){state.playlistPaletteHueOffset=normalizePlaylistHueOffset(value);changed=true;}
                 }
-                if(changed){syncPlaylistPaletteHueOffsetUI?.();syncTunnelSettingsUI?.();window.SomataAmbientPrism?.syncUI?.();}
+                if(changed){syncPlaylistPaletteHueOffsetUI?.();syncTunnelSettingsUI?.();syncWebOutlineUI?.();syncLampSettingsUI?.();window.SomataAmbientPrism?.syncUI?.();}
                 return changed;
             }
             window.__somataApplyOrangeGlobalTargets=applyOrangeGlobalTargets;
@@ -12648,14 +12738,23 @@ syncMorphProfileUI();
                 {const v=Number(document.getElementById('sweepSpectralSectorDegrees')?.value);sweep.spectralSectorDegrees=Number.isFinite(v)?Math.max(1,Math.min(360,v)):45;}{const v=Number(document.getElementById('sweepSpectralAngularSpeed')?.value);sweep.spectralAngularSpeed=Number.isFinite(v)?Math.max(-720,Math.min(720,v)):90;}
                 if(changedId==='sweepEffectType'&&previousEffect!=='lightning'&&sweep.effectType==='lightning'){sweep.phase=0;sweep.lastUpdate=0;sweep.currentVelocity=0;sweep.cycleCount=0;sweep.lightningPhase=0;sweep.lightningLastUpdate=0;sweep.lightningCycleCount=0;resetLightningClock(state.layers.indexOf(active),sweep,0);}
                 const mode=document.getElementById('sweepMode')?.value;sweep.mode=['perSegment','everyNth','across','perPath','whole'].includes(mode)?mode:'whole';sweep.everyN=Math.max(2,Math.min(24,Math.round(Number(document.getElementById('sweepEveryN')?.value)||2)));sweep.direction=document.getElementById('sweepDirection')?.value==='backward'?'backward':'forward';sweep.syncMusic=document.getElementById('sweepSyncMusic')?.checked!==false;sweep.speed=Math.max(.02,Math.min(2,Number(document.getElementById('sweepSpeed')?.value)||.25));{const v=Number(document.getElementById('sweepSpeedMultiplier')?.value);sweep.speedMultiplier=Number.isFinite(v)?Math.max(.015625,Math.min(64,v)):1;}
-                sweep.lengthPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLength')?.value)||3));{const v=Number(document.getElementById('sweepWidthPercent')?.value);sweep.widthPercent=Number.isFinite(v)?Math.max(0,Math.min(200,v)):75;}sweep.color=document.getElementById('sweepColor')?.value||'#ffffff';{const v=Number(document.getElementById('sweepOpacity')?.value);sweep.opacity=Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}sweep.brightness=Math.max(0,Math.min(200,Number(document.getElementById('sweepBrightness')?.value)||0));sweep.glow=Math.max(0,Number(document.getElementById('sweepGlow')?.value)||0);{const v=Number(document.getElementById('sweepGlowMultiplier')?.value);sweep.glowMultiplier=Number.isFinite(v)?Math.max(0,v):1;}{const v=Number(document.getElementById('sweepGlowIntensity')?.value);sweep.glowIntensity=Number.isFinite(v)?Math.max(0,Math.min(200,v)):100;}{const v=Number(document.getElementById('sweepGlowIntensityMultiplier')?.value);sweep.glowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;}sweep.softness=Math.max(0,Math.min(150,Number(document.getElementById('sweepSoftness')?.value)||0));{const v=Number(document.getElementById('sweepSoftnessMultiplier')?.value);sweep.softnessMultiplier=Number.isFinite(v)?Math.max(0,v):1;}
+                sweep.lengthPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLength')?.value)||3));{const v=Number(document.getElementById('sweepWidthPercent')?.value);sweep.widthPercent=Number.isFinite(v)?Math.max(0,Math.min(200,v)):105;}// A non-colour input must never overwrite the two independent tints from a
+                // potentially stale or not-yet-hydrated colour picker.
+                if(changedId==='sweepColor'){
+                    const value=ev?.currentTarget?.value;
+                    if(/^#[0-9a-f]{6}$/i.test(value||''))sweep.color=value;
+                }
+                if(changedId==='sweepHaloColor'){
+                    const value=ev?.currentTarget?.value;
+                    if(/^#[0-9a-f]{6}$/i.test(value||''))sweep.haloColor=value;
+                }{const v=Number(document.getElementById('sweepOpacity')?.value);sweep.opacity=Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}sweep.brightness=Math.max(0,Math.min(200,Number(document.getElementById('sweepBrightness')?.value)||0));sweep.glow=Math.max(0,Number(document.getElementById('sweepGlow')?.value)||0);{const v=Number(document.getElementById('sweepGlowMultiplier')?.value);sweep.glowMultiplier=Number.isFinite(v)?Math.max(0,v):1;}{const v=Number(document.getElementById('sweepGlowIntensity')?.value);sweep.glowIntensity=Number.isFinite(v)?Math.max(0,Math.min(200,v)):100;}{const v=Number(document.getElementById('sweepGlowIntensityMultiplier')?.value);sweep.glowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;}sweep.softness=Math.max(0,Math.min(150,Number(document.getElementById('sweepSoftness')?.value)||0));{const v=Number(document.getElementById('sweepSoftnessMultiplier')?.value);sweep.softnessMultiplier=Number.isFinite(v)?Math.max(0,v):1;}
                 sweep.lightningTriggerMode=document.getElementById('sweepLightningTriggerMode')?.value||'morph';delete sweep.lightningProfileShape;const lbehavior=document.getElementById('sweepLightningBehavior')?.value;sweep.lightningBehavior=normalizeLightningBehaviorValue(lbehavior,'symmetric');const lprecision=document.getElementById('sweepLightningPrecision')?.value;sweep.lightningPrecision=normalizeLightningPrecisionValue(lprecision);sweep.lightningMode='perPath';sweep.lightningEveryN=Math.max(2,Math.min(24,Math.round(Number(document.getElementById('sweepLightningEveryN')?.value)||2)));sweep.lightningRandomPosition=false;sweep.lightningColor=document.getElementById('sweepLightningColor')?.value||'#ffffff';sweep.lightningSecondaryColor=document.getElementById('sweepLightningSecondaryColor')?.value||'#7dd3fc';sweep.lightningSegmentPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLightningSegmentPercent')?.value)||100));
                 {const v=Number(document.getElementById('sweepLightningRatePercent')?.value);sweep.lightningRatePercent=Number.isFinite(v)?Math.max(0,Math.min(100,v)):100;}{const v=Number(document.getElementById('sweepLightningRateMultiplier')?.value);sweep.lightningRateMultiplier=Number.isFinite(v)&&v>0?v:1;}if(lightningRateSyncEnabled())syncLightningRateValuesFrom(sweep);sweep.lightningDurationMs=Math.max(30,Math.min(700,Number(document.getElementById('sweepLightningDuration')?.value)||480));{const v=Number(document.getElementById('sweepLightningDurationMultiplier')?.value);sweep.lightningDurationMultiplier=Number.isFinite(v)&&v>0?v:1;}sweep.lightningWidthPercent=Math.max(1,Math.min(100,Number(document.getElementById('sweepLightningWidthPercent')?.value)||64));{const v=Number(document.getElementById('sweepLightningWidthMultiplier')?.value);sweep.lightningWidthMultiplier=Number.isFinite(v)?Math.max(0,v):1;}
                 {sweep.lightningGlow=Math.max(0,Number(document.getElementById('sweepLightningGlow')?.value)||0);{const v=Number(document.getElementById('sweepLightningGlowMultiplier')?.value);sweep.lightningGlowMultiplier=Number.isFinite(v)?Math.max(0,v):1;}{const v=Number(document.getElementById('sweepLightningGlowIntensity')?.value);sweep.lightningGlowIntensity=Number.isFinite(v)?Math.max(0,Math.min(400,v)):100;}{const v=Number(document.getElementById('sweepLightningGlowIntensityMultiplier')?.value);sweep.lightningGlowIntensityMultiplier=Number.isFinite(v)?Math.max(0,v):1;}sweep.lightningSoftness=Math.max(0,Math.min(150,Number(document.getElementById('sweepLightningSoftness')?.value)||0));{const v=Number(document.getElementById('sweepLightningSoftnessMultiplier')?.value);sweep.lightningSoftnessMultiplier=Number.isFinite(v)?Math.max(0,v):1;}}
                 sweep.lightningPrecision='exact';sweep.lightningSmoothLighting=true;sweep.lightningShowLines=document.getElementById('sweepLightningShowLines')?.checked!==false;sweep.lightningLineOpacity=Math.max(0,Math.min(100,Number(document.getElementById('sweepLightningLineOpacity')?.value)||100));sweep.lightningAfterglow=false;sweep.lightningAfterglowMs=0;{const v=Number(document.getElementById('sweepLightningMicroStrikes')?.value);sweep.lightningMicroStrikes=Number.isFinite(v)?Math.max(0,Math.round(v)):0;}
                 normalizeSweepConfig(sweep);if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(active,'sweep-ui');if(state.masterLayerEdit===true||hasMultiLayerSelection()){for(const layer of getLayerEditTargets()){if(layer===active)continue;ensureLayerEffectState(layer);layer.sweep=cloneEffectConfig(sweep);if(typeof markLayerEffectChanged==='function')markLayerEffectChanged(layer,'sweep-ui');}}if(lightningRateSyncEnabled())syncLightningRateValuesFrom(sweep);syncSweepUI();ensureSweepAnimation();requestMainCanvasRender();
             };
-            ['sweepEffectType','sweepCoreBlendMode','sweepGlowBlendMode','sweepLightningBlendMode','sweepFlashMode','sweepGlintPrecision','sweepSpectralSectorDegrees','sweepSpectralAngularSpeed','sweepMode','sweepEveryN','sweepLightningTriggerMode','sweepLightningBehavior','sweepLightningPrecision','sweepLightningMode','sweepLightningEveryN','sweepLightningRandomPosition','sweepDirection','sweepSyncMusic','sweepSpeed','sweepSpeedMultiplier','sweepLength','sweepWidthPercent','sweepColor','sweepOpacity','sweepBrightness','sweepGlow','sweepGlowMultiplier','sweepGlowIntensity','sweepGlowIntensityMultiplier','sweepSoftness','sweepSoftnessMultiplier','sweepLightningColor','sweepLightningSecondaryColor','sweepLightningSegmentPercent','sweepLightningRatePercent','sweepLightningRateMultiplier','sweepLightningDuration','sweepLightningDurationMultiplier','sweepLightningWidthPercent','sweepLightningWidthMultiplier','sweepLightningGlow','sweepLightningGlowMultiplier','sweepLightningGlowIntensity','sweepLightningGlowIntensityMultiplier','sweepLightningSoftness','sweepLightningSoftnessMultiplier','sweepLightningShowLines','sweepLightningLineOpacity','sweepLightningMicroStrikes'].forEach(id=>{document.getElementById(id)?.addEventListener('input',updateSweepFromUI);document.getElementById(id)?.addEventListener('change',updateSweepFromUI);});
+            ['sweepEffectType','sweepCoreBlendMode','sweepGlowBlendMode','sweepLightningBlendMode','sweepFlashMode','sweepGlintPrecision','sweepSpectralSectorDegrees','sweepSpectralAngularSpeed','sweepMode','sweepEveryN','sweepLightningTriggerMode','sweepLightningBehavior','sweepLightningPrecision','sweepLightningMode','sweepLightningEveryN','sweepLightningRandomPosition','sweepDirection','sweepSyncMusic','sweepSpeed','sweepSpeedMultiplier','sweepLength','sweepWidthPercent','sweepColor','sweepHaloColor','sweepOpacity','sweepBrightness','sweepGlow','sweepGlowMultiplier','sweepGlowIntensity','sweepGlowIntensityMultiplier','sweepSoftness','sweepSoftnessMultiplier','sweepLightningColor','sweepLightningSecondaryColor','sweepLightningSegmentPercent','sweepLightningRatePercent','sweepLightningRateMultiplier','sweepLightningDuration','sweepLightningDurationMultiplier','sweepLightningWidthPercent','sweepLightningWidthMultiplier','sweepLightningGlow','sweepLightningGlowMultiplier','sweepLightningGlowIntensity','sweepLightningGlowIntensityMultiplier','sweepLightningSoftness','sweepLightningSoftnessMultiplier','sweepLightningShowLines','sweepLightningLineOpacity','sweepLightningMicroStrikes'].forEach(id=>{document.getElementById(id)?.addEventListener('input',updateSweepFromUI);document.getElementById(id)?.addEventListener('change',updateSweepFromUI);});
             document.getElementById('sweepLightningRateSync')?.addEventListener('change',e=>{const active=getActiveEffectLayer();if(!active)return;const cfg=getLayerSweepConfig(active);setLightningRateSynchronization(e.target.checked===true,cfg,state.layers.indexOf(active));syncSweepUI();ensureSweepAnimation();requestMainCanvasRender();});
             document.querySelectorAll('[data-line-main-mode]').forEach(btn=>btn.addEventListener('click',()=>{
                 const active=getActiveLayer();if(!active)return;const mode=btn.dataset.lineMainMode;const targets=getLayerEditTargets();
@@ -12752,6 +12851,11 @@ syncMorphProfileUI();
                 syncWebOutlineUI();requestMainCanvasRender();
             };
             document.getElementById('paramLineOutlineEnabled')?.addEventListener('change',updateLineOutlineFromUI);
+            document.getElementById('paramLineOutlineLayerCount')?.addEventListener('input',e=>{
+                const max=Math.max(1,(state.layers||[]).length);
+                state.lineOutline.layerCount=Math.max(0,Math.min(max,Math.round(Number(e.target.value)||0)));
+                syncWebOutlineUI();requestMainCanvasRender();
+            });
             document.getElementById('paramLineOutlineColor')?.addEventListener('input',updateLineOutlineFromUI);
             const bindOutlineWidth=(id)=>document.getElementById(id)?.addEventListener('input',e=>{const v=Math.max(.5,Math.min(12,Number(e.target.value)||1.5));state.lineOutline.width=v;const r=document.getElementById('paramLineOutlineWidth'),n=document.getElementById('numLineOutlineWidth');if(r)r.value=v;if(n)n.value=v;syncWebOutlineUI();requestMainCanvasRender();});
             bindOutlineWidth('paramLineOutlineWidth');bindOutlineWidth('numLineOutlineWidth');
@@ -12810,6 +12914,12 @@ syncMorphProfileUI();
                 state.lamps.freezeTailSec=sec;
                 for(const cfg of getLampConfigTargets())cfg.freezeTailSec=sec;
                 // Preserve the existing history: the renderer slews the effective tail length toward this target.
+                syncLampSettingsUI();requestMainCanvasRender();
+            });
+            document.getElementById('lampFreezeIntensity')?.addEventListener('input',e=>{
+                const value=Math.max(0,Math.min(100,Math.round(Number(e.target.value)||0)));
+                state.lamps.freezeIntensity=value;
+                for(const cfg of getLampConfigTargets())cfg.freezeIntensity=value;
                 syncLampSettingsUI();requestMainCanvasRender();
             });
             document.getElementById('lampFreezeHardness')?.addEventListener('input',e=>{
@@ -13199,7 +13309,7 @@ syncMorphProfileUI();
             activeStopMinimalMorphing();
             activeStopMorphing();
             state.lamps = {
-                positionMode:'key', colorMode:'line', matchLineColor:true, rainbow:false, color:'#ffe600', webgl:true, freezeLight:false, freezeTailSec:1.5, freezeHardness:50, freezeColorMode:'lamp', freezeColor:'#00ffcc', freezeHueDegrees:45, freezeChromatic:false, freezeChromaticColor:'#22d3ee', freezeRain:false, freezeRainDirectionVersion:2, freezeRainDegrees:180, freezeRainSource:'core', freezeRainSpeed:50, freezeRainTailSec:1.5, freezeRainHardness:50,
+                positionMode:'key', colorMode:'line', matchLineColor:true, rainbow:false, color:'#ffe600', webgl:true, freezeLight:false, freezeTailSec:1.5, freezeIntensity:100, freezeHardness:50, freezeColorMode:'lamp', freezeColor:'#00ffcc', freezeHueDegrees:45, freezeChromatic:false, freezeChromaticColor:'#22d3ee', freezeRain:false, freezeRainDirectionVersion:2, freezeRainDegrees:180, freezeRainSource:'core', freezeRainSpeed:50, freezeRainTailSec:1.5, freezeRainHardness:50,
                 brightness:100, radius:30, radiusMultiplier:2, softness:100, softnessMultiplier:1,
                 blendMode:'lighter', type:'whiteCore', density:100, densityMultiplier:1,
                 scatter:0, scatterMultiplier:1, sizeVariation:0, sizeVariationMultiplier:1,
@@ -13298,7 +13408,7 @@ syncMorphProfileUI();
             state.audioReactive.effectsAmplitudeStrength = 50;
             state.audioReactive.effectsAmplitudeMultiplier = 1;
             state.lightningRateSync = true;
-            for(const layer of state.layers)Object.assign(getLayerSweepConfig(layer), {  flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, lengthPercent:3, widthPercent:75, color:'#ffffff', opacity:100, brightness:100, glow:18, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, 
+            for(const layer of state.layers)Object.assign(getLayerSweepConfig(layer), {  flashMode:'moving', flashType:'high', glintPrecision:'high', spectralSectorDegrees:45, spectralAngularSpeed:90, lengthPercent:3, widthPercent:105, color:'#ffffff', haloColor:'#ffffff', opacity:100, brightness:77, glow:14.5, glowMultiplier:1, glowIntensity:100, glowIntensityMultiplier:1, softness:100, softnessMultiplier:1, 
                 lightningBehavior:'symmetric', lightningPrecision:'exact', lightningMode:'perPath', lightningRandomPosition:false,
                 lightningColor:'#ffffff', lightningSecondaryColor:'#7dd3fc', 
                 lightningSegmentPercent:100, lightningTriggerMode:'morph', lightningRatePercent:100, lightningRateMultiplier:1,
@@ -14568,7 +14678,13 @@ syncMorphProfileUI();
             }
             if(configChanged&&(a.lineOutline||b.lineOutline)){
                 const aa=a.lineOutline||b.lineOutline||{},bb=b.lineOutline||a.lineOutline||{};
+                // Random outline coverage is an identity choice, never a numeric
+                // parameter to interpolate. Interpolating the seed would reshuffle
+                // the outlined layers on every Orange project Morph frame.
+                const previousOutlineSeed=state.lineOutline?.selectionSeed;
                 state.lineOutline=projectMorphDeepValueInto(state.lineOutline,aa,bb,configT,'lineOutline');
+                const fixedSeed=configT>=1?bb.selectionSeed:(previousOutlineSeed??aa.selectionSeed??bb.selectionSeed);
+                if(fixedSeed!=null&&Number.isFinite(Number(fixedSeed)))state.lineOutline.selectionSeed=Number(fixedSeed)>>>0;
             }
             if(configChanged&&(a.lamps||b.lamps)){
                 const aa=a.lamps||b.lamps||{},bb=b.lamps||a.lamps||{};
@@ -15566,12 +15682,13 @@ syncMorphProfileUI();
                 state.sweep.speedMultiplier=Math.max(0,Number.isFinite(Number(state.sweep.speedMultiplier))?Number(state.sweep.speedMultiplier):1);
                 state.sweep.syncMusic=state.sweep.syncMusic!==false;
                 state.sweep.lengthPercent=Math.max(1,Math.min(100,Number(state.sweep.lengthPercent)||3));
-                state.sweep.widthPercent=Math.max(0,Math.min(200,Number.isFinite(Number(state.sweep.widthPercent))?Number(state.sweep.widthPercent):75));
+                state.sweep.widthPercent=Math.max(0,Math.min(200,Number.isFinite(Number(state.sweep.widthPercent))?Number(state.sweep.widthPercent):105));
                 state.sweep.color=/^#[0-9a-f]{6}$/i.test(state.sweep.color||'')?state.sweep.color:'#ffffff';
+                state.sweep.haloColor=/^#[0-9a-f]{6}$/i.test(state.sweep.haloColor||'')?state.sweep.haloColor:state.sweep.color;
                 state.sweep.opacity=Math.max(0,Math.min(100,Number.isFinite(Number(state.sweep.opacity))?Number(state.sweep.opacity):100));
                 delete state.sweep.blurEnabled; delete state.sweep.blur;
-                state.sweep.brightness=Math.max(0,Math.min(200,Number.isFinite(Number(state.sweep.brightness))?Number(state.sweep.brightness):100));
-                state.sweep.glow=Math.max(0,Number.isFinite(Number(state.sweep.glow))?Number(state.sweep.glow):18);
+                state.sweep.brightness=Math.max(0,Math.min(200,Number.isFinite(Number(state.sweep.brightness))?Number(state.sweep.brightness):77));
+                state.sweep.glow=Math.max(0,Number.isFinite(Number(state.sweep.glow))?Number(state.sweep.glow):14.5);
                 state.sweep.glowMultiplier=Math.max(0,Number.isFinite(Number(state.sweep.glowMultiplier))?Number(state.sweep.glowMultiplier):1);
                 state.sweep.glowIntensity=Math.max(0,Math.min(200,Number.isFinite(Number(state.sweep.glowIntensity))?Number(state.sweep.glowIntensity):100));
                 state.sweep.glowIntensityMultiplier=Math.max(0,Number.isFinite(Number(state.sweep.glowIntensityMultiplier))?Number(state.sweep.glowIntensityMultiplier):1);
@@ -15658,6 +15775,7 @@ syncMorphProfileUI();
                 state.lineOutline.enabled=state.lineOutline.enabled===true;
                 state.lineOutline.color=state.lineOutline.color||'#ffffff';
                 state.lineOutline.width=Math.max(.5,Math.min(12,Number(state.lineOutline.width)||1.5));
+                if(state.lineOutline.layerCount!=null)state.lineOutline.layerCount=Math.max(0,Math.round(Number(state.lineOutline.layerCount)||0));
                 state.lineOutline.mode=['outer','inner','median'].includes(state.lineOutline.mode)?state.lineOutline.mode:'outer';
             }
             if (settings.lamps && typeof settings.lamps === 'object') {
@@ -15684,6 +15802,7 @@ syncMorphProfileUI();
                 setLampContourAttachmentEnabled(contourAttach);
                 state.lamps.freezeLight=settings.lamps.freezeLight===true;
                 state.lamps.freezeTailSec=Math.max(.05,Math.min(30,Number.isFinite(Number(settings.lamps.freezeTailSec))?Number(settings.lamps.freezeTailSec):1.5));
+                state.lamps.freezeIntensity=Math.max(0,Math.min(100,Number.isFinite(Number(settings.lamps.freezeIntensity))?Number(settings.lamps.freezeIntensity):100));
                 state.lamps.freezeHardness=Math.max(0,Math.min(100,Number.isFinite(Number(settings.lamps.freezeHardness))?Number(settings.lamps.freezeHardness):50));
                 state.lamps.freezeColorMode=['lamp','line','fixed','hue'].includes(settings.lamps.freezeColorMode)?settings.lamps.freezeColorMode:'lamp';
                 state.lamps.freezeColor=typeof settings.lamps.freezeColor==='string'?settings.lamps.freezeColor:'#00ffcc';

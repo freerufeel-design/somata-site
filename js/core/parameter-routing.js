@@ -118,6 +118,26 @@ const SomataParameterRegistry=(()=>{
     function valueAt(root,path){
         if(!root||!path)return undefined;let cur=root;for(const part of pathParts(path)){if(cur==null)return undefined;cur=cur[part];}return cur;
     }
+    function shiftHexHue(hex,degrees=0){
+        const raw=String(hex||''),m=/^#([0-9a-f]{6})$/i.exec(raw);
+        if(!m||!Number.isFinite(Number(degrees))||!Number(degrees))return raw;
+        const n=parseInt(m[1],16),r=((n>>16)&255)/255,g=((n>>8)&255)/255,b=(n&255)/255;
+        const max=Math.max(r,g,b),min=Math.min(r,g,b),d=max-min,l=(max+min)/2;
+        // White/grey/black are valid default outline colours. A pure hue
+        // rotation cannot change them, so acquire chroma smoothly while the
+        // automated hue offset moves away from zero. Unrouted colour stays exact.
+        const neutral=d<1e-9,blend=neutral?Math.min(1,Math.abs(Number(degrees))/90):0;
+        const sat=neutral?.78*blend:d/(1-Math.abs(2*l-1));
+        const light=neutral?l+((l>.85?.66:l<.15?.46:l)-l)*blend:l;
+        let h=neutral?0:max===r?60*(((g-b)/d)%6):max===g?60*((b-r)/d+2):60*((r-g)/d+4);
+        h=((h+Number(degrees))%360+360)%360;
+        const c=(1-Math.abs(2*light-1))*sat,x=c*(1-Math.abs((h/60)%2-1)),o=light-c/2;
+        let rr=0,gg=0,bb=0;
+        if(h<60)[rr,gg,bb]=[c,x,0];else if(h<120)[rr,gg,bb]=[x,c,0];else if(h<180)[rr,gg,bb]=[0,c,x];
+        else if(h<240)[rr,gg,bb]=[0,x,c];else if(h<300)[rr,gg,bb]=[x,0,c];else [rr,gg,bb]=[c,0,x];
+        const hx=v=>Math.round(Math.max(0,Math.min(1,v+o))*255).toString(16).padStart(2,'0');
+        return `#${hx(rr)}${hx(gg)}${hx(bb)}`;
+    }
     function applyPath(root,path,value){
         if(!root||!path)return root;const parts=pathParts(path);let cur=root;
         for(let i=0;i<parts.length-1;i++){const k=parts[i];if(!cur[k]||typeof cur[k]!=='object'||Array.isArray(cur[k]))cur[k]={};cur=cur[k];}
@@ -132,11 +152,11 @@ const SomataParameterRegistry=(()=>{
     legacy('layer.rounding','Геометрия','Скругление','paramRounding','rounding','byRounding','morphByRounding','roundingMin','roundingMax',0,200,1);
     legacy('layer.radius','Геометрия','Размер','paramRadius','radius','bySize','morphBySize','radiusMin','radiusMax',20,500,1);
     legacy('layer.rotation','Геометрия','Поворот','paramRotation','rotation','byRotation','morphByRotation','rotationMinPercent','rotationMaxPercent',0,360,1,{interpolation:'angle'});
-    legacy('layer.opacity','Линия','Прозрачность слоя','paramOpacity','opacity','byOpacity','morphByOpacity','opacityMin','opacityMax',0,100,1);
-    legacy('layer.strokeWidth','Линия','Толщина линии','paramStrokeWidth','strokeWidth','byStrokeWidth','morphByStrokeWidth','strokeWidthMin','strokeWidthMax',.5,50,.1);
-    legacy('layer.fillOpacity','Заливка','Прозрачность заливки','paramFillOpacity','fillOpacity','byFillColor','morphByFillColor','fillOpacityMin','fillOpacityMax',0,100,1,{morphGroup:'Линия'});
-    legacy('layer.strokeColor','Линия','Цвет линии','paramStrokeColor','strokeColor','byColor','morphByColor',null,null,0,1,1,{type:'color'});
-    legacy('layer.fillColor','Заливка','Цвет заливки','paramFillColor','fillColor','byFillColor','morphByFillColor',null,null,0,1,1,{type:'color',morphGroup:'Линия'});
+    legacy('layer.opacity','Линия','Слой · прозрачность','paramOpacity','opacity','byOpacity','morphByOpacity','opacityMin','opacityMax',0,100,1);
+    legacy('layer.strokeWidth','Линия','Линия · толщина','paramStrokeWidth','strokeWidth','byStrokeWidth','morphByStrokeWidth','strokeWidthMin','strokeWidthMax',.5,50,.1);
+    legacy('layer.fillOpacity','Заливка','Заливка · прозрачность','paramFillOpacity','fillOpacity','byFillColor','morphByFillColor','fillOpacityMin','fillOpacityMax',0,100,1,{morphGroup:'Линия'});
+    legacy('layer.strokeColor','Линия','Линия · цвет','paramStrokeColor','strokeColor','byColor','morphByColor',null,null,0,1,1,{type:'color'});
+    legacy('layer.fillColor','Заливка','Заливка · цвет','paramFillColor','fillColor','byFillColor','morphByFillColor',null,null,0,1,1,{type:'color',morphGroup:'Линия'});
 
     const audio=(id,group,label,mode,span,min,max,opts={})=>{
         if(!audioOrderSeen.has(id)){audioOrderSeen.add(id);audioOrder.push(id);}
@@ -151,10 +171,23 @@ const SomataParameterRegistry=(()=>{
     };
     audio('layer.scale','Геометрия','Размер фигуры','centerFactor',.74,.05,8,{audioKey:'layer.scale',morph:false});
     audio('layer.rotation','Геометрия','Вращение','derivativeAdd',45,-720,720,{audioKey:'layer.rotation',morph:true,frameTarget:'layer',framePath:'rotation',uiId:'paramRotation',interpolation:'angle'});
-    audio('layer.opacity','Линия','Прозрачность','fadeFactor',1,0,100,{audioKey:'layer.opacity',frameTarget:'layer',framePath:'opacity',uiId:'paramOpacity'});
+    audio('layer.opacity','Линия','Слой · прозрачность','fadeFactor',1,0,100,{audioKey:'layer.opacity',frameTarget:'layer',framePath:'opacity',uiId:'paramOpacity'});
     audio('layer.strokeWidth','Линия','Толщина линии','positiveFactor',1.25,.1,48,{audioKey:'layer.strokeWidth',frameTarget:'layer',framePath:'strokeWidth',uiId:'paramStrokeWidth'});
-    audio('layer.glow','Линия','Свечение линии','positiveFactor',2,0,160,{frameTarget:'effect',framePath:'glow',uiId:'paramGlow'});
-    audio('outline.width','Линия','Толщина обводки','positiveFactor',1.5,.1,30,{morph:false,scope:'global',uiId:'paramLineOutlineWidth'});
+    audio('layer.glow','Линия','Свечение · размер','positiveFactor',2,0,160,{frameTarget:'effect',framePath:'glow',uiId:'paramGlow'});
+    // Canonical outline controls: ONE definition per property for Blue Morph,
+    // Orange Morph, Audio Link and the left-panel routing decorations. The
+    // authored outline is global, while Audio can still target individual layers.
+    // Discrete controls are integer (0/1, 0/1/2), not boolean/enum, so both
+    // Morph engines can select them using their ordinary numeric bindings.
+    audio('outline.layerCount','Линия','Обводка · число слоёв','add',3,0,32,{morph:true,scope:'global',type:'integer',step:1,uiId:'paramLineOutlineLayerCount',frameTarget:'global',framePath:'lineOutline.layerCount'});
+    audio('outline.width','Линия','Обводка · толщина','positiveFactor',1.5,.5,12,{morph:true,scope:'global',step:.5,uiId:'paramLineOutlineWidth',frameTarget:'global',framePath:'lineOutline.width'});
+    // A colour Morph range represents a hue shift in degrees from the authored
+    // outline colour, preserving saturation and lightness; Audio uses the same key.
+    audio('outline.color','Линия','Обводка · цвет','add',150,-180,180,{morph:true,scope:'global',type:'color',step:1,uiId:'paramLineOutlineColor',frameTarget:'global',framePath:'lineOutline.color'});
+    audio('outline.mode','Линия','Обводка · расположение','add',2,0,2,{morph:true,scope:'global',type:'integer',step:1,uiId:'paramLineOutlineOuter',frameTarget:'global',framePath:'lineOutline.mode'});
+    // FreezeLight is global screen-space history: both engines and Audio share the same IDs.
+    audio('lamps.freezeTailSec','Лампочки','Фризлайт · длина хвоста','add',4,.05,30,{morph:true,scope:'global',type:'number',step:.05,uiId:'lampFreezeTailSec',frameTarget:'global',framePath:'lamps.freezeTailSec'});
+    audio('lamps.freezeIntensity','Лампочки','Фризлайт · интенсивность','add',35,0,100,{morph:true,scope:'global',type:'number',step:1,uiId:'lampFreezeIntensity',frameTarget:'global',framePath:'lamps.freezeIntensity'});
     audio('graffiti.angle','Граффити','Угол маркера','derivativeAdd',80,-90,90,{framePath:'graffitiAngle',uiId:'graffitiAngle'});
     audio('lamps.brightness','Лампочки','Яркость','positiveFactor',1.6,.02,12,{framePath:'lamps.brightness',uiId:'lampBrightness'});
     audio('lamps.radius','Лампочки','Размер','positiveFactor',1.1,.2,Infinity,{framePath:'lamps.radius',uiId:'lampRadius'});
@@ -256,10 +289,10 @@ const SomataParameterRegistry=(()=>{
     // Core line/geometry multipliers that are authored per layer but were not Audio targets.
     generic('tunnel.depthCurveMultiplier','Коридор','Множитель ширины по глубине','tunnelDepthCurveMultiplier','tunnel.depthCurveMultiplier',0,10,.01,{frameTarget:'global',type:'multiplier'});
     generic('layer.radiusMultiplier','Геометрия','Множитель радиуса','paramRadiusMultiplier','radiusMultiplier',0,64,.01,{frameTarget:'layer'});
-    generic('layer.lineOpacity','Линия','Прозрачность линии','paramLineOpacity','lineOpacity',0,100,1,{frameTarget:'layer'});
+    generic('layer.lineOpacity','Линия','Линия · прозрачность','paramLineOpacity','lineOpacity',0,100,1,{frameTarget:'layer'});
     generic('layer.strokeWidthMultiplier','Линия','Множитель толщины','paramStrokeWidthMultiplier','strokeWidthMultiplier',0,64,.01,{frameTarget:'layer'});
     generic('layer.glowMultiplier','Линия','Множитель свечения','paramGlowMultiplier','glowMultiplier',0,64,.01);
-    generic('layer.glowIntensity','Линия','Интенсивность свечения','paramGlowIntensity','glowIntensity',0,200,1);
+    generic('layer.glowIntensity','Линия','Свечение · интенсивность','paramGlowIntensity','glowIntensity',0,200,1);
     generic('layer.glowIntensityMultiplier','Линия','Множитель интенсивности свечения','paramGlowIntensityMultiplier','glowIntensityMultiplier',0,64,.01);
 
     // Graffiti / profile appearance.
@@ -347,7 +380,7 @@ const SomataParameterRegistry=(()=>{
     generic('spiral.fillEnabled','Спирали','Заливка спирали','paramSpiralFillEnabled','spiralFillEnabled',0,1,1,{type:'boolean',frameTarget:'layer'});
     generic('spiral.fillType','Спирали','Тип заливки','paramSpiralFillType','spiralFillType',0,1,1,{type:'enum',values:['interwinding','chopped'],frameTarget:'layer'});
 
-    return Object.freeze({register,get,all,morphable,sharedRoutingDefinitions,sharedRoutingGroups,audioDefinitions,audioCompatibilityDefinitions,valueAt,applyPath,clone,version:()=>revision});
+    return Object.freeze({register,get,all,morphable,sharedRoutingDefinitions,sharedRoutingGroups,audioDefinitions,audioCompatibilityDefinitions,valueAt,applyPath,shiftHexHue,clone,version:()=>revision});
 })();
 window.SomataParameterRegistry=SomataParameterRegistry;
 
@@ -495,7 +528,7 @@ const SomataMorphParameterRouting=(()=>{
     function normalizeBinding(raw){
         const def=SomataParameterRegistry.get(raw?.parameter);if(!def||def.morph?.supported!==true||def.type==='boolean')return null;
         const out={parameter:def.id,enabled:raw?.enabled!==false,legacy:def.morph?.legacy===true,layerPercent:SomataParameterCoverage.percent(raw)};
-        if(!out.legacy&&def.type!=='color'){
+        if(!out.legacy&&(def.type!=='color'||def.id==='outline.color')){
             let lo=Number(raw?.min),hi=Number(raw?.max);
             if(!Number.isFinite(lo))lo=Number.isFinite(Number(def.min))?Number(def.min):0;
             if(!Number.isFinite(hi))hi=Number.isFinite(Number(def.max))?Number(def.max):lo+1;

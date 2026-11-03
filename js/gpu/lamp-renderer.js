@@ -466,7 +466,7 @@ void main(){
             const canvas=document.createElement('canvas');
             let adapter=null,device=null,context=null,format=null,hubGeneration=0;
             let lampPipeline=null,corridorLampPipeline=null,arcLampPipeline=null,arcCorridorLampPipeline=null,topologyLampPipeline=null,topologyCorridorLampPipeline=null,tonePipeline=null,freezePipeline=null,trailCombinePipeline=null,cornerBuffer=null,instanceBuffers=[null,null,null],uniformBuffer=null,toneUniformBuffer=null,freezeUniformBuffer=null,rainUniformBuffer=null,dummyStorageBuffer=null;
-            let lampBindGroup=null,toneBindGroups=[null,null,null],freezeBindGroups=[null,null],rainToneBindGroups=[null,null],rainBindGroups=[null,null],trailCombineBindGroups=[null,null,null,null],rainCurrentCombineBindGroups=[null,null],hdrTexture=null,toneTexture=null,freezeHistoryTextures=[null,null],freezeHistoryViews=[null,null],rainHistoryTextures=[null,null],rainHistoryViews=[null,null],rainSourceTexture=null,rainSourceView=null,rainSourceValid=false,rainSourceRefreshes=0,trailCompositeTexture=null,trailCompositeView=null,trailCompositeToneBindGroup=null;
+            let lampBindGroup=null,toneBindGroups=[null,null,null],freezeBindGroups=[null,null],rainToneBindGroups=[null,null],rainBindGroups=[null,null],trailCombineBindGroups=[null,null,null,null],rainCurrentCombineBindGroups=[null,null],hdrTexture=null,toneTexture=null,freezeHistoryTextures=[null,null],freezeHistoryViews=[null,null],rainHistoryTextures=[null,null],rainHistoryViews=[null,null],rainSourceTexture=null,rainSourceView=null,rainSourceValid=false,rainSourceRefreshes=0,trailCompositeTexture=null,trailCompositeView=null,trailCompositeToneBindGroup=null,trailCompositeToneBindGroups=[null,null,null,null];
             let attempted=false,initializing=false,ready=false,lost=false,lastError='';
             let width=0,height=0,capacity=0,instanceCount=0,submissions=0,lastFlushMode='none',lastToneValid=false,deferredComposite=false,directSceneFrames=0,fallbackPresentFrames=0,lampFrameSerial=0;
             let frameBlendMode='lighter',frameBlendModeSet=false,frameBlendMixed=false;
@@ -668,18 +668,29 @@ fn seg(x:f32,a:f32,b:f32)->f32{return sat((x-a)/max(0.000001,b-a));}
 struct ToneFx { p0:vec4<f32>, p1:vec4<f32> };
 @group(0) @binding(0) var hdrTex:texture_2d<f32>;
 @group(0) @binding(1) var<uniform> toneFx:ToneFx;
+// Tone only: preserve live lamps at original intensity while modulating the
+// independent FreezeLight history. Rain remains unaffected by Freeze intensity.
+@group(0) @binding(2) var freezeTex:texture_2d<f32>;
+@group(0) @binding(3) var rainTex:texture_2d<f32>;
+fn sampleLamp(pos:vec2<i32>)->vec3<f32>{
+    var rgb=max(textureLoad(hdrTex,pos,0).rgb,vec3<f32>(0.0));
+    if(toneFx.p0.z>=0.0){rgb=max(rgb,max(textureLoad(freezeTex,pos,0).rgb,vec3<f32>(0.0))*clamp(toneFx.p0.z,0.0,1.0));}
+    if(toneFx.p0.w>0.5){rgb=max(rgb,max(textureLoad(rainTex,pos,0).rgb,vec3<f32>(0.0)));}
+    return rgb;
+}
+
 @vertex fn vsMain(@builtin(vertex_index) i:u32)->@builtin(position) vec4<f32>{
     var p=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0));
     return vec4<f32>(p[i],0.0,1.0);
 }
 fn peakAt(pos:vec2<i32>,dims:vec2<i32>)->f32{
     if(any(pos<vec2<i32>(0))||any(pos>=dims)){return 0.0;}
-    let c=max(textureLoad(hdrTex,pos,0).rgb,vec3<f32>(0.0));return max(max(c.r,c.g),c.b);
+    let c=sampleLamp(pos);return max(max(c.r,c.g),c.b);
 }
 @fragment fn fsMain(@builtin(position) p:vec4<f32>)->@location(0) vec4<f32>{
     let dims=vec2<i32>(textureDimensions(hdrTex));
     let xy=clamp(vec2<i32>(p.xy),vec2<i32>(0),dims-vec2<i32>(1));
-    let hdr=max(textureLoad(hdrTex,xy,0).rgb,vec3<f32>(0.0));
+    let hdr=sampleLamp(xy);
     var shown=clamp(hdr,vec3<f32>(0.0),vec3<f32>(1.0));
     if(toneFx.p0.x>0.5){
         let r=max(1,i32(toneFx.p0.y+0.5));let center=max(max(shown.r,shown.g),shown.b);
@@ -715,6 +726,19 @@ fn trailEnvelope(age:f32,tailSec:f32,hardness:f32)->f32{
 }
 fn safeHistoryLoad(pos:vec2<i32>,dims:vec2<i32>)->vec4<f32>{if(any(pos<vec2<i32>(0))||any(pos>=dims)){return vec4<f32>(0.0);}return max(textureLoad(historyTex,pos,0),vec4<f32>(0.0));}
 fn historyAt(src:vec2<f32>,dims:vec2<i32>)->vec4<f32>{let b=vec2<i32>(floor(src));let f=fract(src);let a=safeHistoryLoad(b,dims);let b1=safeHistoryLoad(b+vec2<i32>(1,0),dims);let c=safeHistoryLoad(b+vec2<i32>(0,1),dims);let d=safeHistoryLoad(b+vec2<i32>(1,1),dims);return mix(mix(a,b1,f.x),mix(c,d,f.x),f.y);}
+// Rain is a continuous, looping field. Sampling the stored trail periodically
+// avoids creating an empty strip at the upstream viewport edge. Ordinary
+// FreezeLight keeps the original non-wrapping screen-space history.
+fn rainHistoryLoad(pos:vec2<i32>,dims:vec2<i32>)->vec4<f32>{
+    let wrapped=((pos%dims)+dims)%dims;
+    return max(textureLoad(historyTex,wrapped,0),vec4<f32>(0.0));
+}
+fn rainHistoryAt(src:vec2<f32>,dims:vec2<i32>)->vec4<f32>{
+    let b=vec2<i32>(floor(src));let f=fract(src);
+    let a=rainHistoryLoad(b,dims);let b1=rainHistoryLoad(b+vec2<i32>(1,0),dims);
+    let c=rainHistoryLoad(b+vec2<i32>(0,1),dims);let d=rainHistoryLoad(b+vec2<i32>(1,1),dims);
+    return mix(mix(a,b1,f.x),mix(c,d,f.x),f.y);
+}
 fn hueRotate(c:vec3<f32>,a:f32)->vec3<f32>{
     let co=cos(a);let si=sin(a);
     let r=vec3<f32>(0.213+co*0.787-si*0.213,0.715-co*0.715-si*0.715,0.072-co*0.072+si*0.928);
@@ -726,7 +750,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
 @fragment fn fsMain(@builtin(position) p:vec4<f32>)->@location(0) vec4<f32>{
     let dims=vec2<i32>(textureDimensions(currentTex));let xy=clamp(vec2<i32>(p.xy),vec2<i32>(0),dims-vec2<i32>(1));let currentSample=max(textureLoad(currentTex,xy,0),vec4<f32>(0.0));var current=currentSample.rgb;
     if(fu.coreOnly>0.5){let coreMask=smoothstep(0.42,0.82,clamp(currentSample.a,0.0,1.0));current*=coreMask;}
-    var previous=vec4<f32>(0.0);if(fu.historyValid>0.5){let src=vec2<f32>(xy)-vec2<f32>(fu.shiftX,fu.shiftY);previous=historyAt(src,dims);}
+    var previous=vec4<f32>(0.0);if(fu.historyValid>0.5){let src=vec2<f32>(xy)-vec2<f32>(fu.shiftX,fu.shiftY);if(fu._pad0>0.5){previous=rainHistoryAt(src,dims);}else{previous=historyAt(src,dims);}}
     let oldAge=max(0.0,previous.a);let newAge=oldAge+max(0.0,fu.dt);let oldEnvelope=trailEnvelope(oldAge,fu.tailSec,fu.hardness);let newEnvelope=trailEnvelope(newAge,fu.tailSec,fu.hardness);var ratio=0.0;if(oldEnvelope>0.000001){ratio=clamp(newEnvelope/oldEnvelope,0.0,1.0);}
     var historical=max(previous.rgb,vec3<f32>(0.0))*ratio;let histPeak=max(max(historical.r,historical.g),historical.b);
     if(histPeak>0.000001){
@@ -814,7 +838,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             }
             function warmup(){
                 const hubReady=WebGPUDeviceHub.warmup(),gen=WebGPUDeviceHub.getGeneration();
-                if(ready&&(!hubReady||gen!==hubGeneration)){ready=false;attempted=false;initializing=false;lost=!hubReady;arcLampPipeline=arcCorridorLampPipeline=topologyLampPipeline=topologyCorridorLampPipeline=freezePipeline=trailCombinePipeline=null;try{context?.unconfigure?.();}catch(_){} try{hdrTexture?.destroy?.();}catch(_){} try{toneTexture?.destroy?.();}catch(_){}try{rainSourceTexture?.destroy?.();}catch(_){}try{trailCompositeTexture?.destroy?.();}catch(_){}for(const t of [...freezeHistoryTextures,...rainHistoryTextures])try{t?.destroy?.();}catch(_){}try{toneUniformBuffer?.destroy?.();}catch(_){}try{freezeUniformBuffer?.destroy?.();}catch(_){}try{rainUniformBuffer?.destroy?.();}catch(_){}try{dummyStorageBuffer?.destroy?.();}catch(_){}hdrTexture=toneTexture=rainSourceTexture=trailCompositeTexture=null;freezeHistoryTextures=[null,null];freezeHistoryViews=[null,null];rainHistoryTextures=[null,null];rainHistoryViews=[null,null];hdrView=toneView=rainSourceView=trailCompositeView=null;rainSourceValid=false;toneBindGroups=[null,null,null];rainToneBindGroups=[null,null];freezeBindGroups=[null,null];rainBindGroups=[null,null];trailCombineBindGroups=[null,null,null,null];rainCurrentCombineBindGroups=[null,null];trailCompositeToneBindGroup=null;toneUniformBuffer=freezeUniformBuffer=rainUniformBuffer=null;dummyStorageBuffer=null;freezeHistoryValid=rainHistoryValid=false;freezeLastRenderAt=rainLastRenderAt=0;freezeLastMotionAt=rainLastMotionAt=0;lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;lampFrameSerial=0;lastInstanceBuffer=null;lastInstanceSnapshot=null;lastInstanceCount=0;lastInstanceHash=0;for(const b of instanceBuffers)try{b?.destroy?.();}catch(_){}instanceBuffers=[null,null,null];capacity=0;resetCorridorBatchPool();}
+                if(ready&&(!hubReady||gen!==hubGeneration)){ready=false;attempted=false;initializing=false;lost=!hubReady;arcLampPipeline=arcCorridorLampPipeline=topologyLampPipeline=topologyCorridorLampPipeline=freezePipeline=trailCombinePipeline=null;try{context?.unconfigure?.();}catch(_){} try{hdrTexture?.destroy?.();}catch(_){} try{toneTexture?.destroy?.();}catch(_){}try{rainSourceTexture?.destroy?.();}catch(_){}try{trailCompositeTexture?.destroy?.();}catch(_){}for(const t of [...freezeHistoryTextures,...rainHistoryTextures])try{t?.destroy?.();}catch(_){}try{toneUniformBuffer?.destroy?.();}catch(_){}try{freezeUniformBuffer?.destroy?.();}catch(_){}try{rainUniformBuffer?.destroy?.();}catch(_){}try{dummyStorageBuffer?.destroy?.();}catch(_){}hdrTexture=toneTexture=rainSourceTexture=trailCompositeTexture=null;freezeHistoryTextures=[null,null];freezeHistoryViews=[null,null];rainHistoryTextures=[null,null];rainHistoryViews=[null,null];hdrView=toneView=rainSourceView=trailCompositeView=null;rainSourceValid=false;toneBindGroups=[null,null,null];rainToneBindGroups=[null,null];freezeBindGroups=[null,null];rainBindGroups=[null,null];trailCombineBindGroups=[null,null,null,null];rainCurrentCombineBindGroups=[null,null];trailCompositeToneBindGroup=null;trailCompositeToneBindGroups=[null,null,null,null];toneUniformBuffer=freezeUniformBuffer=rainUniformBuffer=null;dummyStorageBuffer=null;freezeHistoryValid=rainHistoryValid=false;freezeLastRenderAt=rainLastRenderAt=0;freezeLastMotionAt=rainLastMotionAt=0;lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;lampFrameSerial=0;lastInstanceBuffer=null;lastInstanceSnapshot=null;lastInstanceCount=0;lastInstanceHash=0;for(const b of instanceBuffers)try{b?.destroy?.();}catch(_){}instanceBuffers=[null,null,null];capacity=0;resetCorridorBatchPool();}
                 if(!ready&&!initializing&&(!attempted||lost))void initAsync();return ready&&!lost&&hubReady;
             }
             function ensureCapacity(count){
@@ -841,10 +865,17 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                 freezeHistoryViews=freezeHistoryTextures.map(t=>t.createView());
                 rainHistoryViews=rainHistoryTextures.map(t=>t.createView());
                 trailCompositeView=trailCompositeTexture.createView();
-                toneBindGroups[1]=device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:freezeHistoryViews[0]},{binding:1,resource:{buffer:toneUniformBuffer}}]});
-                toneBindGroups[2]=device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:freezeHistoryViews[1]},{binding:1,resource:{buffer:toneUniformBuffer}}]});
-                rainToneBindGroups=rainHistoryViews.map(view=>device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:view},{binding:1,resource:{buffer:toneUniformBuffer}}]}));
-                trailCompositeToneBindGroup=device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:trailCompositeView},{binding:1,resource:{buffer:toneUniformBuffer}}]});
+                toneBindGroups[1]=device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:hdrView},{binding:1,resource:{buffer:toneUniformBuffer}},{binding:2,resource:freezeHistoryViews[0]},{binding:3,resource:hdrView}]});
+                toneBindGroups[2]=device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:hdrView},{binding:1,resource:{buffer:toneUniformBuffer}},{binding:2,resource:freezeHistoryViews[1]},{binding:3,resource:hdrView}]});
+                rainToneBindGroups=rainHistoryViews.map(view=>device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:hdrView},{binding:1,resource:{buffer:toneUniformBuffer}},{binding:2,resource:hdrView},{binding:3,resource:view}]}));
+                trailCompositeToneBindGroups=[];
+                for(let fi=0;fi<2;fi++)for(let ri=0;ri<2;ri++){
+                    trailCompositeToneBindGroups[fi*2+ri]=device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[
+                        {binding:0,resource:hdrView},{binding:1,resource:{buffer:toneUniformBuffer}},
+                        {binding:2,resource:freezeHistoryViews[fi]},{binding:3,resource:rainHistoryViews[ri]}
+                    ]});
+                }
+                trailCompositeToneBindGroup=trailCompositeToneBindGroups[0];
                 freezeBindGroups=freezeHistoryViews.map(view=>device.createBindGroup({layout:freezePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:hdrView},{binding:1,resource:view},{binding:2,resource:{buffer:freezeUniformBuffer}}]}));
                 rainBindGroups=rainHistoryViews.map(view=>device.createBindGroup({layout:freezePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:rainSourceView},{binding:1,resource:view},{binding:2,resource:{buffer:rainUniformBuffer}}]}));
                 trailCombineBindGroups=[];
@@ -859,14 +890,28 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                 try{hdrTexture?.destroy?.();}catch(_){}try{toneTexture?.destroy?.();}catch(_){}try{rainSourceTexture?.destroy?.();}catch(_){}try{trailCompositeTexture?.destroy?.();}catch(_){}for(const t of [...freezeHistoryTextures,...rainHistoryTextures])try{t?.destroy?.();}catch(_){}
                 hdrTexture=device.createTexture({label:'Spiro lamp RGBA16F HDR',size:{width,height,depthOrArrayLayers:1},format:'rgba16float',usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_SRC});
                 toneTexture=device.createTexture({label:'Spiro lamp tone scene bridge',size:{width,height,depthOrArrayLayers:1},format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_SRC});
-                hdrView=hdrTexture.createView();toneView=toneTexture.createView();rainSourceTexture=null;rainSourceView=null;rainSourceValid=false;freezeHistoryTextures=[null,null];freezeHistoryViews=[null,null];rainHistoryTextures=[null,null];rainHistoryViews=[null,null];freezeBindGroups=[null,null];rainBindGroups=[null,null];rainToneBindGroups=[null,null];trailCombineBindGroups=[null,null,null,null];rainCurrentCombineBindGroups=[null,null];trailCompositeTexture=null;trailCompositeView=null;trailCompositeToneBindGroup=null;
-                toneBindGroups=[device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:hdrView},{binding:1,resource:{buffer:toneUniformBuffer}}]}),null,null];
+                hdrView=hdrTexture.createView();toneView=toneTexture.createView();rainSourceTexture=null;rainSourceView=null;rainSourceValid=false;freezeHistoryTextures=[null,null];freezeHistoryViews=[null,null];rainHistoryTextures=[null,null];rainHistoryViews=[null,null];freezeBindGroups=[null,null];rainBindGroups=[null,null];rainToneBindGroups=[null,null];trailCombineBindGroups=[null,null,null,null];rainCurrentCombineBindGroups=[null,null];trailCompositeTexture=null;trailCompositeView=null;trailCompositeToneBindGroup=null;trailCompositeToneBindGroups=[null,null,null,null];
+                toneBindGroups=[device.createBindGroup({layout:tonePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:hdrView},{binding:1,resource:{buffer:toneUniformBuffer}},{binding:2,resource:hdrView},{binding:3,resource:hdrView}]}),null,null];
                 freezeHistoryIndex=rainHistoryIndex=0;freezeHistoryValid=rainHistoryValid=false;freezeLastRenderAt=rainLastRenderAt=0;freezeLastMotionAt=rainLastMotionAt=0;lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;
                 uniformData[0]=width;uniformData[1]=height;uniformData[2]=0;uniformData[3]=0;device.queue.writeBuffer(uniformBuffer,0,uniformData);
                 return true;
             }
             function beginFrame(w,h,now=performance.now()){frameNow=Number(now)||performance.now();lampFrameSerial=(lampFrameSerial+1)>>>0;instanceCount=0;frameBlendMode='lighter';frameBlendModeSet=false;frameBlendMixed=false;instanceFrameHash=2166136261>>>0;freezeFrameHash=2166136261>>>0;freezeDrawCount=0;rainFrameHash=2166136261>>>0;rainDrawCount=0;corridorBatchCount=0;arcBatchCount=0;deferredLocalArcTables=[];lastFlushMode='none';lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;return ensureSize(w,h);}
-            function freezeTailSec(){return Math.max(.05,Math.min(30,Number(state?.lamps?.freezeTailSec)||1.5));}
+            function freezeRoutedValue(key,authored){
+                const morph=window.SomataMorphParameterRouting?.resolveGlobalValue?.(key,authored);
+                const base=Number.isFinite(Number(morph))?Number(morph):authored;
+                // The GPU history is one screen-space texture, hence the master
+                // audio route controls the common tail; layer routes modulate the
+                // shared tail using the mean contribution of the targeted layers.
+                const master=audioApplyNumeric(key,base,-1);
+                const active=state?.audioReactive?.active===true?state.layers||[]:[];
+                const routed=active.map((_,i)=>audioApplyNumeric(key,base,i));
+                if(!routed.length)return master;
+                const layerContribution=routed.reduce((sum,v)=>sum+(Number(v)-master),0)/routed.length;
+                return master+layerContribution;
+            }
+            function freezeTailSec(){return Math.max(.05,Math.min(30,freezeRoutedValue('lamps.freezeTailSec',Number(state?.lamps?.freezeTailSec)||1.5)));}
+            function freezeIntensity(){const raw=Number(state?.lamps?.freezeIntensity);return Math.max(0,Math.min(100,freezeRoutedValue('lamps.freezeIntensity',Number.isFinite(raw)?raw:100)));}
             function updateFreezeEffectiveTail(now=performance.now()){
                 const target=freezeTailSec(),t=Number(now)||performance.now();
                 if(!Number.isFinite(freezeEffectiveTailSec)){freezeEffectiveTailSec=target;freezeTailSlewAt=t;return freezeEffectiveTailSec;}
@@ -893,9 +938,11 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             function freezeRainTravelPx(dt){
                 const p=freezeRainSpeed()/100,baseSpeed=Math.max(60,Math.min(480,Math.min(width,height)*0.25));
                 if(p<=0)return 0;
-
-                if(p>=1)return Math.hypot(width,height)+Math.max(width,height);
-                return baseSpeed*Math.max(0,Number(dt)||0)*(p/(1-p));
+                // Previous p/(1-p) went to infinity at 100% and could move
+                // the trail several screens in one frame. The bounded curve
+                // retains fast motion but never teleports across the viewport.
+                const seconds=Math.min(.05,Math.max(0,Number(dt)||0));
+                return baseSpeed*seconds*p*(1+4*p);
             }
             function freezeLightEnabled(){return state?.lamps?.freezeLight===true;}
             function freezeRainEnabled(){return state?.lamps?.freezeRain===true;}
@@ -1107,17 +1154,16 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
                         const wasValid=rainHistoryValid,previous=rainHistoryIndex,next=1-previous;
                         const dt=wasValid&&rainLastRenderAt>0?Math.max(0,(now-rainLastRenderAt)/1000):0;
                         const rad=(freezeRainDegrees()-90)*Math.PI/180,travel=freezeRainTravelPx(dt);
-                        rainUniformData.fill(0);rainUniformData[0]=dt;rainUniformData[1]=freezeRainTailSec();rainUniformData[2]=freezeRainHardness()/100;rainUniformData[3]=wasValid?1:0;rainUniformData[4]=Math.cos(rad)*travel;rainUniformData[5]=Math.sin(rad)*travel;rainUniformData[6]=freezeRainSource()==='core'?1:0;rainUniformData[7]=0;
+                        rainUniformData.fill(0);rainUniformData[0]=dt;rainUniformData[1]=freezeRainTailSec();rainUniformData[2]=freezeRainHardness()/100;rainUniformData[3]=wasValid?1:0;rainUniformData[4]=Math.cos(rad)*travel;rainUniformData[5]=Math.sin(rad)*travel;rainUniformData[6]=freezeRainSource()==='core'?1:0;rainUniformData[7]=0;rainUniformData[12]=1;
                         device.queue.writeBuffer(rainUniformBuffer,0,rainUniformData);
                         const pass=encoder.beginRenderPass({label:'Somata FreezeLight Rain feedback',colorAttachments:[{view:rainHistoryViews[next],clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
                         pass.setPipeline(freezePipeline);pass.setBindGroup(0,rainBindGroups[previous]);pass.draw(3,1,0,0);pass.end();
                         rainHistoryIndex=next;rainHistoryValid=true;rainLastRenderAt=now;rainFrames++;
                     }
                     if(rainEnabled){
-                        const pass=encoder.beginRenderPass({label:freezeEnabled?'Somata FreezeLight + Rain independent combine':'Somata FreezeLight Rain + live lamp combine',colorAttachments:[{view:trailCompositeView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
-                        pass.setPipeline(trailCombinePipeline);pass.setBindGroup(0,freezeEnabled?trailCombineBindGroups[freezeHistoryIndex*2+rainHistoryIndex]:rainCurrentCombineBindGroups[rainHistoryIndex]);pass.draw(3,1,0,0);pass.end();activeToneBindGroup=trailCompositeToneBindGroup;
+                        activeToneBindGroup=freezeEnabled?trailCompositeToneBindGroups[freezeHistoryIndex*2+rainHistoryIndex]:rainToneBindGroups[rainHistoryIndex];
                     }
-                    toneUniformData.fill(0);const chromatic=freezeEnabled&&freezeChromaticEnabled();toneUniformData[0]=chromatic?1:0;toneUniformData[1]=2;const ac=freezeChromaticRgb();toneUniformData[4]=ac[0];toneUniformData[5]=ac[1];toneUniformData[6]=ac[2];device.queue.writeBuffer(toneUniformBuffer,0,toneUniformData);
+                    toneUniformData.fill(0);const chromatic=freezeEnabled&&freezeChromaticEnabled();toneUniformData[0]=chromatic?1:0;toneUniformData[1]=2;toneUniformData[2]=freezeEnabled?freezeIntensity()/100:-1;toneUniformData[3]=rainEnabled?1:0;const ac=freezeChromaticRgb();toneUniformData[4]=ac[0];toneUniformData[5]=ac[1];toneUniformData[6]=ac[2];device.queue.writeBuffer(toneUniformBuffer,0,toneUniformData);
                     const tonePass=encoder.beginRenderPass({label:'Spiro lamp tone',colorAttachments:[{view:toneView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});tonePass.setPipeline(tonePipeline);tonePass.setBindGroup(0,activeToneBindGroup);tonePass.draw(3,1,0,0);tonePass.end();
                     if(freezeEnabled&&freezeHistoryValid&&!freezeSignatureChanged&&now>freezeEnd+20&&freezeHardness()<=0){freezeHistoryValid=false;freezeLastRenderAt=0;}
                     if(rainEnabled&&rainHistoryValid&&!rainSignatureChanged&&now>rainEnd+20&&freezeRainHardness()<=0){rainHistoryValid=false;rainLastRenderAt=0;}
@@ -1139,7 +1185,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
             function presentDeferredToMain(){if(!deferredComposite||!lastToneValid||!toneTexture)return true;try{const encoder=device.createCommandEncoder({label:'Spiro lamp deferred fallback present'});encoder.copyTextureToTexture({texture:toneTexture},{texture:context.getCurrentTexture()},[width,height,1]);const copyCommand=encoder.finish(),lampCommand=getDeferredCommandBuffer();device.queue.submit(lampCommand?[lampCommand,copyCommand]:[copyCommand]);submissions++;for(const table of deferredLocalArcTables)try{noteGpuMorphArcTableSubmitted?.(table);}catch(_){}deferredLocalArcTables=[];deferredCommandBuffer=null;deferredCommandGeneration=0;compositeToMain();deferredComposite=false;fallbackPresentFrames++;lastFlushMode=lastFlushMode.replace('+queued','')+'→fallback-main';return true;}catch(err){deferredCommandBuffer=null;deferredCommandGeneration=0;lastError=String(err?.message||err);return false;}}
             function hasDeferredComposite(){return deferredComposite&&lastToneValid&&!!toneTexture;}
             function clear(){instanceCount=0;corridorBatchCount=0;arcBatchCount=0;deferredLocalArcTables=[];lastFlushMode='none';lastToneValid=false;deferredComposite=false;deferredCommandBuffer=null;deferredCommandGeneration=0;resetFreezeAll();}
-            function status(){warmup();return{supported:!!navigator?.gpu,attempted,initializing,available:ready&&!lost&&WebGPUDeviceHub.isReady(),lost,lastError,width,height,instances:instanceCount,submissions,lastFlushMode,storageMode:'rgba16float',ringBuffers:instanceBuffers.length,frameSerial:lampFrameSerial,blendMode:frameBlendMode,blendMixed:frameBlendMixed,persistentTextureViews:Boolean(hdrView&&toneView),deferredComposite:hasDeferredComposite(),deferredCommandBuffer:Boolean(getDeferredCommandBuffer()),directSceneFrames,mergedFrameSubmissions,fallbackPresentFrames,residentPayloads:{instanceUploadBytes,instanceUploadSkips,instanceUploadBytesAvoided,policy:'exact payload reuse keeps prior ring slot resident when vector lamps are unchanged'},corridor:{batches:corridorBatchCount,logicalInstances:corridorLogicalInstances,lampUploadBytes:corridorLampUploads,lampUploadSkips:corridorLampUploadSkips,lampUploadBytesAvoided:corridorLampUploadBytesAvoided,uniformUploads:corridorUniformUploads,uniformUploadSkips:corridorUniformUploadSkips,copyUploadBytes:corridorCopyUploads,sharedCopyReuse:corridorSharedCopyReuse,sharedCopyAvoidedBytes:corridorSharedCopyAvoidedBytes,draws:corridorDraws,fallbacks:corridorFallbacks},arcNative:{batches:arcBatchCount,draws:arcDraws,corridorDraws:arcCorridorDraws,attachmentUploadBytes:arcAttachmentUploads,prerequisiteFusions:arcPrerequisiteFusions,scheduledReuses:arcScheduledReuses,policy:'bounded arbitrary lamp style records; xy sampled from resident exact Morph Arc in vertex shader'},topologyIdentity:{draws:topologyDraws,corridorDraws:topologyCorridorDraws,policy:'phase-resident Key lamp source/target identity; WGSL interpolates Dynamic/Smooth topology positions while CPU supplies only bounded handoff/style offsets'},freezeLight:{enabled:freezeLightEnabled(),tailSec:freezeTailSec(),effectiveTailSec:Number.isFinite(freezeEffectiveTailSec)?freezeEffectiveTailSec:freezeTailSec(),tailSettling:freezeTailIsSettling(),hardness:freezeHardness(),colorMode:freezeColorMode(),hueDegrees:freezeHueDegrees(),chromatic:freezeChromaticEnabled(),historyValid:freezeHistoryValid,historyIndex:freezeHistoryIndex,frames:freezeFrames,resets:freezeResets,lastMotionAt:freezeLastMotionAt,policy:'post-raster screen-space history; live tail-duration slew preserves history; hue mode advances monotonically from lamp color to the configured maximum tail hue; optional non-persistent edge chromatic fringe'},freezeRain:{enabled:freezeRainEnabled(),degrees:freezeRainDegrees(),source:freezeRainSource(),speed:freezeRainSpeed(),tailSec:freezeRainTailSec(),hardness:freezeRainHardness(),historyValid:rainHistoryValid,historyIndex:rainHistoryIndex,frames:rainFrames,resets:rainResets,lastMotionAt:rainLastMotionAt,motionHash:rainLastFrameHash,emitterSnapshotValid:rainSourceValid,emitterRefreshes:rainSourceRefreshes,policy:'independent emitter snapshot plus age-aware screen-space advection; Corridor copy scale/phase is excluded from Rain source refresh and motion lifetime, so tunnel animation cannot pull Rain radially; separate texture/history/reset from ordinary FreezeLight'},arcBindGroupDummyStorage:Boolean(dummyStorageBuffer),hub:WebGPUDeviceHub.status()};}
+            function status(){warmup();return{supported:!!navigator?.gpu,attempted,initializing,available:ready&&!lost&&WebGPUDeviceHub.isReady(),lost,lastError,width,height,instances:instanceCount,submissions,lastFlushMode,storageMode:'rgba16float',ringBuffers:instanceBuffers.length,frameSerial:lampFrameSerial,blendMode:frameBlendMode,blendMixed:frameBlendMixed,persistentTextureViews:Boolean(hdrView&&toneView),deferredComposite:hasDeferredComposite(),deferredCommandBuffer:Boolean(getDeferredCommandBuffer()),directSceneFrames,mergedFrameSubmissions,fallbackPresentFrames,residentPayloads:{instanceUploadBytes,instanceUploadSkips,instanceUploadBytesAvoided,policy:'exact payload reuse keeps prior ring slot resident when vector lamps are unchanged'},corridor:{batches:corridorBatchCount,logicalInstances:corridorLogicalInstances,lampUploadBytes:corridorLampUploads,lampUploadSkips:corridorLampUploadSkips,lampUploadBytesAvoided:corridorLampUploadBytesAvoided,uniformUploads:corridorUniformUploads,uniformUploadSkips:corridorUniformUploadSkips,copyUploadBytes:corridorCopyUploads,sharedCopyReuse:corridorSharedCopyReuse,sharedCopyAvoidedBytes:corridorSharedCopyAvoidedBytes,draws:corridorDraws,fallbacks:corridorFallbacks},arcNative:{batches:arcBatchCount,draws:arcDraws,corridorDraws:arcCorridorDraws,attachmentUploadBytes:arcAttachmentUploads,prerequisiteFusions:arcPrerequisiteFusions,scheduledReuses:arcScheduledReuses,policy:'bounded arbitrary lamp style records; xy sampled from resident exact Morph Arc in vertex shader'},topologyIdentity:{draws:topologyDraws,corridorDraws:topologyCorridorDraws,policy:'phase-resident Key lamp source/target identity; WGSL interpolates Dynamic/Smooth topology positions while CPU supplies only bounded handoff/style offsets'},freezeLight:{enabled:freezeLightEnabled(),tailSec:freezeTailSec(),intensity:freezeIntensity(),effectiveTailSec:Number.isFinite(freezeEffectiveTailSec)?freezeEffectiveTailSec:freezeTailSec(),tailSettling:freezeTailIsSettling(),hardness:freezeHardness(),colorMode:freezeColorMode(),hueDegrees:freezeHueDegrees(),chromatic:freezeChromaticEnabled(),historyValid:freezeHistoryValid,historyIndex:freezeHistoryIndex,frames:freezeFrames,resets:freezeResets,lastMotionAt:freezeLastMotionAt,policy:'post-raster screen-space history; live tail-duration slew preserves history; hue mode advances monotonically from lamp color to the configured maximum tail hue; optional non-persistent edge chromatic fringe'},freezeRain:{enabled:freezeRainEnabled(),degrees:freezeRainDegrees(),source:freezeRainSource(),speed:freezeRainSpeed(),tailSec:freezeRainTailSec(),hardness:freezeRainHardness(),historyValid:rainHistoryValid,historyIndex:rainHistoryIndex,frames:rainFrames,resets:rainResets,lastMotionAt:rainLastMotionAt,motionHash:rainLastFrameHash,emitterSnapshotValid:rainSourceValid,emitterRefreshes:rainSourceRefreshes,policy:'independent emitter snapshot plus age-aware screen-space advection; Corridor copy scale/phase is excluded from Rain source refresh and motion lifetime, so tunnel animation cannot pull Rain radially; separate texture/history/reset from ordinary FreezeLight'},arcBindGroupDummyStorage:Boolean(dummyStorageBuffer),hub:WebGPUDeviceHub.status()};}
             return{warmup,ensureReady,isReady:()=>warmup(),beginFrame,canUse,queueVisualPlan,queueCorridorVisualPlan,queueArcVisualPlan,queueTopologyVisualPlan,flush,getCompositeTexture,getDeferredCommandBuffer,markDeferredSubmitted,presentDeferredToMain,hasDeferredComposite,resetFreezeLight,resetFreezeTrail,resetFreezeRain,resetFreezeAll,clear,status};
         })();
 

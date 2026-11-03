@@ -180,7 +180,7 @@ const SomataParameterMatrix=(()=>{
         refresh();
         if(rowCache.has(id))return rowCache.get(id);
         const def=lookup(id);if(!def)return null;
-        const numeric=['number','integer','angle','multiplier'].includes(def.type);
+        const numeric=['number','integer','angle','multiplier'].includes(def.type)||def.id==='outline.color';
         const controls=[{widget:'handle'},{widget:'toggle'},{widget:'groupIcon'},{widget:'picker'}];
         if(numeric){const stepping=stepFor(def);controls.push({widget:'range',min:def.min,max:def.max,step:stepping.step,stepMode:stepping.mode});}
         for(const child of subcontrolDefinitions(id))controls.push({widget:'subcontrol',id:child.id,label:child.label,type:child.type,min:child.min,max:child.max,step:child.step});
@@ -208,11 +208,22 @@ const SomataParameterMatrix=(()=>{
             if(!grouped.has(group))grouped.set(group,[]);
             grouped.get(group).push(def);
         }
+        // One ordered catalog for Blue, Orange and Audio. Group related rows by
+        // a shared two-part label, without adding any visible subsection titles.
+        const preferredOrder=Object.freeze({
+            'Линия':['layer.strokeWidth','layer.lineOpacity','layer.strokeColor','layer.opacity',
+                'layer.fillOpacity','layer.fillColor','layer.glow','layer.glowIntensity',
+                'outline.layerCount','outline.width','outline.color','outline.mode'],
+            'Лампочки':['lamps.brightness','lamps.radius','lamps.softness',
+                'lamps.freezeTailSec','lamps.freezeIntensity']
+        });
         const ordered=[];
         for(const [group,defs] of grouped){
             if(group==='Геометрия')ordered.push(...special.slice(0,3));
             if(group==='Спирали')ordered.push(...special.filter(def=>def.group==='Спирали'));
-            ordered.push(...defs);
+            const priorities=new Map((preferredOrder[group]||[]).map((id,index)=>[id,index]));
+            ordered.push(...defs.map((d,index)=>({d,index})).sort((a,b)=>
+                (priorities.get(a.d.id)??10000)-(priorities.get(b.d.id)??10000)||a.index-b.index).map(x=>x.d));
         }
         cachedAll=Object.freeze(ordered);
         cachedGroups=Object.freeze([...new Set(ordered.map(d=>d.morph?.group||d.group))]);
@@ -262,7 +273,7 @@ const SomataParameterMatrix=(()=>{
         ]);
         return cachedAudio;
     };
-    return Object.freeze({all,groups,get:lookup,parentId,children,childLabels,descendants,subcontrols,subcontrolDefinitions,special,specialRowLayouts,rowLayout,stepFor,audioDefinitions,version:'7.11.16'});
+    return Object.freeze({all,groups,get:lookup,parentId,children,childLabels,descendants,subcontrols,subcontrolDefinitions,special,specialRowLayouts,rowLayout,stepFor,audioDefinitions,version:'13.1.3-grouped-freezelight'});
 })();
 window.SomataParameterMatrix=SomataParameterMatrix;
 window.__somataParameterMatrixStatus=()=>({groups:SomataParameterMatrix.groups(),count:SomataParameterMatrix.all().length,ids:SomataParameterMatrix.all().map(d=>d.id),subcontrols:SomataParameterMatrix.all().map(d=>[d.id,SomataParameterMatrix.subcontrols(d.id)])});

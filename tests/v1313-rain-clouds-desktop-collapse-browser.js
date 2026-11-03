@@ -1,0 +1,51 @@
+'use strict';
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const path=require('node:path');
+const {createBrowserHarness,uncaughtExceptions}=require('./lib/browser-harness');
+const css=fs.readFileSync(path.join(__dirname,'../styles/app.css'),'utf8');
+const json=(h,x)=>h.evaluate(`JSON.stringify(${x})`).then(JSON.parse);
+(async()=>{
+ const h=await createBrowserHarness({disableGpu:true,loadDelayMs:100,evalTimeoutMs:18000});
+ try{
+  await h.call('Emulation.setDeviceMetricsOverride',{width:1440,height:850,deviceScaleFactor:1,mobile:false});
+  await h.evaluate(`(()=>{const s=document.createElement('style');s.textContent=${JSON.stringify(css)};document.head.appendChild(s)})()`,{returnByValue:false});
+  const initial=await json(h,`(()=>{const sidebar=document.getElementById('settingsSidebar').getBoundingClientRect();const rail=document.getElementById('sidebarToolRail').getBoundingClientRect();const canvas=document.getElementById('mainContainer').getBoundingClientRect();return {side:sidebar.width,rail:rail.width,mainX:canvas.x}})()`);
+  assert(initial.side>200,JSON.stringify(initial));
+  await h.evaluate(`document.getElementById('btnCollapseSidebar').click()`,{returnByValue:false});
+  await h.sleep(260);
+  const collapsed=await json(h,`(()=>{const sidebar=document.getElementById('settingsSidebar');const rail=document.getElementById('sidebarToolRail').getBoundingClientRect();const main=document.getElementById('mainContainer').getBoundingClientRect();return {side:sidebar.getBoundingClientRect().width,rail:rail.width,mainX:main.x,hidden:getComputedStyle(sidebar).visibility,aria:document.getElementById('btnCollapseSidebar').getAttribute('aria-expanded')}})()`);
+  assert.equal(collapsed.side,0,JSON.stringify(collapsed));
+  assert(Math.abs(collapsed.mainX-collapsed.rail)<2,JSON.stringify(collapsed));
+  assert.equal(collapsed.aria,'false');
+  await h.evaluate(`document.getElementById('btnCollapseSidebar').click()`,{returnByValue:false});
+  await h.sleep(250);
+  const reopened=await json(h,`document.getElementById('settingsSidebar').getBoundingClientRect().width`);
+  assert(reopened>200,JSON.stringify(reopened));
+  await h.evaluate(`document.body.classList.add('ui-easy');document.getElementById('btnCollapseSidebar').click()`,{returnByValue:false});
+  await h.sleep(250);
+  const easy=await json(h,`({side:document.getElementById('settingsSidebar').getBoundingClientRect().width,mainX:document.getElementById('mainContainer').getBoundingClientRect().x,rail:document.getElementById('sidebarToolRail').getBoundingClientRect().width})`);
+  assert.equal(easy.side,0,JSON.stringify(easy));
+  assert(Math.abs(easy.mainX-easy.rail)<2,JSON.stringify(easy));
+  await h.evaluate(`document.body.classList.remove('ui-easy');document.getElementById('btnCollapseSidebar').click()`,{returnByValue:false});
+  await h.sleep(220);
+  const cloud=await json(h,`(()=>{
+    state.showVignette=false;for(const v of Object.values(state.ambient||{}))v.enabled=false;
+    const c=state.ambient.clouds;c.enabled=true;c.density=100;c.opacity=100;c.speed=100;
+    SomataAmbientPrism.render(200000);
+    const canvas=document.getElementById('ambientOverlayCanvas');const ctx=canvas.getContext('2d');
+    const w=canvas.width,hh=canvas.height,d=ctx.getImageData(0,0,w,hh).data;
+    const occupancy=(x0,y0,x1,y1)=>{let total=0,covered=0;for(let y=Math.floor(hh*y0);y<Math.floor(hh*y1);y+=4)for(let x=Math.floor(w*x0);x<Math.floor(w*x1);x+=4){total++;if(d[(y*w+x)*4+3]>0)covered++;}return total?covered/total:0};
+    const regions={top:occupancy(0,0,1,.15),left:occupancy(0,0,.15,1),right:occupancy(.85,0,1,1),bottom:occupancy(0,.85,1,1),center:occupancy(.25,.25,.75,.75)};
+    const sig=()=>{const arr=ctx.getImageData(0,0,w,hh).data;let result=0;for(let i=3;i<arr.length;i+=160)result=(result+arr[i])%1000000007;return result;};
+    const frame1=sig();SomataAmbientPrism.render(201000);const frame2=sig();
+    c.speed=0;SomataAmbientPrism.render(202000);const frozen1=sig();SomataAmbientPrism.render(300000);const frozen2=sig();
+    return {w,h:hh,firstAlpha:d[3],middleAlpha:d[(Math.floor(hh*.5)*w+Math.floor(w*.5))*4+3],...regions,frame1,frame2,frozen1,frozen2};
+  })()`);
+  for(const key of ['top','left','right','bottom','center'])assert(cloud[key]>.015,`cloud coverage ${key}: ${JSON.stringify(cloud)}`);
+  assert.notEqual(cloud.frame1,cloud.frame2,'Clouds must drift in from the sides');
+  assert.equal(cloud.frozen1,cloud.frozen2,'Clouds with speed=0 must remain stationary');
+  assert.deepEqual(uncaughtExceptions(h.events),[]);
+  console.log('PASS desktop sidebar exact-width collapse + Easy mode + cloud edge coverage',JSON.stringify({initial,collapsed,reopened,easy,cloud}));
+ } finally {await h.close();}
+})().catch(e=>{console.error('FAIL',e.stack||e);process.exitCode=1;});
