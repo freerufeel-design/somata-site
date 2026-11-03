@@ -8289,3 +8289,127 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter{display:none!impor
     stroke-width:2.1!important;
   }
 }
+
+
+/* 13.0.26 — mobile focus dock, round 3.
+   Some authored / Morph ranges explicitly set `visibility:visible` even while
+   their sidebar has `visibility:hidden`. Conceal the CLOSED drawer as a single
+   composited surface; descendant visibility overrides can no longer leave
+   orphan sliders over the canvas. Never change the GPU canvas opacity. */
+@media (max-width:760px), (max-height:480px) and (hover:none) and (pointer:coarse) {
+  aside#settingsSidebar:not(.mobile-open) {
+    opacity:0!important;
+    pointer-events:none!important;
+  }
+  aside#settingsSidebar.mobile-open { opacity:1!important; }
+  #sidebarToolRail:not(.mobile-open):not(.mobile-rail-open) {
+    opacity:0!important;
+    pointer-events:none!important;
+  }
+  body.mobile-parameter-focus :is(
+    header,
+    #settingsSidebar,
+    #sidebarToolRail,
+    #mobileSidebarBackdrop,
+    #btnMobileControls,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel,
+    #audioReactivePanel,
+    #audioRoutingPanel,
+    .floating-controls,
+    .info-pill,
+    #fpsCounter
+  ) {
+    opacity:0!important;
+    visibility:hidden!important;
+    pointer-events:none!important;
+  }
+  /* These can be attached to body, outside the hidden control panels. */
+  body.mobile-parameter-focus :is(
+    .standard-slider-value-bubble,
+    .morph-slider-value-bubble,
+    .parameter-routing-context-menu
+  ) {
+    opacity:0!important;
+    visibility:hidden!important;
+    pointer-events:none!important;
+  }
+  .mobile-parameter-focus-dock {
+    bottom:max(8px,env(safe-area-inset-bottom))!important;
+    padding:9px 10px max(10px,env(safe-area-inset-bottom))!important;
+    border-radius:12px!important;
+  }
+  .mobile-parameter-focus-head {
+    display:flex!important;
+    align-items:center!important;
+    gap:7px!important;
+    min-width:0!important;
+    margin-bottom:7px!important;
+  }
+  .mobile-parameter-focus-head .mobile-parameter-focus-title {
+    flex:1 1 auto!important;
+    min-width:0!important;
+    margin:0!important;
+    line-height:1.25!important;
+    font-size:13px!important;
+    text-align:left!important;
+  }
+  .mobile-parameter-focus-value {
+    flex:0 1 auto!important;
+    min-width:20px!important;
+    max-width:55px!important;
+    text-align:right!important;
+    font-size:14px!important;
+    white-space:nowrap;
+  }
+  .mobile-parameter-focus-head .mobile-parameter-focus-multiplier {
+    display:flex;
+    flex:0 0 auto!important;
+    min-width:0!important;
+    max-width:95px!important;
+    gap:4px!important;
+    margin:0!important;
+    justify-content:flex-end!important;
+  }
+  .mobile-parameter-focus-multiplier.hidden { display:none!important; }
+  .mobile-parameter-focus-head .mobile-parameter-focus-multiplier > span:first-child {
+    font-size:12px!important;
+  }
+  #mobileParameterMultiplierSlot { display:flex;min-width:0;max-width:76px; }
+  .mobile-parameter-focus-head .mobile-parameter-focus-multiplier input[type="number"] {
+    box-sizing:border-box!important;
+    width:64px!important;
+    min-width:0!important;
+    max-width:76px!important;
+    height:36px!important;
+    min-height:36px!important;
+    padding:4px 5px!important;
+    font-size:15px!important;
+    text-align:center!important;
+  }
+  .mobile-parameter-focus-close {
+    flex:0 0 36px!important;
+    width:36px!important;
+    height:36px!important;
+    min-width:36px!important;
+    min-height:36px!important;
+    margin:0!important;
+  }
+  .mobile-parameter-focus-controls {
+    grid-template-columns:44px minmax(0,1fr) 44px!important;
+    gap:7px!important;
+    min-width:0!important;
+  }
+  .mobile-parameter-focus-step {
+    width:44px!important;
+    height:44px!important;
+    min-height:44px!important;
+  }
+  .mobile-parameter-focus-range-slot,
+  .mobile-parameter-focus-range-slot > input[type="range"] {
+    min-height:44px!important;
+    height:44px!important;
+  }
+}

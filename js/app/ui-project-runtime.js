@@ -18794,15 +18794,15 @@ syncMorphProfileUI();
                         <div class="mobile-parameter-focus-head">
                             <div id="mobileParameterFocusTitle" class="mobile-parameter-focus-title"></div>
                             <output id="mobileParameterFocusValue" class="mobile-parameter-focus-value" aria-live="off"></output>
+                            <div id="mobileParameterMultiplierWrap" class="mobile-parameter-focus-multiplier hidden" aria-label="Множитель параметра">
+                                <span aria-hidden="true">×</span><span id="mobileParameterMultiplierSlot"></span>
+                            </div>
                             <button id="mobileParameterFocusClose" class="mobile-parameter-focus-close" type="button" aria-label="Вернуться к настройкам">×</button>
                         </div>
                         <div class="mobile-parameter-focus-controls">
                             <button id="mobileParameterMinus" class="mobile-parameter-focus-step" type="button" aria-label="Уменьшить параметр">−</button>
                             <div id="mobileParameterRangeSlot" class="mobile-parameter-focus-range-slot"></div>
                             <button id="mobileParameterPlus" class="mobile-parameter-focus-step" type="button" aria-label="Увеличить параметр">+</button>
-                        </div>
-                        <div id="mobileParameterMultiplierWrap" class="mobile-parameter-focus-multiplier hidden">
-                            <span>×</span><span id="mobileParameterMultiplierSlot"></span>
                         </div>
                     </div>`;
                 document.body.appendChild(overlay);
