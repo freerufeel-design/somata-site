@@ -1025,7 +1025,7 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
       outer: spec.endRadius * screenScale,
     };
   }
-  function prepareUniformSlot(frameCtx, targetCtx, copyIndex = null, mesh = null) {
+  function prepareUniformSlot(frameCtx, targetCtx, copyIndex = null, mesh = null, weight = 1, power = 1) {
     const copies = frameCtx.visibleInstances?.copies || [],
       copy = copyIndex == null ? null : copies[copyIndex];
     const fillColor =
@@ -1043,10 +1043,12 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
       mesh?.corridorBaked === true
         ? 1
         : Math.max(0, Math.min(1, Number(alphaList[copyIndex == null ? 0 : copyIndex] ?? 1)));
-    const alpha = Math.max(
+    const linear = Math.max(
       0,
-      Math.min(1, rgba[3] * Math.max(0, Number(frameCtx.baseAlpha) || 0) * copyAlpha),
+      Math.min(1, rgba[3] * Math.max(0, Number(frameCtx.baseAlpha) || 0) * copyAlpha * weight),
     );
+    // Доля α для перекрывающихся групп заливки: 1−(1−α)^p (см. fill-plan, лишние контуры морфа).
+    const alpha = power === 1 ? linear : 1 - Math.pow(1 - linear, Math.max(0, power));
     if (alpha <= 0.00001) return { empty: true, slot: null };
     const m = affineForFrame(frameCtx, targetCtx, copy, mesh),
       frameId = Math.max(1, Number(frameCtx?.frameId) || Number(renderRuntime?.frameId) || 1),
@@ -1133,49 +1135,66 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
             first = false;
             totalTriangles += part.triangleCount;
           } else if (part.type === 'winding') {
-            const pass = encoder.beginRenderPass({
-              colorAttachments: [
-                {
-                  view: msaaTexture.createView(),
-                  resolveTarget: targetTexture.createView(),
-                  clearValue: { r: 0, g: 0, b: 0, a: 0 },
-                  loadOp: first && !preserveTarget ? 'clear' : 'load',
-                  storeOp: 'store',
+            // A cross-fading morph draws the outgoing and incoming shapes as separate
+            // stencil groups, each with its own Fill alpha (no even-odd cancellation).
+            const groups = Array.isArray(mesh.fanGroups) ? mesh.fanGroups : [null];
+            for (const group of groups) {
+              const groupPrepared =
+                group && (Math.abs(group.weight - 1) > 1e-3 || (group.power ?? 1) !== 1)
+                  ? prepareUniformSlot(
+                      frameCtx,
+                      targetCtx,
+                      corridor ? ci : null,
+                      mesh,
+                      group.weight,
+                      group.power ?? 1,
+                    )
+                  : prepared;
+              if (groupPrepared.empty) continue;
+              const pass = encoder.beginRenderPass({
+                colorAttachments: [
+                  {
+                    view: msaaTexture.createView(),
+                    resolveTarget: targetTexture.createView(),
+                    clearValue: { r: 0, g: 0, b: 0, a: 0 },
+                    loadOp: first && !preserveTarget ? 'clear' : 'load',
+                    storeOp: 'store',
+                  },
+                ],
+                depthStencilAttachment: {
+                  view: stencilTexture.createView(),
+                  depthClearValue: 1,
+                  depthLoadOp: 'clear',
+                  depthStoreOp: 'discard',
+                  stencilClearValue: 0,
+                  stencilLoadOp: 'clear',
+                  stencilStoreOp: 'discard',
                 },
-              ],
-              depthStencilAttachment: {
-                view: stencilTexture.createView(),
-                depthClearValue: 1,
-                depthLoadOp: 'clear',
-                depthStoreOp: 'discard',
-                stencilClearValue: 0,
-                stencilLoadOp: 'clear',
-                stencilStoreOp: 'discard',
-              },
-            });
-            // An orbit split repeats identical closed paths at the
-            // boundary. Even-odd stencil would cancel on even
-            // overlap counts (Fill appears OFF); winding keeps
-            // the covered union with one composite Fill alpha.
-            const mathematical =
-              !frameCtx.layer?.__morphOrbitFillCompositeColor &&
-              getLayerFillRule(frameCtx.layer) === 'evenodd';
-            pass.setStencilReference(0);
-            pass.setPipeline(mathematical ? parityStencilPipeline : windingStencilPipeline);
-            pass.setBindGroup(0, prepared.slot.bindGroup);
-            pass.setVertexBuffer(0, part.vertexBuffer);
-            pass.draw(part.vertexCount);
-            if (mathematical) parityDraws++;
-            else windingDraws++;
-            totalWinding += part.triangleCount;
-            pass.setPipeline(mathematical ? parityCoverPipeline : windingCoverPipeline);
-            pass.setBindGroup(0, prepared.slot.bindGroup);
-            pass.draw(3);
-            if (mathematical) parityCovers++;
-            else windingCovers++;
-            pass.end();
-            draws++;
-            first = false;
+              });
+              // An orbit split repeats identical closed paths at the
+              // boundary. Even-odd stencil would cancel on even
+              // overlap counts (Fill appears OFF); winding keeps
+              // the covered union with one composite Fill alpha.
+              const mathematical =
+                !frameCtx.layer?.__morphOrbitFillCompositeColor &&
+                getLayerFillRule(frameCtx.layer) === 'evenodd';
+              pass.setStencilReference(0);
+              pass.setPipeline(mathematical ? parityStencilPipeline : windingStencilPipeline);
+              pass.setBindGroup(0, groupPrepared.slot.bindGroup);
+              pass.setVertexBuffer(0, part.vertexBuffer);
+              pass.draw(group ? group.count * 3 : part.vertexCount, 1, group ? group.start * 3 : 0);
+              if (mathematical) parityDraws++;
+              else windingDraws++;
+              totalWinding += group ? group.count : part.triangleCount;
+              pass.setPipeline(mathematical ? parityCoverPipeline : windingCoverPipeline);
+              pass.setBindGroup(0, groupPrepared.slot.bindGroup);
+              pass.draw(3);
+              if (mathematical) parityCovers++;
+              else windingCovers++;
+              pass.end();
+              draws++;
+              first = false;
+            }
           }
         }
       }

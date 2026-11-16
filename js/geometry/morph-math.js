@@ -635,6 +635,9 @@ window.SomataMorphMath = (() => {
           pp.turnFrom = pp.from.map((_, i) => Math.floor((i * from.length) / n + 1e-10) / from.length);
           pp.turnTo = pp.from.map((_, i) => Math.floor((i * to.length) / n + 1e-10) / to.length);
         }
+        // Путь i есть в источнике / в цели (иначе он — дубль при разделении / слиянии орбит).
+        pp.sourcePathPresent = i < src.length;
+        pp.targetPathPresent = i < dst.length;
         if (from.length !== to.length) {
           pp.birthEdgeSlots = morphDuplicateEdgeSlots(pp.from);
           pp.deathEdgeSlots = morphDuplicateEdgeSlots(pp.from.map((a, i) => a + pp.delta[i]));

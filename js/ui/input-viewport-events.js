@@ -553,8 +553,8 @@ document.getElementById('btnNew').addEventListener('click', () => {
     spiralLayersMax: 1,
   };
   state.morph.slideType = 'minimal';
-  state.morph.mode = 'coordinated';
-  state.morph.unifiedMode = 'coordinated';
+  state.morph.mode = 'circleSlide';
+  state.morph.unifiedMode = 'circleSlide';
   state.morph.spiralMode = 'coordinated';
   state.morph.fadePercent = 0;
   state.morph.vertexMin = 4;

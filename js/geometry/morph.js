@@ -1,6 +1,7 @@
 import '../render/morph-anchor-renderer.js'; // initialisation order: this module runs after it
 import { easeMorphRounding, getRoundingStrength, interpolateMorphRounding } from '../core/palette.js';
 import { runtimeState, somataWithFourierLayer, state } from '../core/state.js';
+import { fillGhostWeight, fillSplitAheadWeight } from '../morph-runtime/blue/fill-lookahead.js';
 import {
   chaosCircleMorphPlanCache,
   circleMorphPlanCache,
@@ -3579,6 +3580,60 @@ function drawMorphPathQuality(
   );
 }
 
+// Fill presence of a cross-fading path. The Line fades by the raw phase; the Fill of the
+// outgoing (role -1) / incoming (role +1) shape follows the "Смена режима" timeline.
+function morphPathFillPresence(path, fallback) {
+  const role = Number(path?._fillRole);
+  if (role) {
+    const u = profileModeTransitionProgress(path?._fillPhase);
+    return role > 0 ? u : 1 - u;
+  }
+  return path?._fillPresence ?? fallback;
+}
+
+// Заливка Blue-морфа: «лишние» пути слияния/разделения орбит и дубли, которые орбиты получат в
+// следующей фазе (план из playback: __fillSplitAhead у слоя цели, __fillSplitDone и
+// __fillSplitCounts у слоя источника). См. fillGhostWeight / ghostFillLayout.
+function morphFillGhostInfo(layer, t) {
+  const rt = runtimeState?.morph;
+  if (rt?.active !== true || !layer) return null;
+  const idx = state.layers.findIndex((l) => l?.id === layer.id);
+  if (idx < 0) return null;
+  const src = rt.renderSourceLayers?.[idx],
+    dst = rt.renderTargetLayers?.[idx];
+  return {
+    splitDone: src?.__fillSplitDone === true,
+    splitCounts: src?.__fillSplitDone === true ? src.__fillSplitCounts : null,
+    ahead: Array.isArray(dst?.__fillSplitAhead) ? dst.__fillSplitAhead : null,
+    aheadWeight: fillSplitAheadWeight(t),
+  };
+}
+function setPreparedPathFillGhost(ctx, path, info, t) {
+  ctx.__fillGhost = undefined;
+  ctx.__fillDup = 0;
+  ctx.__fillDupWeight = 0;
+  if (!info) return;
+  const orbit = Number.isInteger(path?.orbitIndex) ? path.orbitIndex : -1;
+  // Носители помечены всегда; без пометки — конечный кадр фазы (сами фигуры).
+  const flagged = path?._fillPathSource !== undefined;
+  if (flagged)
+    ctx.__fillGhost = fillGhostWeight(t, {
+      sourcePresent: path._fillPathSource,
+      targetPresent: path._fillPathTarget,
+      splitDone: info.splitDone,
+    });
+  const targetSide = path?._fillPathTarget !== false;
+  // Конечные кадры фазы (t = 0 / 1) — сами фигуры без носителей: дубли ставим по номеру орбиты.
+  const atStart = !flagged && t <= 1e-6,
+    atEnd = !flagged && t >= 1 - 1e-6;
+  if (atStart && info.splitCounts && orbit >= 0) {
+    ctx.__fillDup = Number(info.splitCounts[orbit]) || 0;
+    ctx.__fillDupWeight = 1;
+  } else if ((flagged ? targetSide : atEnd) && info.ahead && orbit >= 0) {
+    ctx.__fillDup = Number(info.ahead[orbit]) || 0;
+    ctx.__fillDupWeight = info.aheadWeight;
+  }
+}
 function drawPreparedMorphGeometry(
   ctx,
   layer,
@@ -3623,7 +3678,13 @@ function drawPreparedMorphGeometry(
       }
     }
   }
+  const priorFillPresence = ctx.__fillPresence;
+  const ghostInfo = morphFillGhostInfo(layer, t);
   for (const path of preparedPaths || []) {
+    // A cross-fading path pair may carry its own Fill presence so the shared
+    // FrameContour fill can draw the outgoing and incoming shapes separately.
+    ctx.__fillPresence = morphPathFillPresence(path, priorFillPresence);
+    setPreparedPathFillGhost(ctx, path, ghostInfo, t);
     const base = path?.points || [];
     const preparedAlpha = Math.max(0, Math.min(1, Number(path?._alpha ?? 1)));
     const pathAlpha = alpha * preparedAlpha;
@@ -3792,6 +3853,10 @@ function drawPreparedMorphGeometry(
     }
     ctx.restore();
   }
+  ctx.__fillPresence = priorFillPresence;
+  ctx.__fillGhost = undefined;
+  ctx.__fillDup = 0;
+  ctx.__fillDupWeight = 0;
 }
 
 function drawMorphGeometry(
@@ -4053,6 +4118,7 @@ export {
   profileCubicPartition,
   profileCubicPoint,
   profileModeTransitionProgress,
+  morphPathFillPresence,
   recordExactPolygonSplinePath,
   rephaseAngleSequenceToReference,
   resampleMorphTopology,

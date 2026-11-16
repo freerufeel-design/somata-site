@@ -11,11 +11,12 @@ import {
 import { normalizeSpiralSquashY } from '../geometry/orbit-builder.js';
 import { SOMATA_STRICT_SPIRAL_GPU_PRESENTATION } from '../render/layer-scene-service.js';
 import { noteSuppressedError } from '../core/suppressed-errors.js';
+import { profileModeTransitionProgress } from '../geometry/morph.js';
 
 const SomataTestMorph = (() => {
   const defaults = Object.freeze({
     enabled: true,
-    mode: 'coordinated',
+    mode: 'circleSlide',
     spiralMode: 'coordinated',
     slide: 'minimal',
     spiralSlide: 'standard',
@@ -32,6 +33,14 @@ const SomataTestMorph = (() => {
   // Тип морфинга спирали отделён от типа многоугольника. Fade и Слайдшоу — кадровые
   // режимы: они общие, поэтому при них спираль следует выбору многоугольника.
   const FRAME_LEVEL_MODES = new Set(['light', 'fade']);
+  // Fill presence of the outgoing / incoming shape during a frame-level cross-fade.
+  // The Line fades by the raw phase; the Fill follows "Смена режима".
+  function fadeFillPresence(phase, slideshow = false) {
+    const v = Math.max(0, Math.min(1, Number(phase) || 0));
+    if (slideshow) return { out: v < 0.5 ? 1 : 0, next: v >= 0.5 ? 1 : 0 };
+    const u = profileModeTransitionProgress(v);
+    return { out: 1 - u, next: u };
+  }
   const spiralOf = (cfg) =>
     cfg ? (FRAME_LEVEL_MODES.has(cfg.mode) ? cfg.mode : cfg.spiralMode || cfg.mode) : undefined;
   const layerIsSpiral = (layer) =>
@@ -319,10 +328,15 @@ const SomataTestMorph = (() => {
     const resolved = SomataMorphRegistry.migrate(migrated);
     const mode = MORPH_TYPES.has(resolved) ? resolved : defaults.mode;
     const slide = SLIDES.has(saved.slide) ? saved.slide : defaults.slide;
-    // Старые слои хранили один общий тип: спираль следует за ним, пока не выбран свой.
+    // У нового слоя тип спирали — по умолчанию. Старые слои хранили один общий тип:
+    // спираль следует за ним, пока не выбран свой.
     const savedSpiral = SomataMorphRegistry.migrate(saved.spiralMode);
     const spiralMode =
-      MORPH_TYPES.has(savedSpiral) && !FRAME_LEVEL_MODES.has(savedSpiral) ? savedSpiral : mode;
+      MORPH_TYPES.has(savedSpiral) && !FRAME_LEVEL_MODES.has(savedSpiral)
+        ? savedSpiral
+        : saved.mode == null
+          ? defaults.spiralMode
+          : mode;
     const effectiveSpiral = FRAME_LEVEL_MODES.has(mode) ? mode : spiralMode;
     return {
       ...defaults,
@@ -707,9 +721,10 @@ const SomataTestMorph = (() => {
         const v = Math.max(0, Math.min(1, Number(phase) || 0));
         const oldAlpha = morphMode === 'light' ? (v < 0.5 ? 1 : 0) : 1 - v;
         const newAlpha = morphMode === 'light' ? (v >= 0.5 ? 1 : 0) : v;
+        const fp = fadeFillPresence(v, morphMode === 'light');
         return [
-          ...a.map((path) => ({ ...path, _alpha: oldAlpha })),
-          ...b.map((path) => ({ ...path, _alpha: newAlpha })),
+          ...a.map((path) => ({ ...path, _alpha: oldAlpha, _fillPresence: fp.out })),
+          ...b.map((path) => ({ ...path, _alpha: newAlpha, _fillPresence: fp.next })),
         ];
       }
     }
@@ -1183,9 +1198,14 @@ const SomataTestMorph = (() => {
       const oldWeight = slideshow ? (phase < 0.5 ? 1 : 0) : 1 - phase;
       const nextWeight = slideshow ? (phase >= 0.5 ? 1 : 0) : phase;
       if (targetPaths.length) {
+        const fp = fadeFillPresence(phase, slideshow);
         paths = [
-          ...r.sourcePaths.map((p) => ({ ...p, _alpha: clamp(Number(p?._alpha ?? 1), 0, 1, 1) * oldWeight })),
-          ...targetPaths.map((p) => ({ ...p, _alpha: nextWeight })),
+          ...r.sourcePaths.map((p) => ({
+            ...p,
+            _alpha: clamp(Number(p?._alpha ?? 1), 0, 1, 1) * oldWeight,
+            _fillPresence: clamp(Number(p?._fillPresence ?? 1), 0, 1, 1) * fp.out,
+          })),
+          ...targetPaths.map((p) => ({ ...p, _alpha: nextWeight, _fillPresence: fp.next })),
         ];
       }
     }
@@ -1221,14 +1241,17 @@ const SomataTestMorph = (() => {
     ) {
       const targetPaths = getCachedLayerDrawData(targetForGeometry)?.paths || [];
       const p = clamp(live.phase, 0, 1, 0);
-      if (targetPaths.length)
+      if (targetPaths.length) {
+        const fp = fadeFillPresence(p);
         paths = [
           ...r.sourcePaths.map((path) => ({
             ...path,
             _alpha: clamp(Number(path?._alpha ?? 1), 0, 1, 1) * (1 - p),
+            _fillPresence: clamp(Number(path?._fillPresence ?? 1), 0, 1, 1) * fp.out,
           })),
-          ...targetPaths.map((path) => ({ ...path, _alpha: p })),
+          ...targetPaths.map((path) => ({ ...path, _alpha: p, _fillPresence: fp.next })),
         ];
+      }
     }
     if (!paths && typeof getCachedLayerDrawData === 'function')
       paths = getCachedLayerDrawData(targetForGeometry)?.paths || null;
@@ -2174,8 +2197,17 @@ const SomataTestMorph = (() => {
     updateTask();
   }
   window.addEventListener('load', init);
+  // Запомнить слои как есть, без анимации. Нужен при остановке Blue: пока Blue рисует общий
+  // скелет, TAP не обновляет «наблюдаемое» состояние, и после остановки он принял бы
+  // зафиксированные на стыках фазы значения за правку и проиграл бы переход ещё раз.
+  function seedLayers(layers) {
+    for (const layer of layers || []) if (layer?.id != null && !independentOrders.has(layer.id)) seed(layer);
+    syncTask();
+  }
+
   return Object.freeze({
     applyFrame,
+    seedLayers,
     syncUI,
     syncModeOptions,
     syncSpeedUI,

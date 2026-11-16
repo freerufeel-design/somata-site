@@ -109,6 +109,10 @@ function createGeometryGLRecordingContext(baseCtx) {
     cmd.__variableWidthBezierSpiral = false;
     cmd.__spiralContinuityProtected = false;
     cmd.__adaptiveWebGPU = false;
+    cmd.fillPresence = undefined;
+    cmd.fillGhost = undefined;
+    cmd.fillDup = 0;
+    cmd.fillDupWeight = 0;
     if (Array.isArray(cmd.bezierSegments)) cmd.bezierSegments.length = 0;
     else cmd.bezierSegments = null;
     cmd.__canonicalPointCount = 0;
@@ -498,6 +502,10 @@ function createGeometryGLRecordingContext(baseCtx) {
       pts.length = segments.length + 1;
       cmd.strokeGrowth = strokeGrowth;
       cmd.alpha = Math.max(0, Math.min(1, Number(this.globalAlpha) || 0));
+      cmd.fillPresence = this.__fillPresence;
+      cmd.fillGhost = this.__fillGhost;
+      cmd.fillDup = this.__fillDup || 0;
+      cmd.fillDupWeight = this.__fillDupWeight || 0;
       cmd.screenLineWidth = Math.max(0.1, (Number(baseWidth) || 1) * scale) * strokeGrowth;
       cmd.strokeStyle = this.__forceStrokeStyle || this.strokeStyle;
       cmd.__canonicalPointCount = segments.length + 1;
@@ -533,7 +541,10 @@ function createGeometryGLRecordingContext(baseCtx) {
         prior.strokeStyle === style &&
         prior.strokeGrowth === strokeGrowth &&
         Math.abs(Number(prior.screenLineWidth) - screenWidth) < 1e-8 &&
-        Math.abs(Number(prior.alpha) - opacity) < 1e-8,
+        Math.abs(Number(prior.alpha) - opacity) < 1e-8 &&
+        prior.fillPresence === this.__fillPresence &&
+        prior.fillGhost === this.__fillGhost &&
+        prior.fillDup === (this.__fillDup || 0),
       );
       const cmd = reuse ? prior : acquireCommand();
       if (!reuse) {
@@ -641,6 +652,10 @@ function createGeometryGLRecordingContext(baseCtx) {
       }
       cmd.strokeGrowth = strokeGrowth;
       cmd.alpha = opacity;
+      cmd.fillPresence = this.__fillPresence;
+      cmd.fillGhost = this.__fillGhost;
+      cmd.fillDup = this.__fillDup || 0;
+      cmd.fillDupWeight = this.__fillDupWeight || 0;
       cmd.screenLineWidth = screenWidth;
       cmd.strokeStyle = style;
       if (this.__spiroWholeTurnBatch === true) this.__spiroWholeTurnCommand = cmd;
@@ -667,6 +682,10 @@ function createGeometryGLRecordingContext(baseCtx) {
         scale = Math.sqrt(Math.max(1e-12, sx * sy));
       cmd.strokeGrowth = strokeGrowth;
       cmd.alpha = a;
+      cmd.fillPresence = this.__fillPresence;
+      cmd.fillGhost = this.__fillGhost;
+      cmd.fillDup = this.__fillDup || 0;
+      cmd.fillDupWeight = this.__fillDupWeight || 0;
       cmd.screenLineWidth = Math.max(0.1, (Number(this.lineWidth) || 1) * scale) * strokeGrowth;
       cmd.strokeStyle = this.__forceStrokeStyle || this.strokeStyle;
       cmd.lineCap = this.lineCap;

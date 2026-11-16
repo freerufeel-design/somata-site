@@ -34,10 +34,11 @@ run(
     ),
 );
 
-// 1. По умолчанию оба типа «согласованный».
+// 1. По умолчанию: многоугольник — «По окружности», спираль — «Неразрывный, согласованный».
 run(`
+state.morph.spiralMode = 'coordinated';
 setUnifiedMorphMode(undefined);
-assert.equal(getPolygonMorphMode(), 'coordinated');
+assert.equal(getPolygonMorphMode(), 'circleSlide');
 assert.equal(getSpiralMorphMode(), 'coordinated');
 assert.equal(getSpiralMorphType(), 'coordinated');
 `);

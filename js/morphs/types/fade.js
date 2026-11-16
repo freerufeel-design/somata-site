@@ -24,9 +24,11 @@ window.SomataMorphRegistry.register('fade', {
       }));
     const outgoing = group(source, a, 'source'),
       incoming = group(target, b, 'target');
+    // The Line cross-fades by the raw phase. The Fill of the outgoing (-1) and the incoming (+1)
+    // shape is drawn as two separate groups and fades by "Смена режима" (see morphPathFillPresence).
     return (t) => [
-      ...outgoing.map((p) => ({ ...p, alpha: 1 - t })),
-      ...incoming.map((p) => ({ ...p, alpha: t })),
+      ...outgoing.map((p) => ({ ...p, alpha: 1 - t, fillRole: -1, fillPhase: t })),
+      ...incoming.map((p) => ({ ...p, alpha: t, fillRole: 1, fillPhase: t })),
     ];
   },
 });

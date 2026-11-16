@@ -2,6 +2,7 @@
 import './lamp-topology.js'; // initialisation order: this module runs after it
 import { audioApplyNumeric } from '../audio/audio-routing.js';
 import { requestMainCanvasRender } from '../core/scheduler.js';
+import { canvasViewport } from '../core/render-runtime.js';
 import { runtimeState, state } from '../core/state.js';
 import { isGeometryMorphActive } from '../effects/motion.js';
 import { lampHash32 } from './lamp-anchors.js';
@@ -22,6 +23,7 @@ const lampAdaptiveFrame = {
   seen: new Set(),
   activeLayers: 0,
   lastViewportArea: 0,
+  viewportArea: 0,
   needsSettle: false,
   instantStatic: true,
 };
@@ -32,6 +34,9 @@ function beginLampAdaptiveFrame() {
   lampAdaptiveFrame.activeLayers = 0;
   lampAdaptiveFrame.seen.clear();
   lampAdaptiveFrame.needsSettle = false;
+  // Размер холста читается из разметки (clientWidth/Height — принудительный layout), поэтому один раз
+  // за кадр, лениво, а не при каждом вызове расчёта экспозиции (их десятки на кадр).
+  lampAdaptiveFrame.viewportArea = 0;
 
   lampAdaptiveFrame.instantStatic = !isGeometryMorphActive();
 }
@@ -124,11 +129,16 @@ function lampAdaptiveExposureFactors(
   const count = Math.max(1, (Number(pointsCount) || 1) * (Number(instanceCount) || 1)),
     zoom = Math.max(0.05, Number(viewZoom) || 1),
     rScreen = Math.max(0.5, (Number(baseR) || 1) * zoom);
-  const viewportArea = Math.max(
-      1,
-      (mainCanvas?.clientWidth || innerWidth || 1) * (mainCanvas?.clientHeight || innerHeight || 1),
-    ),
-    targetArea = viewportArea / 3,
+  let viewportArea = lampAdaptiveFrame.viewportArea;
+  if (!(viewportArea > 0)) {
+    // Размер берём из кэша области просмотра (его обновляет ensureMainCanvasSize) — без чтения
+    // разметки; clientWidth/Height принудительно пересчитывал layout на каждом кадре.
+    const w = canvasViewport.w > 0 ? canvasViewport.w : mainCanvas?.clientWidth || innerWidth || 1,
+      h = canvasViewport.h > 0 ? canvasViewport.h : mainCanvas?.clientHeight || innerHeight || 1;
+    viewportArea = Math.max(1, w * h);
+    lampAdaptiveFrame.viewportArea = viewportArea;
+  }
+  const targetArea = viewportArea / 3,
     estimatedArea = count * Math.PI * rScreen * rScreen;
   if (!lampAdaptiveFrame.seen.has(cfg)) {
     lampAdaptiveFrame.seen.add(cfg);
@@ -155,10 +165,9 @@ function lampAdaptiveExposureFactors(
       Number(cfg?.adaptiveFadeSec ?? 1) || 0,
       overloaded,
     );
-    if (boost > 0) {
-      exponent = Math.min(1, exponent + boost);
-      lampAdaptiveFrame.needsSettle = true;
-    }
+    if (boost > 0) exponent = Math.min(1, exponent + boost);
+    // Пока добавка растёт или спадает, кадры нужно продолжать, иначе статичная сцена замрёт на полпути.
+    if (boost > 0 || auto.peak > 0) lampAdaptiveFrame.needsSettle = true;
   } else lampAdaptiveAutoExponent.delete(cfg);
   if (overloaded && adaptivePower > 0) {
     const load = lampAdaptiveExponentShape(
@@ -326,6 +335,7 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
     if (!item)
       item = items[write] = { px: 0, py: 0, rad: 0, color: '#ffffff', brightness: 0, intensityAlpha: 0 };
     item.lampTraceId = p?.lampId ?? `slot:${p?.pathIndex ?? 0}:${p?.vertexIndex ?? i}`;
+    item.lampRank = p?.lampRank === 1 ? 1 : 0;
     item.px = px;
     item.py = py;
     item.rad = rad;

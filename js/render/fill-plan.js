@@ -8,6 +8,7 @@ import { splinePathForDraw } from '../geometry/spline-rounding.js';
 import { isSpiralLayer } from '../geometry/spiral/order-params.js';
 import { createLampRenderedPathSampler } from '../lamps/lamp-anchors.js';
 import { SomataFrameContourService } from '../geometry/frame-contour.js';
+import { ghostFillLayout } from '../morph-runtime/blue/fill-lookahead.js';
 import { roundPolylineForDraw } from '../geometry/polyline-rounding.js';
 import { noteSuppressedError } from '../core/suppressed-errors.js';
 
@@ -1301,18 +1302,40 @@ var FillMeshPreparer = (() => {
       frameCtx._fillMeshShadow = entry.mesh;
       return entry.mesh;
     }
-    const contours = [];
+    const contours = [],
+      // A cross-fading morph records the outgoing and the incoming shape with their own
+      // Fill presence. They are filled as separate groups (each with its own alpha) so
+      // the overlap of the two shapes does not cancel out under the even-odd rule.
+      contourPresence = [],
+      // Вес «лишнего» контура морфа (см. fillGhostWeight): undefined — обычный контур.
+      contourGhost = [];
     let minX = Infinity,
       minY = Infinity,
       maxX = -Infinity,
       maxY = -Infinity,
       totalEdges = 0,
-      totalPoints = 0;
+      totalPoints = 0,
+      presenceVaries = false,
+      ghostVaries = false,
+      dupWeight = 0,
+      dupEdges = 0;
     for (const path of paths) {
       if (path?.closed !== true) continue;
       const pts = cleanContourPoints(path.points);
       if (!pts?.length) continue;
       contours.push(pts);
+      const rawPresence = Number(path?.source?.[0]?.command?.fillPresence),
+        presence = Number.isFinite(rawPresence) ? Math.max(0, Math.min(1, rawPresence)) : 1;
+      if (presence < 0.999) presenceVaries = true;
+      contourPresence.push(presence);
+      const command = path?.source?.[0]?.command,
+        ghost = command?.fillGhost && Number.isFinite(Number(command.fillGhost.g)) ? command.fillGhost : null,
+        dup = Math.max(0, Math.round(Number(command?.fillDup) || 0));
+      if (ghost || dup > 0) ghostVaries = true;
+      dupEdges += pts.length * dup;
+      if (dup > 0)
+        dupWeight = Math.max(dupWeight, Math.max(0, Math.min(1, Number(command.fillDupWeight) || 0)));
+      contourGhost.push({ ghost, dup });
       totalPoints += pts.length;
       for (let i = 0; i < pts.length; i++) {
         const a = pts[i],
@@ -1333,6 +1356,7 @@ var FillMeshPreparer = (() => {
     mesh.frameId = fid;
     mesh.contourCount = contours.length;
     mesh.totalVertices = totalPoints;
+    mesh.fanGroups = null;
     if (
       !totalEdges ||
       !Number.isFinite(minX) ||
@@ -1351,12 +1375,48 @@ var FillMeshPreparer = (() => {
       frameCtx._fillMeshShadow = mesh;
       return mesh;
     }
-    ensureFanFloatStorage(entry, totalEdges * 6, 96);
+    ensureFanFloatStorage(entry, (totalEdges + dupEdges) * 6, 96);
     const span = Math.max(1, maxX - minX, maxY - minY),
       anchorX = minX - span * 2 - 1,
       anchorY = minY - span * 2 - 1,
       out = entry.storage;
-    const o = appendFanContours(contours, out, anchorX, anchorY);
+    let o = 0;
+    if (presenceVaries) {
+      const byWeight = new Map();
+      for (let i = 0; i < contours.length; i++) {
+        const key = Math.round(contourPresence[i] * 1000);
+        let group = byWeight.get(key);
+        if (!group) byWeight.set(key, (group = { weight: key / 1000, contours: [] }));
+        group.contours.push(contours[i]);
+      }
+      const groups = [];
+      for (const group of byWeight.values()) {
+        if (group.weight < 0.002) continue;
+        const startFloat = o;
+        for (const pts of group.contours) o = appendFanContour(pts, out, o, anchorX, anchorY);
+        if (o > startFloat)
+          groups.push({ start: startFloat / 6, count: (o - startFloat) / 6, weight: group.weight });
+      }
+      mesh.fanGroups = groups;
+    } else if (ghostVaries) {
+      // Лишние контуры морфа (слияние/разделение орбит): см. ghostFillLayout. Веер
+      // складывается в порядке M | обычные | D, группы — непрерывные диапазоны.
+      const layout = ghostFillLayout(contourGhost, dupWeight);
+      const startOf = [];
+      for (const i of layout.order) {
+        startOf.push(o / 6);
+        o = appendFanContour(contours[i], out, o, anchorX, anchorY);
+      }
+      startOf.push(o / 6);
+      mesh.fanGroups = layout.groups
+        .map((group) => ({
+          start: startOf[group.from],
+          count: startOf[group.to] - startOf[group.from],
+          weight: 1,
+          power: group.power,
+        }))
+        .filter((group) => group.count > 0);
+    } else o = appendFanContours(contours, out, anchorX, anchorY);
     mesh.fanData = entry.storage;
     mesh.fanFloatCount = o;
     mesh.fanTriangleCount = Math.floor(o / 6);

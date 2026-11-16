@@ -1295,7 +1295,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
   const savedMode = [m.unifiedMode, m.mode]
     .map(SomataMorphRegistry.migrate)
     .find((key) => UNIFIED_MORPH_KEYS.includes(key));
-  setUnifiedMorphMode(savedMode ?? 'coordinated');
+  setUnifiedMorphMode(savedMode ?? 'circleSlide');
   // Тип морфинга спирали хранится отдельно (как в 13.2). Проекты, сохранённые с одним
   // общим типом, получают для спирали тот же тип, что и для многоугольника.
   setSpiralMorphMode(normalizeSpiralMorphMode(m.spiralMode, null) ?? savedMode ?? 'coordinated');

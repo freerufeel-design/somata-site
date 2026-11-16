@@ -88,7 +88,9 @@ const SomataAmbientPrism = (() => {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? (unlimited ? n : Math.max(0.125, Math.min(8, n))) : 1;
   };
-  let root,
+  let rootSize = null,
+    rootObserver = null,
+    root,
     ambientCanvas,
     prismCanvas,
     ambientCtx,
@@ -212,6 +214,14 @@ const SomataAmbientPrism = (() => {
   function create() {
     root = document.getElementById('mainContainer') || document.getElementById('mainCanvas')?.parentNode;
     if (!root) return false;
+    // Размер корня кэшируется и сбрасывается только при его реальном изменении: getBoundingClientRect
+    // дважды за кадр при «грязной» разметке принудительно пересчитывал layout (≈2 мс/кадр на тяжёлых проектах).
+    if (!rootObserver && typeof ResizeObserver === 'function') {
+      rootObserver = new ResizeObserver(() => {
+        rootSize = null;
+      });
+      rootObserver.observe(root);
+    }
     ambientCanvas = document.getElementById('ambientOverlayCanvas') || document.createElement('canvas');
     prismCanvas = document.getElementById('prismOverlayCanvas') || document.createElement('canvas');
     for (const [canvas, id] of [
@@ -235,9 +245,14 @@ const SomataAmbientPrism = (() => {
   }
   function resize() {
     if (!root) return false;
-    const rect = root.getBoundingClientRect(),
-      w = Math.min(2160, Math.round(rect.width), window.innerWidth || 2160),
-      h = Math.min(1440, Math.round(rect.height), window.innerHeight || 1440);
+    let size = rootSize;
+    if (!size) {
+      const rect = root.getBoundingClientRect();
+      size = { w: rect.width, h: rect.height };
+      if (rootObserver) rootSize = size;
+    }
+    const w = Math.min(2160, Math.round(size.w), window.innerWidth || 2160),
+      h = Math.min(1440, Math.round(size.h), window.innerHeight || 1440);
     if (!(w > 0 && h > 0)) return false;
     const nextDpr = Math.min(1.5, Math.max(0.5, devicePixelRatio || 1));
     if (w !== width || h !== height || Math.abs(dpr - nextDpr) > 0.02) {
@@ -1964,6 +1979,13 @@ const SomataAmbientPrism = (() => {
     });
     document.getElementById('showVignetteSetting')?.addEventListener('change', schedule);
     document.getElementById('tunnelVignetteAmount')?.addEventListener('input', schedule);
+    window.addEventListener(
+      'resize',
+      () => {
+        rootSize = null;
+      },
+      { passive: true },
+    );
     window.addEventListener('resize', schedule, { passive: true });
     syncUI();
   }

@@ -26,6 +26,38 @@ function somataSpiralFillMorphT(frameCtx) {
     return Number(frameCtx.geometryPlan.progress);
   return Number(runtimeState?.morph?.geometryT) || 0;
 }
+// Согласованные типы морфинга публикуют спираль как отдельные ветви (`framePaths` со
+// `spiralBranchIndex`), а не как кадр удерживаемой GPU-ветви. Из этих ветвей собираются полосы
+// заливки: кривые Безье ветви разворачиваются в ломаную, скругления остаются на месте.
+const SOMATA_FILL_RAIL_SAMPLES = 14;
+function somataSampleRailPoints(path) {
+  const segments = path?._bezierSegments;
+  if (!Array.isArray(segments) || !segments.length) return path?.points || [];
+  const out = [];
+  segments.forEach((s, index) => {
+    for (let i = index === 0 ? 0 : 1; i <= SOMATA_FILL_RAIL_SAMPLES; i++) {
+      const t = i / SOMATA_FILL_RAIL_SAMPLES,
+        u = 1 - t;
+      out.push({
+        x: u * u * u * s.p0.x + 3 * u * u * t * s.c1.x + 3 * u * t * t * s.c2.x + t * t * t * s.p3.x,
+        y: u * u * u * s.p0.y + 3 * u * u * t * s.c1.y + 3 * u * t * t * s.c2.y + t * t * t * s.p3.y,
+      });
+    }
+  });
+  return out;
+}
+function somataCoordinatedFillRails(frameCtx) {
+  const framePaths = frameCtx?.geometryPlan?.framePaths;
+  if (!Array.isArray(framePaths)) return null;
+  const rails = [];
+  for (const path of framePaths) {
+    if (!Number.isFinite(Number(path?.spiralBranchIndex))) continue;
+    const points = somataSampleRailPoints(path);
+    if (points.length < 2) continue;
+    rails.push({ ...path, points, alpha: Number(path?._alpha ?? path?.alpha ?? 1) });
+  }
+  return rails.length >= 2 ? rails : null;
+}
 function somataSpiralFillAuxPaths(frameCtx) {
   let paths = null;
   try {
@@ -36,7 +68,7 @@ function somataSpiralFillAuxPaths(frameCtx) {
   } catch (_) {
     paths = null;
   }
-  return paths;
+  return paths?.length ? paths : somataCoordinatedFillRails(frameCtx);
 }
 function somataSpiralMorphFillMesh(frameCtx) {
   const layer = frameCtx?.layer;
@@ -45,8 +77,18 @@ function somataSpiralMorphFillMesh(frameCtx) {
 
   if (mode === 'mathematical')
     return FillMeshPreparer.prepareSpiralMathematical?.(frameCtx, somataSpiralFillAuxPaths(frameCtx)) || null;
-  if (mode === 'interwinding')
-    return FillMeshPreparer.prepareSpiralInterwinding?.(frameCtx, somataSpiralFillAuxPaths(frameCtx)) || null;
+  if (mode === 'interwinding') {
+    const rails = somataSpiralFillAuxPaths(frameCtx);
+    return (
+      FillMeshPreparer.prepareSpiralInterwinding?.(frameCtx, rails) ||
+      // Если у кадра нет локальных межвитковых ячеек (например, у спирали порядка 1 витки не
+      // перекрываются), заливка остаётся полосами между соседними ветвями, как в 13.2.
+      (frameCtx?.geometryPlan?.dynamic === true && Array.isArray(rails) && rails.length >= 2
+        ? FillMeshPreparer.prepareSpiralMorphBands?.(frameCtx, rails)
+        : null) ||
+      null
+    );
+  }
   if (mode !== 'chopped') return null;
   if (
     (frameCtx?.geometryPlan?.dynamic !== true && !frameCtx?.spiralEditMorph) ||

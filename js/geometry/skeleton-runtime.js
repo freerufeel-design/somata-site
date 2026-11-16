@@ -548,7 +548,13 @@ window.SomataSkeletonRuntime = (() => {
         const points = pp.from.map((_, i) => ({ id: `m:${orbitIndex}:${i}`, ...vertex(pp, i, t, r, a, b) }));
         // The carrier may run opposite to an endpoint's authored vertex order
         // (Minimal slide). Its contour profile must then be mirrored.
-        const reversed = { srcReversed: pp.srcReversed === true, dstReversed: pp.dstReversed === true };
+        const reversed = {
+          srcReversed: pp.srcReversed === true,
+          dstReversed: pp.dstReversed === true,
+          // Для заливки: путь-дубль слияния/разделения орбит (см. fillGhostWeight).
+          fillPathSource: pp.sourcePathPresent !== false,
+          fillPathTarget: pp.targetPathPresent !== false,
+        };
         return plan.srcClosed === plan.dstClosed
           ? [{ orbitIndex, closed: plan.srcClosed, points, ...reversed }]
           : [

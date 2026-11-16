@@ -660,7 +660,50 @@ function createMorphTargetsModule(deps) {
     return degrees;
   };
 
-  const buildMorphVisualTargets = (layers) => {
+  const currentKForTarget = (layer, targetN) =>
+    Math.max(1, Math.min(Math.max(1, Math.floor(targetN / 2)), Number(layer.K) || 1));
+
+  // Выбор N, K и числа орбит цели для одного слоя. Порядок бросков кубика важен
+  // и не меняется: сначала N, затем K, затем орбиты.
+  const chooseMorphTopologyTarget = (
+    layer,
+    idx,
+    { lockN = false, lockK = false, preserveOrbits = false } = {},
+  ) => {
+    const sourceN = Number(layer.N) || 4;
+    let targetN = state.morph.options.byVertices && !lockN ? chooseMorphVertexTarget(sourceN, idx) : sourceN;
+    // Fix K means an N candidate cannot force K down as a side
+    // effect of the legal polygon K<=floor(N/2) constraint.
+    // Leave K untouched and keep N in its legal domain.
+    if (lockK) targetN = Math.max(targetN, 2 * Math.max(1, Math.round(Number(layer.K) || 1)));
+
+    const kMaxPossible = Math.max(1, Math.floor(targetN / 2));
+    const stepMinPct = Math.max(0, Math.min(100, Number(state.morph.stepMin) || 0));
+    const stepMaxPct = Math.max(stepMinPct, Math.min(100, Number(state.morph.stepMax ?? 100)));
+    const kLo = Math.max(1, Math.min(kMaxPossible, Math.round(1 + (stepMinPct / 100) * (kMaxPossible - 1))));
+    const kHi = Math.max(
+      kLo,
+      Math.min(kMaxPossible, Math.round(1 + (stepMaxPct / 100) * (kMaxPossible - 1))),
+    );
+    const currentK = currentKForTarget(layer, targetN);
+    // 7.6.6: Phase is the fixed-N / variable-K continuous spiral transport.
+    // K is the actual phase step; no hidden independently-resampled step is generated.
+    const targetK = lockK
+      ? Math.max(1, Math.round(Number(layer.K) || 1))
+      : state.morph.options.bySteps
+        ? state.morph.diversity
+          ? randomIntExcept(kLo, kHi, currentK)
+          : randomInt(kLo, kHi)
+        : currentK;
+    const customSuborbits = preserveOrbits
+      ? Array.isArray(layer.customSuborbits)
+        ? layer.customSuborbits.map((o) => ({ ...o }))
+        : layer.customSuborbits
+      : chooseMorphOrbitTarget(layer, targetN, targetK);
+    return { N: targetN, K: targetK, customSuborbits, currentK };
+  };
+
+  const buildMorphVisualTargets = (layers, topologyPlan = null) => {
     const palette = pickMorphPalette();
     const spiralTargetSet = chooseMorphSpiralLayerSet(layers);
     const maxRadius = Math.max(...layers.map((l) => Number(l.radius) || 220), 160);
@@ -772,46 +815,27 @@ function createMorphTargetsModule(deps) {
           : layer.closedLoop !== false;
       const targetClosedLoop = targetSpiralEnabled ? false : requestedClosedLoop;
 
-      const sourceN = Number(layer.N) || 4;
-      let targetN =
-        state.morph.options.byVertices && !lockSpiralN ? chooseMorphVertexTarget(sourceN, idx) : sourceN;
-      // Fix K means an N candidate cannot force K down as a side
-      // effect of the legal polygon K<=floor(N/2) constraint.
-      // Leave K untouched and keep N in its legal domain.
-      if (lockSpiralK) targetN = Math.max(targetN, 2 * Math.max(1, Math.round(Number(layer.K) || 1)));
-
-      const kMaxPossible = Math.max(1, Math.floor(targetN / 2));
-      const stepMinPct = Math.max(0, Math.min(100, Number(state.morph.stepMin) || 0));
-      const stepMaxPct = Math.max(stepMinPct, Math.min(100, Number(state.morph.stepMax ?? 100)));
-      const kLo = Math.max(
-        1,
-        Math.min(kMaxPossible, Math.round(1 + (stepMinPct / 100) * (kMaxPossible - 1))),
-      );
-      const kHi = Math.max(
-        kLo,
-        Math.min(kMaxPossible, Math.round(1 + (stepMaxPct / 100) * (kMaxPossible - 1))),
-      );
-      const currentK = Math.max(1, Math.min(kMaxPossible, Number(layer.K) || 1));
+      // Топологию цели (N, K, число орбит) заранее выбирает `previewMorphTopology`
+      // для следующего цикла (fill-lookahead): тогда берём её, а не бросаем кубики заново.
+      const planned = topologyPlan?.items?.[idx] || null;
+      const topology = planned
+        ? {
+            N: planned.N,
+            K: planned.K,
+            customSuborbits: planned.customSuborbits,
+            currentK: currentKForTarget(layer, planned.N),
+          }
+        : chooseMorphTopologyTarget(layer, idx, {
+            lockN: lockSpiralN,
+            lockK: lockSpiralK,
+            preserveOrbits: lockSpiralK || morphSpiralType === 'phase',
+          });
+      const { N: targetN, K: targetK, customSuborbits: targetCustomSuborbits, currentK } = topology;
       const currentSpiralStep = normalizeSpiralStep(layer.spiralStep ?? layer.K ?? 1, {
         ...layer,
         N: targetN,
         K: currentK,
       });
-      // 7.6.6: Phase is the fixed-N / variable-K continuous spiral transport.
-      // K is the actual phase step; no hidden independently-resampled step is generated.
-      const targetK = lockSpiralK
-        ? Math.max(1, Math.round(Number(layer.K) || 1))
-        : state.morph.options.bySteps
-          ? state.morph.diversity
-            ? randomIntExcept(kLo, kHi, currentK)
-            : randomInt(kLo, kHi)
-          : currentK;
-      const preserveSpiralOrbitSelection = lockSpiralK || morphSpiralType === 'phase';
-      const targetCustomSuborbits = preserveSpiralOrbitSelection
-        ? Array.isArray(layer.customSuborbits)
-          ? layer.customSuborbits.map((o) => ({ ...o }))
-          : layer.customSuborbits
-        : chooseMorphOrbitTarget(layer, targetN, targetK);
       const targetChaosStar = layer.chaosStar === true && !targetSpiralEnabled;
       const chaosSpread = Math.max(
         0,
@@ -1163,6 +1187,7 @@ function createMorphTargetsModule(deps) {
     chooseMorphSpiralLayerSet,
     chooseMorphSpiralOrderTarget,
     chooseMorphRotationDelta,
+    chooseMorphTopologyTarget,
     buildMorphVisualTargets,
     buildLightMorphVisualTargets,
   });

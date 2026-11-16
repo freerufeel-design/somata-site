@@ -417,7 +417,7 @@
                                         <select id="morphMode" style="margin-left:auto;">
                                             <option value="topology">Топологический</option>
                                             
-                                            <option value="circleSlide">По окружности</option>
+                                            <option value="circleSlide" selected>По окружности</option>
                                             <option value="fade">Fade</option>
                                             <option value="light">Слайдшоу</option>
                                             
@@ -425,7 +425,7 @@
                                             
                                             
                                             <option value="phaseCircle">Неразрывный — фазово-окружностный</option>
-                                            <option value="coordinated" selected>Неразрывный, согласованный</option><option value="coordinatedFromCenter">Неразрывный, согласованный из центра</option>
+                                            <option value="coordinated">Неразрывный, согласованный</option><option value="coordinatedFromCenter">Неразрывный, согласованный из центра</option>
                                         </select>
                                     </label>
                                 </div>
@@ -630,7 +630,7 @@
                 </div>
                 <div id="morphTypeTopNav" class="morph-type-nav header-choice-hidden somata-removed-menu" aria-hidden="true">
                     <button id="btnPrevMorphMode" class="btn-icon" title="Предыдущий тип морфинга" aria-label="Предыдущий тип морфинга">◀</button>
-                    <select id="morphModeTop" aria-label="Текущий тип морфинга"><option value="topology">Топологический</option><option value="circleSlide">По окружности</option><option value="fade">Fade</option><option value="light">Слайдшоу</option><option value="phaseCircle">Неразрывный — фазово-окружностный</option><option value="coordinated" selected>Неразрывный, согласованный</option><option value="coordinatedFromCenter">Неразрывный, согласованный из центра</option></select>
+                    <select id="morphModeTop" aria-label="Текущий тип морфинга"><option value="topology">Топологический</option><option value="circleSlide" selected>По окружности</option><option value="fade">Fade</option><option value="light">Слайдшоу</option><option value="phaseCircle">Неразрывный — фазово-окружностный</option><option value="coordinated">Неразрывный, согласованный</option><option value="coordinatedFromCenter">Неразрывный, согласованный из центра</option></select>
                     <button id="btnNextMorphMode" class="btn-icon" title="Следующий тип морфинга" aria-label="Следующий тип морфинга">▶</button>
                     <select id="morphSpiralModeTop" aria-label="Текущий тип морфинга спирали"><option value="topology">Топологический</option><option value="circleSlide">По окружности</option><option value="phaseCircle">Неразрывный — фазово-окружностный</option><option value="coordinated" selected>Неразрывный, согласованный</option><option value="coordinatedFromCenter">Неразрывный, согласованный из центра</option></select>
                 </div>
@@ -961,7 +961,7 @@
                     <label class="display-enable-toggle lamp-compact-toggle" title="Включает адаптацию. Переключатель выше выбирает, что подстраивается: размер или свет"><input id="lampAdaptiveBrightness" type="checkbox" checked><span>Адаптация включена</span></label>
                     <div class="control-row lamp-adaptive-strength-row"><div class="row-label"><span id="lampAdaptiveStrengthLabel">Сила адаптивного размера</span><span id="lampAdaptiveStrengthText" class="text-mono">100% × 1</span></div><div class="lamp-slider-mult"><input id="lampAdaptiveStrength" type="range" min="0" max="100" step="1" value="100"><span class="lamp-mult-label">×</span><input id="lampAdaptiveStrengthMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель силы адаптации" data-log-multiplier="1"></div></div>
                     <div class="control-row lamp-adaptive-exponent-row" title="Форма кривой отклика на перегрузку. 0% — линейно (как раньше). +100% — десятичная положительная экспонента: умеренную перегрузку гасит сильнее. −100% — десятичная отрицательная экспонента: умеренную перегрузку гасит мягче. Шаг 5%."><div class="row-label"><span>Экспоненциальность</span><span id="lampAdaptiveExponentText" class="text-mono">0%</span></div><div class="lamp-slider-mult"><input id="lampAdaptiveExponent" type="range" min="-100" max="100" step="5" value="0" aria-label="Экспоненциальность адаптации"></div></div>
-                    <label class="display-enable-toggle lamp-compact-toggle" title="Когда обнаружена вспышка (площадь ламп резко выросла), степень экспоненты ненадолго повышается и затем возвращается к значению ползунка"><input id="lampAdaptiveAutoExponent" type="checkbox"><span>Авто-экспонента</span></label>
+                    <label class="display-enable-toggle lamp-compact-toggle" title="Когда площадь ламп резко выросла (вспышка), степень экспоненты плавно повышается — тем сильнее, чем мощнее вспышка, — удерживается и затем так же плавно возвращается к значению ползунка. Скорость нарастания и спада задаёт «Экспозиция адаптации»."><input id="lampAdaptiveAutoExponent" type="checkbox"><span>Авто-экспонента</span></label>
                     <div class="control-row lamp-adaptive-fade-row" title="На статичной сцене адаптация применяется сразу. Во время Morph и движения это время задаёт скорость экспозиции: 0 — мгновенно, больше 0 — плавное следование за нагрузкой."><div class="row-label"><span>Экспозиция адаптации</span><span id="lampAdaptiveFadeText" class="text-mono">1 с</span></div><div class="row-inputs"><input id="lampAdaptiveFadeSec" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Время экспозиции адаптивной яркости в секундах" data-log-step="time"><span class="hint-text">с</span></div></div>
                 </div>
                 <div class="ui-block">
@@ -1699,12 +1699,12 @@
                                 <button type="button" id="btnTestMorphModePrev" class="test-morph-arrow" aria-label="Предыдущий тип морфинга" title="Предыдущий тип морфинга">◀</button>
                                 <select id="testMorphMode" aria-label="Тип морфинга многоугольника">
                             <option value="topology">Топологический</option>
-                            <option value="circleSlide">По окружности</option>
+                            <option value="circleSlide" selected>По окружности</option>
                             <option value="fade">Fade</option><option value="light">Слайдшоу</option>
                             
                             
                             <option value="phaseCircle">Неразрывный — фазово-окружностный</option>
-                            <option value="coordinated" selected>Неразрывный, согласованный</option><option value="coordinatedFromCenter">Неразрывный, согласованный из центра</option>
+                            <option value="coordinated">Неразрывный, согласованный</option><option value="coordinatedFromCenter">Неразрывный, согласованный из центра</option>
                                 </select>
                                 <button type="button" id="btnTestMorphModeNext" class="test-morph-arrow" aria-label="Следующий тип морфинга" title="Следующий тип морфинга">▶</button>
                             </div></div>

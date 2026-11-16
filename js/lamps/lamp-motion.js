@@ -39,12 +39,11 @@ function lampEndpointTravelProgress(sx, sy, cx, cy, tx, ty, fallbackT = 0) {
   const remaining = Math.hypot(tx - cx, ty - cy);
   return Math.max(0, Math.min(1, 1 - remaining / total));
 }
+// Лампа вершины, которой нет в цели, гаснет к концу фазы; лампа вершины, которой не было в
+// источнике, разгорается с начала. Раньше это работало только в режимах движения «Линейно» и
+// «Призрак», а в обычном лишние лампы горели до t=1 и исчезали разом на стыке фаз.
 function lampTopologyPresence(sourcePresent, targetPresent, travelProgress = 0) {
-  if (
-    !['linear', 'ghost'].includes(getLampEvaluationConfig()?.morphMotionMode) ||
-    !runtimeState.morph?.active
-  )
-    return 1;
+  if (!runtimeState.morph?.active) return 1;
   const u = Math.max(0, Math.min(1, Number(travelProgress) || 0));
   if (sourcePresent && targetPresent) return 1;
   if (sourcePresent) return 1 - u;
@@ -53,8 +52,7 @@ function lampTopologyPresence(sourcePresent, targetPresent, travelProgress = 0) 
 }
 function lampAdaptivePointCount(points, cfg = getLampEvaluationConfig()) {
   if (!Array.isArray(points) || !points.length) return 0;
-  if (!['linear', 'ghost'].includes(cfg?.morphMotionMode) || !runtimeState.morph?.active)
-    return points.length;
+  if (!runtimeState.morph?.active) return points.length;
   let sum = 0;
   for (const p of points)
     sum += Math.max(0, Math.min(1, p?.lampPresence === undefined ? 1 : Number(p.lampPresence) || 0));
@@ -153,7 +151,13 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
   if (rt.serial !== serial) {
     const used = new Set();
     const nextAssignments = new Map();
-    for (let i = 0; i < points.length; i++) {
+    // Видимые лампы выбирают прошлых соседей первыми: иначе невидимая лампа будущей вершины
+    // (присутствие 0 в начале фазы) забирает идентификатор горевшей лампы, а настоящая лампа
+    // получает новый и разгорается с нуля — провал света в первом кадре фазы.
+    const presenceOf = (p) => (p?.lampPresence === undefined ? 1 : Number(p.lampPresence) || 0);
+    const order = points.map((_, i) => i);
+    order.sort((a, b) => (presenceOf(points[b]) > 0.001) - (presenceOf(points[a]) > 0.001) || a - b);
+    for (const i of order) {
       const p = points[i];
       const px = Number(p?.x) || 0,
         py = Number(p?.y) || 0;

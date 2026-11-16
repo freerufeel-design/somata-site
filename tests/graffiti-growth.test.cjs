@@ -38,7 +38,7 @@ for(const nib of ['pointed','round','blunt','pinched']) for(const strength of [0
 `);
 
 run(
-  `const state={morph:{}}; const SomataMorphRegistry={migrate:x=>x};` +
+  `const state={morph:{spiralMode:'coordinated'}}; const SomataMorphRegistry={migrate:x=>x};` +
     declarations(
       'UNIFIED_MORPH_KEYS',
       'FRAME_LEVEL_MORPH_MODES',
@@ -55,18 +55,25 @@ run(
     ),
 );
 run(
-  `assert.equal(getUnifiedMorphMode(),'coordinated');setUnifiedMorphMode(undefined);assert.equal(state.morph.spiralMorphType,'coordinated');setUnifiedMorphMode('circleSlide');assert.equal(getUnifiedMorphMode(),'circleSlide');`,
+  `assert.equal(getUnifiedMorphMode(),'circleSlide');assert.equal(getSpiralMorphMode(),'coordinated');setUnifiedMorphMode(undefined);assert.equal(getUnifiedMorphMode(),'circleSlide');assert.equal(state.morph.spiralMorphType,'coordinated');setUnifiedMorphMode('circleSlide');assert.equal(getUnifiedMorphMode(),'circleSlide');`,
 );
 
 const html = read('index.html');
 for (const id of ['morphMode', 'morphModeTop', 'testMorphMode']) {
   const select = html.match(new RegExp('<select[^>]*id="' + id + '"[^>]*>([\\s\\S]*?)</select>'));
   assert(select, id);
+  // По умолчанию многоугольник морфится «По окружности», спираль — «согласованно».
+  assert.match(select[1], /<option value="circleSlide" selected>/);
+  assert.equal((select[1].match(/\bselected\b/g) || []).length, 1);
+}
+for (const id of ['morphSpiralMode', 'morphSpiralModeTop', 'testMorphSpiralMode']) {
+  const select = html.match(new RegExp('<select[^>]*id="' + id + '"[^>]*>([\\s\\S]*?)</select>'));
+  assert(select, id);
   assert.match(select[1], /<option value="coordinated" selected>/);
   assert.equal((select[1].match(/\bselected\b/g) || []).length, 1);
 }
 console.log(
-  'PASS: Graffiti mesh widths follow growth for all nib shapes; coordinated default and explicit modes',
+  'PASS: Graffiti mesh widths follow growth for all nib shapes; circle-slide polygon and coordinated spiral defaults, explicit modes',
 );
 
 run(

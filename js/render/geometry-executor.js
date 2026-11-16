@@ -5,7 +5,7 @@ import { renderLayerOrbitPaths } from './spiral-stroke.js';
 import { getLayerFrameAuxiliaryPaths } from '../geometry/frame-paths.js';
 import { getCanonicalLayerGeometry, noteCanonicalGeometryConsumer } from '../geometry/canonical.js';
 import { drawLightningCentralMorph } from '../lamps/lamp-points.js';
-import { MorphRendering } from '../geometry/morph.js';
+import { MorphRendering, profileModeTransitionProgress } from '../geometry/morph.js';
 import { SomataGeometryRoleService } from './geometry-role-service.js';
 import { ensureProjectMorphFrameGeometryLayer } from '../project/project-morph.js';
 
@@ -266,7 +266,13 @@ function executeMainLayerGeometryPlan(targetCtx, frameCtx, alphaMultiplier = 1) 
           plan.progress,
         );
         break;
-      case 'blue-fade':
+      case 'blue-fade': {
+        // The Line cross-fades by the raw phase. The Fill of the outgoing and
+        // incoming shapes is recorded with its own presence so the shared
+        // FrameContour fill draws them separately (no even-odd cancellation
+        // where the two shapes overlap), following "Смена режима".
+        const fillIn = profileModeTransitionProgress(plan.progress);
+        targetCtx.__fillPresence = 1 - fillIn;
         drawGeometryPlanSnapshot(
           targetCtx,
           frameCtx,
@@ -275,6 +281,7 @@ function executeMainLayerGeometryPlan(targetCtx, frameCtx, alphaMultiplier = 1) 
           alphaMultiplier,
           1 - plan.progress,
         );
+        targetCtx.__fillPresence = fillIn;
         drawGeometryPlanSnapshot(
           targetCtx,
           frameCtx,
@@ -283,7 +290,9 @@ function executeMainLayerGeometryPlan(targetCtx, frameCtx, alphaMultiplier = 1) 
           alphaMultiplier,
           plan.progress,
         );
+        targetCtx.__fillPresence = undefined;
         break;
+      }
       case 'blue-circle-slide': {
         const opacityVariant = plan.modeOverride === 'topoCircleOpacity';
         const t = Math.max(0, Math.min(1, Number(plan.progress) || 0));

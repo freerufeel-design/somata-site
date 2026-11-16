@@ -68,13 +68,27 @@ function renderLayerLampPass(frameCtx) {
       const stats = SomataLampStability.apply(
         `${frameCtx.layer?.id ?? frameCtx.layerIndex}:${set.layer?.id ?? ''}:${setIndex}:${arc ? 'arc' : 'visual'}`,
         plan.items,
-        { now, duration: lampBendAnimationMs(frameCtx), animate: animating, arc },
+        {
+          now,
+          duration: lampBendAnimationMs(frameCtx),
+          animate: animating,
+          arc,
+          // «Произвольное» намеренно ставит лампы густо; в остальных режимах близкие лампы одного узла сливаются.
+          merge: (set.config?.positionMode || drawPlan.config?.positionMode) === 'arbitrary' ? 0 : 0.5,
+        },
       );
       if (stats.pending) {
         lampAdaptiveFrame.needsSettle = true;
         requestMainCanvasRender();
       }
-      window.SomataJumpTrace?.observeLamps(frameCtx, setIndex, stats, set.alphaBase, effect.instances, plan.items);
+      window.SomataJumpTrace?.observeLamps(
+        frameCtx,
+        setIndex,
+        stats,
+        set.alphaBase,
+        effect.instances,
+        plan.items,
+      );
       return plan;
     };
     let visualPlan = prepareVisual();

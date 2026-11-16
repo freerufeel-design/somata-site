@@ -1596,7 +1596,7 @@ console.log(
 {
   run(declarations('drawMorphConstructionGuide'), 'guide');
   run(declarations('morphSplineBlend', 'isMixedSplineSegmentTransition'), 'morph width helpers');
-  run(declarations('drawPreparedMorphGeometry'), 'prepared painter');
+  run(declarations('morphPathFillPresence', 'morphFillGhostInfo', 'setPreparedPathFillGhost', 'drawPreparedMorphGeometry'), 'prepared painter');
   run(declarations('createGeometryGLRecordingContext'), 'stroke recorder');
   run(declarations('roundPolylineForDraw'), 'polygon line commands');
   global.WebGPUStrokeRenderer = { isReady: () => true, supportsBezierSpiralCorridor: () => true };

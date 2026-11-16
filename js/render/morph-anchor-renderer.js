@@ -1,4 +1,5 @@
 import '../morph-runtime/manual-interpolation.js'; // initialisation order: this module runs after it
+import { fillGhostWeight, fillSplitAheadWeight } from '../morph-runtime/blue/fill-lookahead.js';
 import { MAX_ROUNDING_PERCENT, getRoundingStrength, interpolateMorphRounding } from '../core/palette.js';
 import { runtimeState, state } from '../core/state.js';
 import { getEffectiveLayerRadius } from '../effects/motion.js';
@@ -42,6 +43,27 @@ import {
   roundMorphPolyline,
 } from '../geometry/morph.js';
 import { getEffectiveCircleSlideType } from '../morph-runtime/morph-mode.js';
+
+// Заливка морфа: «лишние» контуры слияния/разделения орбит и дубли разделения следующей фазы
+// (план из Blue: targetLayer.__fillSplitAhead — сколько дублей получит каждая орбита цели,
+// sourceLayer.__fillSplitDone — разделение этой фазы уже введено в заливку заранее).
+function setMorphFillGhost(ctx, pp, plan, t, sourceLayer, targetLayer) {
+  ctx.__fillGhost = fillGhostWeight(t, {
+    sourcePresent: pp.sourcePathPresent,
+    targetPresent: pp.targetPathPresent,
+    splitDone: sourceLayer?.__fillSplitDone === true,
+  });
+  const ahead = targetLayer?.__fillSplitAhead;
+  const j = plan.pathPlans.indexOf(pp);
+  const dup = Array.isArray(ahead) && pp.targetPathPresent !== false ? Number(ahead[j]) || 0 : 0;
+  ctx.__fillDup = dup > 0 ? dup : 0;
+  ctx.__fillDupWeight = dup > 0 ? fillSplitAheadWeight(t) : 0;
+}
+function clearMorphFillGhost(ctx) {
+  ctx.__fillGhost = undefined;
+  ctx.__fillDup = 0;
+  ctx.__fillDupWeight = 0;
+}
 
 function sampleMorphPolygonVertex(mode, pp, i, t, r, source, target, movement) {
   const rule = window.SomataMorphRegistry.get(mode === 'topoCircleOpacity' ? 'topoCircle' : mode);
@@ -224,12 +246,14 @@ function drawAngularAnchorMorph(
         }
         if (vertexPts.length < 2) continue;
         const collapseReferenceLength = R * pp.collapseFactor;
+        setMorphFillGhost(ctx, pp, plan, t, sourceLayer, targetLayer);
         if (srcClosed === dstClosed) drawAnchorPolylineSet(vertexPts, srcClosed, 1, collapseReferenceLength);
         else {
           drawAnchorPolylineSet(vertexPts, srcClosed, 1 - smoothMix, collapseReferenceLength);
           drawAnchorPolylineSet(vertexPts, dstClosed, smoothMix, collapseReferenceLength);
         }
       }
+      clearMorphFillGhost(ctx);
       return;
     }
 
@@ -410,6 +434,7 @@ function drawAngularAnchorMorph(
       }
       if (vertexPts.length < 2) continue;
       const collapseReferenceLength = R * pp.collapseFactor;
+      setMorphFillGhost(ctx, pp, plan, t, sourceLayer, targetLayer);
       if (srcClosed === dstClosed) {
         drawPolylineSet(vertexPts, srcClosed, 1, collapseReferenceLength);
       } else {
@@ -418,6 +443,7 @@ function drawAngularAnchorMorph(
       }
     }
   } finally {
+    clearMorphFillGhost(ctx);
     if (fittedLiveContour) ctx.restore();
   }
 }

@@ -116,6 +116,8 @@ const SpiroMorphController = (() => {
     rt.webUiHoldStart = 0;
     rt.manualProfileEditing = false;
     rt.orbitCopyMemory = [];
+    rt.nextTopologyPlan = null;
+    rt.fillSplitAheadCounts = [];
     rt.lightScales = [];
     rt.lightRotations = [];
     rt.lightLayers = [];

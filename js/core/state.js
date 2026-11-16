@@ -574,7 +574,7 @@ const state = {
     rotationRandomDirection: true,
     fillOpacityMin: 3,
     fillOpacityMax: 3,
-    mode: 'coordinated',
+    mode: 'circleSlide',
     spiralMode: 'coordinated',
     fadePercent: 0,
     circleProfileOverflow: true,

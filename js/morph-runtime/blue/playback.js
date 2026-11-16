@@ -124,6 +124,8 @@ import {
   isSpiralLayerMorphEnabled,
   setUnifiedMorphMode,
   spiralMorphKeepsContinuity,
+  spiralMorphLocksK,
+  spiralMorphLocksN,
   spiralMorphUsesCorridorPhase,
   spiralMorphUsesRetainedBezierRail,
 } from '../morph-mode.js';
@@ -162,6 +164,7 @@ import {
 import { hasOrangeColorRoute } from '../../ui/orange-morph/routing-ui.js';
 import { syncMorphIntervalQuickButtons } from '../../ui/morph-settings-panel.js';
 import { getMorphLongPeriodDetailScale } from './interpolation.js';
+import { acceptPlan, activeOrbitCount, planNextCycle } from './fill-lookahead.js';
 import { noteSuppressedError } from '../../core/suppressed-errors.js';
 
 function noteMorphGpuPrepareWait(owner, morphKind, now) {
@@ -258,6 +261,7 @@ function createMorphPlaybackModule(deps) {
     chooseMorphSpiralLayerSet,
     chooseMorphSpiralOrderTarget,
     chooseMorphRotationDelta,
+    chooseMorphTopologyTarget,
     buildMorphVisualTargets,
     buildLightMorphVisualTargets,
   } = MorphTargets;
@@ -514,8 +518,28 @@ function createMorphPlaybackModule(deps) {
     return rt.spiralRotationCompensationBaseDeg;
   };
 
+  // Топология следующего цикла выбирается заранее (см. fill-lookahead.js).
+  // План, выбранный в прошлом цикле. Годится только для цикла, который он готовил.
+  const takeTopologyPlan = () => {
+    const rt = runtimeState.morph;
+    const stored = rt.nextTopologyPlan;
+    rt.nextTopologyPlan = null;
+    if (!stored || stored.serial !== rt.lampCycleSerial) return null;
+    return acceptPlan(stored.plan, state.layers, state.morph);
+  };
+  // Спиральные режимы могут принудительно фиксировать N/K после выбора цели (и спираль может
+  // появиться случайно) — тогда заранее выбранной топологии верить нельзя.
+  const topologyPlanBlocked = () =>
+    state.morph.options.bySpiralLayers === true ||
+    state.morph.options.bySpiralOrder === true ||
+    spiralMorphLocksN() ||
+    spiralMorphLocksK() ||
+    ['continuous', 'phase', 'minimalTurn'].includes(getSpiralMorphType());
+
   const prepareMorphCycle = (now) => {
     runtimeState.morph.returnToPhaseStart = null;
+    // План следующего цикла берём до любых изменений слоёв и счётчика цикла.
+    const topologyPlan = takeTopologyPlan();
 
     // Blue takes ownership of the whole frame; cancel any previous
     // manual corridor prelude as well as the last Blue cycle's.
@@ -703,7 +727,7 @@ function createMorphPlaybackModule(deps) {
         v.fillOpacity = hand.alpha * 100;
       });
     }
-    runtimeState.morph.targetVisuals = buildMorphVisualTargets(state.layers);
+    runtimeState.morph.targetVisuals = buildMorphVisualTargets(state.layers, topologyPlan);
     const orderRt = runtimeState.morph,
       zero = SomataSpiralZeroTransition;
     orderRt.orderRailDurations = new Map();
@@ -899,7 +923,15 @@ function createMorphPlaybackModule(deps) {
         Number.isFinite(remembered) && remembered >= 1
           ? Math.max(1, Math.round(remembered))
           : getMorphVisualOrbitCount(sv, layer);
-      const targetCount = chooseVirtualOrbitTargetCount(sv, tv, sourceCount);
+      // Число копий орбит, выбранное заранее, действует, только если цель осталась той же.
+      const planned = topologyPlan?.items?.[idx];
+      const plannedValid =
+        planned &&
+        planned.srcCopies === sourceCount &&
+        planned.N === tv.N &&
+        planned.K === tv.K &&
+        JSON.stringify(planned.customSuborbits ?? null) === JSON.stringify(tv.customSuborbits ?? null);
+      const targetCount = plannedValid ? planned.copies : chooseVirtualOrbitTargetCount(sv, tv, sourceCount);
       const sn = Math.max(2, Math.round(Number(sv.N) || 4));
       const sk = Math.max(1, Math.min(Math.floor(sn / 2), Math.round(Number(sv.K) || 1)));
       const tn = Math.max(2, Math.round(Number(tv.N) || sn));
@@ -910,6 +942,24 @@ function createMorphPlaybackModule(deps) {
       sv.morphOrbitVirtualTotal = virtualTotal;
       tv.morphOrbitVirtualTotal = virtualTotal;
     });
+
+    // Выбираем топологию СЛЕДУЮЩЕГО цикла сейчас и по ней решаем, гасить ли заливку в хвосте этого.
+    {
+      const rt = runtimeState.morph;
+      const next = planNextCycle({
+        layers: state.layers,
+        targets: rt.targetVisuals,
+        endpoints: rt.fillPhaseEndpoints,
+        morph: state.morph,
+        hooks: {
+          blocked: topologyPlanBlocked,
+          topology: (layer, i) => chooseMorphTopologyTarget(layer, i),
+          copies: (src, dst, count) => chooseVirtualOrbitTargetCount(src, dst, count),
+          orbits: (visual, layer) => getMorphVisualOrbitCount(visual, layer),
+        },
+      });
+      rt.nextTopologyPlan = next ? { plan: next, serial: rt.lampCycleSerial } : null;
+    }
 
     // Derive all four cycle color tables in one pass. Keep separate
     // arrays because palette rotation mutates them independently.
@@ -1103,6 +1153,53 @@ function createMorphPlaybackModule(deps) {
       setPreSampledSplineLayer(snap, !strictSpiralTarget && snap.profileMode === 'spline');
       return snap;
     });
+
+    // Заливка «вперёд»: если по плану следующая фаза раздвоит орбиты, их дубли входят в заливку
+    // уже в хвосте этой фазы (__fillSplitAhead[j] — сколько дублей получит орбита j цели), а
+    // следующая фаза, где это совпало с фактом, их не вводит заново (__fillSplitDone).
+    {
+      const rt = runtimeState.morph;
+      const hide = (obj, key, value) => {
+        if (obj)
+          Object.defineProperty(obj, key, { value, writable: true, configurable: true, enumerable: false });
+      };
+      const prevAhead = Array.isArray(rt.fillSplitAheadCounts) ? rt.fillSplitAheadCounts : [];
+      const nextCounts = [];
+      state.layers.forEach((layer, idx) => {
+        const sv = rt.sourceVisuals?.[idx],
+          tv = rt.targetVisuals?.[idx];
+        const srcOrbits = sv ? activeOrbitCount(sv.N, sv.K, sv.customSuborbits) : 0,
+          dstOrbits = tv ? activeOrbitCount(tv.N, tv.K, tv.customSuborbits) : 0;
+        const actualSplit = Math.max(0, dstOrbits - srcOrbits);
+        hide(
+          rt.renderSourceLayers?.[idx],
+          '__fillSplitDone',
+          actualSplit > 0 &&
+            prevAhead[idx] === actualSplit &&
+            ['circleSlide', 'topology'].includes(getMorphModeForLayer(idx)),
+        );
+        let splitCounts = null;
+        if (actualSplit > 0 && srcOrbits > 0) {
+          splitCounts = new Array(srcOrbits).fill(0);
+          for (let s = srcOrbits; s < dstOrbits; s++) splitCounts[s % srcOrbits]++;
+        }
+        hide(rt.renderSourceLayers?.[idx], '__fillSplitCounts', splitCounts);
+        const item = rt.nextTopologyPlan?.plan?.items?.[idx];
+        let ahead = null;
+        // Пометки «лишних» путей ставит только общий помощник polygon (circleSlide, topology).
+        const ghostCarriers = ['circleSlide', 'topology'].includes(getMorphModeForLayer(idx));
+        if (ghostCarriers && item && tv && tv.spiralEnabled !== true && tv.chaosStar !== true) {
+          const nextOrbits = activeOrbitCount(item.N, item.K, item.customSuborbits);
+          if (nextOrbits > dstOrbits && dstOrbits > 0) {
+            ahead = new Array(dstOrbits).fill(0);
+            for (let s = dstOrbits; s < nextOrbits; s++) ahead[s % dstOrbits]++;
+            nextCounts[idx] = nextOrbits - dstOrbits;
+          }
+        }
+        hide(rt.renderTargetLayers?.[idx], '__fillSplitAhead', ahead);
+      });
+      rt.fillSplitAheadCounts = nextCounts;
+    }
 
     buildBlueProfileCarrierPlans();
     prepareSpiralMorphRotationCompensationPhase();
@@ -3050,6 +3147,8 @@ function createMorphPlaybackModule(deps) {
     runtimeState.morph.targetFillColorHsl = [];
     runtimeState.morph.sourceFillIndices = [];
     runtimeState.morph.orbitCopyMemory = [];
+    runtimeState.morph.nextTopologyPlan = null;
+    runtimeState.morph.fillSplitAheadCounts = [];
     runtimeState.morph.frameLayers = [];
     runtimeState.morph.spiralBezierRailCounts = [];
     runtimeState.morph.gpuPhaseHandoffT = 0;
@@ -3078,6 +3177,8 @@ function createMorphPlaybackModule(deps) {
       syncPlaylistPaletteHueOffsetUI();
     }
     clearMorphOrigin(runtimeState.morph);
+    // TAP не должен принять фазы Blue за правку слоя и повторить переход (см. seedLayers).
+    window.SomataTestMorph?.seedLayers?.(state.layers);
     syncSidebarInputs();
     renderProfileEditor();
     requestMainCanvasRender();
@@ -3867,6 +3968,8 @@ function createMorphPlaybackModule(deps) {
     syncBlueMorphParameterDecorations();
     armBlueMorphOwnerGuard();
     runtimeState.morph.orbitCopyMemory = [];
+    runtimeState.morph.nextTopologyPlan = null;
+    runtimeState.morph.fillSplitAheadCounts = [];
     runtimeState.morph.paused = false;
     runtimeState.morph.pausedByGreenProject = false;
     runtimeState.morph.pauseStartedAt = 0;

@@ -319,7 +319,23 @@ function projectLampPointsToCurrentPolygon(
       const direct = Number(p?.lampAttachFraction);
       let targetS;
       if (Number.isFinite(direct)) {
-        targetS = visualPath.closed ? ((direct % 1) + 1) % 1 : Math.max(0, Math.min(1, direct));
+        const wrapS = (v) => (visualPath.closed ? ((v % 1) + 1) % 1 : Math.max(0, Math.min(1, v)));
+        const base = wrapS(direct);
+        // Доля i/N отсчитывается от начала видимого контура, а при скруглении оно лежит у края
+        // дуги, не на вершине: лампа вставала на ~2° дальше по дуге и в первом кадре морфа
+        // «соскакивала» с вершины скругления. Когда лампа появляется (начало фазы), находим
+        // точку видимого контура, ближайшую к самой вершине (как в статике), и дальше ведём
+        // лампу с этой поправкой.
+        let offset = rt && rt.pathIndex === visualPathIndex ? Number(rt.directOffset) || 0 : null;
+        if (offset === null) {
+          const near = nearestLampFractionOnPath(p, visualPath);
+          let d = Number(near?.fraction) - base;
+          if (visualPath.closed) d -= Math.round(d);
+          offset = Number.isFinite(d) && Math.abs(d) < 0.25 ? d : 0;
+        }
+        targetS = wrapS(base + offset);
+        if (rt) rt.directOffset = offset;
+        else rt = { pendingOffset: offset };
       } else {
         const ref = Number.isFinite(Number(rt?.targetS))
           ? Number(rt.targetS)
@@ -330,7 +346,8 @@ function projectLampPointsToCurrentPolygon(
         targetS = near.fraction;
       }
       if (!rt || rt.pathIndex !== visualPathIndex) {
-        rt = { pathIndex: visualPathIndex, s: targetS, targetS, last: now, lastSeen: now };
+        const directOffset = rt?.pendingOffset ?? rt?.directOffset;
+        rt = { pathIndex: visualPathIndex, s: targetS, targetS, last: now, lastSeen: now, directOffset };
         lampMotionRuntime.profileAttach.set(key, rt);
       }
       const rawDt = Math.max(0, now - (rt.last || now)),

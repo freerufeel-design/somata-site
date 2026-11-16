@@ -6,13 +6,15 @@ const SomataLampStability = (() => {
     cell = 1;
   // A lamp's attachment point can hop along the contour from one frame to the next (a corner
   // key or slot changes owner) while the line itself barely moves. Drawn as is, that is a
-  // teleport. A move far above the lamp's own recent speed is treated as a hop: the lamp
-  // glides there from where it was last drawn. GPU Arc lamps are placed by attachment +
-  // offset, so the offset carries the same correction.
+  // teleport. A move far above the lamp's own recent speed is treated as a hop. The lamp does
+  // NOT slide there (a straight slide cuts across empty space between neighbouring windings
+  // and looks like a lamp flying over the gap): it fades out where it was last drawn and fades
+  // in at the new place. GPU Arc lamps are placed by attachment + offset, so the offset
+  // carries the same correction.
   const HOP_MIN_PX = 4,
     HOP_RATIO = 5,
     HOP_GLIDE_MS = 240;
-  function glideHops(track, items, now, animate) {
+  function glideHops(track, items, now, animate, arc, hopGhosts) {
     const prev = track.pos || new Map(),
       pos = new Map(),
       seen = new Map();
@@ -31,13 +33,26 @@ const SomataLampStability = (() => {
           else if (!s.glideAt) s.speed = p.speed * 0.7 + step * 0.3;
         } else if (now === p.at) s.speed = p.speed;
       }
-      if (s.glideAt) {
+      if (s.glideAt && !arc) {
+        // Перекрёстное затухание: на новом месте лампа разгорается, а её тень гаснет на старом.
+        // Сумма света не проваливается, поэтому «мигания» нет.
         const g = Math.max(0, Math.min(1, (now - s.glideAt) / HOP_GLIDE_MS)),
-          e = g * g * (3 - 2 * g),
-          x = s.gx + (v.px - s.gx) * e,
-          y = s.gy + (v.py - s.gy) * e;
+          e = g * g * (3 - 2 * g);
+        hopGhosts.push({ v, x: s.gx, y: s.gy, base: v.intensityAlpha, weight: 1 - e });
+        v.intensityAlpha *= e;
+        s.x = v.px;
+        s.y = v.py;
+        if (g >= 1) s.glideAt = 0;
+      } else if (s.glideAt) {
+        const g = Math.max(0, Math.min(1, (now - s.glideAt) / HOP_GLIDE_MS)),
+          fadeOut = g < 0.5,
+          f = fadeOut ? g * 2 : g * 2 - 1,
+          e = f * f * (3 - 2 * f),
+          x = fadeOut ? s.gx : v.px,
+          y = fadeOut ? s.gy : v.py;
         if (Number.isFinite(v.gpuLampOffsetX)) v.gpuLampOffsetX += x - v.px;
         if (Number.isFinite(v.gpuLampOffsetY)) v.gpuLampOffsetY += y - v.py;
+        v.intensityAlpha *= fadeOut ? 1 - e : e;
         v.px = x;
         v.py = y;
         s.x = x;
@@ -48,10 +63,94 @@ const SomataLampStability = (() => {
     }
     track.pos = pos;
   }
-  function apply(scope, items, { now, duration, animate, arc = false }) {
+  // Лампы одного ключевого узла (углы соседних витков спирали, близкие точки профиля) стоят на
+  // расстоянии в несколько пикселей — внутри одной лампы видны 3–4 белых ядра. Из группы
+  // близких ламп остаётся одна (первая по идентификатору); остальные гаснут плавно по мере
+  // сближения (вес — сглаженная функция расстояния), поэтому рывков нет. Порог — доля радиуса
+  // меньшей лампы: мелкие лампы не сливаются.
+  function mergeCloseLamps(items, outputs, factor) {
+    const live = items.filter((v) => Number.isFinite(v.px) && Number.isFinite(v.py) && v.rad > 0);
+    if (live.length < 2) return;
+    // Главнее ключевые точки (lampRank 0), затем изломы (1); внутри ранга — по идентификатору.
+    live.sort(
+      (a, b) =>
+        (a.lampRank || 0) - (b.lampRank || 0) ||
+        (a.lampTraceId < b.lampTraceId ? -1 : a.lampTraceId > b.lampTraceId ? 1 : 0),
+    );
+    let maxRad = 0;
+    for (const v of live) maxRad = Math.max(maxRad, v.rad);
+    const bin = Math.max(1, factor * maxRad),
+      grid = new Map(),
+      merged = new Map();
+    for (const v of live) {
+      const base = outputs.get(v) || 0;
+      let keep = 1;
+      const bx = Math.floor(v.px / bin),
+        by = Math.floor(v.py / bin);
+      for (let dx = -1; dx <= 1 && keep > 0; dx++)
+        for (let dy = -1; dy <= 1 && keep > 0; dy++)
+          for (const w of grid.get(`${bx + dx}:${by + dy}`) || []) {
+            const reach = Math.max(1, factor * Math.min(v.rad, w.rad)),
+              d = Math.hypot(w.px - v.px, w.py - v.py) / reach;
+            if (d >= 1) continue;
+            // Внутри половины радиуса сосед гасится целиком, дальше возвращается плавно до края.
+            const t = Math.max(0, (d - 0.5) / 0.5),
+              near = 1 - t * t * (3 - 2 * t),
+              wLevel = merged.get(w) || 0,
+              dominance = Math.min(1, wLevel / Math.max(base, 1e-3));
+            keep *= 1 - near * dominance;
+          }
+      merged.set(v, base * keep);
+      const k = `${bx}:${by}`;
+      let list = grid.get(k);
+      if (!list) grid.set(k, (list = []));
+      list.push(v);
+    }
+    for (const [v, value] of merged) outputs.set(v, value);
+  }
+  // Лампы, которые были в прошлом кадре, а в этом пропали по идентификатору.
+  function findOrphans(track, present) {
+    const orphans = [];
+    if (!track.birthPos) return orphans;
+    for (const [id, level] of track.levels) {
+      const p = track.birthPos.get(id);
+      if (level > 0.001 && p && !present.has(id)) orphans.push({ id, x: p[0], y: p[1], level, used: false });
+    }
+    return orphans;
+  }
+  // Смена схемы идентификаторов (например, статика → морф: `blue:…` → `key:…`) не должна гасить
+  // лампы: лампа без истории, у которой в прошлом кадре на том же месте стояла лампа с другим
+  // (теперь пропавшим) идентификатором, наследует её уровень, а не рождается тёмной. Пары жадные,
+  // один к одному, по расстоянию; по-настоящему новые лампы (рядом ничего не было) рождаются тёмными.
+  function inheritLevels(track, items, orphans, spatial) {
+    if (!orphans.length) return null;
+    const born = items.filter((v) => spatial(v) && !track.levels.has(v.lampTraceId));
+    if (!born.length || born.length * orphans.length > 250000) return null;
+    born.sort((a, b) => (a.lampTraceId < b.lampTraceId ? -1 : a.lampTraceId > b.lampTraceId ? 1 : 0));
+    const result = new Map();
+    for (const v of born) {
+      const reach = Math.min(40, Math.max(3, Number(v.rad) || 8));
+      let best = null,
+        bestD = reach * reach;
+      for (const o of orphans) {
+        if (o.used) continue;
+        const d = (o.x - v.px) * (o.x - v.px) + (o.y - v.py) * (o.y - v.py);
+        if (d < bestD) {
+          bestD = d;
+          best = o;
+        }
+      }
+      if (best) {
+        best.used = true;
+        result.set(v, best.level);
+      }
+    }
+    return result.size ? result : null;
+  }
+  function apply(scope, items, { now, duration, animate, arc = false, merge = 0 }) {
     let track = tracks.get(scope);
     if (!track || now < track.now || now - track.now > Math.max(2000, duration * 2)) {
-      track = { now, levels: new Map(), pending: false };
+      track = { now, levels: new Map(), pending: false, ghosts: [], snaps: new Map() };
       tracks.set(scope, track);
       for (const [k, v] of tracks) if (now - v.now > 120000) tracks.delete(k);
     }
@@ -68,6 +167,10 @@ const SomataLampStability = (() => {
       peak = 0,
       pending = false;
     const spatial = (v) => Number.isFinite(v.px) && Number.isFinite(v.py);
+    const present = new Set();
+    for (const v of items) present.add(v.lampTraceId);
+    const orphans = arc ? [] : findOrphans(track, present);
+    const inherited = arc ? null : inheritLevels(track, items, orphans, spatial);
     for (const v of items) {
       const key = arc
         ? `${v.pathIndex}:${Math.round(v.lampAttachFraction * 1e7)}:${Math.round(v.gpuLampOffsetX * 10)}:${Math.round(v.gpuLampOffsetY * 10)}`
@@ -75,7 +178,7 @@ const SomataLampStability = (() => {
       keys.set(v, key);
       const id = v.lampTraceId,
         target = v.intensityAlpha,
-        previous = track.levels.get(id);
+        previous = track.levels.get(id) ?? inherited?.get(v);
       const level = active ? Math.min(target, previous === undefined ? 0 : previous + limit) : target;
       if (level + 1e-5 < target) pending = true;
       levels.set(v, level);
@@ -123,11 +226,99 @@ const SomataLampStability = (() => {
       rawOverlap = Math.max(rawOverlap, sum);
       maxMultiplicity = Math.max(maxMultiplicity, count);
     }
+    if (merge > 0) mergeCloseLamps(items, outputs, merge);
+    // Исходные значения нужны «хранителю»: если на старте фазы все лампы разом гаснут, одна остаётся.
+    const raw = new Map(),
+      origin = new Map();
     for (const v of items) {
+      raw.set(v, v.intensityAlpha);
+      origin.set(v, [v.px, v.py, v.gpuLampOffsetX, v.gpuLampOffsetY]);
       v.intensityAlpha = outputs.get(v);
-      peak = Math.max(peak, v.intensityAlpha);
     }
-    glideHops(track, items, now, animate);
+    const hopGhosts = [];
+    glideHops(track, items, now, animate, arc, hopGhosts);
+    // Тени: перескочившие лампы гаснут на старом месте, пропавшие по идентификатору (никому не
+    // отданные) досвечивают и гаснут за то же время — вместе с разгорающимися новыми это
+    // перекрёстное затухание без провала света.
+    const ghostItems = new Set();
+    const addGhost = (src, id, x, y, level) => {
+      if (!(level > 0.002)) return;
+      const ghost = Object.assign({}, src, { lampTraceId: `${id}~g`, px: x, py: y, intensityAlpha: level });
+      ghostItems.add(ghost);
+      items.push(ghost);
+    };
+    if (!arc) {
+      for (const g of hopGhosts) addGhost(g.v, g.v.lampTraceId, g.x, g.y, g.base * g.weight);
+      if (active) {
+        for (const o of orphans) {
+          const snap = !o.used && track.snaps?.get(o.id);
+          if (snap && snap.intensityAlpha > 0.002) track.ghosts.push({ id: o.id, snap, at: now });
+        }
+      }
+      track.ghosts = track.ghosts.filter((g) => {
+        if (present.has(g.id) || now - g.at >= HOP_GLIDE_MS || now < g.at) return false;
+        const f = (now - g.at) / HOP_GLIDE_MS;
+        addGhost(g.snap, g.id, g.snap.px, g.snap.py, g.snap.intensityAlpha * (1 - f * f * (3 - 2 * f)));
+        return true;
+      });
+      if (track.ghosts.length > 400) track.ghosts.length = 400;
+    }
+    // Хранитель: ни один кадр не должен остаться совсем без света, если в предыдущем он был.
+    // Смена фазы меняет идентификаторы ламп (старые исчезают, новые рождаются тёмными), а перескоки
+    // гасят лампы на старом месте — вместе это давало «все лампы погасли разом». Тогда одна лампа
+    // (ближайшая к той, что светила последней) остаётся полностью включённой, без рождения и перескока.
+    let litNow = 0,
+      best = null;
+    for (const v of items) {
+      if (v.intensityAlpha > litNow) {
+        litNow = v.intensityAlpha;
+        best = v;
+      }
+    }
+    if (items.length && rawPeak > 0.05 && track.hadLit === true && litNow < 0.5 * rawPeak) {
+      const eligible = items.filter((v) => raw.get(v) >= 0.5 * rawPeak);
+      let keeper = eligible.find((v) => v.lampTraceId === track.keeperId) || null;
+      if (!keeper) {
+        const from = track.litPos;
+        let bestD = Infinity;
+        for (const v of eligible) {
+          const o = origin.get(v),
+            d = from && Number.isFinite(o[0]) ? Math.hypot(o[0] - from.x, o[1] - from.y) : 0;
+          if (d < bestD || (d === bestD && keeper && v.lampTraceId < keeper.lampTraceId)) {
+            bestD = d;
+            keeper = v;
+          }
+        }
+      }
+      if (keeper) {
+        const o = origin.get(keeper);
+        keeper.intensityAlpha = raw.get(keeper);
+        keeper.px = o[0];
+        keeper.py = o[1];
+        if (Number.isFinite(o[2])) keeper.gpuLampOffsetX = o[2];
+        if (Number.isFinite(o[3])) keeper.gpuLampOffsetY = o[3];
+        next.set(keeper.lampTraceId, Math.max(next.get(keeper.lampTraceId) || 0, raw.get(keeper)));
+        track.keeperId = keeper.lampTraceId;
+        best = keeper;
+        litNow = keeper.intensityAlpha;
+      }
+    } else track.keeperId = null;
+    for (const v of items) peak = Math.max(peak, v.intensityAlpha);
+    track.hadLit = rawPeak > 0.05 && litNow >= 0.5 * rawPeak;
+    if (best && Number.isFinite(best.px)) track.litPos = { x: best.px, y: best.py };
+    track.birthPos = new Map();
+    const snaps = new Map();
+    for (const v of items) {
+      if (ghostItems.has(v)) continue;
+      const o = origin.get(v);
+      if (spatial(v) && o && Number.isFinite(o[0]) && Number.isFinite(o[1]))
+        track.birthPos.set(v.lampTraceId, o);
+      if (!arc && v.intensityAlpha > 0.002) {
+        const snap = track.snaps.get(v.lampTraceId) || {};
+        snaps.set(v.lampTraceId, Object.assign(snap, v));
+      }
+    }
+    track.snaps = snaps;
     track.levels = next;
     track.now = now;
     track.pending = pending;

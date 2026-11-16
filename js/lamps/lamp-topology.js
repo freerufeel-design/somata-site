@@ -1271,6 +1271,55 @@ function collectCircleVertexLampPoints(layerIndex, t, maxPoints = 260) {
   }
   return capLampPointList(out, maxPoints);
 }
+// Лампы вершин Blue-морфа — это сами вершины-носители общего скелета, по которым идёт линия
+// (circleSlide, topology). У каждой своя траектория от начального места к конечному; при смене
+// числа вершин лишние носители рождаются из соседней вершины или уходят в неё по своему пути.
+// Никакого сопоставления «к ближайшей вершине» и никакого появления лампы на пустом месте:
+// присутствие всегда 1, совпавшие лампы склеивает слияние близких ламп (lamp-stability).
+function collectSkeletonVertexLampPoints(layerIndex, t, maxPoints = 260) {
+  const runtime = window.SomataMorphRuntime;
+  if (!runtime?.fromBlue || !runtime?.getPlan || runtimeState.morph?.active !== true) return null;
+  const spec = runtime.fromBlue(layerIndex);
+  if (!spec || !['circleSlide', 'topology'].includes(spec.mode)) return null;
+  const a = spec.sourceLayer,
+    b = spec.targetLayer;
+  if (!a || !b || isSpiralLayer(a) || isSpiralLayer(b) || a.chaosStar === true || b.chaosStar === true)
+    return null;
+  const plan = runtime.getPlan(spec);
+  if (typeof plan?.evaluate !== 'function') return null;
+  // Концы фазы помощник отдаёт как сами фигуры (без носителей): берём носители чуть внутри.
+  const u = Math.max(1e-6, Math.min(1 - 1e-6, Number(t) || 0));
+  const carriers = plan.evaluate(u);
+  if (!Array.isArray(carriers) || !carriers.length) return null;
+  const layerKey = String(state.layers[layerIndex]?.id ?? layerIndex),
+    seen = new Set(),
+    out = [];
+  // В концевых кадрах фазы видимых контуров столько, сколько орбит у самой фигуры, а носителей —
+  // max(источник, цель): лишняя орбита совпадает с орбитой (номер mod число орбит), к ней и
+  // привязываем лампу, иначе она не находит свой контур и гаснет на кадр.
+  const atStart = !(Number(t) > 1e-6),
+    atEnd = Number(t) >= 1 - 1e-6;
+  const endpointOrbits = atStart ? plan.source?.length : atEnd ? plan.target?.length : 0;
+  for (const carrier of carriers) {
+    const orbit = Number.isInteger(carrier?.orbitIndex) ? carrier.orbitIndex : out.length;
+    if (seen.has(orbit)) continue; // при смене замкнутости орбита рисуется дважды
+    seen.add(orbit);
+    const pts = carrier?.points || [];
+    for (let j = 0; j < pts.length; j++)
+      out.push({
+        x: Number(pts[j]?.x) || 0,
+        y: Number(pts[j]?.y) || 0,
+        pathIndex: endpointOrbits > 0 ? orbit % endpointOrbits : orbit,
+        vertexIndex: j,
+        lampPresence: 1,
+        lampSourcePresent: true,
+        lampTargetPresent: true,
+        lampId: `skel:${orbit}:${j}`,
+        lampSeed: lampHash32(`${layerKey}:skel:${orbit}:${j}`),
+      });
+  }
+  return out.length ? capLampPointList(out, maxPoints) : null;
+}
 function collectMorphLampPoints(
   layerIndex,
   t,
@@ -1328,6 +1377,10 @@ function collectMorphLampPoints(
     return preserveBlueMorphLampIdentity(layerIndex, out);
   };
 
+  if (mode === 'key') {
+    const vertices = collectSkeletonVertexLampPoints(layerIndex, motionT, maxPoints);
+    if (vertices) return finalizeMorphLampPoints(vertices, { forceNearest: circumferenceMode });
+  }
   if (getLampEvaluationConfig()?.morphMotionMode === 'linear' && mode === 'key') {
     let exact = collectTrueLinearKeyLampPoints(layerIndex, motionT, maxPoints);
     if (exact.length) return finalizeMorphLampPoints(exact, { forceNearest: circumferenceMode });

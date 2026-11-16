@@ -46,7 +46,7 @@ function getPolygonMorphMode() {
     ? m.unifiedMode
     : UNIFIED_MORPH_KEYS.includes(m.mode)
       ? m.mode
-      : 'coordinated';
+      : 'circleSlide';
 }
 // Тип морфинга, который видит движок: внутри области слоя — выбранный для слоя,
 // снаружи (интерфейс, сохранение) — тип многоугольника.
@@ -72,7 +72,7 @@ function getSpiralMorphMode() {
 }
 function setUnifiedMorphMode(value) {
   const replacement = SomataMorphRegistry.migrate(value);
-  const next = UNIFIED_MORPH_KEYS.includes(replacement) ? replacement : 'coordinated';
+  const next = UNIFIED_MORPH_KEYS.includes(replacement) ? replacement : 'circleSlide';
   const m = state.morph;
   // Тип для многоугольника (порядок 0). Для спирали — setSpiralMorphMode.
   m.unifiedMode = next;

@@ -54,7 +54,7 @@ test('кривая: плюс прижимает к нулю, минус подн
   }
 });
 
-test('авто-экспонента: спокойная сцена не срабатывает, вспышка поднимает и затем возвращает', () => {
+test('авто-экспонента: спокойная сцена не срабатывает, вспышка плавно поднимает и затем возвращает', () => {
   const rt = createLampAutoExponentState();
   let t = 1000;
   for (let i = 0; i < 40; i++) {
@@ -63,17 +63,43 @@ test('авто-экспонента: спокойная сцена не сраб
   }
   assert.equal(rt.flashes, 0);
   t += 16;
-  const boosted = stepLampAutoExponent(rt, 120000, t, 1, true); // площадь выросла более чем вдвое
-  assert.equal(boosted, LAMP_AUTO_EXPONENT_BOOST);
+  const first = stepLampAutoExponent(rt, 120000, t, 1, true); // площадь выросла более чем вдвое
+  assert.ok(first > 0, 'вспышка замечена');
+  assert.ok(first < LAMP_AUTO_EXPONENT_BOOST * 0.2, 'но не скачком: первый кадр — малая доля добавки');
   assert.equal(rt.flashes, 1);
-  let prev = boosted;
+  // Нарастание: кадр за кадром без больших ступенек, до почти полной добавки.
+  let prev = first,
+    maxStep = first,
+    peak = first;
   for (let i = 0; i < 400; i++) {
     t += 16;
     const b = stepLampAutoExponent(rt, 120000, t, 1, true);
-    assert.ok(b <= prev + 1e-12, 'добавка только спадает, пока площадь держится');
+    maxStep = Math.max(maxStep, Math.abs(b - prev));
+    peak = Math.max(peak, b);
     prev = b;
   }
+  assert.ok(maxStep < LAMP_AUTO_EXPONENT_BOOST * 0.1, `шаг за кадр ${maxStep} слишком резкий`);
+  assert.ok(peak > LAMP_AUTO_EXPONENT_BOOST * 0.8, `добавка должна дорастать до цели, а не до ${peak}`);
   assert.equal(prev, 0, 'через несколько секунд добавка полностью ушла');
+  assert.equal(rt.flashes, 1, 'одна вспышка — один отсчёт');
+});
+
+test('авто-экспонента: слабый рост даёт малую добавку, сильный — полную (без порога-ступеньки)', () => {
+  const peakFor = (ratio) => {
+    const rt = createLampAutoExponentState();
+    let t = 1000;
+    for (let i = 0; i < 40; i++) stepLampAutoExponent(rt, 50000, (t += 16), 1, true);
+    let peak = 0;
+    for (let i = 0; i < 120; i++)
+      peak = Math.max(peak, stepLampAutoExponent(rt, 50000 * ratio, (t += 16), 1, true));
+    return peak;
+  };
+  const weak = peakFor(1.2),
+    mid = peakFor(1.5),
+    strong = peakFor(3);
+  assert.ok(weak < mid && mid < strong, `${weak} < ${mid} < ${strong}`);
+  assert.ok(weak < LAMP_AUTO_EXPONENT_BOOST * 0.2);
+  assert.ok(strong > LAMP_AUTO_EXPONENT_BOOST * 0.8);
 });
 
 test('авто-экспонента: без перегрузки и на первом кадре вспышка не фиксируется', () => {
@@ -159,6 +185,10 @@ test('расчёт: авто-экспонента по умолчанию вык
       for (let i = 0; i < 30; i++) at(8); // спокойно: умеренная нагрузка
       return {
         first: at(24),
+        later: (() => {
+          for (let i = 0; i < 20; i++) at(24);
+          return at(24);
+        })(),
         settled: (() => {
           for (let i = 0; i < 400; i++) at(24);
           return at(24);
@@ -167,7 +197,9 @@ test('расчёт: авто-экспонента по умолчанию вык
     };
     const off = timeline(false);
     const on = timeline(true);
-    assert.ok(on.first < off.first, 'в момент вспышки с авто-экспонентой коэффициент ниже');
+    assert.ok(on.first <= off.first, 'в момент вспышки коэффициент не выше, чем без авто-экспоненты');
+    assert.ok(on.first > off.first * 0.9, 'и он меняется не скачком, а плавно');
+    assert.ok(on.later < off.later, 'через ~300 мс добавка набрана: коэффициент заметно ниже');
     assert.equal(on.settled, off.settled, 'после затухания добавки результат тот же, что без неё');
   } finally {
     rr.renderRuntime.active = false;

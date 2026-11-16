@@ -174,6 +174,7 @@ function collectPreparedSpiralLampPoints(layer, paths, config, maxPoints = 260, 
           lampId,
           lampSeed: lampHash32(`${layerKey}:${lampId}`),
           lampPresence: (path._alpha ?? 1) * (p.__profileLampPresence ?? 1),
+          lampRank: bend ? 1 : 0,
         };
         (bend ? bends : out).push(point);
       }

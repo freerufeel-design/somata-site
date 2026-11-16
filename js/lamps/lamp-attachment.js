@@ -413,12 +413,14 @@ function mergeLampKeysAndBends(keys, bends, maxPoints) {
   return capLampPointList(
     [
       ...keys,
-      ...bends.filter((p) => {
-        const k = pos(p);
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      }),
+      ...bends
+        .filter((p) => {
+          const k = pos(p);
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        })
+        .map((p) => (p.lampRank === 1 ? p : { ...p, lampRank: 1 })),
     ],
     maxPoints,
   );

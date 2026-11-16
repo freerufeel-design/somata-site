@@ -248,6 +248,13 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
           strokeGrowth: carrier.strokeGrowth,
           phaseFollower: carrier.phaseFollower,
           _alpha: carrier.alpha ?? 1,
+          ...(carrier.fillRole ? { _fillRole: carrier.fillRole, _fillPhase: carrier.fillPhase } : null),
+          ...(carrier.fillPathSource !== undefined
+            ? {
+                _fillPathSource: carrier.fillPathSource !== false,
+                _fillPathTarget: carrier.fillPathTarget !== false,
+              }
+            : null),
           spiralOrder: carrier.order,
         }
       : {};
