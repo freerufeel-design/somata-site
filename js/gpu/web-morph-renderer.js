@@ -1,17 +1,92 @@
+import './web-corner-resource.js'; // initialisation order: this module runs after it
+import { mainCanvas } from '../ui/profile-presets.js';
+import { requestMainCanvasRender } from '../core/scheduler.js';
+import { isSpiralLayer } from '../geometry/spiral/order-params.js';
+import { WebGPUDeviceHub } from './device-hub.js';
+import { GPUColorCache, assertWebGPUShaderModule } from './gpu-utils.js';
+import { WebGPUCorridorCopyStore } from './corridor-copy-store.js';
+import { webRuntime } from '../effects/web.js';
+import { gpuArcEncoderInputT } from './morph-arc-resource.js';
+import {
+  GPU_WEB_MAX_CORNERS,
+  GPU_WEB_MAX_THREAD_SLOTS,
+  encodeGpuWebCornerResource,
+  noteGpuWebCornerSubmitted,
+} from './web-corner-resource.js';
+import { noteSuppressedError } from '../core/suppressed-errors.js';
 
+const WebGPUWebMorphRenderer = (() => {
+  let device = null,
+    generation = -1,
+    format = null,
+    ready = false,
+    initializing = null,
+    lastError = 'not-initialized';
+  let uniformLayout = null,
+    pathLayout = null,
+    copyLayout = null,
+    uniformBuffers = [],
+    uniformBinds = [],
+    uniformCursor = 0,
+    pathBinds = new WeakMap(),
+    copyBinds = new WeakMap(),
+    renderBundleCache = new WeakMap(),
+    bundleObjectIds = new WeakMap(),
+    bundleObjectSerial = 0;
+  let bevelCombined = null,
+    roundCombined = null,
+    bevelCorridorCombined = null,
+    roundCorridorCombined = null,
+    crossCorridorCombined = null;
+  let bevelOpenCombined = null,
+    roundOpenCombined = null,
+    bevelOpenCorridorCombined = null,
+    roundOpenCorridorCombined = null;
+  let maskPipeline = null,
+    maskCorridorPipeline = null,
+    compositePipeline = null,
+    haloTexture = null,
+    haloView = null,
+    coreTexture = null,
+    coreView = null,
+    stencilTexture = null,
+    stencilView = null,
+    compositeBind = null,
+    width = 0,
+    height = 0,
+    targetViews = new WeakMap();
+  const uniformData = new Float32Array(36);
+  const stats = {
+    frames: 0,
+    draws: 0,
+    indirectDraws: 0,
+    corridorFrames: 0,
+    corridorCopies: 0,
+    logicalThreadSlots: 0,
+    roundingThreadSlots: 0,
+    cornerComputes: 0,
+    arcComputes: 0,
+    cpuPathBuildsAvoided: 0,
+    cpuCornerScansAvoided: 0,
+    cpuPathTablesAvoided: 0,
+    cpuThreadObjectsAvoided: 0,
+    cpuMaskBuildsAvoided: 0,
+    uniformBindReuses: 0,
+    bundleBuilds: 0,
+    bundleHits: 0,
+    bundleExecutes: 0,
+    bundleFallbacks: 0,
+    fusedColorPasses: 0,
+    fullScreenCompositesAvoided: 0,
+    msaaSamplesAvoided: 0,
+    perVertexArcSamplesAvoided: 0,
+    masterThreadGeometryFrames: 0,
+    corridorCrossLinkFrames: 0,
+    corridorCrossLinkSegments: 0,
+    failures: 0,
+  };
 
-window.__spiroRegisterModule?.('js/gpu/web-morph-renderer');
-
-const WebGPUWebMorphRenderer=(()=>{
-    let device=null,generation=-1,format=null,ready=false,initializing=null,lastError='not-initialized';
-    let uniformLayout=null,pathLayout=null,copyLayout=null,uniformBuffers=[],uniformBinds=[],uniformCursor=0,pathBinds=new WeakMap(),copyBinds=new WeakMap(),renderBundleCache=new WeakMap(),bundleObjectIds=new WeakMap(),bundleObjectSerial=0;
-    let bevelCombined=null,roundCombined=null,bevelCorridorCombined=null,roundCorridorCombined=null,crossCorridorCombined=null;
-    let maskPipeline=null,maskCorridorPipeline=null,compositePipeline=null,haloTexture=null,haloView=null,coreTexture=null,coreView=null,stencilTexture=null,stencilView=null,compositeBind=null,width=0,height=0,targetViews=new WeakMap();
-    const uniformData=new Float32Array(36);
-    const stats={frames:0,draws:0,indirectDraws:0,corridorFrames:0,corridorCopies:0,logicalThreadSlots:0,roundingThreadSlots:0,cornerComputes:0,arcComputes:0,
-        cpuPathBuildsAvoided:0,cpuCornerScansAvoided:0,cpuPathTablesAvoided:0,cpuThreadObjectsAvoided:0,cpuMaskBuildsAvoided:0,uniformBindReuses:0,bundleBuilds:0,bundleHits:0,bundleExecutes:0,bundleFallbacks:0,fusedColorPasses:0,fullScreenCompositesAvoided:0,msaaSamplesAvoided:0,perVertexArcSamplesAvoided:0,masterThreadGeometryFrames:0,corridorCrossLinkFrames:0,corridorCrossLinkSegments:0,failures:0};
-
-    const WGSL=`
+  const WGSL = `
 struct U{
     viewport:vec2<f32>,_pad0:vec2<f32>,
     row0:vec4<f32>,row1:vec4<f32>,color:vec4<f32>,color2:vec4<f32>,
@@ -32,9 +107,9 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{return vec2<f32>(u.row0.x*p.x+u.row0.y*p.
 fn threadEndpoints(recIndex:u32)->array<vec2<f32>,3>{let g0=threadGeometry[recIndex*2u];let g1=threadGeometry[recIndex*2u+1u];return array<vec2<f32>,3>(g0.xy,g0.zw,g1.xy);}
 fn quad(a:vec2<f32>,q:vec2<f32>,b:vec2<f32>,t:f32)->vec2<f32>{let s=1.0-t;return s*s*a+2.0*s*t*q+t*t*b;}
 fn capsuleCorner(vid:u32)->vec2<f32>{return array<vec2<f32>,4>(vec2<f32>(-1.0,-1.0),vec2<f32>(1.0,-1.0),vec2<f32>(-1.0,1.0),vec2<f32>(1.0,1.0))[vid%4u];}
-fn emitSegment(a0:vec2<f32>,b0:vec2<f32>,vid:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool)->Vout{let valid=select(1.0,0.0,a0.x>1e19||b0.x>1e19);let a=screenPoint(applyCopy(a0,c0,c1,useCopy));let b=screenPoint(applyCopy(b0,c0,c1,useCopy));let d=b-a;let len=max(length(d),0.0001);let dir=d/len;let n=vec2<f32>(-dir.y,dir.x);let copyScale=select(1.0,max(0.000001,abs(c1.z)),useCopy);let hw=max(0.001,u.style.x*copyScale);let halo=max(0.1,u.style.y);let pad=hw+halo+2.5;let c=capsuleCorner(vid);let tx=(c.x+1.0)*0.5;let lx=mix(-pad,len+pad,tx);let ly=c.y*pad;let p=a+dir*lx+n*ly;var o:Vout;if(valid>0.5){o.p=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);}else{o.p=vec4<f32>(-3.0,-3.0,0.0,1.0);}o.local=vec2<f32>(lx,ly);o.segLen=len;o.halfWidth=hw;o.haloRadius=halo;o.alpha=u.style.z*select(1.0,c0.z,useCopy)*u.color.a;o.valid=valid;return o;}
-fn bevelVertex(vid:u32,recIndex:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool)->Vout{let e=threadEndpoints(recIndex);return emitSegment(e[0],e[2],vid,c0,c1,useCopy);}
-fn roundVertex(vid:u32,recIndex:u32,step:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool)->Vout{let e=threadEndpoints(recIndex);let t0=f32(step)/12.0;let t1=f32(step+1u)/12.0;return emitSegment(quad(e[0],e[1],e[2],t0),quad(e[0],e[1],e[2],t1),vid,c0,c1,useCopy);}
+fn emitSegment(a0:vec2<f32>,b0:vec2<f32>,vid:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool,stitchPresence:f32)->Vout{let valid=select(1.0,0.0,a0.x>1e19||b0.x>1e19);let a=screenPoint(applyCopy(a0,c0,c1,useCopy));let b=screenPoint(applyCopy(b0,c0,c1,useCopy));let d=b-a;let len=max(length(d),0.0001);let dir=d/len;let n=vec2<f32>(-dir.y,dir.x);let copyScale=select(1.0,max(0.000001,abs(c1.z)),useCopy);let hw=max(0.001,u.style.x*copyScale);let halo=max(0.1,u.style.y);let pad=hw+halo+2.5;let c=capsuleCorner(vid);let tx=(c.x+1.0)*0.5;let lx=mix(-pad,len+pad,tx);let ly=c.y*pad;let p=a+dir*lx+n*ly;var o:Vout;if(valid>0.5){o.p=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);}else{o.p=vec4<f32>(-3.0,-3.0,0.0,1.0);}o.local=vec2<f32>(lx,ly);o.segLen=len;o.halfWidth=hw;o.haloRadius=halo;o.alpha=u.style.z*select(1.0,c0.z,useCopy)*u.color.a*clamp(stitchPresence,0.0,1.0);o.valid=valid;return o;}
+fn bevelVertex(vid:u32,recIndex:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool)->Vout{let e=threadEndpoints(recIndex);let presence=threadGeometry[recIndex*2u+1u].z;return emitSegment(e[0],e[2],vid,c0,c1,useCopy,presence);}
+fn roundVertex(vid:u32,recIndex:u32,step:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool)->Vout{let e=threadEndpoints(recIndex);let presence=threadGeometry[recIndex*2u+1u].z;let t0=f32(step)/12.0;let t1=f32(step+1u)/12.0;return emitSegment(quad(e[0],e[1],e[2],t0),quad(e[0],e[1],e[2],t1),vid,c0,c1,useCopy,presence);}
 @vertex fn vsBevel(@builtin(vertex_index)vid:u32,@builtin(instance_index)iid:u32)->Vout{return bevelVertex(vid,iid,vec4<f32>(0.0),vec4<f32>(0.0),false);}
 @vertex fn vsRound(@builtin(vertex_index)vid:u32,@builtin(instance_index)iid:u32)->Vout{return roundVertex(vid,iid/12u,iid%12u,vec4<f32>(0.0),vec4<f32>(0.0),false);}
 @vertex fn vsBevelCorridor(@builtin(vertex_index)vid:u32,@builtin(instance_index)iid:u32)->Vout{let n=max(1u,threadCount[0]);let ci=iid/n;let ri=iid%n;return bevelVertex(vid,ri,copyData[ci*2u],copyData[ci*2u+1u],true);}
@@ -61,69 +136,748 @@ fn maskVertex(iid:u32,vid:u32,c0:vec4<f32>,c1:vec4<f32>,useCopy:bool)->MOut{let 
 @vertex fn vsMaskCorridor(@builtin(vertex_index)vid:u32,@builtin(instance_index)iid:u32)->MOut{let segCount=max(1u,u32(u.draw.x+0.5));let ci=iid/segCount;return maskVertex(iid,vid,copyData[ci*2u],copyData[ci*2u+1u],true);}
 @fragment fn fsMask()->@location(0) vec4<f32>{return vec4<f32>(0.0);}
 `;
-    const COMPOSITE_WGSL=`@group(0) @binding(0) var haloTex:texture_2d<f32>;@group(0) @binding(1) var coreTex:texture_2d<f32>;struct V{@builtin(position)p:vec4<f32>};@vertex fn vs(@builtin(vertex_index)i:u32)->V{let q=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0))[i];var o:V;o.p=vec4<f32>(q,0.0,1.0);return o;}@fragment fn fs(@builtin(position)p:vec4<f32>)->@location(0) vec4<f32>{let d=textureDimensions(haloTex);let q=vec2<i32>(clamp(i32(p.x),0,i32(d.x)-1),clamp(i32(p.y),0,i32(d.y)-1));let h=textureLoad(haloTex,q,0);let c=textureLoad(coreTex,q,0);return c+h*(1.0-c.a);}`;
-    function safeDestroy(x){try{x?.destroy?.();}catch(_){} }
-    function resetSize(){safeDestroy(haloTexture);safeDestroy(coreTexture);safeDestroy(stencilTexture);haloTexture=coreTexture=stencilTexture=null;haloView=coreView=stencilView=compositeBind=null;width=height=0;}
-    function blendMax(){return{color:{srcFactor:'one',dstFactor:'one',operation:'max'},alpha:{srcFactor:'one',dstFactor:'one',operation:'max'}};}
-    async function initAsync(){if(ready&&device&&generation===WebGPUDeviceHub.getGeneration())return true;if(initializing)return initializing;const task=(async()=>{try{const shared=await WebGPUDeviceHub.acquire();device=shared.device;generation=shared.generation;format=navigator.gpu.getPreferredCanvasFormat();const mod=device.createShaderModule({label:'SpiroStar GPU Morph Web WGSL',code:WGSL}),comp=device.createShaderModule({label:'SpiroStar GPU Morph Web composite WGSL',code:COMPOSITE_WGSL});if(typeof assertWebGPUShaderModule==='function'){await assertWebGPUShaderModule(mod,'SpiroStar GPU Morph Web WGSL');await assertWebGPUShaderModule(comp,'SpiroStar GPU Morph Web composite WGSL');}
-        uniformLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'uniform'}}]});pathLayout=device.createBindGroupLayout({entries:[0,1,2,3].map(binding=>({binding,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}))});copyLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
-        const stencilFace={compare:'equal',failOp:'keep',depthFailOp:'keep',passOp:'keep'},depthStencil={format:'depth24plus-stencil8',depthWriteEnabled:false,depthCompare:'always',stencilFront:stencilFace,stencilBack:stencilFace,stencilReadMask:1,stencilWriteMask:0},targets=[{format,blend:blendMax()},{format,blend:blendMax()}];
-
-        const makeThread=(entry,corridor=false)=>device.createRenderPipeline({layout:device.createPipelineLayout({bindGroupLayouts:corridor?[uniformLayout,pathLayout,copyLayout]:[uniformLayout,pathLayout]}),vertex:{module:mod,entryPoint:entry},fragment:{module:mod,entryPoint:'fsCombined',targets},primitive:{topology:'triangle-strip',cullMode:'none'},depthStencil});
-        bevelCombined=makeThread('vsBevel');roundCombined=makeThread('vsRound');bevelCorridorCombined=makeThread('vsBevelCorridor',true);roundCorridorCombined=makeThread('vsRoundCorridor',true);// Cross-copy links share a pass that has a Depth24PlusStencil8 attachment, so the
-
-        const crossStencilFace={compare:'always',failOp:'keep',depthFailOp:'keep',passOp:'keep'},crossDepthStencil={format:'depth24plus-stencil8',depthWriteEnabled:false,depthCompare:'always',stencilFront:crossStencilFace,stencilBack:crossStencilFace,stencilReadMask:0,stencilWriteMask:0};
-        crossCorridorCombined=device.createRenderPipeline({layout:device.createPipelineLayout({bindGroupLayouts:[uniformLayout,pathLayout,copyLayout]}),vertex:{module:mod,entryPoint:'vsCrossCorridor'},fragment:{module:mod,entryPoint:'fsCombined',targets},primitive:{topology:'triangle-strip',cullMode:'none'},depthStencil:crossDepthStencil});
-        const invert={compare:'always',failOp:'keep',depthFailOp:'keep',passOp:'invert'},maskDepth={format:'depth24plus-stencil8',depthWriteEnabled:false,depthCompare:'always',stencilFront:invert,stencilBack:invert,stencilReadMask:1,stencilWriteMask:1},maskTarget=[{format,writeMask:0}];
-        const makeMask=(corridor=false)=>device.createRenderPipeline({layout:device.createPipelineLayout({bindGroupLayouts:corridor?[uniformLayout,pathLayout,copyLayout]:[uniformLayout,pathLayout]}),vertex:{module:mod,entryPoint:corridor?'vsMaskCorridor':'vsMask'},fragment:{module:mod,entryPoint:'fsMask',targets:maskTarget},primitive:{topology:'triangle-list',cullMode:'none'},depthStencil:maskDepth});maskPipeline=makeMask(false);maskCorridorPipeline=makeMask(true);
-        const over={color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}};compositePipeline=device.createRenderPipeline({layout:'auto',vertex:{module:comp,entryPoint:'vs'},fragment:{module:comp,entryPoint:'fs',targets:[{format,blend:over}]},primitive:{topology:'triangle-list'}});
-        uniformBuffers=Array.from({length:96},(_,i)=>device.createBuffer({label:`SpiroStar Morph Web uniforms ${i}`,size:144,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}));uniformBinds=uniformBuffers.map(buffer=>device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer}}]}));uniformCursor=0;pathBinds=new WeakMap();copyBinds=new WeakMap();renderBundleCache=new WeakMap();bundleObjectIds=new WeakMap();bundleObjectSerial=0;ready=true;lastError='';try{requestMainCanvasRender?.();}catch(_){}return true;
-    }catch(err){ready=false;lastError=String(err?.message||err);stats.failures++;return false;}})();initializing=task;try{return await task;}finally{if(initializing===task)initializing=null;}}
-    function warmup(){const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(ready&&gen!==generation){ready=false;device=null;resetSize();uniformBuffers=[];uniformBinds=[];pathBinds=new WeakMap();copyBinds=new WeakMap();renderBundleCache=new WeakMap();bundleObjectIds=new WeakMap();bundleObjectSerial=0;targetViews=new WeakMap();}if(!ready&&!initializing)void initAsync();return ready;}
-    function ensureSize(w,h){w=Math.max(1,w|0);h=Math.max(1,h|0);if(width===w&&height===h&&haloTexture&&coreTexture&&stencilTexture)return true;resetSize();width=w;height=h;haloTexture=device.createTexture({label:'SpiroStar Morph Web halo scratch',size:[w,h,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});haloView=haloTexture.createView();coreTexture=device.createTexture({label:'SpiroStar Morph Web core scratch',size:[w,h,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});coreView=coreTexture.createView();stencilTexture=device.createTexture({label:'SpiroStar Morph Web parity stencil',size:[w,h,1],format:'depth24plus-stencil8',usage:GPUTextureUsage.RENDER_ATTACHMENT});stencilView=stencilTexture.createView();compositeBind=device.createBindGroup({layout:compositePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:haloView},{binding:1,resource:coreView}]});return true;}
-    function pathBind(prepared){const rec=prepared.gpuWebCornerResource,arc=prepared.gpuMorphArcTable?._gpuMorphArcResource;if(!rec||!arc)return null;let byArc=pathBinds.get(rec);if(!byArc){byArc=new WeakMap();pathBinds.set(rec,byArc);}let bg=byArc.get(arc);if(bg)return bg;bg=device.createBindGroup({layout:pathLayout,entries:[{binding:0,resource:{buffer:arc.segmentBuffer}},{binding:1,resource:{buffer:rec.threadGeometryBuffer}},{binding:2,resource:{buffer:rec.threadCountBuffer}},{binding:3,resource:{buffer:rec.cornerIndexBuffer}}]});byArc.set(arc,bg);return bg;}
-    function copyBind(buffer){let bg=copyBinds.get(buffer);if(bg)return bg;bg=device.createBindGroup({layout:copyLayout,entries:[{binding:0,resource:{buffer}}]});copyBinds.set(buffer,bg);return bg;}
-    function bindUniform(ctx,prepared,alpha,type,copyCount){const m=ctx?.getTransform?.();if(!m)return null;const c=GPUColorCache.rgba(prepared.color||'#ffffff'),c2=GPUColorCache.rgba(prepared.style==='laser'?(prepared.secondaryColor||'#00ffff'):(prepared.color||'#ffffff')),sx=Math.hypot(Number(m.a)||0,Number(m.b)||0),sy=Math.hypot(Number(m.c)||0,Number(m.d)||0),screenScale=Math.sqrt(Math.max(1e-12,sx*sy)),halfWidth=Math.max(.05,Number(prepared.renderWidth??prepared.width)||.6)*screenScale*.5,fallbackHalo=Math.max(.1,Math.min(6,Math.max(.03,Number(prepared.width)||.6)*2.4)*Math.max(.1,Number(prepared.dpr)||1)),halo=Math.max(.1,Number(prepared.haloRadius)||fallbackHalo),threadAlpha=Math.max(0,Math.min(1,Number(prepared.threadAlpha??.88)));
-        uniformData.fill(0);uniformData[0]=mainCanvas.width;uniformData[1]=mainCanvas.height;uniformData[4]=m.a;uniformData[5]=m.c;uniformData[6]=m.e;uniformData[8]=m.b;uniformData[9]=m.d;uniformData[10]=m.f;
-        uniformData.set(c,12);uniformData.set(c2,16);uniformData[20]=halfWidth;uniformData[21]=halo;uniformData[22]=Math.max(0,Math.min(1,Number(alpha)||0))*threadAlpha;uniformData[23]=Math.max(.1,Number(prepared.spacing)||10);{const df=Math.max(0,Math.min(1,(Number(prepared.depthPercent)||0)/100));uniformData[24]=prepared.placementMode==='corners'?-(df+1e-7):df;}uniformData[25]=Math.max(0,Number(prepared.depthMultiplier)||0);uniformData[26]=Math.max(0,Number(prepared.jitterStrength)||0);uniformData[27]=type==='rounding'?1:0;uniformData[28]=prepared.gpuMorphResource?.segmentCount||prepared.gpuMorphArcTable?._gpuMorphArcResource?.segmentCount||0;uniformData[29]=copyCount||1;uniformData[32]=prepared.oscillating===true?1:0;uniformData[33]=Number(prepared.oscillationPhase)||0;uniformData[34]=Math.min(8,Math.max(0,(Number(prepared.oscillationStrength)||0)/100)*Math.max(.015625,Math.min(64,Number(prepared.oscillationStrengthMultiplier)||1)));uniformData[35]=Math.max(1,Number(prepared.gpuMorphArcTable?._gpuMorphArcResource?.subdiv)||1);
-        const slot=uniformCursor++%uniformBuffers.length,ub=uniformBuffers[slot];device.queue.writeBuffer(ub,0,uniformData.buffer,0,144);stats.uniformBindReuses++;return{bind:uniformBinds[slot],slot};}
-    function bundleObjectId(obj){if(!obj)return 0;let id=bundleObjectIds.get(obj);if(id)return id;id=++bundleObjectSerial;bundleObjectIds.set(obj,id);return id;}
-    function webBundle(corner,pbg,copyBg,uniformRow,kind,round=false,arcSegments=0){
-        if(typeof device?.createRenderBundleEncoder!=='function'||!corner||!pbg||!uniformRow?.bind)return null;
-        let cache=renderBundleCache.get(corner);if(!cache){cache=new Map();renderBundleCache.set(corner,cache);}
-        const corridor=Boolean(copyBg),key=`${kind}|${round?1:0}|${bundleObjectId(copyBg)}|${uniformRow.slot}|${arcSegments}`;let hit=cache.get(key);
-        if(hit){stats.bundleHits++;return hit;}
-        try{
-            const rbe=device.createRenderBundleEncoder({label:'SpiroStar Morph Web retained bundle',colorFormats:kind==='mask'?[format]:[format,format],depthStencilFormat:'depth24plus-stencil8',sampleCount:1});
-            if(kind==='mask'){
-                rbe.setPipeline(corridor?maskCorridorPipeline:maskPipeline);rbe.setBindGroup(0,uniformRow.bind);rbe.setBindGroup(1,pbg);if(corridor)rbe.setBindGroup(2,copyBg);rbe.draw(3,arcSegments);
-            }else{
-                const pipe=round?(corridor?roundCorridorCombined:roundCombined):(corridor?bevelCorridorCombined:bevelCombined);
-                const indirectOffset=corridor?(round?48:32):(round?16:0);rbe.setPipeline(pipe);rbe.setBindGroup(0,uniformRow.bind);rbe.setBindGroup(1,pbg);if(corridor)rbe.setBindGroup(2,copyBg);rbe.drawIndirect(corner.indirectBuffer,indirectOffset);
-            }
-            const bundle=rbe.finish();hit={bundle,list:[bundle]};cache.set(key,hit);stats.bundleBuilds++;return hit;
-        }catch(_){stats.bundleFallbacks++;return null;}
+  const COMPOSITE_WGSL = `@group(0) @binding(0) var haloTex:texture_2d<f32>;@group(0) @binding(1) var coreTex:texture_2d<f32>;struct V{@builtin(position)p:vec4<f32>};@vertex fn vs(@builtin(vertex_index)i:u32)->V{let q=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0))[i];var o:V;o.p=vec4<f32>(q,0.0,1.0);return o;}@fragment fn fs(@builtin(position)p:vec4<f32>)->@location(0) vec4<f32>{let d=textureDimensions(haloTex);let q=vec2<i32>(clamp(i32(p.x),0,i32(d.x)-1),clamp(i32(p.y),0,i32(d.y)-1));let h=textureLoad(haloTex,q,0);let c=textureLoad(coreTex,q,0);return c+h*(1.0-c.a);}`;
+  function safeDestroy(x) {
+    try {
+      x?.destroy?.();
+    } catch (error) {
+      noteSuppressedError('gpu/web-morph-renderer#safeDestroy', error);
     }
-    function beginStencil(enc){return enc.beginRenderPass({colorAttachments:[{view:haloView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'discard'}],depthStencilAttachment:{view:stencilView,depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'store',stencilClearValue:0,stencilLoadOp:'clear',stencilStoreOp:'store'}});}
-    function beginThread(enc){return enc.beginRenderPass({colorAttachments:[{view:haloView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'},{view:coreView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}],depthStencilAttachment:{view:stencilView,depthLoadOp:'load',depthStoreOp:'store',stencilLoadOp:'load',stencilStoreOp:'store'}});}
-    function composite(enc,targetTexture){let targetView=targetViews.get(targetTexture);if(!targetView){targetView=targetTexture.createView();targetViews.set(targetTexture,targetView);}const pass=enc.beginRenderPass({colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}]});pass.setPipeline(compositePipeline);pass.setBindGroup(0,compositeBind);pass.draw(3);pass.end();}
-    function variants(prepared){const tr=prepared.transition;if(!tr)return[{type:prepared.cfg?.type==='rounding'?'rounding':'bevel',weight:1}];const duration=Math.max(60,Number(tr.duration)||180),p=Math.max(0,Math.min(1,(Number(prepared.now)-Number(tr.start||0))/duration)),e=p*p*p*(p*(p*6-15)+10);if(p>=1&&prepared.owner){try{webRuntime.transitionByLayer.delete(prepared.owner.id);prepared.transition=null;}catch(_){}}if(tr.kind==='type')return[{type:tr.fromType==='rounding'?'rounding':'bevel',weight:1-e},{type:tr.toType==='rounding'?'rounding':'bevel',weight:e}].filter(v=>v.weight>.001);return e>.001?[{type:tr.toType==='rounding'?'rounding':'bevel',weight:e}]:[];}
-    function canEncode(prepared){const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1,corner=prepared?.gpuWebCornerResource,arc=prepared?.gpuMorphArcTable?._gpuMorphArcResource;return warmup()&&generation===gen&&prepared?.gpuMorphWebNative===true&&corner?.ready===true&&corner.generation===gen&&arc?.ready===true&&arc.generation===gen;}
-    function encode(targetTexture,prepared,ctx,baseAlpha,copies=null,alphas=null,frameCtx=null,footprint=1){if(!targetTexture||baseAlpha<=.001||!canEncode(prepared)||!ensureSize(mainCanvas.width,mainCanvas.height))return{handled:false,commandBuffer:null};try{const arc=prepared.gpuMorphArcTable?._gpuMorphArcResource,corner=prepared.gpuWebCornerResource;
-        let copyCount=1,copyBg=null;if(Array.isArray(copies)&&copies.length){const shared=WebGPUCorridorCopyStore.acquire(device,generation,frameCtx,copies,alphas,'web',footprint,frameCtx?.layer);if(!shared?.buffer||!shared.k)return{handled:true,commandBuffer:null};copyCount=shared.k;copyBg=copyBind(shared.buffer);stats.corridorFrames++;stats.corridorCopies+=copyCount;}
-        const enc=device.createCommandEncoder({label:`SpiroStar GPU Morph Web L${arc.morphRec.layerIndex}`});if(!encodeGpuWebCornerResource(corner,prepared.gpuMorphArcTable,enc,prepared.angleThreshold,prepared.now,prepared.spacing,prepared.depthPercent,prepared.depthMultiplier,copyCount,frameCtx,prepared.placementMode==='corners',prepared.jitterStrength,prepared.oscillating===true,prepared.oscillationPhase,Math.min(8,Math.max(0,(Number(prepared.oscillationStrength)||0)/100)*Math.max(.015625,Math.min(64,Number(prepared.oscillationStrengthMultiplier)||1)))))throw new Error('Web corner/thread compute failed');stats.cornerComputes++;stats.arcComputes++;stats.masterThreadGeometryFrames++;
-        const pbg=pathBind(prepared);if(!pbg)return{handled:false,commandBuffer:null};const vars=variants(prepared);if(!vars.length)return{handled:true,commandBuffer:null};const binds=vars.map(v=>({v,bg:bindUniform(ctx,prepared,baseAlpha*v.weight,v.type,copyCount)})).filter(x=>x.bg);if(!binds.length)return{handled:false,commandBuffer:null};
-        const mask=beginStencil(enc),maskBundle=webBundle(corner,pbg,copyBg,binds[0].bg,'mask',false,arc.segmentCount*copyCount);if(maskBundle){mask.executeBundles(maskBundle.list);stats.bundleExecutes++;}else{mask.setPipeline(copyBg?maskCorridorPipeline:maskPipeline);mask.setBindGroup(0,binds[0].bg.bind);mask.setBindGroup(1,pbg);if(copyBg)mask.setBindGroup(2,copyBg);mask.draw(3,arc.segmentCount*copyCount);}mask.end();
-        const pass=beginThread(enc);pass.setStencilReference(1);for(const item of binds){const round=item.v.type==='rounding',bundled=webBundle(corner,pbg,copyBg,item.bg,'thread',round,arc.segmentCount*copyCount);if(bundled){pass.executeBundles(bundled.list);stats.bundleExecutes++;}else{const indirectOffset=copyBg?(round?48:32):(round?16:0);pass.setPipeline(round?(copyBg?roundCorridorCombined:roundCombined):(copyBg?bevelCorridorCombined:bevelCombined));pass.setBindGroup(0,item.bg.bind);pass.setBindGroup(1,pbg);if(copyBg)pass.setBindGroup(2,copyBg);pass.drawIndirect(corner.indirectBuffer,indirectOffset);}stats.draws++;stats.indirectDraws++;stats.logicalThreadSlots+=GPU_WEB_MAX_THREAD_SLOTS*copyCount;if(round)stats.roundingThreadSlots+=GPU_WEB_MAX_THREAD_SLOTS*copyCount;}
+  }
+  function resetSize() {
+    safeDestroy(haloTexture);
+    safeDestroy(coreTexture);
+    safeDestroy(stencilTexture);
+    haloTexture = coreTexture = stencilTexture = null;
+    haloView = coreView = stencilView = compositeBind = null;
+    width = height = 0;
+  }
+  function blendMax() {
+    return {
+      color: { srcFactor: 'one', dstFactor: 'one', operation: 'max' },
+      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'max' },
+    };
+  }
+  async function initAsync() {
+    if (ready && device && generation === WebGPUDeviceHub.getGeneration()) return true;
+    if (initializing) return initializing;
+    const task = (async () => {
+      try {
+        const shared = await WebGPUDeviceHub.acquire();
+        device = shared.device;
+        generation = shared.generation;
+        format = navigator.gpu.getPreferredCanvasFormat();
+        const mod = device.createShaderModule({ label: 'SpiroStar GPU Morph Web WGSL', code: WGSL }),
+          comp = device.createShaderModule({
+            label: 'SpiroStar GPU Morph Web composite WGSL',
+            code: COMPOSITE_WGSL,
+          });
+        {
+          await assertWebGPUShaderModule(mod, 'SpiroStar GPU Morph Web WGSL');
+          await assertWebGPUShaderModule(comp, 'SpiroStar GPU Morph Web composite WGSL');
+        }
+        uniformLayout = device.createBindGroupLayout({
+          entries: [
+            {
+              binding: 0,
+              visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+              buffer: { type: 'uniform' },
+            },
+          ],
+        });
+        pathLayout = device.createBindGroupLayout({
+          entries: [0, 1, 2, 3].map((binding) => ({
+            binding,
+            visibility: GPUShaderStage.VERTEX,
+            buffer: { type: 'read-only-storage' },
+          })),
+        });
+        copyLayout = device.createBindGroupLayout({
+          entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } }],
+        });
+        const stencilFace = { compare: 'equal', failOp: 'keep', depthFailOp: 'keep', passOp: 'keep' },
+          depthStencil = {
+            format: 'depth24plus-stencil8',
+            depthWriteEnabled: false,
+            depthCompare: 'always',
+            stencilFront: stencilFace,
+            stencilBack: stencilFace,
+            stencilReadMask: 1,
+            stencilWriteMask: 0,
+          },
+          targets = [
+            { format, blend: blendMax() },
+            { format, blend: blendMax() },
+          ];
 
-        if(copyBg&&prepared.placementMode==='selfIntersectionCorridor'&&copyCount>1){pass.setPipeline(crossCorridorCombined);pass.setBindGroup(0,binds[0].bg.bind);pass.setBindGroup(1,pbg);pass.setBindGroup(2,copyBg);pass.draw(4,64*(copyCount-1));stats.corridorCrossLinkFrames++;stats.corridorCrossLinkSegments+=64*(copyCount-1);}
-        pass.end();composite(enc,targetTexture);stats.fusedColorPasses++;stats.fullScreenCompositesAvoided++;stats.msaaSamplesAvoided+=3;
-        stats.frames++;stats.perVertexArcSamplesAvoided+=GPU_WEB_MAX_THREAD_SLOTS*2*4*(vars.some(x=>x.type==='rounding')?12:1)*copyCount;stats.cpuPathBuildsAvoided++;stats.cpuCornerScansAvoided+=arc.segmentCount;stats.cpuPathTablesAvoided+=arc.pathCount;stats.cpuThreadObjectsAvoided+=GPU_WEB_MAX_CORNERS*96;stats.cpuMaskBuildsAvoided+=arc.segmentCount;
-        return{handled:true,commandBuffer:enc.finish(),onSubmitted:()=>noteGpuWebCornerSubmitted?.(corner,prepared.gpuMorphArcTable)};
-    }catch(err){lastError=String(err?.message||err);stats.failures++;return{handled:false,commandBuffer:null};}}
-    function encodeToLayerScene(targetTexture,prepared,ctx,baseAlpha,frameCtx=null){return encode(targetTexture,prepared,ctx,baseAlpha,null,null,frameCtx,1);}
-    function encodeCorridorToLayerScene(targetTexture,prepared,ctx,baseAlpha,copies,alphas,frameCtx,footprint=1){return encode(targetTexture,prepared,ctx,baseAlpha,copies,alphas,frameCtx,footprint);}
-    function status(){warmup();return{available:ready,initializing:Boolean(initializing),lastError,generation,...stats,contract:'Somata 7.5 keeps retained cubic/periodic Arc as the only Web contour truth, but exact Arc sampling happens once in GPU thread compaction (two samples per active master thread). The resident {A,Control,B} geometry is reused by all 4 raster vertices, all 12 rounding steps and every Corridor copy. Fused Halo+Core remains single-sample and single-composite; no CPU Morph path or Canvas Web geometry.'};}
-    return{warmup,ensureReady:()=>initAsync(),isReady:()=>warmup(),canEncode,encodeToLayerScene,encodeCorridorToLayerScene,status};
+        const makeThread = (entry, corridor = false, open = false) =>
+          device.createRenderPipeline({
+            layout: device.createPipelineLayout({
+              bindGroupLayouts: corridor
+                ? [uniformLayout, pathLayout, copyLayout]
+                : [uniformLayout, pathLayout],
+            }),
+            vertex: { module: mod, entryPoint: entry },
+            fragment: { module: mod, entryPoint: 'fsCombined', targets },
+            primitive: { topology: 'triangle-strip', cullMode: 'none' },
+            depthStencil: open
+              ? {
+                  ...depthStencil,
+                  stencilFront: { ...stencilFace, compare: 'always' },
+                  stencilBack: { ...stencilFace, compare: 'always' },
+                }
+              : depthStencil,
+          });
+        bevelCombined = makeThread('vsBevel');
+        roundCombined = makeThread('vsRound');
+        bevelCorridorCombined = makeThread('vsBevelCorridor', true);
+        roundCorridorCombined = makeThread('vsRoundCorridor', true);
+
+        bevelOpenCombined = makeThread('vsBevel', false, true);
+        roundOpenCombined = makeThread('vsRound', false, true);
+        bevelOpenCorridorCombined = makeThread('vsBevelCorridor', true, true);
+        roundOpenCorridorCombined = makeThread('vsRoundCorridor', true, true);
+
+        const crossStencilFace = { compare: 'always', failOp: 'keep', depthFailOp: 'keep', passOp: 'keep' },
+          crossDepthStencil = {
+            format: 'depth24plus-stencil8',
+            depthWriteEnabled: false,
+            depthCompare: 'always',
+            stencilFront: crossStencilFace,
+            stencilBack: crossStencilFace,
+            stencilReadMask: 0,
+            stencilWriteMask: 0,
+          };
+        crossCorridorCombined = device.createRenderPipeline({
+          layout: device.createPipelineLayout({ bindGroupLayouts: [uniformLayout, pathLayout, copyLayout] }),
+          vertex: { module: mod, entryPoint: 'vsCrossCorridor' },
+          fragment: { module: mod, entryPoint: 'fsCombined', targets },
+          primitive: { topology: 'triangle-strip', cullMode: 'none' },
+          depthStencil: crossDepthStencil,
+        });
+        const invert = { compare: 'always', failOp: 'keep', depthFailOp: 'keep', passOp: 'invert' },
+          maskDepth = {
+            format: 'depth24plus-stencil8',
+            depthWriteEnabled: false,
+            depthCompare: 'always',
+            stencilFront: invert,
+            stencilBack: invert,
+            stencilReadMask: 1,
+            stencilWriteMask: 1,
+          },
+          maskTarget = [{ format, writeMask: 0 }];
+        const makeMask = (corridor = false) =>
+          device.createRenderPipeline({
+            layout: device.createPipelineLayout({
+              bindGroupLayouts: corridor
+                ? [uniformLayout, pathLayout, copyLayout]
+                : [uniformLayout, pathLayout],
+            }),
+            vertex: { module: mod, entryPoint: corridor ? 'vsMaskCorridor' : 'vsMask' },
+            fragment: { module: mod, entryPoint: 'fsMask', targets: maskTarget },
+            primitive: { topology: 'triangle-list', cullMode: 'none' },
+            depthStencil: maskDepth,
+          });
+        maskPipeline = makeMask(false);
+        maskCorridorPipeline = makeMask(true);
+        const over = {
+          color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        };
+        compositePipeline = device.createRenderPipeline({
+          layout: 'auto',
+          vertex: { module: comp, entryPoint: 'vs' },
+          fragment: { module: comp, entryPoint: 'fs', targets: [{ format, blend: over }] },
+          primitive: { topology: 'triangle-list' },
+        });
+        uniformBuffers = Array.from({ length: 96 }, (_, i) =>
+          device.createBuffer({
+            label: `SpiroStar Morph Web uniforms ${i}`,
+            size: 144,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+          }),
+        );
+        uniformBinds = uniformBuffers.map((buffer) =>
+          device.createBindGroup({ layout: uniformLayout, entries: [{ binding: 0, resource: { buffer } }] }),
+        );
+        uniformCursor = 0;
+        pathBinds = new WeakMap();
+        copyBinds = new WeakMap();
+        renderBundleCache = new WeakMap();
+        bundleObjectIds = new WeakMap();
+        bundleObjectSerial = 0;
+        ready = true;
+        lastError = '';
+        try {
+          requestMainCanvasRender?.();
+        } catch (error) {
+          noteSuppressedError('gpu/web-morph-renderer#initAsync', error);
+        }
+        return true;
+      } catch (err) {
+        ready = false;
+        lastError = String(err?.message || err);
+        stats.failures++;
+        return false;
+      }
+    })();
+    initializing = task;
+    try {
+      return await task;
+    } finally {
+      if (initializing === task) initializing = null;
+    }
+  }
+  function warmup() {
+    const gen = typeof WebGPUDeviceHub !== 'undefined' ? WebGPUDeviceHub.getGeneration() : -1;
+    if (ready && gen !== generation) {
+      ready = false;
+      device = null;
+      resetSize();
+      uniformBuffers = [];
+      uniformBinds = [];
+      pathBinds = new WeakMap();
+      copyBinds = new WeakMap();
+      renderBundleCache = new WeakMap();
+      bundleObjectIds = new WeakMap();
+      bundleObjectSerial = 0;
+      targetViews = new WeakMap();
+    }
+    if (!ready && !initializing) void initAsync();
+    return ready;
+  }
+  function ensureSize(w, h) {
+    w = Math.max(1, w | 0);
+    h = Math.max(1, h | 0);
+    if (width === w && height === h && haloTexture && coreTexture && stencilTexture) return true;
+    resetSize();
+    width = w;
+    height = h;
+    haloTexture = device.createTexture({
+      label: 'SpiroStar Morph Web halo scratch',
+      size: [w, h, 1],
+      format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    haloView = haloTexture.createView();
+    coreTexture = device.createTexture({
+      label: 'SpiroStar Morph Web core scratch',
+      size: [w, h, 1],
+      format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    coreView = coreTexture.createView();
+    stencilTexture = device.createTexture({
+      label: 'SpiroStar Morph Web parity stencil',
+      size: [w, h, 1],
+      format: 'depth24plus-stencil8',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    stencilView = stencilTexture.createView();
+    compositeBind = device.createBindGroup({
+      layout: compositePipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: haloView },
+        { binding: 1, resource: coreView },
+      ],
+    });
+    return true;
+  }
+  function pathBind(prepared) {
+    const rec = prepared.gpuWebCornerResource,
+      arc = prepared.gpuMorphArcTable?._gpuMorphArcResource;
+    if (!rec || !arc) return null;
+    let byArc = pathBinds.get(rec);
+    if (!byArc) {
+      byArc = new WeakMap();
+      pathBinds.set(rec, byArc);
+    }
+    let bg = byArc.get(arc);
+    if (bg) return bg;
+    bg = device.createBindGroup({
+      layout: pathLayout,
+      entries: [
+        { binding: 0, resource: { buffer: arc.segmentBuffer } },
+        { binding: 1, resource: { buffer: rec.threadGeometryBuffer } },
+        { binding: 2, resource: { buffer: rec.threadCountBuffer } },
+        { binding: 3, resource: { buffer: rec.cornerIndexBuffer } },
+      ],
+    });
+    byArc.set(arc, bg);
+    return bg;
+  }
+  function copyBind(buffer) {
+    let bg = copyBinds.get(buffer);
+    if (bg) return bg;
+    bg = device.createBindGroup({ layout: copyLayout, entries: [{ binding: 0, resource: { buffer } }] });
+    copyBinds.set(buffer, bg);
+    return bg;
+  }
+  function bindUniform(ctx, prepared, alpha, type, copyCount) {
+    const m = ctx?.getTransform?.();
+    if (!m) return null;
+    const c = GPUColorCache.rgba(prepared.color || '#ffffff'),
+      c2 = GPUColorCache.rgba(
+        prepared.style === 'laser' ? prepared.secondaryColor || '#00ffff' : prepared.color || '#ffffff',
+      ),
+      sx = Math.hypot(Number(m.a) || 0, Number(m.b) || 0),
+      sy = Math.hypot(Number(m.c) || 0, Number(m.d) || 0),
+      screenScale = Math.sqrt(Math.max(1e-12, sx * sy)),
+      halfWidth = Math.max(0.05, Number(prepared.renderWidth ?? prepared.width) || 0.6) * screenScale * 0.5,
+      fallbackHalo = Math.max(
+        0.1,
+        Math.min(6, Math.max(0.03, Number(prepared.width) || 0.6) * 2.4) *
+          Math.max(0.1, Number(prepared.dpr) || 1),
+      ),
+      halo = Math.max(0.1, Number(prepared.haloRadius) || fallbackHalo),
+      threadAlpha = Math.max(0, Math.min(1, Number(prepared.threadAlpha ?? 0.88)));
+    uniformData.fill(0);
+    uniformData[0] = mainCanvas.width;
+    uniformData[1] = mainCanvas.height;
+    uniformData[4] = m.a;
+    uniformData[5] = m.c;
+    uniformData[6] = m.e;
+    uniformData[8] = m.b;
+    uniformData[9] = m.d;
+    uniformData[10] = m.f;
+    uniformData.set(c, 12);
+    uniformData.set(c2, 16);
+    uniformData[20] = halfWidth;
+    uniformData[21] = halo;
+    uniformData[22] = Math.max(0, Math.min(1, Number(alpha) || 0)) * threadAlpha;
+    uniformData[23] = Math.max(0.1, Number(prepared.spacing) || 10);
+    {
+      const df = Math.max(0, Math.min(1, (Number(prepared.depthPercent) || 0) / 100));
+      uniformData[24] = prepared.placementMode === 'corners' ? -(df + 1e-7) : df;
+    }
+    uniformData[25] = Math.max(0, Number(prepared.depthMultiplier) || 0);
+    uniformData[26] = Math.max(0, Number(prepared.jitterStrength) || 0);
+    uniformData[27] = type === 'rounding' ? 1 : 0;
+    uniformData[28] =
+      prepared.gpuMorphResource?.segmentCount ||
+      prepared.gpuMorphArcTable?._gpuMorphArcResource?.segmentCount ||
+      0;
+    uniformData[29] = copyCount || 1;
+    uniformData[32] = prepared.oscillating === true ? 1 : 0;
+    uniformData[33] = Number(prepared.oscillationPhase) || 0;
+    uniformData[34] = Math.min(
+      8,
+      Math.max(0, (Number(prepared.oscillationStrength) || 0) / 100) *
+        Math.max(0.015625, Math.min(64, Number(prepared.oscillationStrengthMultiplier) || 1)),
+    );
+    uniformData[35] = Math.max(1, Number(prepared.gpuMorphArcTable?._gpuMorphArcResource?.subdiv) || 1);
+    const slot = uniformCursor++ % uniformBuffers.length,
+      ub = uniformBuffers[slot];
+    device.queue.writeBuffer(ub, 0, uniformData.buffer, 0, 144);
+    stats.uniformBindReuses++;
+    return { bind: uniformBinds[slot], slot };
+  }
+  function bundleObjectId(obj) {
+    if (!obj) return 0;
+    let id = bundleObjectIds.get(obj);
+    if (id) return id;
+    id = ++bundleObjectSerial;
+    bundleObjectIds.set(obj, id);
+    return id;
+  }
+  function webBundle(corner, pbg, copyBg, uniformRow, kind, round = false, arcSegments = 0, open = false) {
+    if (typeof device?.createRenderBundleEncoder !== 'function' || !corner || !pbg || !uniformRow?.bind)
+      return null;
+    let cache = renderBundleCache.get(corner);
+    if (!cache) {
+      cache = new Map();
+      renderBundleCache.set(corner, cache);
+    }
+    const corridor = Boolean(copyBg),
+      key = `${kind}|${round ? 1 : 0}|${open ? 1 : 0}|${bundleObjectId(copyBg)}|${uniformRow.slot}|${arcSegments}`;
+    let hit = cache.get(key);
+    if (hit) {
+      stats.bundleHits++;
+      return hit;
+    }
+    try {
+      const rbe = device.createRenderBundleEncoder({
+        label: 'SpiroStar Morph Web retained bundle',
+        colorFormats: kind === 'mask' ? [format] : [format, format],
+        depthStencilFormat: 'depth24plus-stencil8',
+        sampleCount: 1,
+      });
+      if (kind === 'mask') {
+        rbe.setPipeline(corridor ? maskCorridorPipeline : maskPipeline);
+        rbe.setBindGroup(0, uniformRow.bind);
+        rbe.setBindGroup(1, pbg);
+        if (corridor) rbe.setBindGroup(2, copyBg);
+        rbe.draw(3, arcSegments);
+      } else {
+        const pipe = round
+          ? corridor
+            ? open
+              ? roundOpenCorridorCombined
+              : roundCorridorCombined
+            : open
+              ? roundOpenCombined
+              : roundCombined
+          : corridor
+            ? open
+              ? bevelOpenCorridorCombined
+              : bevelCorridorCombined
+            : open
+              ? bevelOpenCombined
+              : bevelCombined;
+        const indirectOffset = corridor ? (round ? 48 : 32) : round ? 16 : 0;
+        rbe.setPipeline(pipe);
+        rbe.setBindGroup(0, uniformRow.bind);
+        rbe.setBindGroup(1, pbg);
+        if (corridor) rbe.setBindGroup(2, copyBg);
+        rbe.drawIndirect(corner.indirectBuffer, indirectOffset);
+      }
+      const bundle = rbe.finish();
+      hit = { bundle, list: [bundle] };
+      cache.set(key, hit);
+      stats.bundleBuilds++;
+      return hit;
+    } catch (_) {
+      stats.bundleFallbacks++;
+      return null;
+    }
+  }
+  function beginStencil(enc) {
+    return enc.beginRenderPass({
+      colorAttachments: [
+        { view: haloView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'discard' },
+      ],
+      depthStencilAttachment: {
+        view: stencilView,
+        depthClearValue: 1,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store',
+        stencilClearValue: 0,
+        stencilLoadOp: 'clear',
+        stencilStoreOp: 'store',
+      },
+    });
+  }
+  function beginThread(enc) {
+    return enc.beginRenderPass({
+      colorAttachments: [
+        { view: haloView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+        { view: coreView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+      ],
+      depthStencilAttachment: {
+        view: stencilView,
+        depthLoadOp: 'load',
+        depthStoreOp: 'store',
+        stencilLoadOp: 'load',
+        stencilStoreOp: 'store',
+      },
+    });
+  }
+  function composite(enc, targetTexture) {
+    let targetView = targetViews.get(targetTexture);
+    if (!targetView) {
+      targetView = targetTexture.createView();
+      targetViews.set(targetTexture, targetView);
+    }
+    const pass = enc.beginRenderPass({
+      colorAttachments: [{ view: targetView, loadOp: 'load', storeOp: 'store' }],
+    });
+    pass.setPipeline(compositePipeline);
+    pass.setBindGroup(0, compositeBind);
+    pass.draw(3);
+    pass.end();
+  }
+  function variants(prepared) {
+    const tr = prepared.transition;
+    const sun = prepared.style === 'spiderSun';
+    if (!tr)
+      return [{ type: sun ? 'bevel' : prepared.cfg?.type === 'rounding' ? 'rounding' : 'bevel', weight: 1 }];
+    const duration = Math.max(60, Number(tr.duration) || 180),
+      p = Math.max(0, Math.min(1, (Number(prepared.now) - Number(tr.start || 0)) / duration)),
+      e = p * p * p * (p * (p * 6 - 15) + 10);
+    if (p >= 1 && prepared.owner) {
+      try {
+        webRuntime.transitionByLayer.delete(prepared.owner.id);
+        prepared.transition = null;
+      } catch (error) {
+        noteSuppressedError('gpu/web-morph-renderer#variants', error);
+      }
+    }
+    if (tr.kind === 'type') {
+      if (sun) return [{ type: 'bevel', weight: 1 }];
+      return [
+        { type: tr.fromType === 'rounding' ? 'rounding' : 'bevel', weight: 1 - e },
+        { type: tr.toType === 'rounding' ? 'rounding' : 'bevel', weight: e },
+      ].filter((v) => v.weight > 0.001);
+    }
+    return e > 0.001
+      ? [{ type: sun ? 'bevel' : tr.toType === 'rounding' ? 'rounding' : 'bevel', weight: e }]
+      : [];
+  }
+  function canEncode(prepared) {
+    const gen = typeof WebGPUDeviceHub !== 'undefined' ? WebGPUDeviceHub.getGeneration() : -1,
+      corner = prepared?.gpuWebCornerResource,
+      arc = prepared?.gpuMorphArcTable?._gpuMorphArcResource;
+    return (
+      warmup() &&
+      generation === gen &&
+      prepared?.gpuMorphWebNative === true &&
+      corner?.ready === true &&
+      corner.generation === gen &&
+      arc?.ready === true &&
+      arc.generation === gen
+    );
+  }
+  function encode(
+    targetTexture,
+    prepared,
+    ctx,
+    baseAlpha,
+    copies = null,
+    alphas = null,
+    frameCtx = null,
+    footprint = 1,
+  ) {
+    if (
+      !targetTexture ||
+      baseAlpha <= 0.001 ||
+      !canEncode(prepared) ||
+      !ensureSize(mainCanvas.width, mainCanvas.height)
+    )
+      return { handled: false, commandBuffer: null };
+    try {
+      const arc = prepared.gpuMorphArcTable?._gpuMorphArcResource,
+        corner = prepared.gpuWebCornerResource;
+      let copyCount = 1,
+        copyBg = null;
+      if (Array.isArray(copies) && copies.length) {
+        const shared = WebGPUCorridorCopyStore.acquire(
+          device,
+          generation,
+          frameCtx,
+          copies,
+          alphas,
+          'web',
+          footprint,
+          frameCtx?.layer,
+        );
+        if (!shared?.buffer || !shared.k) return { handled: true, commandBuffer: null };
+        copyCount = shared.k;
+        copyBg = copyBind(shared.buffer);
+        stats.corridorFrames++;
+        stats.corridorCopies += copyCount;
+      }
+      const enc = device.createCommandEncoder({
+        label: `SpiroStar GPU Morph Web L${arc.morphRec.layerIndex}`,
+      });
+      if (
+        !encodeGpuWebCornerResource(
+          corner,
+          prepared.gpuMorphArcTable,
+          enc,
+          prepared.angleThreshold,
+          prepared.now,
+          prepared.spacing,
+          prepared.depthPercent,
+          prepared.depthMultiplier,
+          copyCount,
+          frameCtx,
+          prepared.placementMode === 'corners' || prepared.style === 'spiderSun',
+          prepared.jitterStrength,
+          prepared.oscillating === true,
+          prepared.oscillationPhase,
+          Math.min(
+            8,
+            Math.max(0, (Number(prepared.oscillationStrength) || 0) / 100) *
+              Math.max(0.015625, Math.min(64, Number(prepared.oscillationStrengthMultiplier) || 1)),
+          ),
+          prepared.style === 'spiderSun' ? prepared.sunDegrees : 0,
+        )
+      )
+        throw new Error('Web corner/thread compute failed');
+      stats.cornerComputes++;
+      stats.arcComputes++;
+      stats.masterThreadGeometryFrames++;
+      const pbg = pathBind(prepared);
+      if (!pbg) return { handled: false, commandBuffer: null };
+      const vars = variants(prepared);
+      if (!vars.length) return { handled: true, commandBuffer: null };
+      const binds = vars
+        .map((v) => ({ v, bg: bindUniform(ctx, prepared, baseAlpha * v.weight, v.type, copyCount) }))
+        .filter((x) => x.bg);
+      if (!binds.length) return { handled: false, commandBuffer: null };
+      // The retained path metadata, not the shape of its stencil triangles,
+      // decides whether a contour is open. Keep the polygon path unchanged.
+      const ranges = prepared.gpuMorphResource?.cpuPathRanges;
+      const allOpen = Boolean(
+        ranges?.length &&
+        prepared.gpuMorphResource?.pathCount > 0 &&
+        Array.from({ length: prepared.gpuMorphResource.pathCount }, (_, i) => ranges[i * 4 + 2] === 0).every(
+          Boolean,
+        ),
+      );
+      // Spiral copies overlap in Corridor. Their combined even-odd mask
+      // XOR-erases pieces of Web threads despite both endpoints being on
+      // the retained Bézier rail. Keep whole corner stitches, including on
+      // closed or self-intersecting spirals; don't change polygon masking.
+      const strictSpiral = Boolean(
+        arc.morphRec?.specialSpiralBezierRail === true ||
+        (frameCtx?.layer && typeof isSpiralLayer === 'function' && isSpiralLayer(frameCtx.layer)),
+      );
+      const unmaskedSpiralCorners =
+        (prepared.placementMode === 'corners' || prepared.style === 'spiderSun') && strictSpiral;
+      // Blue Spiral Morph is an actual winding, not a polygon interior. A single
+      // even-odd stencil for the entire dynamic rail (and ALL Corridor copies)
+      // XOR-erases independent Web stitches wherever turns overlap. That
+      // produces floating dashes on the *other* winding even though both
+      // endpoints were sampled from the right fastRailBuffer. Use complete
+      // local stitches on the visible line for every Spiral placement mode;
+      // preserve all polygon masking. The native Web/Line paths still share
+      // the exact same current rail and copy transforms.
+      const blueSpiralWeb = Boolean(strictSpiral && frameCtx?.morphFrameActive === true);
+      const unmaskedWeb = Boolean(allOpen || unmaskedSpiralCorners || blueSpiralWeb);
+      const mask = beginStencil(enc);
+      if (!unmaskedWeb) {
+        const maskBundle = webBundle(
+          corner,
+          pbg,
+          copyBg,
+          binds[0].bg,
+          'mask',
+          false,
+          arc.segmentCount * copyCount,
+        );
+        if (maskBundle) {
+          mask.executeBundles(maskBundle.list);
+          stats.bundleExecutes++;
+        } else {
+          mask.setPipeline(copyBg ? maskCorridorPipeline : maskPipeline);
+          mask.setBindGroup(0, binds[0].bg.bind);
+          mask.setBindGroup(1, pbg);
+          if (copyBg) mask.setBindGroup(2, copyBg);
+          mask.draw(3, arc.segmentCount * copyCount);
+        }
+      }
+      mask.end();
+      const pass = beginThread(enc);
+      pass.setStencilReference(1);
+      for (const item of binds) {
+        const round = item.v.type === 'rounding',
+          bundled = webBundle(
+            corner,
+            pbg,
+            copyBg,
+            item.bg,
+            'thread',
+            round,
+            arc.segmentCount * copyCount,
+            unmaskedWeb,
+          );
+        if (bundled) {
+          pass.executeBundles(bundled.list);
+          stats.bundleExecutes++;
+        } else {
+          const indirectOffset = copyBg ? (round ? 48 : 32) : round ? 16 : 0;
+          pass.setPipeline(
+            round
+              ? copyBg
+                ? unmaskedWeb
+                  ? roundOpenCorridorCombined
+                  : roundCorridorCombined
+                : unmaskedWeb
+                  ? roundOpenCombined
+                  : roundCombined
+              : copyBg
+                ? unmaskedWeb
+                  ? bevelOpenCorridorCombined
+                  : bevelCorridorCombined
+                : unmaskedWeb
+                  ? bevelOpenCombined
+                  : bevelCombined,
+          );
+          pass.setBindGroup(0, item.bg.bind);
+          pass.setBindGroup(1, pbg);
+          if (copyBg) pass.setBindGroup(2, copyBg);
+          pass.drawIndirect(corner.indirectBuffer, indirectOffset);
+        }
+        stats.draws++;
+        stats.indirectDraws++;
+        stats.logicalThreadSlots += GPU_WEB_MAX_THREAD_SLOTS * copyCount;
+        if (round) stats.roundingThreadSlots += GPU_WEB_MAX_THREAD_SLOTS * copyCount;
+      }
+
+      if (copyBg && prepared.placementMode === 'selfIntersectionCorridor' && copyCount > 1) {
+        pass.setPipeline(crossCorridorCombined);
+        pass.setBindGroup(0, binds[0].bg.bind);
+        pass.setBindGroup(1, pbg);
+        pass.setBindGroup(2, copyBg);
+        pass.draw(4, 64 * (copyCount - 1));
+        stats.corridorCrossLinkFrames++;
+        stats.corridorCrossLinkSegments += 64 * (copyCount - 1);
+      }
+      pass.end();
+      composite(enc, targetTexture);
+      stats.fusedColorPasses++;
+      stats.fullScreenCompositesAvoided++;
+      stats.msaaSamplesAvoided += 3;
+      stats.frames++;
+      stats.perVertexArcSamplesAvoided +=
+        GPU_WEB_MAX_THREAD_SLOTS * 2 * 4 * (vars.some((x) => x.type === 'rounding') ? 12 : 1) * copyCount;
+      stats.cpuPathBuildsAvoided++;
+      stats.cpuCornerScansAvoided += arc.segmentCount;
+      stats.cpuPathTablesAvoided += arc.pathCount;
+      stats.cpuThreadObjectsAvoided += GPU_WEB_MAX_CORNERS * 96;
+      stats.cpuMaskBuildsAvoided += arc.segmentCount;
+      const committedFrame = Math.max(0, Number(prepared.gpuMorphArcTable?.frameId) || 0);
+      const committedT = gpuArcEncoderInputT(prepared.gpuMorphArcTable);
+      const committedTable = prepared.gpuMorphArcTable;
+      return {
+        handled: true,
+        commandBuffer: enc.finish(),
+        onSubmitted: () => noteGpuWebCornerSubmitted?.(corner, committedTable, committedFrame, committedT),
+      };
+    } catch (err) {
+      lastError = String(err?.message || err);
+      stats.failures++;
+      return { handled: false, commandBuffer: null };
+    }
+  }
+  function encodeToLayerScene(targetTexture, prepared, ctx, baseAlpha, frameCtx = null) {
+    return encode(targetTexture, prepared, ctx, baseAlpha, null, null, frameCtx, 1);
+  }
+  function encodeCorridorToLayerScene(
+    targetTexture,
+    prepared,
+    ctx,
+    baseAlpha,
+    copies,
+    alphas,
+    frameCtx,
+    footprint = 1,
+  ) {
+    return encode(targetTexture, prepared, ctx, baseAlpha, copies, alphas, frameCtx, footprint);
+  }
+  function status() {
+    warmup();
+    return {
+      available: ready,
+      initializing: Boolean(initializing),
+      lastError,
+      generation,
+      ...stats,
+      contract:
+        'Somata 7.5 keeps retained cubic/periodic Arc as the only Web contour truth, but exact Arc sampling happens once in GPU thread compaction (two samples per active master thread). The resident {A,Control,B} geometry is reused by all 4 raster vertices, all 12 rounding steps and every Corridor copy. Fused Halo+Core remains single-sample and single-composite; no CPU Morph path or Canvas Web geometry.',
+    };
+  }
+  return {
+    warmup,
+    ensureReady: () => initAsync(),
+    isReady: () => warmup(),
+    canEncode,
+    encodeToLayerScene,
+    encodeCorridorToLayerScene,
+    status,
+  };
 })();
-window.__spiroGpuMorphWebStatus=()=>WebGPUWebMorphRenderer.status();
+window.__spiroGpuMorphWebStatus = () => WebGPUWebMorphRenderer.status();
+
+export { WebGPUWebMorphRenderer };

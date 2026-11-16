@@ -1,0 +1,27 @@
+{
+  "name": "somata",
+  "version": "15.5.0",
+  "private": true,
+  "description": "Somata — браузерная среда процедурной графики, морфинга и аудиореактивных композиций (WebGPU).",
+  "type": "module",
+  "scripts": {
+    "start": "node tools/serve.mjs",
+    "test": "node --test \"tests/*.test.*\"",
+    "check:graph": "node tools/check-graph.mjs",
+    "lint": "eslint js",
+    "format": "prettier --write \"js/**/*.js\" \"tests/**/*.{js,mjs,cjs}\" \"tools/**/*.{js,mjs,cjs}\" styles/app.css",
+    "format:check": "prettier --check \"js/**/*.js\" styles/app.css",
+    "golden:geometry": "node tools/geometry-golden.cjs http://127.0.0.1:8000 out/geometry.json",
+    "visual": "node tools/visual.cjs http://127.0.0.1:8000 out/visual"
+  },
+  "devDependencies": {
+    "acorn": "^8.14.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.0.0",
+    "globals": "^15.0.0",
+    "pixelmatch": "^5.3.0",
+    "pngjs": "^7.0.0",
+    "prettier": "^3.3.0",
+    "puppeteer-core": "^23.0.0"
+  }
+}

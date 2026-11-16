@@ -1,0 +1,216 @@
+/* Somata mobile layer. Everything here is scoped to touch screens (pointer: coarse) or to the app mobile
+   breakpoint (max-width: 760px). Desktop, including a narrow desktop window, never reads the touch sizes. */
+/* ---- Mobile ------------------------------------------------------------------------- */
+/* Touch screens only: finger-sized fields. A narrow desktop window keeps the desktop sizes. */
+@media (pointer: coarse) and (hover: none) {
+  :root {
+    --ui-font: 12px;
+    --ui-font-value: 11px;
+    --ui-font-title: 13px;
+    --ui-control-h: 30px;
+    --ui-input-h: 28px;
+  }
+  /* Fields keep 16px text so iOS does not zoom the page on focus. */
+  :is(
+      #settingsSidebar,
+      #morphSettingsPanel,
+      #randomSettingsPanel,
+      #projectMorphSettingsPanel,
+      #tunnelSettingsPanel,
+      #tapSettingsPanel
+    )
+    :is(select, input[type='number'], input[type='text']) {
+    font-size: 16px !important;
+  }
+  :is(
+      #settingsSidebar,
+      #morphSettingsPanel,
+      #randomSettingsPanel,
+      #projectMorphSettingsPanel,
+      #tunnelSettingsPanel,
+      #tapSettingsPanel
+    )
+    :is(.lamp-slider-mult, .line-slider-mult, .motion-slider-mult, .row-inputs)
+    > input[type='number'] {
+    flex-basis: 60px !important;
+    width: 60px !important;
+  }
+  #settingsSidebar .row-inputs > .btn-icon {
+    flex-basis: 30px !important;
+    width: 30px !important;
+    min-width: 30px !important;
+    height: 30px !important;
+    min-height: 30px !important;
+  }
+  /* Slider hosts were 40px tall: keep a comfortable touch target without the extra height. */
+  #settingsSidebar .blue-morph-range-host.parameter-routing-capable {
+    min-height: 30px !important;
+    padding: 2px 6px !important;
+  }
+  #settingsSidebar input[type='range'] {
+    height: 26px !important;
+    min-height: 26px !important;
+  }
+  #settingsSidebar .control-group {
+    padding: 10px 8px !important;
+  }
+}
+
+/* Mobile layout (same breakpoint as the app's own mobile layout in app.css). */
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  /* Layers header: one row (title · layer actions · Master · list · close) instead of two. */
+  #settingsSidebar .section-header {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    align-items: center !important;
+    gap: 4px !important;
+    padding: 6px 8px !important;
+    min-height: 0 !important;
+    height: auto !important;
+  }
+  #settingsSidebar .section-header > * {
+    grid-area: auto !important;
+    margin: 0 !important;
+  }
+  #settingsSidebar .section-header .sidebar-section-title {
+    flex: 1 1 auto !important;
+    order: 0;
+  }
+  #settingsSidebar .section-header .sidebar-layer-actions {
+    order: 1;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    gap: 4px !important;
+  }
+  #settingsSidebar .section-header .master-layer-btn {
+    order: 2;
+  }
+  #settingsSidebar .section-header .mobile-layer-list-toggle {
+    order: 3;
+  }
+  #settingsSidebar .section-header .mobile-sidebar-close {
+    order: 4;
+  }
+  #settingsSidebar .section-header :is(.btn-icon, .mobile-sidebar-close) {
+    width: 32px !important;
+    min-width: 32px !important;
+    height: 32px !important;
+    min-height: 32px !important;
+    padding: 0 !important;
+  }
+  #settingsSidebar .section-header .master-layer-btn {
+    width: auto !important;
+    padding: 0 8px !important;
+  }
+  /* Blue/Orange parameter groups: three compact columns instead of two tall ones. */
+  :is(#morphSettingsPanel, #randomSettingsPanel) .morph-routing-groups {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 4px !important;
+  }
+  :is(#morphSettingsPanel, #randomSettingsPanel) .audio-route-group {
+    min-width: 0 !important;
+    width: auto !important;
+  }
+  :is(#morphSettingsPanel, #randomSettingsPanel) .audio-route-group-btn {
+    width: 100% !important;
+    height: 30px !important;
+    min-height: 30px !important;
+    padding: 0 4px !important;
+    font-size: 11px !important;
+    min-width: 0 !important;
+  }
+  :is(#morphSettingsPanel, #randomSettingsPanel) :is(.morph-routing-group-label, .morph-routing-group-name) {
+    min-width: 0 !important;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px !important;
+  }
+  /* Cycle period: the six presets fit on one line. */
+  :is(#morphSettingsPanel, #randomSettingsPanel) .morph-cycle-controls {
+    flex-wrap: nowrap !important;
+    gap: 3px !important;
+  }
+  :is(#morphSettingsPanel, #randomSettingsPanel) .morph-top-cycle-row input[type='number'] {
+    flex: 0 0 44px !important;
+    width: 44px !important;
+    min-width: 0 !important;
+  }
+  :is(#morphSettingsPanel, #randomSettingsPanel) .morph-quick-btn {
+    min-width: 30px !important;
+    height: 28px !important;
+    padding: 0 5px !important;
+    font-size: 12px !important;
+  }
+  :is(#morphSettingsPanel, #randomSettingsPanel) .morph-route-row {
+    padding: 4px 6px !important;
+    gap: 4px !important;
+    margin-bottom: 4px !important;
+  }
+  /* Blue/Orange top row: "Тип скорости" gets its own line instead of collapsing to an arrow. */
+  :is(#morphSettingsPanel, #randomSettingsPanel) .morph-compact-profile-controls {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+  }
+  :is(#morphSettingsPanel, #randomSettingsPanel) .morph-speed-toolbar-field {
+    grid-column: 1 / -1 !important;
+    min-width: 0 !important;
+  }
+  :is(#morphSettingsPanel, #randomSettingsPanel) .morph-speed-toolbar-field select {
+    flex: 1 1 auto !important;
+    min-width: 0 !important;
+  }
+}
+
+/* ---- Orange morph rows fold to their header on a phone -------------------------------------- */
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  #orangeMorphBindings .orange-route-row > .morph-row-fold {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 34px;
+    width: 34px;
+    height: 34px;
+    min-height: 34px;
+    padding: 0;
+    border: 1px solid rgba(71, 85, 105, 0.55);
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.6);
+    color: #cbd5e1;
+    font-size: 15px;
+    line-height: 1;
+  }
+  #orangeMorphBindings
+    .orange-route-row:not(.morph-row-expanded)
+    > :not(
+      .morph-route-drag-handle,
+      input[type='checkbox'],
+      .morph-route-row-icon,
+      .morph-route-compact-picker,
+      .morph-special-config-name,
+      .morph-spiral-picker,
+      .morph-row-fold,
+      .morph-binding-remove
+    ) {
+    display: none !important;
+  }
+}
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  /* Folded row: name takes the free width, fold arrow and remove stay on the same line. */
+  #orangeMorphBindings .orange-route-row > :is(.morph-route-compact-picker, .morph-special-config-name, .morph-spiral-picker) {
+    flex: 1 1 0 !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+  /* The row has a full-width ::before line break at order 1: header items must stay at order 0. */
+  #orangeMorphBindings .orange-route-row > :is(.morph-binding-remove, .morph-row-fold) {
+    order: 0 !important;
+  }
+  #orangeMorphBindings .orange-route-row > .morph-binding-remove {
+    margin-left: 0 !important;
+  }
+  #orangeMorphBindings .orange-route-row.morph-row-expanded {
+    row-gap: 6px !important;
+  }
+}

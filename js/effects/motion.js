@@ -1,596 +1,1038 @@
+import '../core/coordinated-carrier.js'; // initialisation order: this module runs after it
+import {
+  getActivePlaylistPaletteKeys,
+  getPlaylistPaletteColors,
+  getRoundingStrength,
+  normalizePlaylistPaletteKey,
+  paletteLerpHex,
+} from '../core/palette.js';
+import { runtimeState, somataWithFourierLayer, state } from '../core/state.js';
+import { getLayerVersions } from '../core/layer-versions.js';
+import { mainCanvas } from '../ui/profile-presets.js';
+import {
+  canvasViewport,
+  getMainCanvasRenderDpr,
+  isPreSampledSplineLayer,
+  layerDrawCache,
+  layerGeometrySignatureCache,
+  mainContainerEl,
+} from '../core/render-runtime.js';
+import { animationScheduler, requestMainCanvasRender } from '../core/scheduler.js';
+import { SomataCorridorFocus } from '../render/corridor-copy-frame.js';
+import {
+  getActiveEffectLayer,
+  getFillOpacityUnit,
+  getLayerFillMatchStroke,
+  getPersistentEffectLayer,
+  setLayerStrokeColor,
+} from '../core/defaults-layers.js';
+import {
+  getConfiguredSplinePointCount,
+  normalizeSplineRenderMode,
+  useSmoothSplinePath,
+} from '../geometry/profile-model.js';
+import { splinePathForDraw } from '../geometry/spline-rounding.js';
+import {
+  getEffectiveSpiralOrder,
+  getEffectiveSpiralStep,
+  getSpiralClosureRatio,
+  isSpiralLayer,
+} from '../geometry/spiral/order-params.js';
+import { buildOrbitPolylines, normalizeSpiralSquashY } from '../geometry/orbit-builder.js';
+import { buildLampRenderedAttachmentPathsUncached } from '../lamps/lamp-anchors.js';
+import { getCanonicalLayerGeometry, noteCanonicalGeometryConsumer } from '../geometry/canonical.js';
+import { syncMotionUI } from '../ui/effects-sidebar.js';
+import { roundPolylineForDraw } from '../geometry/polyline-rounding.js';
+import { getLayerEditTargets } from '../ui/layer-selection.js';
+import { spiralMorphUsesCorridorPhase } from '../morph-runtime/morph-mode.js';
 
+const motionRuntime = {
+  lastTime: 0,
+  rotationRad: 0,
+  layerRotationRad: new Map(),
+  cameraPhase: 0,
+  colorPhase: 0,
+};
+function normalizeMotionState(raw = state.motion) {
+  const m = raw && typeof raw === 'object' ? raw : (state.motion = {});
 
-window.__spiroRegisterModule?.('js/effects/motion');
-        const motionRuntime = { lastTime:0, rotationRad:0, layerRotationRad:new Map(), cameraPhase:0, colorPhase:0 };
-        function normalizeMotionState(raw=state.motion){
-            const m=(raw&&typeof raw==='object')?raw:(state.motion={});
+  m.rotationEnabled = m.rotationEnabled === true;
+  m.rotationSpeed = Math.max(
+    0,
+    Math.min(180, Number.isFinite(Number(m.rotationSpeed)) ? Number(m.rotationSpeed) : 30),
+  );
+  m.rotationMultiplier = Number.isFinite(Number(m.rotationMultiplier))
+    ? Math.max(0, Number(m.rotationMultiplier))
+    : 1;
+  m.rotationDirection = m.rotationDirection === 'cw' ? 'cw' : 'ccw';
+  m.rotationTunnelLag = Math.max(
+    0,
+    Math.min(360, Number.isFinite(Number(m.rotationTunnelLag)) ? Number(m.rotationTunnelLag) : 0),
+  );
+  m.rotationTunnelLagMultiplier = Number.isFinite(Number(m.rotationTunnelLagMultiplier))
+    ? Math.max(0, Number(m.rotationTunnelLagMultiplier))
+    : 1;
+  m.cameraEnabled = m.cameraEnabled === true;
+  m.cameraSpeed = Math.max(
+    0,
+    Math.min(100, Number.isFinite(Number(m.cameraSpeed)) ? Number(m.cameraSpeed) : 20),
+  );
+  m.cameraMultiplier = Number.isFinite(Number(m.cameraMultiplier))
+    ? Math.max(0, Number(m.cameraMultiplier))
+    : 1;
+  m.cameraAmount = Math.max(
+    0,
+    Math.min(100, Number.isFinite(Number(m.cameraAmount)) ? Number(m.cameraAmount) : 20),
+  );
+  m.colorEnabled = m.colorEnabled === true;
+  m.colorSpeed = Math.max(
+    0,
+    Math.min(100, Number.isFinite(Number(m.colorSpeed)) ? Number(m.colorSpeed) : 20),
+  );
+  m.colorMultiplier = Number.isFinite(Number(m.colorMultiplier)) ? Math.max(0, Number(m.colorMultiplier)) : 1;
+  m.quickToggleCamera = m.quickToggleCamera === true;
+  m.quickToggleColor = m.quickToggleColor === true;
+  const active = getActivePlaylistPaletteKeys();
+  m.paletteKey = active.includes(m.paletteKey)
+    ? m.paletteKey
+    : active[0] || normalizePlaylistPaletteKey?.(m.paletteKey) || 'standard';
+  state.motion = m;
+  return m;
+}
+function normalizeLayerMotionRotation(layer) {
+  const owner = getPersistentEffectLayer(layer) || layer;
+  if (!owner)
+    return {
+      enabled: false,
+      speed: 30,
+      multiplier: 1,
+      direction: 'ccw',
+      tunnelLag: 0,
+      tunnelLagMultiplier: 1,
+    };
+  const legacy = normalizeMotionState();
+  let r = owner.motionRotation;
+  if (!r || typeof r !== 'object')
+    r = owner.motionRotation = {
+      enabled: legacy.rotationEnabled === true,
+      speed: legacy.rotationSpeed,
+      multiplier: legacy.rotationMultiplier,
+      direction: legacy.rotationDirection,
+      tunnelLag: legacy.rotationTunnelLag,
+      tunnelLagMultiplier: legacy.rotationTunnelLagMultiplier,
+    };
+  r.enabled = r.enabled === true;
+  r.speed = Math.max(0, Math.min(180, Number.isFinite(Number(r.speed)) ? Number(r.speed) : 30));
+  r.multiplier = Number.isFinite(Number(r.multiplier)) ? Math.max(0, Number(r.multiplier)) : 1;
+  r.direction = r.direction === 'cw' ? 'cw' : 'ccw';
+  r.tunnelLag = Math.max(0, Math.min(360, Number.isFinite(Number(r.tunnelLag)) ? Number(r.tunnelLag) : 0));
+  r.tunnelLagMultiplier = Number.isFinite(Number(r.tunnelLagMultiplier))
+    ? Math.max(0, Number(r.tunnelLagMultiplier))
+    : 1;
+  return r;
+}
+function getMotionRotationTargets() {
+  const active = getActiveEffectLayer();
+  if (!active) return [];
+  return getLayerEditTargets()
+    .map((l) => getPersistentEffectLayer(l) || l)
+    .filter(Boolean);
+}
+function anyLayerRotationEnabled() {
+  return Array.isArray(state.layers) && state.layers.some((l) => normalizeLayerMotionRotation(l).enabled);
+}
+function anyMotionEnabled() {
+  const m = normalizeMotionState();
+  return anyLayerRotationEnabled() || m.cameraEnabled || m.colorEnabled;
+}
 
-            m.rotationEnabled=m.rotationEnabled===true;
-            m.rotationSpeed=Math.max(0,Math.min(180,Number.isFinite(Number(m.rotationSpeed))?Number(m.rotationSpeed):30));
-            m.rotationMultiplier=Number.isFinite(Number(m.rotationMultiplier))?Math.max(0,Number(m.rotationMultiplier)):1;
-            m.rotationDirection=m.rotationDirection==='cw'?'cw':'ccw';
-            m.rotationTunnelLag=Math.max(0,Math.min(360,Number.isFinite(Number(m.rotationTunnelLag))?Number(m.rotationTunnelLag):0));
-            m.rotationTunnelLagMultiplier=Number.isFinite(Number(m.rotationTunnelLagMultiplier))?Math.max(0,Number(m.rotationTunnelLagMultiplier)):1;
-            m.cameraEnabled=m.cameraEnabled===true;
-            m.cameraSpeed=Math.max(0,Math.min(100,Number.isFinite(Number(m.cameraSpeed))?Number(m.cameraSpeed):20));
-            m.cameraMultiplier=Number.isFinite(Number(m.cameraMultiplier))?Math.max(0,Number(m.cameraMultiplier)):1;
-            m.cameraAmount=Math.max(0,Math.min(100,Number.isFinite(Number(m.cameraAmount))?Number(m.cameraAmount):20));
-            m.colorEnabled=m.colorEnabled===true;
-            m.colorSpeed=Math.max(0,Math.min(100,Number.isFinite(Number(m.colorSpeed))?Number(m.colorSpeed):20));
-            m.colorMultiplier=Number.isFinite(Number(m.colorMultiplier))?Math.max(0,Number(m.colorMultiplier)):1;
-            m.quickToggleCamera=m.quickToggleCamera===true;
-            m.quickToggleColor=m.quickToggleColor===true;
-            const active=typeof getActivePlaylistPaletteKeys==='function'?getActivePlaylistPaletteKeys():[];
-            m.paletteKey=active.includes(m.paletteKey)?m.paletteKey:(active[0]||normalizePlaylistPaletteKey?.(m.paletteKey)||'standard');
-            state.motion=m;return m;
-        }
-        function normalizeLayerMotionRotation(layer){
-            const owner=getPersistentEffectLayer(layer)||layer;
-            if(!owner)return {enabled:false,speed:30,multiplier:1,direction:'ccw',tunnelLag:0,tunnelLagMultiplier:1};
-            const legacy=normalizeMotionState();
-            let r=owner.motionRotation;
-            if(!r||typeof r!=='object')r=owner.motionRotation={enabled:legacy.rotationEnabled===true,speed:legacy.rotationSpeed,multiplier:legacy.rotationMultiplier,direction:legacy.rotationDirection,tunnelLag:legacy.rotationTunnelLag,tunnelLagMultiplier:legacy.rotationTunnelLagMultiplier};
-            r.enabled=r.enabled===true;
-            r.speed=Math.max(0,Math.min(180,Number.isFinite(Number(r.speed))?Number(r.speed):30));
-            r.multiplier=Number.isFinite(Number(r.multiplier))?Math.max(0,Number(r.multiplier)):1;
-            r.direction=r.direction==='cw'?'cw':'ccw';
-            r.tunnelLag=Math.max(0,Math.min(360,Number.isFinite(Number(r.tunnelLag))?Number(r.tunnelLag):0));
-            r.tunnelLagMultiplier=Number.isFinite(Number(r.tunnelLagMultiplier))?Math.max(0,Number(r.tunnelLagMultiplier)):1;
-            return r;
-        }
-        function getMotionRotationTargets(){
-            const active=getActiveEffectLayer();if(!active)return[];
-            return getLayerEditTargets().map(l=>getPersistentEffectLayer(l)||l).filter(Boolean);
-        }
-        function anyLayerRotationEnabled(){return Array.isArray(state.layers)&&state.layers.some(l=>normalizeLayerMotionRotation(l).enabled);}
-        function anyMotionEnabled(){const m=normalizeMotionState();return anyLayerRotationEnabled()||m.cameraEnabled||m.colorEnabled;}
+function isGeometryMorphActive() {
+  return (
+    runtimeState?.morph?.active === true ||
+    runtimeState?.minimalMorph?.active === true ||
+    runtimeState?.projectMorph?.active === true
+  );
+}
+function isLinearMotionMorphActive() {
+  const m = state?.motion || {};
+  if (m.cameraEnabled === true || m.colorEnabled === true) return true;
+  for (const layer of state?.layers || []) {
+    if (layer?.motionRotation?.enabled === true || layer?.lineMotionFx?.enabled === true) return true;
+  }
+  return false;
+}
+function getMorphActivityState() {
+  const geometry = isGeometryMorphActive(),
+    linear = isLinearMotionMorphActive();
+  return { active: geometry || linear, geometry, linear };
+}
+window.__spiroMorphActivity = () => getMorphActivityState();
+function toggleMotionQuickGroup() {
+  const m = normalizeMotionState(),
+    targets = getMotionRotationTargets();
+  if (!targets.length) return false;
+  const includeCamera = m.quickToggleCamera === true,
+    includeColor = m.quickToggleColor === true;
+  const currentlyOn =
+    targets.some((l) => normalizeLayerMotionRotation(l).enabled) ||
+    (includeCamera && m.cameraEnabled) ||
+    (includeColor && m.colorEnabled);
+  const on = !currentlyOn;
+  for (const layer of targets) normalizeLayerMotionRotation(layer).enabled = on;
+  if (includeCamera) m.cameraEnabled = on;
+  if (includeColor) m.colorEnabled = on;
+  syncMotionUI();
+  ensureMotionAnimation();
+  requestMainCanvasRender();
+  return on;
+}
+function getLayerMotionRotationRadians(layer) {
+  const r = normalizeLayerMotionRotation(layer);
+  if (!r.enabled) return 0;
+  return Number(motionRuntime.layerRotationRad.get(String(layer?.id || ''))) || 0;
+}
 
-        function isGeometryMorphActive(){
-            return runtimeState?.morph?.active===true || runtimeState?.minimalMorph?.active===true || runtimeState?.projectMorph?.active===true;
-        }
-        function isLinearMotionMorphActive(){
-            const m=state?.motion||{};
-            if(m.cameraEnabled===true||m.colorEnabled===true)return true;
-            for(const layer of state?.layers||[]){
-                if(layer?.motionRotation?.enabled===true||layer?.lineMotionFx?.enabled===true)return true;
-            }
-            return false;
-        }
-        function getMorphActivityState(){
-            const geometry=isGeometryMorphActive(),linear=isLinearMotionMorphActive();
-            return {active:geometry||linear,geometry,linear};
-        }
-        window.__spiroMorphActivity=()=>getMorphActivityState();
-        function toggleMotionQuickGroup(){
-            const m=normalizeMotionState(),targets=getMotionRotationTargets();if(!targets.length)return false;
-            const includeCamera=m.quickToggleCamera===true,includeColor=m.quickToggleColor===true;
-            const currentlyOn=targets.some(l=>normalizeLayerMotionRotation(l).enabled)||(includeCamera&&m.cameraEnabled)||(includeColor&&m.colorEnabled);
-            const on=!currentlyOn;
-            for(const layer of targets)normalizeLayerMotionRotation(layer).enabled=on;
-            if(includeCamera)m.cameraEnabled=on;
-            if(includeColor)m.colorEnabled=on;
-            syncMotionUI();ensureMotionAnimation();requestMainCanvasRender();return on;
-        }
-        function getLayerMotionRotationRadians(layer){
-            const r=normalizeLayerMotionRotation(layer);if(!r.enabled)return 0;
-            return Number(motionRuntime.layerRotationRad.get(String(layer?.id||'')))||0;
-        }
-        // The first retained carrier anchor is the physical orientation marker.
-        // K/N changes the carrier's INTERNAL end-angle, but not this anchor.
-        // Canceling that end-angle (13.0.8) made the whole highlighted figure
-        // rotate backwards: the old analytic test incorrectly tracked its tip.
-        // Rotation here must use the same spatial figure number as highlighting.
-        function getSpiralMorphTunnelPhaseRadians(copy,layer){
-            if(!state.tunnel?.active||!layer||typeof isSpiralLayer!=='function'||!isSpiralLayer(layer))return 0;
-            const morphActive=runtimeState?.morph?.active===true;
-            // Torn morph deliberately retains unconstrained least-turn paths. All
-            // continuous modes use the SAME Corridor phase for every renderer.
-            if(morphActive&&typeof spiralMorphUsesCorridorPhase==='function'&&!spiralMorphUsesCorridorPhase()&&
-               layer.__spiralLayerwiseAngleMix==null)return 0;
-            // During morph use continuous (unrounded) N/K of the actual carrier.
-            // During the final/static frame use the target's N/K, rather than
-            // suddenly setting the copy phase to zero when morph.active changes.
-            // This shared resolver is used by Base, Glow, Fill, Sweep and Corridor.
-            let delta=NaN;
-            if(morphActive){
-                try{delta=Number(window.__spiroCurrentSpiralMorphCorridorDelta?.(layer));}catch(_){delta=NaN;}
-            }
-            if(!Number.isFinite(delta)){
-                const n=Math.max(2,Number(layer.N)||4);
-                const step=typeof getEffectiveSpiralStep==='function'?Number(getEffectiveSpiralStep(layer)):(Number(layer.spiralStep)||Number(layer.K)||1);
-                const order=typeof getEffectiveSpiralOrder==='function'?Number(getEffectiveSpiralOrder(layer)):(Number(layer.spiralOrder)||1);
-                // 9.2.17: the carrier phase depends on the SIGN of the spiral
-                // order, not its fractional magnitude.  Multiplying by order
-                // moved Corridor copies to different angles than the carrier
-                // and caused a snap on the first static frame.
-                const direction=order < -1e-8 ? -1 : 1;
-                delta=(Math.PI*2*step/n)*direction;
-            }
-            const copyId=Number.isFinite(Number(copy?.copyId))?Number(copy.copyId):Math.round(Number(copy?.position)||0);
-            // The tunnel continually recycles copyId at integer travel-phase
-            // boundaries.  Highlighting follows position from the centre.
-            // Use THAT SAME position for the angular pivot, preserving exactly
-            // one carrier delta between neighboring Corridor figures.
-            const position=Number.isFinite(Number(copy?.position))?Number(copy.position):copyId;
-            const focusPos=typeof SomataCorridorFocus!=='undefined'
-                ?SomataCorridorFocus.focusPosition(layer)
-                :(-2+Math.max(0,Math.min(255,Math.round(Number(layer?.spiralRotationFocusFigure)||7)-1)));
-            const localMix=Number(layer?.__spiralLayerwiseAngleMix);
-            // Layerwise interpolation lives on each copy, not at the Corridor
-            // population level. The same angle reaches all visual effects.
-            if(Number.isFinite(localMix)&&layer?.__spiralLayerwiseAngleMix!=null){
-                const mix=Math.max(0,Math.min(1,localMix));
-                if(layer.__spiralLayerwiseRotationMode!=='active'){
-                    // Rotate each copy to its *equivalent* authored final pose
-                    // by the shortest arc (<= PI), not copyId full revolutions.
-                    // At t=0/1 this equals the static phase modulo 2*PI.
-                    const targetDelta=Number(layer.__spiralLayerwiseReferenceDelta);
-                    if(Number.isFinite(targetDelta)&&layer.__spiralLayerwiseReferenceDelta!=null)
-                        return window.SomataSpiralZeroTransition.shortestEquivalentAngle(
-                            (position-focusPos)*targetDelta)*mix;
-                }
-                delta*=mix;
-            }
-            return (position-focusPos)*delta;
-        }
-        function getMotionTunnelLagRadians(copy,layer){
-            let angle=getSpiralMorphTunnelPhaseRadians(copy,layer);
-            const r=normalizeLayerMotionRotation(layer);
-            if(!r.enabled||!state.tunnel?.active)return angle;
-            const lagDeg=r.tunnelLag*r.tunnelLagMultiplier;
-            if(!(lagDeg>0))return angle;
-            const copyId=Number.isFinite(Number(copy?.copyId))?Number(copy.copyId):Math.round(Number(copy?.position)||0);
-            const directionSign=r.direction==='cw'?1:-1;
-            const lagWrapped=((copyId*lagDeg)%360+360)%360;
-            angle+=-directionSign*lagWrapped*Math.PI/180;
-            return angle;
-        }
-        function applyMotionTunnelLag(ctx,copy,layer){const a=getMotionTunnelLagRadians(copy,layer);if(Math.abs(a)>1e-12)ctx.rotate(a);}
+function getSpiralMorphTunnelPhaseRadians(copy, layer) {
+  if (state.tunnel?.active && Number.isFinite(copy?._spiralUntwistedAngle)) return copy._spiralUntwistedAngle;
+  if (!state.tunnel?.active || !layer || typeof isSpiralLayer !== 'function' || !isSpiralLayer(layer))
+    return 0;
+  const copyId = Number.isFinite(Number(copy?.copyId))
+    ? Number(copy.copyId)
+    : Math.round(Number(copy?.position) || 0);
 
-        function getSpiralMorphRotationCompensationRadians(){
-            const morph=state?.morph,rt=runtimeState?.morph;
-            if(morph?.spiralRotationCompensation!==true||rt?.active!==true||morph?.mode==='fade')return 0;
-            const t=Math.max(0,Math.min(1,Number.isFinite(Number(rt.geometryT))?Number(rt.geometryT):(Number(rt.progress)||0)));
-            const base=Number.isFinite(Number(rt.spiralRotationCompensationBaseDeg))?Number(rt.spiralRotationCompensationBaseDeg):0;
-            const phase=Number.isFinite(Number(rt.spiralRotationCompensationPhaseDeg))?Number(rt.spiralRotationCompensationPhaseDeg):0;
-            const degrees=base+phase*t;
-            return -degrees*Math.PI/180;
+  const position = Number.isFinite(Number(copy?.position)) ? Number(copy.position) : copyId;
+  const focusPos = Number.isFinite(copy?._spiralUnfoldFocusPosition)
+    ? copy._spiralUnfoldFocusPosition
+    : typeof SomataCorridorFocus !== 'undefined'
+      ? SomataCorridorFocus.focusPosition(layer)
+      : -2 + Math.max(0, Math.min(255, Math.round(Number(layer?.spiralRotationFocusFigure) || 7) - 1));
+  const primaryPhase = layer.__somataSkeletonCorridorPhase;
+  const mix = layer.__spiralLayerwiseAngleMix;
+  const reference = layer.__spiralLayerwiseReferenceDelta;
+  if (Number.isFinite(mix) && Number.isFinite(reference)) {
+    const period = layer.__somataCoordinatedPeriodDelta;
+    const angle = (position - focusPos) * (Number.isFinite(period) ? period : reference);
+    return window.SomataSpiralZeroTransition.shortestEquivalentAngle(angle) * mix;
+  }
+  if (primaryPhase === false) return 0;
+  const morphActive = runtimeState?.morph?.active === true;
+  const manualCoordinated = Boolean(layer.__somataCoordinatedEdit);
+
+  if (
+    primaryPhase == null &&
+    morphActive &&
+    typeof spiralMorphUsesCorridorPhase === 'function' &&
+    !spiralMorphUsesCorridorPhase() &&
+    layer.__spiralLayerwiseAngleMix == null
+  )
+    return 0;
+
+  let delta = NaN;
+  if (primaryPhase === true) {
+    delta = Number(layer.__somataCoordinatedPeriodDelta);
+    if (!Number.isFinite(delta)) return 0;
+  } else if (morphActive || manualCoordinated) {
+    try {
+      delta = Number(window.__spiroCurrentSpiralMorphCorridorDelta?.(layer));
+    } catch (_) {
+      delta = NaN;
+    }
+  }
+  if (!Number.isFinite(delta)) {
+    const n = Math.max(2, Number(layer.N) || 4);
+    const step = Number(getEffectiveSpiralStep(layer));
+    const order = Number(getEffectiveSpiralOrder(layer));
+
+    const direction = order < -1e-8 ? -1 : 1;
+    delta = ((Math.PI * 2 * step) / n) * direction;
+  }
+  return (position - focusPos) * delta;
+}
+function getMotionTunnelLagRadians(copy, layer) {
+  let angle = getSpiralMorphTunnelPhaseRadians(copy, layer);
+  if (layer?.__somataContinuousSpiralPeriodScale > 0) return angle;
+  const r = normalizeLayerMotionRotation(layer);
+  if (!r.enabled || !state.tunnel?.active) return angle;
+  const lagDeg = r.tunnelLag * r.tunnelLagMultiplier;
+  if (!(lagDeg > 0)) return angle;
+  const copyId = Number.isFinite(Number(copy?.copyId))
+    ? Number(copy.copyId)
+    : Math.round(Number(copy?.position) || 0);
+  const directionSign = r.direction === 'cw' ? 1 : -1;
+  const lagWrapped = (((copyId * lagDeg) % 360) + 360) % 360;
+  angle += (-directionSign * lagWrapped * Math.PI) / 180;
+  return angle;
+}
+function applyMotionTunnelLag(ctx, copy, layer) {
+  const a = getMotionTunnelLagRadians(copy, layer);
+  if (Math.abs(a) > 1e-12) ctx.rotate(a);
+}
+
+function getSpiralMorphRotationCompensationRadians() {
+  const morph = state?.morph,
+    rt = runtimeState?.morph;
+  if (morph?.spiralRotationCompensation !== true || rt?.active !== true || morph?.mode === 'fade') return 0;
+  const t = Math.max(
+    0,
+    Math.min(1, Number.isFinite(Number(rt.geometryT)) ? Number(rt.geometryT) : Number(rt.progress) || 0),
+  );
+  const base = Number.isFinite(Number(rt.spiralRotationCompensationBaseDeg))
+    ? Number(rt.spiralRotationCompensationBaseDeg)
+    : 0;
+  const phase = Number.isFinite(Number(rt.spiralRotationCompensationPhaseDeg))
+    ? Number(rt.spiralRotationCompensationPhaseDeg)
+    : 0;
+  const degrees = base + phase * t;
+  return (-degrees * Math.PI) / 180;
+}
+function getMotionViewportTransform(w, h) {
+  const m = normalizeMotionState();
+  let panX = 0,
+    panY = 0;
+  if (m.cameraEnabled && m.cameraAmount > 0) {
+    const amp = Math.min(Math.max(1, Number(w) || 1), Math.max(1, Number(h) || 1)) * 0.00115 * m.cameraAmount;
+    const p = motionRuntime.cameraPhase;
+    panX = Math.sin(p) * amp + Math.sin(p * 0.37 + 1.1) * amp * 0.34;
+    panY = Math.cos(p * 0.79 + 0.45) * amp * 0.82 + Math.sin(p * 0.23 + 2.2) * amp * 0.28;
+  }
+  return { panX, panY, rotationRad: getSpiralMorphRotationCompensationRadians() };
+}
+function applyMotionColorCycle() {
+  const m = normalizeMotionState();
+  if (!m.colorEnabled || !Array.isArray(state.layers) || !state.layers.length) return;
+  const colors = getPlaylistPaletteColors(m.paletteKey);
+  if (!Array.isArray(colors) || !colors.length) return;
+  const n = colors.length,
+    layerCount = Math.max(1, state.layers.length);
+  for (let i = 0; i < state.layers.length; i++) {
+    const layer = state.layers[i];
+    if (!layer) continue;
+    const pos = (((motionRuntime.colorPhase + (i * n) / layerCount) % n) + n) % n,
+      idx = Math.floor(pos) % n,
+      t = pos - Math.floor(pos);
+    const c = paletteLerpHex(colors[idx], colors[(idx + 1) % n], t);
+    setLayerStrokeColor(layer, c);
+    if (layer.fill && !getLayerFillMatchStroke(layer)) {
+      const opacityUnit = getFillOpacityUnit(layer.fillColor);
+      const alpha = Math.max(0, Math.min(255, Math.round(opacityUnit * 255)))
+        .toString(16)
+        .padStart(2, '0');
+      layer.fillColor = c + alpha;
+    }
+  }
+}
+function motionAnimationTick(now) {
+  const m = normalizeMotionState();
+  if (!anyMotionEnabled()) {
+    motionRuntime.lastTime = 0;
+    return false;
+  }
+  if (!motionRuntime.lastTime) motionRuntime.lastTime = now;
+
+  const rawDt = Math.max(0, (now - motionRuntime.lastTime) / 1000);
+  const dt = rawDt > 1.25 ? 0 : rawDt;
+  motionRuntime.lastTime = now;
+  const liveIds = new Set();
+  for (const layer of state.layers || []) {
+    const id = String(layer?.id || '');
+    liveIds.add(id);
+    const r = normalizeLayerMotionRotation(layer);
+    if (!r.enabled) continue;
+    const sign = r.direction === 'cw' ? 1 : -1,
+      prev = Number(motionRuntime.layerRotationRad.get(id)) || 0;
+    motionRuntime.layerRotationRad.set(
+      id,
+      (prev + ((sign * r.speed * r.multiplier * Math.PI) / 180) * dt) % (Math.PI * 2),
+    );
+  }
+  for (const id of motionRuntime.layerRotationRad.keys())
+    if (!liveIds.has(id)) motionRuntime.layerRotationRad.delete(id);
+  if (m.cameraEnabled)
+    motionRuntime.cameraPhase =
+      (motionRuntime.cameraPhase + (m.cameraSpeed / 100) * m.cameraMultiplier * 1.25 * dt) % (Math.PI * 2000);
+  if (m.colorEnabled) {
+    motionRuntime.colorPhase =
+      (motionRuntime.colorPhase + (m.colorSpeed / 100) * m.colorMultiplier * 2 * dt) % 100000;
+    applyMotionColorCycle();
+  }
+  requestMainCanvasRender();
+  return true;
+}
+function ensureMotionAnimation() {
+  if (anyMotionEnabled()) animationScheduler.add('linear-motion', motionAnimationTick);
+  else {
+    animationScheduler.remove('linear-motion');
+    motionRuntime.lastTime = 0;
+    requestMainCanvasRender();
+  }
+}
+
+function ensureMainCanvasSize(mainContainer = mainContainerEl) {
+  let w = canvasViewport.w;
+  let h = canvasViewport.h;
+  if (!(w > 0 && h > 0)) {
+    w = Math.max(1, Math.round(mainContainer?.clientWidth || 1));
+    h = Math.max(1, Math.round(mainContainer?.clientHeight || 1));
+    canvasViewport.w = w;
+    canvasViewport.h = h;
+  }
+  const dpr = getMainCanvasRenderDpr();
+  canvasViewport.dpr = dpr;
+  const pixelW = Math.max(1, Math.round(w * dpr));
+  const pixelH = Math.max(1, Math.round(h * dpr));
+  if (mainCanvas.width !== pixelW || mainCanvas.height !== pixelH) {
+    mainCanvas.width = pixelW;
+    mainCanvas.height = pixelH;
+  }
+  return { w, h, dpr };
+}
+
+function multiplyAffine2D(a, b) {
+  return [
+    a[0] * b[0] + a[2] * b[1],
+    a[1] * b[0] + a[3] * b[1],
+    a[0] * b[2] + a[2] * b[3],
+    a[1] * b[2] + a[3] * b[3],
+    a[0] * b[4] + a[2] * b[5] + a[4],
+    a[1] * b[4] + a[3] * b[5] + a[5],
+  ];
+}
+
+function createVectorRecordingContext(initial = {}) {
+  const commands = [];
+  const stack = [];
+  let currentPath = new Path2D();
+  const rec = {
+    commands,
+    globalAlpha: Number.isFinite(Number(initial.globalAlpha)) ? Number(initial.globalAlpha) : 1,
+    lineWidth: Number(initial.lineWidth) || 1,
+    strokeStyle: initial.strokeStyle || '#ffffff',
+    fillStyle: initial.fillStyle || 'transparent',
+    lineCap: initial.lineCap || 'butt',
+    lineJoin: initial.lineJoin || 'miter',
+    miterLimit: Number(initial.miterLimit) || 10,
+    _matrix: [1, 0, 0, 1, 0, 0],
+    save() {
+      stack.push({
+        globalAlpha: this.globalAlpha,
+        lineWidth: this.lineWidth,
+        strokeStyle: this.strokeStyle,
+        fillStyle: this.fillStyle,
+        lineCap: this.lineCap,
+        lineJoin: this.lineJoin,
+        miterLimit: this.miterLimit,
+        matrix: this._matrix.slice(),
+      });
+    },
+    restore() {
+      const st = stack.pop();
+      if (!st) return;
+      this.globalAlpha = st.globalAlpha;
+      this.lineWidth = st.lineWidth;
+      this.strokeStyle = st.strokeStyle;
+      this.fillStyle = st.fillStyle;
+      this.lineCap = st.lineCap;
+      this.lineJoin = st.lineJoin;
+      this.miterLimit = st.miterLimit;
+      this._matrix = st.matrix;
+    },
+    beginPath() {
+      currentPath = new Path2D();
+    },
+    moveTo(x, y) {
+      currentPath.moveTo(x, y);
+    },
+    lineTo(x, y) {
+      currentPath.lineTo(x, y);
+    },
+    bezierCurveTo(...args) {
+      currentPath.bezierCurveTo(...args);
+    },
+    quadraticCurveTo(...args) {
+      currentPath.quadraticCurveTo(...args);
+    },
+    arc(...args) {
+      currentPath.arc(...args);
+    },
+    ellipse(...args) {
+      currentPath.ellipse(...args);
+    },
+    rect(...args) {
+      currentPath.rect(...args);
+    },
+    closePath() {
+      currentPath.closePath();
+    },
+    translate(x, y) {
+      this._matrix = multiplyAffine2D(this._matrix, [1, 0, 0, 1, Number(x) || 0, Number(y) || 0]);
+    },
+    scale(x, y) {
+      const sx = Number(x) || 0;
+      const sy = Number.isFinite(Number(y)) ? Number(y) : sx;
+      this._matrix = multiplyAffine2D(this._matrix, [sx, 0, 0, sy, 0, 0]);
+    },
+    rotate(rad) {
+      const c = Math.cos(Number(rad) || 0),
+        q = Math.sin(Number(rad) || 0);
+      this._matrix = multiplyAffine2D(this._matrix, [c, q, -q, c, 0, 0]);
+    },
+    transform(a, b, c, d, e, f) {
+      this._matrix = multiplyAffine2D(this._matrix, [a, b, c, d, e, f].map(Number));
+    },
+    setTransform(a, b, c, d, e, f) {
+      this._matrix = [a, b, c, d, e, f].map(Number);
+    },
+    setLineDash() {},
+    stroke(path) {
+      commands.push({
+        type: 'stroke',
+        path: path || currentPath,
+        matrix: this._matrix.slice(),
+        alpha: Math.max(0, Math.min(1, Number(this.globalAlpha) || 0)),
+        lineWidth: Math.max(0.01, Number(this.lineWidth) || 1),
+        strokeStyle: this.strokeStyle,
+        lineCap: this.lineCap,
+        lineJoin: this.lineJoin,
+        miterLimit: this.miterLimit,
+      });
+    },
+    fill(path) {
+      commands.push({
+        type: 'fill',
+        path: path || currentPath,
+        matrix: this._matrix.slice(),
+        alpha: Math.max(0, Math.min(1, Number(this.globalAlpha) || 0)),
+        fillStyle: this.fillStyle,
+      });
+    },
+  };
+  return rec;
+}
+
+function replayVectorRecording(ctx, recording, alphaMultiplier = 1, scaleRatio = 1, overrides = null) {
+  if (!recording?.commands?.length) return;
+  const aMul = Math.max(0, Number(alphaMultiplier) || 0);
+  const ratio = Math.max(1e-9, Number(scaleRatio) || 1);
+  const ov = overrides || null;
+  const commands = recording.commands;
+  ctx.save();
+  ctx.scale(ratio, ratio);
+  for (const cmd of commands) {
+    if (!cmd?.path || cmd.alpha * aMul <= 0.0001) continue;
+    if (ov?.strokeOnly === true && cmd.type !== 'stroke') continue;
+    if (ov?.suppressFill === true && cmd.type === 'fill') continue;
+    const m = cmd.matrix;
+    const transformed =
+      m && (m[0] !== 1 || m[1] !== 0 || m[2] !== 0 || m[3] !== 1 || m[4] !== 0 || m[5] !== 0);
+    if (transformed) {
+      ctx.save();
+      ctx.transform(m[0], m[1], m[2], m[3], m[4], m[5]);
+    }
+    ctx.globalAlpha = cmd.alpha * aMul;
+    if (cmd.type === 'fill') {
+      ctx.fillStyle = ov?.fillStyle || cmd.fillStyle || 'transparent';
+      ctx.fill(cmd.path);
+    } else {
+      const delta = Number(ov?.lineWidthDelta) || 0;
+      ctx.lineWidth = Math.max(0.01, Number(cmd.lineWidth || 1) + delta);
+      ctx.strokeStyle = ov?.strokeStyle || cmd.strokeStyle || '#ffffff';
+      ctx.lineCap = ov?.lineCap || cmd.lineCap || 'butt';
+      ctx.lineJoin = ov?.lineJoin || cmd.lineJoin || 'miter';
+      ctx.miterLimit = Number(ov?.miterLimit) || cmd.miterLimit || 10;
+      ctx.stroke(cmd.path);
+    }
+    if (transformed) ctx.restore();
+  }
+  ctx.restore();
+}
+
+function getLayerRadiusMultiplier(layer) {
+  const v = Number(layer?.radiusMultiplier);
+  return Number.isFinite(v) ? Math.max(0, v) : 1;
+}
+function getLayerStrokeWidthMultiplier(layer) {
+  const v = Number(layer?.strokeWidthMultiplier);
+  return Number.isFinite(v) ? Math.max(0, v) : 1;
+}
+function getLayerGlowMultiplier(layer) {
+  const v = Number(layer?.glowMultiplier);
+  return Number.isFinite(v) ? Math.max(0, v) : 1;
+}
+function getLayerGlowIntensityMultiplier(layer) {
+  const v = Number(layer?.glowIntensityMultiplier);
+  return Number.isFinite(v) ? Math.max(0, v) : 1;
+}
+function getEffectiveLayerRadius(layer, fallback = 220) {
+  const raw = Number(layer?.radius);
+  const base = Number.isFinite(raw) ? raw : Number(fallback) || 220;
+  return Math.max(1, base * getLayerRadiusMultiplier(layer));
+}
+
+function layerGeometrySignature(layer) {
+  const nodes = Array.isArray(layer.profileNodes) ? layer.profileNodes : [];
+  let cached = layerGeometrySignatureCache.get(layer);
+  const geometryVersion = Number(getLayerVersions(layer).geometry) || 0;
+  const N = Number(layer.N) || 0;
+
+  const angularN =
+    layer.spiralEnabled === true && Number.isFinite(Number(layer.__spiralAnimatedN))
+      ? Number(layer.__spiralAnimatedN)
+      : N;
+  const K = Number(layer.K) || 0;
+  const customSuborbits = layer.customSuborbits ?? '';
+  const chaosStar = layer.chaosStar === true ? 1 : 0;
+  const chaosStepMinus = Math.max(0, Math.round(Number(layer.chaosStepMinus) || 0));
+  const chaosStepPlus = Math.max(0, Math.round(Number(layer.chaosStepPlus) || 0));
+  const chaosClosures = Math.max(1, Math.round(Number(layer.chaosClosures) || 1));
+  const chaosSeed = Number(layer.chaosSeed) >>> 0;
+  const closedLoop = layer.closedLoop === false ? 0 : 1;
+  const extendedMode =
+    layer.extendedProfileEnabled === true ? (layer.extendedProfileMode === 'repeat' ? 2 : 1) : 0;
+  const lineJoinType = layer.lineJoinType || '';
+  const roundingMode = layer.roundingMode === 'monoradius' ? 'monoradius' : 'standard';
+  const roundingShape = 'spline-plus';
+  const roundingCornerType = layer.roundingCornerType === 'local' ? 'local' : 'classic';
+  const roundingMaxRadiusDrop = Number(layer.roundingMaxRadiusDrop ?? 30);
+  const roundingSmoothSplines = layer.roundingSmoothSplines === true;
+  const radius = getEffectiveLayerRadius(layer, 0);
+  const radiusMultiplier = getLayerRadiusMultiplier(layer);
+  const rotation = Number(layer.rotation) || 0;
+  const profileMode = layer.profileMode || '';
+  const splineRenderMode = normalizeSplineRenderMode(layer.splineRenderMode);
+  const preSampledSpline = profileMode === 'spline' && isPreSampledSplineLayer(layer) ? 1 : 0;
+  const configuredSplinePoints = profileMode === 'spline' ? getConfiguredSplinePointCount() : 0;
+  const splineSegments = Number(layer.profileSplineSegments) || 0;
+  const splineMix = Number(layer.profileSplineMix) || 0;
+  const spiralEnabled = isSpiralLayer(layer) ? 1 : 0;
+  const spiralOrder = getEffectiveSpiralOrder(layer);
+  const spiralSquashY = spiralEnabled ? normalizeSpiralSquashY(layer.spiralSquashY) : 0;
+  const spiralTwist = layer.spiralTwist === true;
+  const spiralTangential =
+    Math.abs(spiralOrder) <= 1e-8
+      ? 0
+      : Number.isFinite(layer.__spiralTangentialMix)
+        ? Math.max(0, Math.min(1, layer.__spiralTangentialMix))
+        : layer.spiralTangential === true
+          ? 1
+          : 0;
+  const spiralRoundSeams = layer.spiralRoundSeams !== false ? 1 : 0;
+  const spiralClosed = layer.spiralClosed !== false ? 1 : 0;
+  const spiralStep = spiralEnabled ? getEffectiveSpiralStep(layer) : 0;
+  const spiralStepLinked = layer.spiralStepLinked !== false ? 1 : 0;
+  const spiralStepRatio = spiralEnabled ? getSpiralClosureRatio() : 1;
+  const spiralRounding = spiralEnabled ? Number(layer.rounding) || 0 : 0;
+
+  let nodesChanged = !cached || cached.nodes !== nodes || cached.nodeRefs.length !== nodes.length;
+  if (!nodesChanged) {
+    for (let i = 0; i < nodes.length; i++) {
+      if (cached.nodeRefs[i] !== nodes[i]) {
+        nodesChanged = true;
+        break;
+      }
+    }
+  }
+  const primitivesChanged =
+    !cached ||
+    cached.geometryVersion !== geometryVersion ||
+    cached.N !== N ||
+    cached.angularN !== angularN ||
+    cached.K !== K ||
+    cached.customSuborbits !== customSuborbits ||
+    cached.chaosStar !== chaosStar ||
+    cached.chaosStepMinus !== chaosStepMinus ||
+    cached.chaosStepPlus !== chaosStepPlus ||
+    cached.chaosClosures !== chaosClosures ||
+    cached.chaosSeed !== chaosSeed ||
+    cached.closedLoop !== closedLoop ||
+    cached.extendedMode !== extendedMode ||
+    cached.lineJoinType !== lineJoinType ||
+    cached.roundingMode !== roundingMode ||
+    cached.roundingShape !== roundingShape ||
+    cached.roundingCornerType !== roundingCornerType ||
+    cached.roundingMaxRadiusDrop !== roundingMaxRadiusDrop ||
+    cached.roundingSmoothSplines !== roundingSmoothSplines ||
+    cached.radius !== radius ||
+    cached.radiusMultiplier !== radiusMultiplier ||
+    cached.rotation !== rotation ||
+    cached.profileMode !== profileMode ||
+    cached.splineRenderMode !== splineRenderMode ||
+    cached.preSampledSpline !== preSampledSpline ||
+    cached.configuredSplinePoints !== configuredSplinePoints ||
+    cached.splineSegments !== splineSegments ||
+    cached.splineMix !== splineMix ||
+    cached.spiralEnabled !== spiralEnabled ||
+    cached.spiralOrder !== spiralOrder ||
+    cached.spiralSquashY !== spiralSquashY ||
+    cached.spiralTwist !== spiralTwist ||
+    cached.spiralTangential !== spiralTangential ||
+    cached.spiralRoundSeams !== spiralRoundSeams ||
+    cached.spiralClosed !== spiralClosed ||
+    cached.spiralStep !== spiralStep ||
+    cached.spiralStepLinked !== spiralStepLinked ||
+    cached.spiralStepRatio !== spiralStepRatio ||
+    cached.spiralRounding !== spiralRounding;
+
+  if (!nodesChanged && !primitivesChanged) return cached.signature;
+
+  let nodeSig = cached?.nodeSig || '';
+
+  if (nodesChanged || !cached || cached.geometryVersion !== geometryVersion) {
+    let parts = '';
+    for (let i = 0; i < nodes.length; i++) {
+      const p = nodes[i] || {};
+      parts += `${Number(p.x) || 0},${Number(p.y) || 0};`;
+    }
+    nodeSig = parts;
+  }
+  const signature = `${N}|an:${angularN}|${K}|${customSuborbits}|ch:${chaosStar},${chaosStepMinus},${chaosStepPlus},${chaosClosures},${chaosSeed}|${closedLoop}|extended:${extendedMode}|${lineJoinType}|roundMode:${roundingMode}|roundShape:${roundingShape}|cornerType:${roundingCornerType}|drop:${roundingMaxRadiusDrop}|smooth:${roundingSmoothSplines ? 1 : 0}|${radius}|rm:${radiusMultiplier}|${rotation}|${profileMode}|${splineRenderMode}|${preSampledSpline}|${configuredSplinePoints}|${splineSegments}|${splineMix}|${spiralEnabled}|${spiralOrder}|sy:${spiralSquashY}|${spiralTwist}|${spiralTangential}|${spiralRoundSeams}|${spiralClosed}|${spiralStep}|${spiralStepLinked}|${layer.spiralStepLimiterEnabled !== false}|${layer.spiralStepLimiter ?? 2}|${spiralStepRatio}|sr:${spiralRounding}|${nodeSig}`;
+  cached = {
+    geometryVersion,
+    N,
+    angularN,
+    K,
+    customSuborbits,
+    chaosStar,
+    chaosStepMinus,
+    chaosStepPlus,
+    chaosClosures,
+    chaosSeed,
+    closedLoop,
+    extendedMode,
+    lineJoinType,
+    roundingMode,
+    roundingShape,
+    roundingCornerType,
+    roundingMaxRadiusDrop,
+    roundingSmoothSplines,
+    radius,
+    radiusMultiplier,
+    rotation,
+    profileMode,
+    splineRenderMode,
+    preSampledSpline,
+    configuredSplinePoints,
+    splineSegments,
+    splineMix,
+    spiralEnabled,
+    spiralOrder,
+    spiralSquashY,
+    spiralTwist,
+    spiralTangential,
+    spiralRoundSeams,
+    spiralClosed,
+    spiralStep,
+    spiralStepLinked,
+    spiralStepRatio,
+    spiralRounding,
+    nodes,
+    nodeRefs: nodes.slice(),
+    nodeSig,
+    signature,
+  };
+  layerGeometrySignatureCache.set(layer, cached);
+  return signature;
+}
+
+const sharedLayerDrawDataCache = new Map();
+const SHARED_LAYER_DRAW_CACHE_MAX = 128;
+const sharedLayerDrawDataStats = { hits: 0, misses: 0, stores: 0, evictions: 0 };
+function sharedLayerDrawDataGet(key) {
+  const rec = sharedLayerDrawDataCache.get(key);
+  if (!rec) {
+    sharedLayerDrawDataStats.misses++;
+    return null;
+  }
+  sharedLayerDrawDataCache.delete(key);
+  sharedLayerDrawDataCache.set(key, rec);
+  sharedLayerDrawDataStats.hits++;
+  return rec;
+}
+function sharedLayerDrawDataPut(key, rec) {
+  if (!key || !rec) return;
+  if (sharedLayerDrawDataCache.has(key)) sharedLayerDrawDataCache.delete(key);
+  sharedLayerDrawDataCache.set(key, rec);
+  sharedLayerDrawDataStats.stores++;
+  while (sharedLayerDrawDataCache.size > SHARED_LAYER_DRAW_CACHE_MAX) {
+    const first = sharedLayerDrawDataCache.keys().next().value;
+    sharedLayerDrawDataCache.delete(first);
+    sharedLayerDrawDataStats.evictions++;
+  }
+}
+
+function maxRadiusForPathList(paths) {
+  let maxSq = 0;
+  for (const path of paths || [])
+    for (const p of path?.points || []) {
+      const x = Number(p?.x) || 0,
+        y = Number(p?.y) || 0,
+        rr = x * x + y * y;
+      if (rr > maxSq) maxSq = rr;
+    }
+  return Math.sqrt(maxSq);
+}
+function applyMonoradiusRoundingCompensation(paths, layer, roundingValue) {
+  // Standard rounding has no radius compensation. buildLegacyLayerDrawData
+  // already scans these same points for maxRadiusSq and pointCount;
+  // return a zero sentinel so that single existing scan supplies
+  // the EXACT same Math.sqrt(maxRadiusSq) result. Mono Radius keeps
+  // its own measurement/iteration contract unchanged.
+  if (layer?.roundingMode !== 'monoradius' || !Array.isArray(paths) || !paths.length)
+    return { paths, targetRadius: 0, scale: 1 };
+  const targetRadius = getEffectiveLayerRadius(layer, 220);
+  if (
+    !(targetRadius > 1e-7) ||
+    typeof buildLampRenderedAttachmentPathsUncached !== 'function' ||
+    typeof getRoundingStrength !== 'function'
+  )
+    return { paths, targetRadius, scale: 1 };
+  // A fixed physical base edge makes the new overlay non-homogeneous:
+  // re-evaluate the actual final curve after scaling, otherwise the
+  // previous one-shot ratio leaves up to 10% MonoRadius drift.
+  const makeScaled = (scale) => {
+    if (Math.abs(scale - 1) < 1e-12) return paths;
+    const scaled = paths.map((path) => ({
+      ...path,
+      points: (path?.points || []).map((pt) => ({
+        ...pt,
+        x: (Number(pt?.x) || 0) * scale,
+        y: (Number(pt?.y) || 0) * scale,
+      })),
+    }));
+    const graphs = paths.__somataSkeletonGraphs;
+    if (Array.isArray(graphs) && graphs.length) {
+      const scaledGraphs = graphs.map((graph) => {
+        const byId = new Map(),
+          nodes = graph.nodes.map((p) => {
+            const node = { ...p, x: p.x * scale, y: p.y * scale };
+            byId.set(node.id, node);
+            return node;
+          });
+        const edgeSamples = graph.edgeSamples.map((r) => r.map((p) => byId.get(p.id)));
+        const orbits = graph.orbits.map((orbit) => ({
+          ...orbit,
+          points: orbit.points.map((p) => byId.get(p.id)),
+          rawJunctionGap: orbit.rawJunctionGap * scale,
+        }));
+        return { ...graph, nodes, byId, edgeSamples, orbits };
+      });
+      Object.defineProperty(scaled, '__somataSkeletonGraphs', {
+        value: scaledGraphs,
+        configurable: true,
+        enumerable: false,
+      });
+      Object.defineProperty(scaled, '__somataSkeletonOrbits', {
+        value: scaledGraphs.flatMap((g) => g.orbits),
+        configurable: true,
+        enumerable: false,
+      });
+    } else {
+      const raw = paths.__somataSkeletonOrbits;
+      if (Array.isArray(raw))
+        Object.defineProperty(scaled, '__somataSkeletonOrbits', {
+          value: raw.map((orbit) => ({
+            ...orbit,
+            points: orbit.points.map((p) => ({ ...p, x: p.x * scale, y: p.y * scale })),
+          })),
+          configurable: true,
+          enumerable: false,
+        });
+    }
+    return scaled;
+  };
+  let scale = 1,
+    previousScale = NaN,
+    previousRadius = NaN;
+  try {
+    for (let k = 0; k < 9; k++) {
+      const probe = makeScaled(scale);
+      const rendered = buildLampRenderedAttachmentPathsUncached(
+        probe,
+        layer,
+        null,
+        getRoundingStrength(roundingValue),
+      );
+      const r = maxRadiusForPathList(rendered);
+      if (!(r > 1e-8)) break;
+      const error = targetRadius / r;
+      if (!Number.isFinite(error)) break;
+      if (Math.abs(error - 1) < 1e-5) break;
+      let next = scale * error;
+      // 12.6.1: a long shoulder makes the rendered radius
+      // nonhomogeneous under scale. Multiplying by target/r
+      // can converge too slowly (nine steps were insufficient
+      // on a three-corner profile). Use a bounded secant step
+      // after the first two actual output-radius measurements.
+      // Fall back to the old multiplicative step when the
+      // radius response is degenerate or non-monotone.
+      const dx = scale - previousScale,
+        dy = r - previousRadius;
+      if (Number.isFinite(dx) && Number.isFinite(dy) && Math.abs(dx) > 1e-10 && dy / dx > 1e-9) {
+        const candidate = scale + (targetRadius - r) * (dx / dy);
+        if (Number.isFinite(candidate) && candidate > 0)
+          next = Math.max(scale * 0.4, Math.min(scale * 2.5, candidate));
+      }
+      previousScale = scale;
+      previousRadius = r;
+      scale = Math.max(1e-8, Math.min(1e8, next));
+    }
+  } catch (_) {
+    return { paths, targetRadius, scale: 1 };
+  }
+  return { paths: makeScaled(scale), targetRadius, scale };
+}
+
+function buildLegacyLayerDrawData(layer) {
+  const geometryKey = layerGeometrySignature(layer);
+  const roundingValue = Number(layer.rounding) || 0;
+  const sharedKey = `${geometryKey}|r:${roundingValue}`;
+
+  const sharedEligible = Array.isArray(state?.layers) && state.layers.includes(layer);
+  let cached = layerDrawCache.get(layer);
+  if (!cached || cached.geometryKey !== geometryKey || cached.roundingValue !== roundingValue) {
+    const shared = sharedEligible ? sharedLayerDrawDataGet(sharedKey) : null;
+    if (shared) {
+      layerDrawCache.set(layer, shared);
+      return shared;
+    }
+    let paths = buildOrbitPolylines(layer);
+    const monoradius = applyMonoradiusRoundingCompensation(paths, layer, roundingValue);
+    paths = monoradius.paths;
+    let maxRadiusSq = 0;
+    let pointCount = 0;
+    for (const path of paths) {
+      const pts = path?.points || [];
+      pointCount += pts.length;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i];
+        const x = Number(p.x) || 0;
+        const y = Number(p.y) || 0;
+        const rSq = x * x + y * y;
+        if (rSq > maxRadiusSq) maxRadiusSq = rSq;
+      }
+    }
+    cached = {
+      geometryKey,
+      paths,
+
+      maxRadius: Math.max(1, monoradius.targetRadius || Math.sqrt(maxRadiusSq)),
+      monoradiusScale: monoradius.scale || 1,
+      pointCount,
+      roundedKey: null,
+      roundingValue: NaN,
+      path2ds: null,
+      combinedStrokePath2d: null,
+    };
+    layerDrawCache.set(layer, cached);
+  }
+
+  const roundedKey = `${geometryKey}|r:${roundingValue}`;
+  if (cached.roundingValue !== roundingValue) {
+    cached.roundingValue = roundingValue;
+    cached.roundedKey = roundedKey;
+    cached.path2ds = null;
+    cached.combinedStrokePath2d = null;
+    // Spiral Base never consumes the ordinary cached Path2Ds: its
+    // variable-width renderer (or native WebGPU rail) draws from
+    // the underlying paths instead. A multi-turn Spiral can have
+    // dozens of separate paths, so eagerly materializing them here
+    // also allocates and merges paths that no renderer will read.
+    // Order=0 remains a polygon and retains the original cache.
+    if (typeof Path2D !== 'undefined' && !isSpiralLayer(layer)) {
+      const roundingFrac = getRoundingStrength(layer.rounding);
+      cached.path2ds = cached.paths.map((path) => {
+        if (!path.points || path.points.length < 2) return null;
+        const p = new Path2D();
+        if (useSmoothSplinePath(layer, roundingFrac, path))
+          splinePathForDraw(
+            p,
+            path.points,
+            path.closed,
+            roundingFrac,
+            path.cornerFlags || [],
+            path.bridgeRoundFlags || [],
+            layer.wholeCurveSpline === true,
+            1,
+            0,
+            layer,
+          );
+        else
+          roundPolylineForDraw(
+            p,
+            path.points,
+            path.closed,
+            roundingFrac,
+            path.cornerFlags || [],
+            null,
+            false,
+            null,
+            layer,
+          );
+        return p;
+      });
+      // A single contour is already a complete Path2D. Do not
+      // allocate another native path and copy all its commands
+      // just to stroke the same contour. Multiple contours still
+      // need addPath() to preserve their combined stroke topology.
+      if (
+        cached.path2ds.length === 1 &&
+        cached.path2ds[0] &&
+        typeof Path2D.prototype?.addPath === 'function'
+      ) {
+        cached.combinedStrokePath2d = cached.path2ds[0];
+      } else
+        try {
+          const combined = new Path2D();
+          if (typeof combined.addPath === 'function') {
+            for (const p of cached.path2ds) if (p) combined.addPath(p);
+            cached.combinedStrokePath2d = combined;
+          }
+        } catch (_) {
+          cached.combinedStrokePath2d = null;
         }
-        function getMotionViewportTransform(w,h){
-            const m=normalizeMotionState();let panX=0,panY=0;
-            if(m.cameraEnabled&&m.cameraAmount>0){
-                const amp=Math.min(Math.max(1,Number(w)||1),Math.max(1,Number(h)||1))*.00115*m.cameraAmount;
-                const p=motionRuntime.cameraPhase;
-                panX=Math.sin(p)*amp+Math.sin(p*.37+1.1)*amp*.34;
-                panY=Math.cos(p*.79+.45)*amp*.82+Math.sin(p*.23+2.2)*amp*.28;
-            }
-            return {panX,panY,rotationRad:getSpiralMorphRotationCompensationRadians()};
-        }
-        function applyMotionColorCycle(){
-            const m=normalizeMotionState();if(!m.colorEnabled||!Array.isArray(state.layers)||!state.layers.length)return;
-            const colors=getPlaylistPaletteColors(m.paletteKey);if(!Array.isArray(colors)||!colors.length)return;
-            const n=colors.length,layerCount=Math.max(1,state.layers.length);
-            for(let i=0;i<state.layers.length;i++){
-                const layer=state.layers[i];if(!layer)continue;
-                const pos=((motionRuntime.colorPhase+(i*n/layerCount))%n+n)%n,idx=Math.floor(pos)%n,t=pos-Math.floor(pos);
-                const c=paletteLerpHex(colors[idx],colors[(idx+1)%n],t);
-                setLayerStrokeColor(layer,c);
-                if(layer.fill&&!getLayerFillMatchStroke(layer)){
-                    const opacityUnit=getFillOpacityUnit(layer.fillColor);const alpha=Math.max(0,Math.min(255,Math.round(opacityUnit*255))).toString(16).padStart(2,'0');layer.fillColor=c+alpha;
-                }
-            }
-        }
-        function motionAnimationTick(now){
-            const m=normalizeMotionState();if(!anyMotionEnabled()){motionRuntime.lastTime=0;return false;}
-            if(!motionRuntime.lastTime)motionRuntime.lastTime=now;
+    }
+  }
+  if (sharedEligible) sharedLayerDrawDataPut(sharedKey, cached);
+  return cached;
+}
 
-            const rawDt=Math.max(0,(now-motionRuntime.lastTime)/1000);
-            const dt=rawDt>1.25?0:rawDt;motionRuntime.lastTime=now;
-            const liveIds=new Set();
-            for(const layer of state.layers||[]){
-                const id=String(layer?.id||'');liveIds.add(id);const r=normalizeLayerMotionRotation(layer);if(!r.enabled)continue;
-                const sign=r.direction==='cw'?1:-1,prev=Number(motionRuntime.layerRotationRad.get(id))||0;
-                motionRuntime.layerRotationRad.set(id,(prev+sign*r.speed*r.multiplier*Math.PI/180*dt)%(Math.PI*2));
-            }
-            for(const id of motionRuntime.layerRotationRad.keys())if(!liveIds.has(id))motionRuntime.layerRotationRad.delete(id);
-            if(m.cameraEnabled)motionRuntime.cameraPhase=(motionRuntime.cameraPhase+(m.cameraSpeed/100)*m.cameraMultiplier*1.25*dt)%(Math.PI*2000);
-            if(m.colorEnabled){motionRuntime.colorPhase=(motionRuntime.colorPhase+(m.colorSpeed/100)*m.colorMultiplier*2*dt)%100000;applyMotionColorCycle();}
-            requestMainCanvasRender();return true;
-        }
-        function ensureMotionAnimation(){
-            if(anyMotionEnabled())animationScheduler.add('linear-motion',motionAnimationTick);
-            else{animationScheduler.remove('linear-motion');motionRuntime.lastTime=0;requestMainCanvasRender();}
-        }
+function getCachedLayerDrawData(layer) {
+  return somataWithFourierLayer(layer, () => getCachedLayerDrawDataScoped(layer));
+}
+function getCachedLayerDrawDataScoped(layer) {
+  {
+    const canonical = getCanonicalLayerGeometry(layer);
+    if (canonical?.drawData) {
+      noteCanonicalGeometryConsumer('getCachedLayerDrawData');
+      return canonical.drawData;
+    }
+  }
+  return buildLegacyLayerDrawData(layer);
+}
 
-        function ensureMainCanvasSize(mainContainer = mainContainerEl) {
-            let w = canvasViewport.w;
-            let h = canvasViewport.h;
-            if (!(w > 0 && h > 0)) {
-                w = Math.max(1, Math.round(mainContainer?.clientWidth || 1));
-                h = Math.max(1, Math.round(mainContainer?.clientHeight || 1));
-                canvasViewport.w = w;
-                canvasViewport.h = h;
-            }
-            const dpr = getMainCanvasRenderDpr();
-            canvasViewport.dpr = dpr;
-            const pixelW = Math.max(1, Math.round(w * dpr));
-            const pixelH = Math.max(1, Math.round(h * dpr));
-            if (mainCanvas.width !== pixelW || mainCanvas.height !== pixelH) {
-                mainCanvas.width = pixelW;
-                mainCanvas.height = pixelH;
-            }
-            return { w, h, dpr };
-        }
-
-        function multiplyAffine2D(a, b) {
-            return [
-                a[0] * b[0] + a[2] * b[1],
-                a[1] * b[0] + a[3] * b[1],
-                a[0] * b[2] + a[2] * b[3],
-                a[1] * b[2] + a[3] * b[3],
-                a[0] * b[4] + a[2] * b[5] + a[4],
-                a[1] * b[4] + a[3] * b[5] + a[5]
-            ];
-        }
-
-        function createVectorRecordingContext(initial = {}) {
-            const commands = [];
-            const stack = [];
-            let currentPath = new Path2D();
-            const rec = {
-                commands,
-                globalAlpha: Number.isFinite(Number(initial.globalAlpha)) ? Number(initial.globalAlpha) : 1,
-                lineWidth: Number(initial.lineWidth) || 1,
-                strokeStyle: initial.strokeStyle || '#ffffff',
-                fillStyle: initial.fillStyle || 'transparent',
-                lineCap: initial.lineCap || 'butt',
-                lineJoin: initial.lineJoin || 'miter',
-                miterLimit: Number(initial.miterLimit) || 10,
-                _matrix: [1, 0, 0, 1, 0, 0],
-                save() {
-                    stack.push({
-                        globalAlpha: this.globalAlpha,
-                        lineWidth: this.lineWidth,
-                        strokeStyle: this.strokeStyle,
-                        fillStyle: this.fillStyle,
-                        lineCap: this.lineCap,
-                        lineJoin: this.lineJoin,
-                        miterLimit: this.miterLimit,
-                        matrix: this._matrix.slice()
-                    });
-                },
-                restore() {
-                    const st = stack.pop();
-                    if (!st) return;
-                    this.globalAlpha = st.globalAlpha;
-                    this.lineWidth = st.lineWidth;
-                    this.strokeStyle = st.strokeStyle;
-                    this.fillStyle = st.fillStyle;
-                    this.lineCap = st.lineCap;
-                    this.lineJoin = st.lineJoin;
-                    this.miterLimit = st.miterLimit;
-                    this._matrix = st.matrix;
-                },
-                beginPath() { currentPath = new Path2D(); },
-                moveTo(x, y) { currentPath.moveTo(x, y); },
-                lineTo(x, y) { currentPath.lineTo(x, y); },
-                bezierCurveTo(...args) { currentPath.bezierCurveTo(...args); },
-                quadraticCurveTo(...args) { currentPath.quadraticCurveTo(...args); },
-                arc(...args) { currentPath.arc(...args); },
-                ellipse(...args) { currentPath.ellipse(...args); },
-                rect(...args) { currentPath.rect(...args); },
-                closePath() { currentPath.closePath(); },
-                translate(x, y) { this._matrix = multiplyAffine2D(this._matrix, [1, 0, 0, 1, Number(x) || 0, Number(y) || 0]); },
-                scale(x, y) {
-                    const sx = Number(x) || 0;
-                    const sy = Number.isFinite(Number(y)) ? Number(y) : sx;
-                    this._matrix = multiplyAffine2D(this._matrix, [sx, 0, 0, sy, 0, 0]);
-                },
-                rotate(rad) {
-                    const c = Math.cos(Number(rad) || 0), q = Math.sin(Number(rad) || 0);
-                    this._matrix = multiplyAffine2D(this._matrix, [c, q, -q, c, 0, 0]);
-                },
-                transform(a, b, c, d, e, f) { this._matrix = multiplyAffine2D(this._matrix, [a, b, c, d, e, f].map(Number)); },
-                setTransform(a, b, c, d, e, f) { this._matrix = [a, b, c, d, e, f].map(Number); },
-                setLineDash() {},
-                stroke(path) {
-                    commands.push({
-                        type: 'stroke', path: path || currentPath, matrix: this._matrix.slice(),
-                        alpha: Math.max(0, Math.min(1, Number(this.globalAlpha) || 0)),
-                        lineWidth: Math.max(0.01, Number(this.lineWidth) || 1),
-                        strokeStyle: this.strokeStyle,
-                        lineCap: this.lineCap,
-                        lineJoin: this.lineJoin,
-                        miterLimit: this.miterLimit
-                    });
-                },
-                fill(path) {
-                    commands.push({
-                        type: 'fill', path: path || currentPath, matrix: this._matrix.slice(),
-                        alpha: Math.max(0, Math.min(1, Number(this.globalAlpha) || 0)),
-                        fillStyle: this.fillStyle
-                    });
-                }
-            };
-            return rec;
-        }
-
-        // Corridor can replay the same authored contour dozens of times in one frame.
-        // Keep copy-scale outside the individual stroke/fill commands and avoid a
-        // Canvas transform/state stack for identity-matrix commands. The outer
-        // save/restore keeps every caller's state identical to the legacy path.
-        function replayVectorRecording(ctx, recording, alphaMultiplier = 1, scaleRatio = 1, overrides = null) {
-            if (!recording?.commands?.length) return;
-            const aMul = Math.max(0, Number(alphaMultiplier) || 0);
-            const ratio = Math.max(1e-9, Number(scaleRatio) || 1);
-            const ov = overrides || null;
-            const commands = recording.commands;
-            ctx.save();
-            ctx.scale(ratio, ratio);
-            for (const cmd of commands) {
-                if (!cmd?.path || cmd.alpha * aMul <= 0.0001) continue;
-                if (ov?.strokeOnly === true && cmd.type !== 'stroke') continue;
-                if (ov?.suppressFill === true && cmd.type === 'fill') continue;
-                const m = cmd.matrix;
-                const transformed = m && (m[0] !== 1 || m[1] !== 0 || m[2] !== 0 || m[3] !== 1 || m[4] !== 0 || m[5] !== 0);
-                if (transformed) { ctx.save(); ctx.transform(m[0],m[1],m[2],m[3],m[4],m[5]); }
-                ctx.globalAlpha = cmd.alpha * aMul;
-                if (cmd.type === 'fill') {
-                    ctx.fillStyle = ov?.fillStyle || cmd.fillStyle || 'transparent';
-                    ctx.fill(cmd.path);
-                } else {
-                    const delta = Number(ov?.lineWidthDelta) || 0;
-                    ctx.lineWidth = Math.max(.01, Number(cmd.lineWidth || 1) + delta);
-                    ctx.strokeStyle = ov?.strokeStyle || cmd.strokeStyle || '#ffffff';
-                    ctx.lineCap = ov?.lineCap || cmd.lineCap || 'butt';
-                    ctx.lineJoin = ov?.lineJoin || cmd.lineJoin || 'miter';
-                    ctx.miterLimit = Number(ov?.miterLimit) || cmd.miterLimit || 10;
-                    ctx.stroke(cmd.path);
-                }
-                if (transformed) ctx.restore();
-            }
-            ctx.restore();
-        }
-
-        function getLayerRadiusMultiplier(layer) {
-            const v=Number(layer?.radiusMultiplier);
-            return Number.isFinite(v)?Math.max(0,v):1;
-        }
-        function getLayerStrokeWidthMultiplier(layer) { const v=Number(layer?.strokeWidthMultiplier); return Number.isFinite(v)?Math.max(0,v):1; }
-        function getLayerGlowMultiplier(layer) { const v=Number(layer?.glowMultiplier); return Number.isFinite(v)?Math.max(0,v):1; }
-        function getLayerGlowIntensityMultiplier(layer) { const v=Number(layer?.glowIntensityMultiplier); return Number.isFinite(v)?Math.max(0,v):1; }
-        function getEffectiveLayerRadius(layer,fallback=220) {
-            const raw=Number(layer?.radius);
-            const base=Number.isFinite(raw)?raw:Number(fallback)||220;
-            return Math.max(1,base*getLayerRadiusMultiplier(layer));
-        }
-
-        function layerGeometrySignature(layer) {
-            const nodes = Array.isArray(layer.profileNodes) ? layer.profileNodes : [];
-            let cached = layerGeometrySignatureCache.get(layer);
-            const geometryVersion = typeof getLayerVersions==='function' ? (Number(getLayerVersions(layer).geometry)||0) : 0;
-            const N = Number(layer.N) || 0;
-            // Fractional Spiral N changes the actual rail angle while the
-            // discrete topology N remains unchanged; it belongs in cache keys.
-            const angularN = layer.spiralEnabled===true&&Number.isFinite(Number(layer.__spiralAnimatedN))
-                ? Number(layer.__spiralAnimatedN) : N;
-            const K = Number(layer.K) || 0;
-            const customSuborbits = layer.customSuborbits ?? '';
-            const chaosStar = layer.chaosStar === true ? 1 : 0;
-            const chaosStepMinus = Math.max(0, Math.round(Number(layer.chaosStepMinus) || 0));
-            const chaosStepPlus = Math.max(0, Math.round(Number(layer.chaosStepPlus) || 0));
-            const chaosClosures = Math.max(1, Math.round(Number(layer.chaosClosures) || 1));
-            const chaosSeed = Number(layer.chaosSeed) >>> 0;
-            const closedLoop = layer.closedLoop === false ? 0 : 1;
-            const extendedMode = layer.extendedProfileEnabled === true ? (layer.extendedProfileMode === 'repeat' ? 2 : 1) : 0;
-            const lineJoinType = layer.lineJoinType || '';
-            const roundingMode = layer.roundingMode === 'monoradius' ? 'monoradius' : 'standard';
-            const roundingShape = 'spline-plus';
-            const roundingMaxRadiusDrop=Number(layer.roundingMaxRadiusDrop??30);
-            const roundingSmoothSplines=layer.roundingSmoothSplines===true;
-            const radius = getEffectiveLayerRadius(layer, 0);
-            const radiusMultiplier = getLayerRadiusMultiplier(layer);
-            const rotation = Number(layer.rotation) || 0;
-            const profileMode = layer.profileMode || '';
-            const splineRenderMode = normalizeSplineRenderMode(layer.splineRenderMode);
-            const preSampledSpline = profileMode === 'spline' && isPreSampledSplineLayer(layer) ? 1 : 0;
-            const configuredSplinePoints = profileMode === 'spline' ? getConfiguredSplinePointCount() : 0;
-            const splineSegments = Number(layer.profileSplineSegments) || 0;
-            const splineMix = Number(layer.profileSplineMix) || 0;
-            const spiralEnabled = isSpiralLayer(layer) ? 1 : 0;
-            const spiralOrder = getEffectiveSpiralOrder(layer);
-            const spiralTangential = Math.abs(spiralOrder)<=1e-8 ? 0 : (Number.isFinite(layer.__spiralTangentialMix) ? Math.max(0,Math.min(1,layer.__spiralTangentialMix)) : (layer.spiralTangential === true ? 1 : 0));
-            const spiralRoundSeams = layer.spiralRoundSeams !== false ? 1 : 0;
-            const spiralClosed = layer.spiralClosed !== false ? 1 : 0;
-            const spiralStep = spiralEnabled ? getEffectiveSpiralStep(layer) : 0;
-            const spiralStepLinked = layer.spiralStepLinked !== false ? 1 : 0;
-            const spiralStepRatio = spiralEnabled ? getSpiralClosureRatio() : 1;
-            const spiralRounding = spiralEnabled ? (Number(layer.rounding) || 0) : 0;
-
-            let nodesChanged = !cached || cached.nodes !== nodes || cached.nodeRefs.length !== nodes.length;
-            if (!nodesChanged) {
-                for (let i = 0; i < nodes.length; i++) {
-                    if (cached.nodeRefs[i] !== nodes[i]) { nodesChanged = true; break; }
-                }
-            }
-            const primitivesChanged = !cached || cached.geometryVersion !== geometryVersion ||
-                cached.N !== N || cached.angularN !== angularN || cached.K !== K || cached.customSuborbits !== customSuborbits ||
-                cached.chaosStar !== chaosStar || cached.chaosStepMinus !== chaosStepMinus || cached.chaosStepPlus !== chaosStepPlus ||
-                cached.chaosClosures !== chaosClosures || cached.chaosSeed !== chaosSeed ||
-                cached.closedLoop !== closedLoop || cached.extendedMode !== extendedMode || cached.lineJoinType !== lineJoinType || cached.roundingMode !== roundingMode || cached.roundingShape !== roundingShape || cached.roundingMaxRadiusDrop!==roundingMaxRadiusDrop || cached.roundingSmoothSplines!==roundingSmoothSplines ||
-                cached.radius !== radius || cached.radiusMultiplier !== radiusMultiplier || cached.rotation !== rotation || cached.profileMode !== profileMode || cached.splineRenderMode !== splineRenderMode ||
-                cached.preSampledSpline !== preSampledSpline ||
-                cached.configuredSplinePoints !== configuredSplinePoints ||
-                cached.splineSegments !== splineSegments || cached.splineMix !== splineMix ||
-                cached.spiralEnabled !== spiralEnabled || cached.spiralOrder !== spiralOrder || cached.spiralTangential !== spiralTangential || cached.spiralRoundSeams !== spiralRoundSeams || cached.spiralClosed !== spiralClosed || cached.spiralStep !== spiralStep ||
-                cached.spiralStepLinked !== spiralStepLinked || cached.spiralStepRatio !== spiralStepRatio || cached.spiralRounding !== spiralRounding;
-
-            if (!nodesChanged && !primitivesChanged) return cached.signature;
-
-            let nodeSig = cached?.nodeSig || '';
-
-            if (nodesChanged || !cached || cached.geometryVersion !== geometryVersion) {
-                let parts = '';
-                for (let i = 0; i < nodes.length; i++) {
-                    const p = nodes[i] || {};
-                    parts += `${Number(p.x) || 0},${Number(p.y) || 0};`;
-                }
-                nodeSig = parts;
-            }
-            const signature = `${N}|an:${angularN}|${K}|${customSuborbits}|ch:${chaosStar},${chaosStepMinus},${chaosStepPlus},${chaosClosures},${chaosSeed}|${closedLoop}|extended:${extendedMode}|${lineJoinType}|roundMode:${roundingMode}|roundShape:${roundingShape}|drop:${roundingMaxRadiusDrop}|smooth:${roundingSmoothSplines?1:0}|${radius}|rm:${radiusMultiplier}|${rotation}|${profileMode}|${splineRenderMode}|${preSampledSpline}|${configuredSplinePoints}|${splineSegments}|${splineMix}|${spiralEnabled}|${spiralOrder}|${spiralTangential}|${spiralRoundSeams}|${spiralClosed}|${spiralStep}|${spiralStepLinked}|${layer.spiralStepLimiterEnabled!==false}|${layer.spiralStepLimiter??2}|${spiralStepRatio}|sr:${spiralRounding}|${nodeSig}`;
-            cached = {
-                geometryVersion, N, angularN, K, customSuborbits, chaosStar, chaosStepMinus, chaosStepPlus, chaosClosures, chaosSeed, closedLoop, extendedMode, lineJoinType, roundingMode, roundingShape, roundingMaxRadiusDrop, roundingSmoothSplines, radius, radiusMultiplier, rotation, profileMode, splineRenderMode, preSampledSpline,
-                configuredSplinePoints, splineSegments, splineMix, spiralEnabled, spiralOrder, spiralTangential, spiralRoundSeams, spiralClosed, spiralStep, spiralStepLinked, spiralStepRatio, spiralRounding, nodes, nodeRefs: nodes.slice(), nodeSig, signature
-            };
-            layerGeometrySignatureCache.set(layer, cached);
-            return signature;
-        }
-
-        const sharedLayerDrawDataCache = new Map();
-        const SHARED_LAYER_DRAW_CACHE_MAX = 128;
-        const sharedLayerDrawDataStats = {hits:0,misses:0,stores:0,evictions:0};
-        function sharedLayerDrawDataGet(key){
-            const rec=sharedLayerDrawDataCache.get(key);
-            if(!rec){sharedLayerDrawDataStats.misses++;return null;}
-            sharedLayerDrawDataCache.delete(key);sharedLayerDrawDataCache.set(key,rec);
-            sharedLayerDrawDataStats.hits++;return rec;
-        }
-        function sharedLayerDrawDataPut(key,rec){
-            if(!key||!rec)return;
-            if(sharedLayerDrawDataCache.has(key))sharedLayerDrawDataCache.delete(key);
-            sharedLayerDrawDataCache.set(key,rec);sharedLayerDrawDataStats.stores++;
-            while(sharedLayerDrawDataCache.size>SHARED_LAYER_DRAW_CACHE_MAX){
-                const first=sharedLayerDrawDataCache.keys().next().value;
-                sharedLayerDrawDataCache.delete(first);sharedLayerDrawDataStats.evictions++;
-            }
-        }
-        window.__spiroSharedGeometryCacheStatus=()=>({size:sharedLayerDrawDataCache.size,max:SHARED_LAYER_DRAW_CACHE_MAX,...sharedLayerDrawDataStats});
-
-        function maxRadiusForPathList(paths){
-            let maxSq=0;
-            for(const path of paths||[])for(const p of path?.points||[]){const x=Number(p?.x)||0,y=Number(p?.y)||0,rr=x*x+y*y;if(rr>maxSq)maxSq=rr;}
-            return Math.sqrt(maxSq);
-        }
-        function applyMonoradiusRoundingCompensation(paths,layer,roundingValue){
-            if(layer?.roundingMode!=='monoradius'||!Array.isArray(paths)||!paths.length)return {paths,targetRadius:maxRadiusForPathList(paths),scale:1};
-            const targetRadius=getEffectiveLayerRadius(layer,220);
-            if(!(targetRadius>1e-7)||typeof buildLampRenderedAttachmentPathsUncached!=='function'||typeof getRoundingStrength!=='function')return {paths,targetRadius,scale:1};
-            // A fixed physical base edge makes the new overlay non-homogeneous:
-            // re-evaluate the actual final curve after scaling, otherwise the
-            // previous one-shot ratio leaves up to 10% MonoRadius drift.
-            const makeScaled=scale=>Math.abs(scale-1)<1e-12?paths:paths.map(path=>({...path,points:(path?.points||[]).map(pt=>({...pt,x:(Number(pt?.x)||0)*scale,y:(Number(pt?.y)||0)*scale}))}));
-            let scale=1,previousScale=NaN,previousRadius=NaN;
-            try{
-                for(let k=0;k<9;k++){
-                    const probe=makeScaled(scale);
-                    const rendered=buildLampRenderedAttachmentPathsUncached(probe,layer,null,getRoundingStrength(roundingValue));
-                    const r=maxRadiusForPathList(rendered);
-                    if(!(r>1e-8))break;
-                    const error=targetRadius/r;
-                    if(!Number.isFinite(error))break;
-                    if(Math.abs(error-1)<1e-5)break;
-                    let next=scale*error;
-                    // 12.6.1: a long shoulder makes the rendered radius
-                    // nonhomogeneous under scale. Multiplying by target/r
-                    // can converge too slowly (nine steps were insufficient
-                    // on a three-corner profile). Use a bounded secant step
-                    // after the first two actual output-radius measurements.
-                    // Fall back to the old multiplicative step when the
-                    // radius response is degenerate or non-monotone.
-                    const dx=scale-previousScale,dy=r-previousRadius;
-                    if(Number.isFinite(dx)&&Number.isFinite(dy)&&Math.abs(dx)>1e-10&&
-                       dy/dx>1e-9){
-                        const candidate=scale+(targetRadius-r)*(dx/dy);
-                        if(Number.isFinite(candidate)&&candidate>0)
-                            next=Math.max(scale*.4,Math.min(scale*2.5,candidate));
-                    }
-                    previousScale=scale;previousRadius=r;
-                    scale=Math.max(1e-8,Math.min(1e8,next));
-                }
-            }catch(_){return {paths,targetRadius,scale:1};}
-            return {paths:makeScaled(scale),targetRadius,scale};
-        }
-
-        function buildLegacyLayerDrawData(layer) {
-            const geometryKey = layerGeometrySignature(layer);
-            const roundingValue = Number(layer.rounding) || 0;
-            const sharedKey = `${geometryKey}|r:${roundingValue}`;
-
-            const sharedEligible=Array.isArray(state?.layers)&&state.layers.includes(layer);
-            let cached = layerDrawCache.get(layer);
-            if (!cached || cached.geometryKey !== geometryKey || cached.roundingValue !== roundingValue) {
-                const shared=sharedEligible?sharedLayerDrawDataGet(sharedKey):null;
-                if(shared){layerDrawCache.set(layer,shared);return shared;}
-                let paths = buildOrbitPolylines(layer);
-                const monoradius=applyMonoradiusRoundingCompensation(paths,layer,roundingValue);
-                paths=monoradius.paths;
-                let maxRadiusSq = 0;
-                let pointCount = 0;
-                for (const path of paths) {
-                    const pts = path?.points || [];
-                    pointCount += pts.length;
-                    for (let i = 0; i < pts.length; i++) {
-                        const p = pts[i];
-                        const x = Number(p.x) || 0;
-                        const y = Number(p.y) || 0;
-                        const rSq = x * x + y * y;
-                        if (rSq > maxRadiusSq) maxRadiusSq = rSq;
-                    }
-                }
-                cached = {
-                    geometryKey,
-                    paths,
-
-                    maxRadius: Math.max(1, monoradius.targetRadius || Math.sqrt(maxRadiusSq)),
-                    monoradiusScale: monoradius.scale || 1,
-                    pointCount,
-                    roundedKey: null,
-                    roundingValue: NaN,
-                    path2ds: null,
-                    combinedStrokePath2d: null
-                };
-                layerDrawCache.set(layer, cached);
-            }
-
-            const roundedKey = `${geometryKey}|r:${roundingValue}`;
-            if (cached.roundingValue !== roundingValue) {
-                cached.roundingValue = roundingValue;
-                cached.roundedKey = roundedKey;
-                cached.path2ds = null;
-                cached.combinedStrokePath2d = null;
-                if (typeof Path2D !== 'undefined') {
-
-                    const roundingFrac = getRoundingStrength(layer.rounding);
-                    cached.path2ds = cached.paths.map(path => {
-                        if (!path.points || path.points.length < 2) return null;
-                        const p = new Path2D();
-                        if (useSmoothSplinePath(layer, roundingFrac, path)) splinePathForDraw(p,path.points,path.closed,roundingFrac,path.cornerFlags || [],path.bridgeRoundFlags || [],layer.wholeCurveSpline===true,1,0,layer);
-                        else roundPolylineForDraw(p, path.points, path.closed, roundingFrac, path.cornerFlags || [],null,false,null,layer);
-                        return p;
-                    });
-                    try {
-                        const combined = new Path2D();
-                        if (typeof combined.addPath === 'function') {
-                            for (const p of cached.path2ds) if (p) combined.addPath(p);
-                            cached.combinedStrokePath2d = combined;
-                        }
-                    } catch (_) {
-                        cached.combinedStrokePath2d = null;
-                    }
-                }
-            }
-            if(sharedEligible)sharedLayerDrawDataPut(sharedKey,cached);
-            return cached;
-        }
-
-        function getCachedLayerDrawData(layer) {
-            if (typeof getCanonicalLayerGeometry === 'function') {
-                const canonical = getCanonicalLayerGeometry(layer);
-                if (canonical?.drawData) {
-                    if (typeof noteCanonicalGeometryConsumer === 'function') noteCanonicalGeometryConsumer('getCachedLayerDrawData');
-                    return canonical.drawData;
-                }
-            }
-            return buildLegacyLayerDrawData(layer);
-        }
-
+export {
+  anyMotionEnabled,
+  applyMonoradiusRoundingCompensation,
+  applyMotionColorCycle,
+  applyMotionTunnelLag,
+  buildLegacyLayerDrawData,
+  createVectorRecordingContext,
+  ensureMainCanvasSize,
+  ensureMotionAnimation,
+  getCachedLayerDrawData,
+  getEffectiveLayerRadius,
+  getLayerGlowIntensityMultiplier,
+  getLayerGlowMultiplier,
+  getLayerMotionRotationRadians,
+  getLayerRadiusMultiplier,
+  getLayerStrokeWidthMultiplier,
+  getMotionRotationTargets,
+  getMotionTunnelLagRadians,
+  getMotionViewportTransform,
+  isGeometryMorphActive,
+  layerGeometrySignature,
+  motionRuntime,
+  normalizeLayerMotionRotation,
+  normalizeMotionState,
+  replayVectorRecording,
+  toggleMotionQuickGroup,
+};

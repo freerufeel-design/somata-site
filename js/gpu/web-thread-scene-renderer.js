@@ -1,27 +1,114 @@
-
-
-window.__spiroRegisterModule?.('js/gpu/web-thread-scene-renderer');
+import './lamp-renderer.js'; // initialisation order: this module runs after it
+import { mainCanvas } from '../ui/profile-presets.js';
+import { GeometryKernel } from '../geometry/kernel.js';
+import { mainCtx } from '../core/render-runtime.js';
+import { performanceGovernor, requestMainCanvasRender } from '../core/scheduler.js';
+import { WebGPUDeviceHub } from './device-hub.js';
+import { GPUColorCache, assertWebGPUShaderModule } from './gpu-utils.js';
+import { WebGPUCorridorCopyStore } from './corridor-copy-store.js';
+import { packTunnelEffectCopyRecords } from '../geometry/frame-paths.js';
 
 const WebGPUWebThreadSceneRenderer = (() => {
-            const FLOATS_PER_SEGMENT=10,CORRIDOR_FLOATS_PER_SEGMENT=12,CORRIDOR_SEGMENT_LIMIT_BASE=48,WEB_SEGMENT_LIMIT_BASE=64;
-            const webThreadCorridorSegmentLimit=()=>CORRIDOR_SEGMENT_LIMIT_BASE*Math.max(1,(performanceGovernor.residencyScale?.()||1));
-            const webThreadSegmentLimit=()=>WEB_SEGMENT_LIMIT_BASE*Math.max(1,(performanceGovernor.residencyScale?.()||1));
-            let device=null,format=null,ready=false,attempted=false,initializing=false,lost=false,lastError='',hubGeneration=0;
-            let width=0,height=0,cornerBuffer=null,haloTexture=null,haloTextureView=null,coreTexture=null,coreTextureView=null,stencilTexture=null,stencilTextureView=null,compositeScratchBindGroup=null,targetViews=new WeakMap();
-            let segmentCapacity=0,segmentData=null,segmentBuffers=[null,null,null],segmentCursor=0,webStaticSegments=new Map();
-            let webStaticBuilds=0,webStaticHits=0,webStaticUploads=0,webStaticEvictions=0;
-            let maskCapacity=0,maskBuffers=[null,null,null],maskCursor=0,maskRecords=new WeakMap(),maskRecordSet=new Set(),maskResidentBuilds=0,maskUploadSkips=0,maskUploadBytesAvoided=0;
-            let maskPipeline=null,combinedPipeline=null,compositePipeline=null;
-            let corridorMaskPipeline=null,corridorCombinedPipeline=null,corridorSegmentLayout=null,corridorCopyLayout=null;
-            let corridorDynamicCapacity=0,corridorDynamicData=null,corridorDynamicBuffers=[null,null,null],corridorDynamicBinds=[null,null,null],corridorDynamicCursor=0;
-            let corridorCopyCapacity=0,corridorCopyData=null,corridorCopyBuffers=[null,null,null],corridorCopyBinds=[null,null,null],corridorCopyCursor=0;
-            let corridorStaticSegments=new Map(),corridorUniformData=new Float32Array(8),retiredDynamicBuffers=[];
-            let frames=0,clippedFrames=0,openFrames=0,maskTriangles=0,segmentUploads=0,maskUploads=0,compositePasses=0,fusedColorPasses=0,fullScreenCompositesAvoided=0,msaaSamplesAvoided=0,failures=0;
-            let corridorFrames=0,corridorCopies=0,corridorLogicalSegments=0,corridorMaskTriangles=0,corridorCopyUploads=0,corridorDynamicUploads=0,corridorStaticUploads=0,corridorStaticBuilds=0,corridorStaticHits=0,corridorStaticEvictions=0;
-            function safeDestroy(res){if(!res)return;try{res.destroy?.();}catch(err){if(!lastError)lastError=String(err?.message||err);}}
-            function retireDynamicBuffer(res){if(res)retiredDynamicBuffers.push(res);}
-            function retireDynamicList(list){for(const b of list||[])if(b)retireDynamicBuffer(b);}
-            const THREAD_WGSL=`
+  const FLOATS_PER_SEGMENT = 10,
+    CORRIDOR_FLOATS_PER_SEGMENT = 12,
+    CORRIDOR_SEGMENT_LIMIT_BASE = 48,
+    WEB_SEGMENT_LIMIT_BASE = 64;
+  const webThreadCorridorSegmentLimit = () =>
+    CORRIDOR_SEGMENT_LIMIT_BASE * Math.max(1, performanceGovernor.residencyScale?.() || 1);
+  const webThreadSegmentLimit = () =>
+    WEB_SEGMENT_LIMIT_BASE * Math.max(1, performanceGovernor.residencyScale?.() || 1);
+  let device = null,
+    format = null,
+    ready = false,
+    attempted = false,
+    initializing = false,
+    lost = false,
+    lastError = '',
+    hubGeneration = 0;
+  let width = 0,
+    height = 0,
+    cornerBuffer = null,
+    haloTexture = null,
+    haloTextureView = null,
+    coreTexture = null,
+    coreTextureView = null,
+    stencilTexture = null,
+    stencilTextureView = null,
+    compositeScratchBindGroup = null,
+    targetViews = new WeakMap();
+  let segmentCapacity = 0,
+    segmentData = null,
+    segmentBuffers = [null, null, null],
+    segmentCursor = 0,
+    webStaticSegments = new Map();
+  let webStaticBuilds = 0,
+    webStaticHits = 0,
+    webStaticUploads = 0,
+    webStaticEvictions = 0;
+  let maskCapacity = 0,
+    maskBuffers = [null, null, null],
+    maskCursor = 0,
+    maskRecords = new WeakMap(),
+    maskRecordSet = new Set(),
+    maskResidentBuilds = 0,
+    maskUploadSkips = 0,
+    maskUploadBytesAvoided = 0;
+  let maskPipeline = null,
+    combinedPipeline = null,
+    compositePipeline = null;
+  let corridorMaskPipeline = null,
+    corridorCombinedPipeline = null,
+    corridorSegmentLayout = null,
+    corridorCopyLayout = null;
+  let corridorDynamicCapacity = 0,
+    corridorDynamicData = null,
+    corridorDynamicBuffers = [null, null, null],
+    corridorDynamicBinds = [null, null, null],
+    corridorDynamicCursor = 0;
+  let corridorCopyCapacity = 0,
+    corridorCopyData = null,
+    corridorCopyBuffers = [null, null, null],
+    corridorCopyBinds = [null, null, null],
+    corridorCopyCursor = 0;
+  let corridorStaticSegments = new Map(),
+    corridorUniformData = new Float32Array(8),
+    retiredDynamicBuffers = [];
+  let frames = 0,
+    clippedFrames = 0,
+    openFrames = 0,
+    maskTriangles = 0,
+    segmentUploads = 0,
+    maskUploads = 0,
+    compositePasses = 0,
+    fusedColorPasses = 0,
+    fullScreenCompositesAvoided = 0,
+    msaaSamplesAvoided = 0,
+    failures = 0;
+  let corridorFrames = 0,
+    corridorCopies = 0,
+    corridorLogicalSegments = 0,
+    corridorMaskTriangles = 0,
+    corridorCopyUploads = 0,
+    corridorDynamicUploads = 0,
+    corridorStaticUploads = 0,
+    corridorStaticBuilds = 0,
+    corridorStaticHits = 0,
+    corridorStaticEvictions = 0;
+  function safeDestroy(res) {
+    if (!res) return;
+    try {
+      res.destroy?.();
+    } catch (err) {
+      if (!lastError) lastError = String(err?.message || err);
+    }
+  }
+  function retireDynamicBuffer(res) {
+    if (res) retiredDynamicBuffers.push(res);
+  }
+  function retireDynamicList(list) {
+    for (const b of list || []) if (b) retireDynamicBuffer(b);
+  }
+  const THREAD_WGSL = `
 struct U { viewport:vec2<f32>, origin:vec2<f32>, params:vec4<f32>, };
 @group(0) @binding(0) var<uniform> u:U;
 @group(1) @binding(0) var<storage,read> corridorSegData:array<vec4<f32>>;
@@ -70,7 +157,7 @@ struct Fout{ @location(0) halo:vec4<f32>, @location(1) core:vec4<f32>, };
     if(max(ha,ca)<0.00015){discard;}
     var o:Fout;o.halo=select(vec4<f32>(0.0),vec4<f32>(v.color.rgb*ha,ha),ha>=0.00015);o.core=select(vec4<f32>(0.0),vec4<f32>(v.color.rgb*ca,ca),ca>=0.00015);return o;
 }`;
-            const MASK_WGSL=`
+  const MASK_WGSL = `
 struct U { viewport:vec2<f32>, origin:vec2<f32>, params:vec4<f32>, };
 @group(0) @binding(0) var<uniform> u:U;
 @group(1) @binding(0) var<storage,read> copyData:array<vec4<f32>>;
@@ -78,143 +165,1076 @@ struct Vin{@location(0) p:vec2<f32>};struct Vout{@builtin(position) p:vec4<f32>}
 @vertex fn vs(v:Vin)->Vout{var o:Vout;o.p=vec4<f32>(v.p.x/u.viewport.x*2.0-1.0,1.0-v.p.y/u.viewport.y*2.0,0.0,1.0);return o;}
 @vertex fn vsCorridor(v:Vin,@builtin(instance_index) iid:u32)->Vout{let c0=copyData[iid*2u];let c1=copyData[iid*2u+1u];let q=v.p-u.origin;let p=u.origin+vec2<f32>(c0.x*q.x+c0.y*q.y,c1.x*q.x+c1.y*q.y);var o:Vout;o.p=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);return o;}
 @fragment fn fs()->@location(0) vec4<f32>{return vec4<f32>(0.0);}`;
-            const COMPOSITE_WGSL=`
+  const COMPOSITE_WGSL = `
 @group(0) @binding(0) var haloTex:texture_2d<f32>;@group(0) @binding(1) var coreTex:texture_2d<f32>;struct V{@builtin(position) p:vec4<f32>};
 @vertex fn vs(@builtin(vertex_index) i:u32)->V{let q=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0))[i];var o:V;o.p=vec4<f32>(q,0.0,1.0);return o;}
 @fragment fn fs(@builtin(position) p:vec4<f32>)->@location(0) vec4<f32>{let d=textureDimensions(haloTex);let x=clamp(i32(p.x),0,i32(d.x)-1);let y=clamp(i32(p.y),0,i32(d.y)-1);let h=textureLoad(haloTex,vec2<i32>(x,y),0);let c=textureLoad(coreTex,vec2<i32>(x,y),0);return c+h*(1.0-c.a);}`;
-            let uniformBuffer=null,uniformBind=null,uniformLayout=null,corridorUniformRecords=new WeakMap(),corridorUniformRecordSet=new Set(),corridorUniformBuilds=0,corridorUniformUploads=0,corridorUniformUploadSkips=0;
-            let webUniformRecords=new WeakMap(),webUniformRecordSet=new Set(),webUniformBuilds=0,webUniformUploads=0,webUniformUploadSkips=0;
-            const webUniformData=new Float32Array(8);
-            function destroySizeResources(){safeDestroy(haloTexture);safeDestroy(coreTexture);safeDestroy(stencilTexture);haloTexture=coreTexture=stencilTexture=null;haloTextureView=coreTextureView=stencilTextureView=compositeScratchBindGroup=null;width=height=0;}
-            function destroyBuffers(){
-                for(const b of segmentBuffers)safeDestroy(b);for(const b of maskBuffers)safeDestroy(b);for(const b of corridorDynamicBuffers)safeDestroy(b);for(const b of corridorCopyBuffers)safeDestroy(b);for(const b of retiredDynamicBuffers)safeDestroy(b);retiredDynamicBuffers=[];for(const rec of corridorStaticSegments.values())safeDestroy(rec?.buffer);for(const rec of webStaticSegments.values())safeDestroy(rec?.buffer);
-                for(const rec of corridorUniformRecordSet)safeDestroy(rec?.buffer);corridorUniformRecordSet.clear();corridorUniformRecords=new WeakMap();
-                for(const rec of webUniformRecordSet)safeDestroy(rec?.buffer);webUniformRecordSet.clear();webUniformRecords=new WeakMap();
-                for(const rec of maskRecordSet)safeDestroy(rec?.buffer);maskRecordSet.clear();maskRecords=new WeakMap();
-                segmentBuffers=[null,null,null];maskBuffers=[null,null,null];corridorDynamicBuffers=[null,null,null];corridorDynamicBinds=[null,null,null];corridorCopyBuffers=[null,null,null];corridorCopyBinds=[null,null,null];corridorStaticSegments=new Map();webStaticSegments=new Map();targetViews=new WeakMap();segmentCapacity=maskCapacity=corridorDynamicCapacity=corridorCopyCapacity=0;segmentData=corridorDynamicData=corridorCopyData=null;
-            }
-            async function initAsync(){
-                if(ready&&!lost)return true;if(initializing)return false;if(attempted&&!ready)return false;attempted=true;initializing=true;lastError='';
-                try{
-                    const shared=await WebGPUDeviceHub.acquire();device=shared.device;hubGeneration=shared.generation;lost=false;format=navigator.gpu.getPreferredCanvasFormat();
-                    const tm=device.createShaderModule({label:'SpiroStar Web Threads scene WGSL',code:THREAD_WGSL});await assertWebGPUShaderModule(tm,'SpiroStar Web Threads scene WGSL');
-                    const mm=device.createShaderModule({label:'SpiroStar Web Threads stencil WGSL',code:MASK_WGSL});await assertWebGPUShaderModule(mm,'SpiroStar Web Threads stencil WGSL');
-                    const cm=device.createShaderModule({label:'SpiroStar Web Threads composite WGSL',code:COMPOSITE_WGSL});await assertWebGPUShaderModule(cm,'SpiroStar Web Threads composite WGSL');
-                    uniformBuffer=device.createBuffer({size:32,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST,label:'SpiroStar Web Threads viewport/corridor uniforms'});
-                    uniformLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'uniform'}}]});
-                    corridorSegmentLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
-                    corridorCopyLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
-                    uniformBind=device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer:uniformBuffer}}]});
-                    const stencilFace={compare:'equal',failOp:'keep',depthFailOp:'keep',passOp:'keep'};
-                    const threadLayout=device.createPipelineLayout({bindGroupLayouts:[uniformLayout]}),corridorThreadLayout=device.createPipelineLayout({bindGroupLayouts:[uniformLayout,corridorSegmentLayout,corridorCopyLayout]});
-                    const threadBuffers=[
-                        {arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]},
-                        {arrayStride:FLOATS_PER_SEGMENT*4,stepMode:'instance',attributes:[
-                            {shaderLocation:1,offset:0,format:'float32x2'},{shaderLocation:2,offset:8,format:'float32x2'},
-                            {shaderLocation:3,offset:16,format:'float32'},{shaderLocation:4,offset:20,format:'float32'},
-                            {shaderLocation:5,offset:24,format:'float32x4'}
-                        ]}
-                    ];
-                    const maxBlend={color:{srcFactor:'one',dstFactor:'one',operation:'max'},alpha:{srcFactor:'one',dstFactor:'one',operation:'max'}};
-                    const targets=[{format,blend:maxBlend},{format,blend:maxBlend}],depthStencil={format:'depth24plus-stencil8',depthWriteEnabled:false,depthCompare:'always',stencilFront:stencilFace,stencilBack:stencilFace,stencilReadMask:1,stencilWriteMask:0};
-                    const makeThread=(label)=>device.createRenderPipeline({label,layout:threadLayout,vertex:{module:tm,entryPoint:'vs',buffers:threadBuffers},fragment:{module:tm,entryPoint:'fsCombined',targets},primitive:{topology:'triangle-strip',cullMode:'none'},depthStencil});
-                    const makeCorridorThread=(label)=>device.createRenderPipeline({label,layout:corridorThreadLayout,vertex:{module:tm,entryPoint:'vsCorridor',buffers:[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}]},fragment:{module:tm,entryPoint:'fsCombined',targets},primitive:{topology:'triangle-strip',cullMode:'none'},depthStencil});
-                    combinedPipeline=makeThread('Somata 7.5 Web Threads fused Halo+Core');
-                    corridorCombinedPipeline=makeCorridorThread('Somata 7.5 Corridor Web Threads fused Halo+Core');
-                    const maskLayout=device.createPipelineLayout({bindGroupLayouts:[uniformLayout]}),corridorMaskLayout=device.createPipelineLayout({bindGroupLayouts:[uniformLayout,corridorCopyLayout]});const invertFace={compare:'always',failOp:'keep',depthFailOp:'keep',passOp:'invert'};
-                    const maskTarget=[{format,writeMask:0}],maskDepth={format:'depth24plus-stencil8',depthWriteEnabled:false,depthCompare:'always',stencilFront:invertFace,stencilBack:invertFace,stencilReadMask:1,stencilWriteMask:1},maskVertex=[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}];
-                    maskPipeline=device.createRenderPipeline({label:'SpiroStar Web Threads even-odd stencil',layout:maskLayout,vertex:{module:mm,entryPoint:'vs',buffers:maskVertex},fragment:{module:mm,entryPoint:'fs',targets:maskTarget},primitive:{topology:'triangle-list',cullMode:'none'},depthStencil:maskDepth});
-                    corridorMaskPipeline=device.createRenderPipeline({label:'SpiroStar Corridor Web Threads even-odd stencil',layout:corridorMaskLayout,vertex:{module:mm,entryPoint:'vsCorridor',buffers:maskVertex},fragment:{module:mm,entryPoint:'fs',targets:maskTarget},primitive:{topology:'triangle-list',cullMode:'none'},depthStencil:maskDepth});
-                    const overBlend={color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}};
-                    compositePipeline=device.createRenderPipeline({label:'SpiroStar Web Threads scratch → Layer Scene',layout:'auto',vertex:{module:cm,entryPoint:'vs'},fragment:{module:cm,entryPoint:'fs',targets:[{format,blend:overBlend}]},primitive:{topology:'triangle-list'}});
-                    cornerBuffer=device.createBuffer({size:8*4,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST,label:'SpiroStar Web Threads corners'});device.queue.writeBuffer(cornerBuffer,0,new Float32Array([-1,-1,1,-1,-1,1,1,1]));
-                    ready=true;initializing=false;requestMainCanvasRender();return true;
-                }catch(err){ready=false;initializing=false;lastError=String(err?.message||err);return false;}
-            }
-            function warmup(){const hub=WebGPUDeviceHub.warmup(),gen=WebGPUDeviceHub.getGeneration();if(ready&&(!hub||gen!==hubGeneration)){ready=false;attempted=false;initializing=false;lost=!hub;destroySizeResources();destroyBuffers();safeDestroy(uniformBuffer);safeDestroy(cornerBuffer);uniformBuffer=cornerBuffer=null;uniformBind=null;corridorSegmentLayout=corridorCopyLayout=null;}if(!ready&&!initializing&&(!attempted||lost))void initAsync();return ready&&!lost&&hub;}
-            function ensureSize(w,h){w=Math.max(1,w|0);h=Math.max(1,h|0);if(width===w&&height===h&&haloTexture&&coreTexture&&stencilTexture)return true;destroySizeResources();width=w;height=h;haloTexture=device.createTexture({label:'Somata 7.5 Web Threads halo scratch',size:[w,h,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});haloTextureView=haloTexture.createView();coreTexture=device.createTexture({label:'Somata 7.5 Web Threads core scratch',size:[w,h,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});coreTextureView=coreTexture.createView();stencilTexture=device.createTexture({label:'Somata 7.5 Web Threads parity stencil',size:[w,h,1],format:'depth24plus-stencil8',usage:GPUTextureUsage.RENDER_ATTACHMENT});stencilTextureView=stencilTexture.createView();compositeScratchBindGroup=device.createBindGroup({layout:compositePipeline.getBindGroupLayout(0),entries:[{binding:0,resource:haloTextureView},{binding:1,resource:coreTextureView}]});device.queue.writeBuffer(uniformBuffer,0,new Float32Array([w,h,0,0,0,0,0,0]));return true;}
-            function ensureSegments(count){const desired=performanceGovernor.stickyRingCount(3,segmentBuffers.length),grow=count>segmentCapacity||!segmentData||segmentBuffers.some(x=>!x);if(grow){segmentCapacity=performanceGovernor.capacityFor(count,segmentCapacity,256,1.6);segmentData=new Float32Array(segmentCapacity*FLOATS_PER_SEGMENT);retireDynamicList(segmentBuffers);segmentBuffers=[];}while(segmentBuffers.length<desired)segmentBuffers.push(device.createBuffer({size:segmentCapacity*FLOATS_PER_SEGMENT*4,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST,label:`SpiroStar Web Threads segments ${segmentBuffers.length}`}));}
-            function ensureMask(vertexCount){const desired=performanceGovernor.stickyRingCount(3,maskBuffers.length),grow=vertexCount>maskCapacity||maskBuffers.some(x=>!x);if(grow){maskCapacity=performanceGovernor.capacityFor(vertexCount,maskCapacity,384,1.6);retireDynamicList(maskBuffers);maskBuffers=[];}while(maskBuffers.length<desired)maskBuffers.push(device.createBuffer({size:maskCapacity*2*4,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST,label:`SpiroStar Web Threads mask vertices ${maskBuffers.length}`}));}
-            function countSegments(commands){return GeometryKernel.inspectStrokeCommands(commands).count;}
-            function packSegments(commands,target=segmentData){
-                let k=0,lastCmd=null,rgba=null,a=0,hw=.5;
-                for(const seg of GeometryKernel.strokeSegments(commands,'webThreadPack')){
-                    const cmd=seg.command;if(cmd!==lastCmd){rgba=GPUColorCache.rgba(cmd?.strokeStyle||'#ffffff');a=Math.max(0,Math.min(1,(Number(cmd?.alpha)||0)*rgba[3]));hw=Math.max(.001,(Number(cmd?.screenLineWidth)||1)*.5);lastCmd=cmd;}
-                    if(a<=.0001)continue;const o=k*FLOATS_PER_SEGMENT;target[o]=seg.ax;target[o+1]=seg.ay;target[o+2]=seg.bx;target[o+3]=seg.by;target[o+4]=hw;target[o+5]=0.1;target[o+6]=rgba[0];target[o+7]=rgba[1];target[o+8]=rgba[2];target[o+9]=a;k++;
-                }return k;
-            }
-            function touchWebStatic(commands,rec){webStaticSegments.delete(commands);webStaticSegments.set(commands,rec);return rec;}
-            function getWebSegmentRecord(commands){
-                const need=countSegments(commands);if(!need)return{buffer:null,k:0,stable:false};
-                if(commands?.__spiroWebStable===true){let rec=webStaticSegments.get(commands);if(rec&&rec.generation===hubGeneration&&rec.buffer){webStaticHits++;return touchWebStatic(commands,rec);}const cpu=new Float32Array(need*FLOATS_PER_SEGMENT),k=packSegments(commands,cpu);if(!k)return{buffer:null,k:0,stable:true};const bytes=k*FLOATS_PER_SEGMENT*4,buffer=device.createBuffer({size:Math.max(40,bytes),usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST,label:'SpiroStar resident Web Threads segments'});device.queue.writeBuffer(buffer,0,cpu.buffer,cpu.byteOffset,bytes);webStaticUploads+=bytes;webStaticBuilds++;rec={buffer,k,generation:hubGeneration};touchWebStatic(commands,rec);while(webStaticSegments.size>webThreadSegmentLimit()){const key=webStaticSegments.keys().next().value,old=webStaticSegments.get(key);safeDestroy(old?.buffer);webStaticSegments.delete(key);webStaticEvictions++;}return rec;}
-                ensureSegments(need);const k=packSegments(commands,segmentData);if(!k)return{buffer:null,k:0,stable:false};const segSlot=segmentCursor++%segmentBuffers.length,buffer=segmentBuffers[segSlot],bytes=k*FLOATS_PER_SEGMENT*4;device.queue.writeBuffer(buffer,0,segmentData.buffer,segmentData.byteOffset,bytes);segmentUploads+=bytes;return{buffer,k,stable:false};
-            }
-            function packCorridorSegments(commands,target){
-                let k=0,lastCmd=null,rgba=null,a=0,hw=.5;
-                for(const seg of GeometryKernel.strokeSegments(commands,'webThreadCorridorPack')){
-                    const cmd=seg.command;if(cmd!==lastCmd){rgba=GPUColorCache.rgba(cmd?.strokeStyle||'#ffffff');a=Math.max(0,Math.min(1,(Number(cmd?.alpha)||0)*rgba[3]));hw=Math.max(.001,(Number(cmd?.screenLineWidth)||1)*.5);lastCmd=cmd;}
-                    if(a<=.0001)continue;const o=k*CORRIDOR_FLOATS_PER_SEGMENT;target[o]=seg.ax;target[o+1]=seg.ay;target[o+2]=seg.bx;target[o+3]=seg.by;target[o+4]=hw;target[o+5]=a;target[o+6]=rgba[0];target[o+7]=rgba[1];target[o+8]=rgba[2];target[o+9]=target[o+10]=target[o+11]=0;k++;
-                }return k;
-            }
-            function touchStatic(commands,rec){corridorStaticSegments.delete(commands);corridorStaticSegments.set(commands,rec);return rec;}
-            function getCorridorSegmentRecord(commands){
-                const need=countSegments(commands);if(!need)return{buffer:null,bindGroup:null,k:0};
-                if(commands?.__spiroWebStable===true){let rec=corridorStaticSegments.get(commands);if(rec&&rec.generation===hubGeneration&&rec.buffer){corridorStaticHits++;return touchStatic(commands,rec);}const cpu=new Float32Array(need*CORRIDOR_FLOATS_PER_SEGMENT),k=packCorridorSegments(commands,cpu);if(!k)return{buffer:null,bindGroup:null,k:0};const buffer=device.createBuffer({size:Math.max(48,k*CORRIDOR_FLOATS_PER_SEGMENT*4),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST,label:'SpiroStar static Corridor Web master segments'});device.queue.writeBuffer(buffer,0,cpu.buffer,cpu.byteOffset,k*CORRIDOR_FLOATS_PER_SEGMENT*4);const bindGroup=device.createBindGroup({layout:corridorSegmentLayout,entries:[{binding:0,resource:{buffer}}]});corridorStaticUploads+=k*CORRIDOR_FLOATS_PER_SEGMENT*4;corridorStaticBuilds++;rec={buffer,bindGroup,k,generation:hubGeneration};touchStatic(commands,rec);while(corridorStaticSegments.size>webThreadCorridorSegmentLimit()){const key=corridorStaticSegments.keys().next().value,old=corridorStaticSegments.get(key);safeDestroy(old?.buffer);corridorStaticSegments.delete(key);corridorStaticEvictions++;}return rec;}
-                {const desired=performanceGovernor.stickyRingCount(3,corridorDynamicBuffers.length),grow=need>corridorDynamicCapacity||!corridorDynamicData||corridorDynamicBuffers.some(x=>!x);if(grow){corridorDynamicCapacity=performanceGovernor.capacityFor(need,corridorDynamicCapacity,256,1.6);corridorDynamicData=new Float32Array(corridorDynamicCapacity*CORRIDOR_FLOATS_PER_SEGMENT);retireDynamicList(corridorDynamicBuffers);corridorDynamicBuffers=[];corridorDynamicBinds=[];}while(corridorDynamicBuffers.length<desired){const buffer=device.createBuffer({size:corridorDynamicCapacity*CORRIDOR_FLOATS_PER_SEGMENT*4,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST,label:`SpiroStar dynamic Corridor Web master ${corridorDynamicBuffers.length}`});corridorDynamicBuffers.push(buffer);corridorDynamicBinds.push(device.createBindGroup({layout:corridorSegmentLayout,entries:[{binding:0,resource:{buffer}}]}));}}
-                const k=packCorridorSegments(commands,corridorDynamicData);if(!k)return{buffer:null,bindGroup:null,k:0};const slot=corridorDynamicCursor++%corridorDynamicBuffers.length,buffer=corridorDynamicBuffers[slot];device.queue.writeBuffer(buffer,0,corridorDynamicData.buffer,corridorDynamicData.byteOffset,k*CORRIDOR_FLOATS_PER_SEGMENT*4);corridorDynamicUploads+=k*CORRIDOR_FLOATS_PER_SEGMENT*4;return{buffer,bindGroup:corridorDynamicBinds[slot],k};
-            }
-            function ensureCorridorCopyCapacity(count){const desired=performanceGovernor.stickyRingCount(3,corridorCopyBuffers.length),grow=count>corridorCopyCapacity||!corridorCopyData||corridorCopyBuffers.some(x=>!x);if(grow){corridorCopyCapacity=performanceGovernor.capacityFor(count,corridorCopyCapacity,64,1.6);corridorCopyData=new Float32Array(corridorCopyCapacity*8);retireDynamicList(corridorCopyBuffers);corridorCopyBuffers=[];corridorCopyBinds=[];}while(corridorCopyBuffers.length<desired){const buffer=device.createBuffer({size:corridorCopyCapacity*8*4,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST,label:`SpiroStar Corridor Web copies ${corridorCopyBuffers.length}`});corridorCopyBuffers.push(buffer);corridorCopyBinds.push(device.createBindGroup({layout:corridorCopyLayout,entries:[{binding:0,resource:{buffer}}]}));}}
-            const sharedCorridorCopyBinds=new WeakMap();let sharedCorridorCopyReuse=0;
-            function prepareCorridorCopies(copies,alphas,frameCtx,footprint){const shared=WebGPUCorridorCopyStore.acquire(device,hubGeneration,frameCtx,copies,alphas,'web',footprint,frameCtx?.layer);if(shared?.buffer){let bg=sharedCorridorCopyBinds.get(shared.buffer);if(!bg){bg=device.createBindGroup({layout:corridorCopyLayout,entries:[{binding:0,resource:{buffer:shared.buffer}}]});sharedCorridorCopyBinds.set(shared.buffer,bg);}sharedCorridorCopyReuse++;return{buffer:shared.buffer,bindGroup:bg,k:shared.k};}ensureCorridorCopyCapacity(copies.length);const k=packTunnelEffectCopyRecords(corridorCopyData,copies,alphas,frameCtx,'web',footprint,frameCtx?.layer);if(!k)return{buffer:null,bindGroup:null,k:0};const slot=corridorCopyCursor++%corridorCopyBuffers.length,buffer=corridorCopyBuffers[slot];device.queue.writeBuffer(buffer,0,corridorCopyData.buffer,corridorCopyData.byteOffset,k*8*4);corridorCopyUploads+=k*8*4;return{buffer,bindGroup:corridorCopyBinds[slot],k};}
-            function sameF32Prefix(a,b,n){if(!a||!b||b.length<n)return false;for(let i=0;i<n;i++)if(a[i]!==b[i])return false;return true;}
-            function maskRecord(frameCtx,floatCount){const key=frameCtx?.layer&&typeof frameCtx.layer==='object'?frameCtx.layer:null;if(!key)return null;let rec=maskRecords.get(key);if(rec&&rec.generation===hubGeneration&&rec.buffer&&rec.capacity>=floatCount)return rec;if(rec?.buffer){maskRecordSet.delete(rec);retireDynamicBuffer(rec.buffer);}const capacity=performanceGovernor.capacityFor(floatCount,rec?.capacity||0,768,1.6),buffer=device.createBuffer({size:Math.max(8,capacity*4),usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST,label:'SpiroStar resident Web parity mask'});rec={buffer,capacity,snapshot:new Float32Array(capacity),floatCount:0,hasLast:false,generation:hubGeneration};maskRecords.set(key,rec);maskRecordSet.add(rec);maskResidentBuilds++;return rec;}
-            function uploadMask(clipGeometry,corridorCopyCount=0,frameCtx=null){const verts=clipGeometry?.vertices instanceof Float32Array?clipGeometry.vertices:null,vertexCount=verts?Math.floor(verts.length/2):0;let maskBuffer=null;if(vertexCount){const floatCount=vertexCount*2,bytes=floatCount*4,rec=maskRecord(frameCtx,floatCount);if(rec){maskBuffer=rec.buffer;const same=rec.hasLast&&rec.floatCount===floatCount&&sameF32Prefix(verts,rec.snapshot,floatCount);if(same){maskUploadSkips++;maskUploadBytesAvoided+=bytes;}else{device.queue.writeBuffer(maskBuffer,0,verts.buffer,verts.byteOffset,bytes);rec.snapshot.set(verts.subarray(0,floatCount),0);rec.floatCount=floatCount;rec.hasLast=true;maskUploads+=bytes;}}else{ensureMask(vertexCount);const slot=maskCursor++%maskBuffers.length;maskBuffer=maskBuffers[slot];device.queue.writeBuffer(maskBuffer,0,verts.buffer,verts.byteOffset,bytes);maskUploads+=bytes;}if(corridorCopyCount>0)corridorMaskTriangles+=Math.floor(vertexCount/3)*corridorCopyCount;else maskTriangles+=Math.floor(vertexCount/3);}return{maskBuffer,vertexCount};}
-            function sameWebUniform(a,b){for(let i=0;i<8;i++)if(a[i]!==b[i])return false;return true;}
-            function webUniformRecord(frameCtx){const key=frameCtx?.layer&&typeof frameCtx.layer==='object'?frameCtx.layer:null;if(!key||!uniformLayout)return{buffer:uniformBuffer,bindGroup:uniformBind,snapshot:null,hasLast:false,fallback:true};let rec=webUniformRecords.get(key);if(rec&&rec.generation===hubGeneration&&rec.buffer)return rec;const buffer=device.createBuffer({size:32,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST,label:'SpiroStar resident Web Threads uniforms'});rec={buffer,bindGroup:device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer}}]}),snapshot:new Float32Array(8),hasLast:false,generation:hubGeneration};webUniformRecords.set(key,rec);webUniformRecordSet.add(rec);webUniformBuilds++;return rec;}
-            function prepareWebUniform(frameCtx,alphaScale,haloRadius){webUniformData[0]=width;webUniformData[1]=height;webUniformData[2]=0;webUniformData[3]=0;webUniformData[4]=0;webUniformData[5]=Math.max(0,Number(alphaScale)||0);webUniformData[6]=Math.max(.1,Number(haloRadius)||.1);webUniformData[7]=0;const rec=webUniformRecord(frameCtx),changed=rec.fallback||!rec.hasLast||!sameWebUniform(webUniformData,rec.snapshot);if(changed){device.queue.writeBuffer(rec.buffer,0,webUniformData);webUniformUploads++;if(rec.snapshot){rec.snapshot.set(webUniformData);rec.hasLast=true;}}else webUniformUploadSkips++;return rec;}
-            function compositeScratch(encoder,targetTexture){let view=targetViews.get(targetTexture);if(!view){view=targetTexture.createView();targetViews.set(targetTexture,view);}const pass=encoder.beginRenderPass({colorAttachments:[{view,loadOp:'load',storeOp:'store'}]});pass.setPipeline(compositePipeline);pass.setBindGroup(0,compositeScratchBindGroup);pass.draw(3);pass.end();compositePasses++;}
-            function beginStencilPass(encoder,colorView,stencilView,vertexCount){return encoder.beginRenderPass({colorAttachments:[{view:colorView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'discard'}],depthStencilAttachment:{view:stencilView,depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'store',stencilClearValue:vertexCount?0:1,stencilLoadOp:'clear',stencilStoreOp:'store'}});}
-            function beginThreadPass(encoder,haloView,coreView,stencilView){return encoder.beginRenderPass({colorAttachments:[{view:haloView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'},{view:coreView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}],depthStencilAttachment:{view:stencilView,depthLoadOp:'load',depthStoreOp:'store',stencilLoadOp:'load',stencilStoreOp:'store'}});}
-            // Corridor copies are nested. Building one parity stencil from every copy at once
-            // XORs their interiors, which made Web visible only on alternating Corridor copies.
-            // Keep one scratch accumulation but rebuild parity independently for each copy.
-            function clearThreadScratch(encoder,haloView,coreView){const p=encoder.beginRenderPass({colorAttachments:[{view:haloView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'},{view:coreView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});p.end();}
-            function beginCorridorStencilPass(encoder,colorView,stencilView,vertexCount){return encoder.beginRenderPass({colorAttachments:[{view:colorView,loadOp:'load',storeOp:'store'}],depthStencilAttachment:{view:stencilView,depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'store',stencilClearValue:vertexCount?0:1,stencilLoadOp:'clear',stencilStoreOp:'store'}});}
-            function beginCorridorThreadPass(encoder,haloView,coreView,stencilView){return encoder.beginRenderPass({colorAttachments:[{view:haloView,loadOp:'load',storeOp:'store'},{view:coreView,loadOp:'load',storeOp:'store'}],depthStencilAttachment:{view:stencilView,depthLoadOp:'load',depthStoreOp:'store',stencilLoadOp:'load',stencilStoreOp:'store'}});}
-            function encodeToLayerScene(targetTexture,commands,clipGeometry,haloRadius,alphaScale=1,frameCtx=null,clipMode='inside'){
-                if(!targetTexture||!warmup()||!ready||lost||!ensureSize(mainCanvas.width,mainCanvas.height))return null;
-                try{
-                    const seg=getWebSegmentRecord(commands);if(!seg?.k)return{handled:true,commandBuffer:null};const ur=prepareWebUniform(frameCtx,alphaScale,haloRadius),segBuffer=seg.buffer;
-                    const {maskBuffer,vertexCount}=uploadMask(clipGeometry,0,frameCtx),encoder=device.createCommandEncoder({label:'Somata 7.5 Web Threads → Layer Scene'}),haloView=haloTextureView,coreView=coreTextureView,stencilView=stencilTextureView;
-                    const maskPass=beginStencilPass(encoder,haloView,stencilView,vertexCount);if(vertexCount){maskPass.setPipeline(maskPipeline);maskPass.setBindGroup(0,ur.bindGroup);maskPass.setVertexBuffer(0,maskBuffer);maskPass.draw(vertexCount);}maskPass.end();
-                    const stencilRef=clipMode==='outside'?0:1;const webPass=beginThreadPass(encoder,haloView,coreView,stencilView);webPass.setStencilReference(stencilRef);webPass.setPipeline(combinedPipeline);webPass.setBindGroup(0,ur.bindGroup);webPass.setVertexBuffer(0,cornerBuffer);webPass.setVertexBuffer(1,segBuffer);webPass.draw(4,seg.k);webPass.end();compositeScratch(encoder,targetTexture);fusedColorPasses++;fullScreenCompositesAvoided++;msaaSamplesAvoided+=3;
-                    frames++;if(vertexCount)clippedFrames++;else openFrames++;return{handled:true,commandBuffer:encoder.finish()};
-                }catch(err){failures++;lastError=String(err?.message||err);return null;}
-            }
-            function sameWebCorridorUniform(a,b){for(let i=0;i<8;i++)if(a[i]!==b[i])return false;return true;}
-            function webCorridorUniformRecord(frameCtx){const key=frameCtx?.layer&&typeof frameCtx.layer==='object'?frameCtx.layer:null;if(!key||!uniformLayout)return{buffer:uniformBuffer,bindGroup:uniformBind,snapshot:null,hasLast:false,fallback:true};let rec=corridorUniformRecords.get(key);if(rec&&rec.generation===hubGeneration&&rec.buffer)return rec;const buffer=device.createBuffer({size:32,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST,label:'SpiroStar resident Corridor Web uniforms'});rec={buffer,bindGroup:device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer}}]}),snapshot:new Float32Array(8),hasLast:false,generation:hubGeneration};corridorUniformRecords.set(key,rec);corridorUniformRecordSet.add(rec);corridorUniformBuilds++;return rec;}
-            function encodeCorridorToLayerScene(targetTexture,commands,clipGeometry,haloRadius,alphaScale,copies,alphas,frameCtx,footprint=1,ctx=mainCtx,clipMode='inside'){
-                if(!targetTexture||!warmup()||!ready||lost||!ensureSize(mainCanvas.width,mainCanvas.height)||!Array.isArray(copies)||!copies.length)return null;
-                try{
-                    const seg=getCorridorSegmentRecord(commands);if(!seg?.k)return{handled:true,commandBuffer:null};const copy=prepareCorridorCopies(copies,alphas,frameCtx,footprint);if(!copy?.k)return{handled:true,commandBuffer:null};
-                    const tr=ctx?.getTransform?.(),originX=Number(tr?.e)||0,originY=Number(tr?.f)||0;corridorUniformData[0]=width;corridorUniformData[1]=height;corridorUniformData[2]=originX;corridorUniformData[3]=originY;corridorUniformData[4]=seg.k;corridorUniformData[5]=Math.max(0,Number(alphaScale)||0);corridorUniformData[6]=Math.max(.1,Number(haloRadius)||.1);corridorUniformData[7]=0;const ur=webCorridorUniformRecord(frameCtx),uniformChanged=ur.fallback||!ur.hasLast||!sameWebCorridorUniform(corridorUniformData,ur.snapshot);if(uniformChanged){device.queue.writeBuffer(ur.buffer,0,corridorUniformData);corridorUniformUploads++;if(ur.snapshot){ur.snapshot.set(corridorUniformData);ur.hasLast=true;}}else corridorUniformUploadSkips++;
-                    const {maskBuffer,vertexCount}=uploadMask(clipGeometry,copy.k,frameCtx),encoder=device.createCommandEncoder({label:'Somata 7.5 Corridor Web Threads → Layer Scene'}),haloView=haloTextureView,coreView=coreTextureView,stencilView=stencilTextureView;
-                    const logical=seg.k*copy.k,stencilRef=clipMode==='outside'?0:1;
-                    if(vertexCount&&copy.k>1){
-                        clearThreadScratch(encoder,haloView,coreView);
-                        for(let ci=0;ci<copy.k;ci++){
-                            const maskPass=beginCorridorStencilPass(encoder,haloView,stencilView,vertexCount);maskPass.setPipeline(corridorMaskPipeline);maskPass.setBindGroup(0,ur.bindGroup);maskPass.setBindGroup(1,copy.bindGroup);maskPass.setVertexBuffer(0,maskBuffer);maskPass.draw(vertexCount,1,0,ci);maskPass.end();
-                            const webPass=beginCorridorThreadPass(encoder,haloView,coreView,stencilView);webPass.setStencilReference(stencilRef);webPass.setPipeline(corridorCombinedPipeline);webPass.setBindGroup(0,ur.bindGroup);webPass.setBindGroup(1,seg.bindGroup);webPass.setBindGroup(2,copy.bindGroup);webPass.setVertexBuffer(0,cornerBuffer);webPass.draw(4,seg.k,0,ci*seg.k);webPass.end();
-                        }
-                    }else{
-                        const maskPass=beginStencilPass(encoder,haloView,stencilView,vertexCount);if(vertexCount){maskPass.setPipeline(corridorMaskPipeline);maskPass.setBindGroup(0,ur.bindGroup);maskPass.setBindGroup(1,copy.bindGroup);maskPass.setVertexBuffer(0,maskBuffer);maskPass.draw(vertexCount,copy.k);}maskPass.end();
-                        const webPass=beginThreadPass(encoder,haloView,coreView,stencilView);webPass.setStencilReference(stencilRef);webPass.setPipeline(corridorCombinedPipeline);webPass.setBindGroup(0,ur.bindGroup);webPass.setBindGroup(1,seg.bindGroup);webPass.setBindGroup(2,copy.bindGroup);webPass.setVertexBuffer(0,cornerBuffer);webPass.draw(4,logical);webPass.end();
-                    }
-                    compositeScratch(encoder,targetTexture);fusedColorPasses++;fullScreenCompositesAvoided++;msaaSamplesAvoided+=3;
-                    frames++;corridorFrames++;corridorCopies+=copy.k;corridorLogicalSegments+=logical;if(vertexCount)clippedFrames++;else openFrames++;return{handled:true,commandBuffer:encoder.finish()};
-                }catch(err){failures++;lastError=String(err?.message||err);return null;}
-            }
-            function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost&&WebGPUDeviceHub.isReady(),attempted,initializing,lost,lastError,width,height,frames,clippedFrames,openFrames,maskTriangles,segmentUploads,maskUploads,compositePasses,fusedColorPasses,fullScreenCompositesAvoided,msaaSamplesAvoided,failures,sceneStorage:'gpu-dual-texture+single-sample-stencil',retiredDynamicBuffers:retiredDynamicBuffers.length,bufferLifetimePolicy:'dynamic Web buffers are never destroyed while same-frame deferred command buffers may still reference them',webResidency:{staticBuffers:webStaticSegments.size,staticBuilds:webStaticBuilds,staticHits:webStaticHits,staticUploadBytes:webStaticUploads,staticEvictions:webStaticEvictions,uniformRecords:webUniformRecordSet.size,uniformBuilds:webUniformBuilds,uniformUploads:webUniformUploads,uniformUploadSkips:webUniformUploadSkips,maskRecords:maskRecordSet.size,maskBuilds:maskResidentBuilds,maskUploadSkips,maskUploadBytesAvoided,policy:'stable Web segment geometry resident in VRAM; alpha/halo in per-layer uniforms; exact parity-mask upload dedup'},corridor:{frames:corridorFrames,copies:corridorCopies,logicalSegments:corridorLogicalSegments,maskTriangles:corridorMaskTriangles,copyUploadBytes:corridorCopyUploads,sharedCopyReuse:sharedCorridorCopyReuse,dynamicUploadBytes:corridorDynamicUploads,staticUploadBytes:corridorStaticUploads,staticBuilds:corridorStaticBuilds,staticHits:corridorStaticHits,staticEvictions:corridorStaticEvictions,staticBuffers:corridorStaticSegments.size,copyRingBuffers:corridorCopyBuffers.length,uniformResidency:{records:corridorUniformRecordSet.size,builds:corridorUniformBuilds,uploads:corridorUniformUploads,uploadSkips:corridorUniformUploadSkips,policy:'per-layer persistent Corridor Web uniform buffer; exact upload dedup'}},hub:WebGPUDeviceHub.status()};}
-            return{warmup,isReady:()=>{warmup();return ready&&!lost;},encodeToLayerScene,encodeCorridorToLayerScene,status};
-        })();
-        window.__spiroWebThreadSceneGPUStatus=()=>WebGPUWebThreadSceneRenderer.status();
+  let uniformBuffer = null,
+    uniformBind = null,
+    uniformLayout = null,
+    corridorUniformRecords = new WeakMap(),
+    corridorUniformRecordSet = new Set(),
+    corridorUniformBuilds = 0,
+    corridorUniformUploads = 0,
+    corridorUniformUploadSkips = 0;
+  let webUniformRecords = new WeakMap(),
+    webUniformRecordSet = new Set(),
+    webUniformBuilds = 0,
+    webUniformUploads = 0,
+    webUniformUploadSkips = 0;
+  const webUniformData = new Float32Array(8);
+  function destroySizeResources() {
+    safeDestroy(haloTexture);
+    safeDestroy(coreTexture);
+    safeDestroy(stencilTexture);
+    haloTexture = coreTexture = stencilTexture = null;
+    haloTextureView = coreTextureView = stencilTextureView = compositeScratchBindGroup = null;
+    width = height = 0;
+  }
+  function destroyBuffers() {
+    for (const b of segmentBuffers) safeDestroy(b);
+    for (const b of maskBuffers) safeDestroy(b);
+    for (const b of corridorDynamicBuffers) safeDestroy(b);
+    for (const b of corridorCopyBuffers) safeDestroy(b);
+    for (const b of retiredDynamicBuffers) safeDestroy(b);
+    retiredDynamicBuffers = [];
+    for (const rec of corridorStaticSegments.values()) safeDestroy(rec?.buffer);
+    for (const rec of webStaticSegments.values()) safeDestroy(rec?.buffer);
+    for (const rec of corridorUniformRecordSet) safeDestroy(rec?.buffer);
+    corridorUniformRecordSet.clear();
+    corridorUniformRecords = new WeakMap();
+    for (const rec of webUniformRecordSet) safeDestroy(rec?.buffer);
+    webUniformRecordSet.clear();
+    webUniformRecords = new WeakMap();
+    for (const rec of maskRecordSet) safeDestroy(rec?.buffer);
+    maskRecordSet.clear();
+    maskRecords = new WeakMap();
+    segmentBuffers = [null, null, null];
+    maskBuffers = [null, null, null];
+    corridorDynamicBuffers = [null, null, null];
+    corridorDynamicBinds = [null, null, null];
+    corridorCopyBuffers = [null, null, null];
+    corridorCopyBinds = [null, null, null];
+    corridorStaticSegments = new Map();
+    webStaticSegments = new Map();
+    targetViews = new WeakMap();
+    segmentCapacity = maskCapacity = corridorDynamicCapacity = corridorCopyCapacity = 0;
+    segmentData = corridorDynamicData = corridorCopyData = null;
+  }
+  async function initAsync() {
+    if (ready && !lost) return true;
+    if (initializing) return false;
+    if (attempted && !ready) return false;
+    attempted = true;
+    initializing = true;
+    lastError = '';
+    try {
+      const shared = await WebGPUDeviceHub.acquire();
+      device = shared.device;
+      hubGeneration = shared.generation;
+      lost = false;
+      format = navigator.gpu.getPreferredCanvasFormat();
+      const tm = device.createShaderModule({ label: 'SpiroStar Web Threads scene WGSL', code: THREAD_WGSL });
+      await assertWebGPUShaderModule(tm, 'SpiroStar Web Threads scene WGSL');
+      const mm = device.createShaderModule({ label: 'SpiroStar Web Threads stencil WGSL', code: MASK_WGSL });
+      await assertWebGPUShaderModule(mm, 'SpiroStar Web Threads stencil WGSL');
+      const cm = device.createShaderModule({
+        label: 'SpiroStar Web Threads composite WGSL',
+        code: COMPOSITE_WGSL,
+      });
+      await assertWebGPUShaderModule(cm, 'SpiroStar Web Threads composite WGSL');
+      uniformBuffer = device.createBuffer({
+        size: 32,
+        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        label: 'SpiroStar Web Threads viewport/corridor uniforms',
+      });
+      uniformLayout = device.createBindGroupLayout({
+        entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } }],
+      });
+      corridorSegmentLayout = device.createBindGroupLayout({
+        entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } }],
+      });
+      corridorCopyLayout = device.createBindGroupLayout({
+        entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } }],
+      });
+      uniformBind = device.createBindGroup({
+        layout: uniformLayout,
+        entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+      });
+      const stencilFace = { compare: 'equal', failOp: 'keep', depthFailOp: 'keep', passOp: 'keep' };
+      const threadLayout = device.createPipelineLayout({ bindGroupLayouts: [uniformLayout] }),
+        corridorThreadLayout = device.createPipelineLayout({
+          bindGroupLayouts: [uniformLayout, corridorSegmentLayout, corridorCopyLayout],
+        });
+      const threadBuffers = [
+        {
+          arrayStride: 8,
+          stepMode: 'vertex',
+          attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }],
+        },
+        {
+          arrayStride: FLOATS_PER_SEGMENT * 4,
+          stepMode: 'instance',
+          attributes: [
+            { shaderLocation: 1, offset: 0, format: 'float32x2' },
+            { shaderLocation: 2, offset: 8, format: 'float32x2' },
+            { shaderLocation: 3, offset: 16, format: 'float32' },
+            { shaderLocation: 4, offset: 20, format: 'float32' },
+            { shaderLocation: 5, offset: 24, format: 'float32x4' },
+          ],
+        },
+      ];
+      const maxBlend = {
+        color: { srcFactor: 'one', dstFactor: 'one', operation: 'max' },
+        alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'max' },
+      };
+      const targets = [
+          { format, blend: maxBlend },
+          { format, blend: maxBlend },
+        ],
+        depthStencil = {
+          format: 'depth24plus-stencil8',
+          depthWriteEnabled: false,
+          depthCompare: 'always',
+          stencilFront: stencilFace,
+          stencilBack: stencilFace,
+          stencilReadMask: 1,
+          stencilWriteMask: 0,
+        };
+      const makeThread = (label) =>
+        device.createRenderPipeline({
+          label,
+          layout: threadLayout,
+          vertex: { module: tm, entryPoint: 'vs', buffers: threadBuffers },
+          fragment: { module: tm, entryPoint: 'fsCombined', targets },
+          primitive: { topology: 'triangle-strip', cullMode: 'none' },
+          depthStencil,
+        });
+      const makeCorridorThread = (label) =>
+        device.createRenderPipeline({
+          label,
+          layout: corridorThreadLayout,
+          vertex: {
+            module: tm,
+            entryPoint: 'vsCorridor',
+            buffers: [
+              {
+                arrayStride: 8,
+                stepMode: 'vertex',
+                attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }],
+              },
+            ],
+          },
+          fragment: { module: tm, entryPoint: 'fsCombined', targets },
+          primitive: { topology: 'triangle-strip', cullMode: 'none' },
+          depthStencil,
+        });
+      combinedPipeline = makeThread('Somata 7.5 Web Threads fused Halo+Core');
+      corridorCombinedPipeline = makeCorridorThread('Somata 7.5 Corridor Web Threads fused Halo+Core');
+      const maskLayout = device.createPipelineLayout({ bindGroupLayouts: [uniformLayout] }),
+        corridorMaskLayout = device.createPipelineLayout({
+          bindGroupLayouts: [uniformLayout, corridorCopyLayout],
+        });
+      const invertFace = { compare: 'always', failOp: 'keep', depthFailOp: 'keep', passOp: 'invert' };
+      const maskTarget = [{ format, writeMask: 0 }],
+        maskDepth = {
+          format: 'depth24plus-stencil8',
+          depthWriteEnabled: false,
+          depthCompare: 'always',
+          stencilFront: invertFace,
+          stencilBack: invertFace,
+          stencilReadMask: 1,
+          stencilWriteMask: 1,
+        },
+        maskVertex = [
+          {
+            arrayStride: 8,
+            stepMode: 'vertex',
+            attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }],
+          },
+        ];
+      maskPipeline = device.createRenderPipeline({
+        label: 'SpiroStar Web Threads even-odd stencil',
+        layout: maskLayout,
+        vertex: { module: mm, entryPoint: 'vs', buffers: maskVertex },
+        fragment: { module: mm, entryPoint: 'fs', targets: maskTarget },
+        primitive: { topology: 'triangle-list', cullMode: 'none' },
+        depthStencil: maskDepth,
+      });
+      corridorMaskPipeline = device.createRenderPipeline({
+        label: 'SpiroStar Corridor Web Threads even-odd stencil',
+        layout: corridorMaskLayout,
+        vertex: { module: mm, entryPoint: 'vsCorridor', buffers: maskVertex },
+        fragment: { module: mm, entryPoint: 'fs', targets: maskTarget },
+        primitive: { topology: 'triangle-list', cullMode: 'none' },
+        depthStencil: maskDepth,
+      });
+      const overBlend = {
+        color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      };
+      compositePipeline = device.createRenderPipeline({
+        label: 'SpiroStar Web Threads scratch → Layer Scene',
+        layout: 'auto',
+        vertex: { module: cm, entryPoint: 'vs' },
+        fragment: { module: cm, entryPoint: 'fs', targets: [{ format, blend: overBlend }] },
+        primitive: { topology: 'triangle-list' },
+      });
+      cornerBuffer = device.createBuffer({
+        size: 8 * 4,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        label: 'SpiroStar Web Threads corners',
+      });
+      device.queue.writeBuffer(cornerBuffer, 0, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]));
+      ready = true;
+      initializing = false;
+      requestMainCanvasRender();
+      return true;
+    } catch (err) {
+      ready = false;
+      initializing = false;
+      lastError = String(err?.message || err);
+      return false;
+    }
+  }
+  function warmup() {
+    const hub = WebGPUDeviceHub.warmup(),
+      gen = WebGPUDeviceHub.getGeneration();
+    if (ready && (!hub || gen !== hubGeneration)) {
+      ready = false;
+      attempted = false;
+      initializing = false;
+      lost = !hub;
+      destroySizeResources();
+      destroyBuffers();
+      safeDestroy(uniformBuffer);
+      safeDestroy(cornerBuffer);
+      uniformBuffer = cornerBuffer = null;
+      uniformBind = null;
+      corridorSegmentLayout = corridorCopyLayout = null;
+    }
+    if (!ready && !initializing && (!attempted || lost)) void initAsync();
+    return ready && !lost && hub;
+  }
+  function ensureSize(w, h) {
+    w = Math.max(1, w | 0);
+    h = Math.max(1, h | 0);
+    if (width === w && height === h && haloTexture && coreTexture && stencilTexture) return true;
+    destroySizeResources();
+    width = w;
+    height = h;
+    haloTexture = device.createTexture({
+      label: 'Somata 7.5 Web Threads halo scratch',
+      size: [w, h, 1],
+      format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    haloTextureView = haloTexture.createView();
+    coreTexture = device.createTexture({
+      label: 'Somata 7.5 Web Threads core scratch',
+      size: [w, h, 1],
+      format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    coreTextureView = coreTexture.createView();
+    stencilTexture = device.createTexture({
+      label: 'Somata 7.5 Web Threads parity stencil',
+      size: [w, h, 1],
+      format: 'depth24plus-stencil8',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    stencilTextureView = stencilTexture.createView();
+    compositeScratchBindGroup = device.createBindGroup({
+      layout: compositePipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: haloTextureView },
+        { binding: 1, resource: coreTextureView },
+      ],
+    });
+    device.queue.writeBuffer(uniformBuffer, 0, new Float32Array([w, h, 0, 0, 0, 0, 0, 0]));
+    return true;
+  }
+  function ensureSegments(count) {
+    const desired = performanceGovernor.stickyRingCount(3, segmentBuffers.length),
+      grow = count > segmentCapacity || !segmentData || segmentBuffers.some((x) => !x);
+    if (grow) {
+      segmentCapacity = performanceGovernor.capacityFor(count, segmentCapacity, 256, 1.6);
+      segmentData = new Float32Array(segmentCapacity * FLOATS_PER_SEGMENT);
+      retireDynamicList(segmentBuffers);
+      segmentBuffers = [];
+    }
+    while (segmentBuffers.length < desired)
+      segmentBuffers.push(
+        device.createBuffer({
+          size: segmentCapacity * FLOATS_PER_SEGMENT * 4,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+          label: `SpiroStar Web Threads segments ${segmentBuffers.length}`,
+        }),
+      );
+  }
+  function ensureMask(vertexCount) {
+    const desired = performanceGovernor.stickyRingCount(3, maskBuffers.length),
+      grow = vertexCount > maskCapacity || maskBuffers.some((x) => !x);
+    if (grow) {
+      maskCapacity = performanceGovernor.capacityFor(vertexCount, maskCapacity, 384, 1.6);
+      retireDynamicList(maskBuffers);
+      maskBuffers = [];
+    }
+    while (maskBuffers.length < desired)
+      maskBuffers.push(
+        device.createBuffer({
+          size: maskCapacity * 2 * 4,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+          label: `SpiroStar Web Threads mask vertices ${maskBuffers.length}`,
+        }),
+      );
+  }
+  function countSegments(commands) {
+    return GeometryKernel.inspectStrokeCommands(commands).count;
+  }
+  function packSegments(commands, target = segmentData) {
+    let k = 0,
+      lastCmd = null,
+      rgba = null,
+      a = 0,
+      hw = 0.5;
+    for (const seg of GeometryKernel.strokeSegments(commands, 'webThreadPack')) {
+      const cmd = seg.command;
+      if (cmd !== lastCmd) {
+        rgba = GPUColorCache.rgba(cmd?.strokeStyle || '#ffffff');
+        a = Math.max(0, Math.min(1, (Number(cmd?.alpha) || 0) * rgba[3]));
+        hw = Math.max(0.001, (Number(cmd?.screenLineWidth) || 1) * 0.5);
+        lastCmd = cmd;
+      }
+      if (a <= 0.0001) continue;
+      const o = k * FLOATS_PER_SEGMENT;
+      target[o] = seg.ax;
+      target[o + 1] = seg.ay;
+      target[o + 2] = seg.bx;
+      target[o + 3] = seg.by;
+      target[o + 4] = hw;
+      target[o + 5] = 0.1;
+      target[o + 6] = rgba[0];
+      target[o + 7] = rgba[1];
+      target[o + 8] = rgba[2];
+      target[o + 9] = a;
+      k++;
+    }
+    return k;
+  }
+  function touchWebStatic(commands, rec) {
+    webStaticSegments.delete(commands);
+    webStaticSegments.set(commands, rec);
+    return rec;
+  }
+  function getWebSegmentRecord(commands) {
+    const need = countSegments(commands);
+    if (!need) return { buffer: null, k: 0, stable: false };
+    if (commands?.__spiroWebStable === true) {
+      let rec = webStaticSegments.get(commands);
+      if (rec && rec.generation === hubGeneration && rec.buffer) {
+        webStaticHits++;
+        return touchWebStatic(commands, rec);
+      }
+      const cpu = new Float32Array(need * FLOATS_PER_SEGMENT),
+        k = packSegments(commands, cpu);
+      if (!k) return { buffer: null, k: 0, stable: true };
+      const bytes = k * FLOATS_PER_SEGMENT * 4,
+        buffer = device.createBuffer({
+          size: Math.max(40, bytes),
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+          label: 'SpiroStar resident Web Threads segments',
+        });
+      device.queue.writeBuffer(buffer, 0, cpu.buffer, cpu.byteOffset, bytes);
+      webStaticUploads += bytes;
+      webStaticBuilds++;
+      rec = { buffer, k, generation: hubGeneration };
+      touchWebStatic(commands, rec);
+      while (webStaticSegments.size > webThreadSegmentLimit()) {
+        const key = webStaticSegments.keys().next().value,
+          old = webStaticSegments.get(key);
+        safeDestroy(old?.buffer);
+        webStaticSegments.delete(key);
+        webStaticEvictions++;
+      }
+      return rec;
+    }
+    ensureSegments(need);
+    const k = packSegments(commands, segmentData);
+    if (!k) return { buffer: null, k: 0, stable: false };
+    const segSlot = segmentCursor++ % segmentBuffers.length,
+      buffer = segmentBuffers[segSlot],
+      bytes = k * FLOATS_PER_SEGMENT * 4;
+    device.queue.writeBuffer(buffer, 0, segmentData.buffer, segmentData.byteOffset, bytes);
+    segmentUploads += bytes;
+    return { buffer, k, stable: false };
+  }
+  function packCorridorSegments(commands, target) {
+    let k = 0,
+      lastCmd = null,
+      rgba = null,
+      a = 0,
+      hw = 0.5;
+    for (const seg of GeometryKernel.strokeSegments(commands, 'webThreadCorridorPack')) {
+      const cmd = seg.command;
+      if (cmd !== lastCmd) {
+        rgba = GPUColorCache.rgba(cmd?.strokeStyle || '#ffffff');
+        a = Math.max(0, Math.min(1, (Number(cmd?.alpha) || 0) * rgba[3]));
+        hw = Math.max(0.001, (Number(cmd?.screenLineWidth) || 1) * 0.5);
+        lastCmd = cmd;
+      }
+      if (a <= 0.0001) continue;
+      const o = k * CORRIDOR_FLOATS_PER_SEGMENT;
+      target[o] = seg.ax;
+      target[o + 1] = seg.ay;
+      target[o + 2] = seg.bx;
+      target[o + 3] = seg.by;
+      target[o + 4] = hw;
+      target[o + 5] = a;
+      target[o + 6] = rgba[0];
+      target[o + 7] = rgba[1];
+      target[o + 8] = rgba[2];
+      target[o + 9] = target[o + 10] = target[o + 11] = 0;
+      k++;
+    }
+    return k;
+  }
+  function touchStatic(commands, rec) {
+    corridorStaticSegments.delete(commands);
+    corridorStaticSegments.set(commands, rec);
+    return rec;
+  }
+  function getCorridorSegmentRecord(commands) {
+    const need = countSegments(commands);
+    if (!need) return { buffer: null, bindGroup: null, k: 0 };
+    if (commands?.__spiroWebStable === true) {
+      let rec = corridorStaticSegments.get(commands);
+      if (rec && rec.generation === hubGeneration && rec.buffer) {
+        corridorStaticHits++;
+        return touchStatic(commands, rec);
+      }
+      const cpu = new Float32Array(need * CORRIDOR_FLOATS_PER_SEGMENT),
+        k = packCorridorSegments(commands, cpu);
+      if (!k) return { buffer: null, bindGroup: null, k: 0 };
+      const buffer = device.createBuffer({
+        size: Math.max(48, k * CORRIDOR_FLOATS_PER_SEGMENT * 4),
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        label: 'SpiroStar static Corridor Web master segments',
+      });
+      device.queue.writeBuffer(buffer, 0, cpu.buffer, cpu.byteOffset, k * CORRIDOR_FLOATS_PER_SEGMENT * 4);
+      const bindGroup = device.createBindGroup({
+        layout: corridorSegmentLayout,
+        entries: [{ binding: 0, resource: { buffer } }],
+      });
+      corridorStaticUploads += k * CORRIDOR_FLOATS_PER_SEGMENT * 4;
+      corridorStaticBuilds++;
+      rec = { buffer, bindGroup, k, generation: hubGeneration };
+      touchStatic(commands, rec);
+      while (corridorStaticSegments.size > webThreadCorridorSegmentLimit()) {
+        const key = corridorStaticSegments.keys().next().value,
+          old = corridorStaticSegments.get(key);
+        safeDestroy(old?.buffer);
+        corridorStaticSegments.delete(key);
+        corridorStaticEvictions++;
+      }
+      return rec;
+    }
+    {
+      const desired = performanceGovernor.stickyRingCount(3, corridorDynamicBuffers.length),
+        grow =
+          need > corridorDynamicCapacity || !corridorDynamicData || corridorDynamicBuffers.some((x) => !x);
+      if (grow) {
+        corridorDynamicCapacity = performanceGovernor.capacityFor(need, corridorDynamicCapacity, 256, 1.6);
+        corridorDynamicData = new Float32Array(corridorDynamicCapacity * CORRIDOR_FLOATS_PER_SEGMENT);
+        retireDynamicList(corridorDynamicBuffers);
+        corridorDynamicBuffers = [];
+        corridorDynamicBinds = [];
+      }
+      while (corridorDynamicBuffers.length < desired) {
+        const buffer = device.createBuffer({
+          size: corridorDynamicCapacity * CORRIDOR_FLOATS_PER_SEGMENT * 4,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+          label: `SpiroStar dynamic Corridor Web master ${corridorDynamicBuffers.length}`,
+        });
+        corridorDynamicBuffers.push(buffer);
+        corridorDynamicBinds.push(
+          device.createBindGroup({
+            layout: corridorSegmentLayout,
+            entries: [{ binding: 0, resource: { buffer } }],
+          }),
+        );
+      }
+    }
+    const k = packCorridorSegments(commands, corridorDynamicData);
+    if (!k) return { buffer: null, bindGroup: null, k: 0 };
+    const slot = corridorDynamicCursor++ % corridorDynamicBuffers.length,
+      buffer = corridorDynamicBuffers[slot];
+    device.queue.writeBuffer(
+      buffer,
+      0,
+      corridorDynamicData.buffer,
+      corridorDynamicData.byteOffset,
+      k * CORRIDOR_FLOATS_PER_SEGMENT * 4,
+    );
+    corridorDynamicUploads += k * CORRIDOR_FLOATS_PER_SEGMENT * 4;
+    return { buffer, bindGroup: corridorDynamicBinds[slot], k };
+  }
+  function ensureCorridorCopyCapacity(count) {
+    const desired = performanceGovernor.stickyRingCount(3, corridorCopyBuffers.length),
+      grow = count > corridorCopyCapacity || !corridorCopyData || corridorCopyBuffers.some((x) => !x);
+    if (grow) {
+      corridorCopyCapacity = performanceGovernor.capacityFor(count, corridorCopyCapacity, 64, 1.6);
+      corridorCopyData = new Float32Array(corridorCopyCapacity * 8);
+      retireDynamicList(corridorCopyBuffers);
+      corridorCopyBuffers = [];
+      corridorCopyBinds = [];
+    }
+    while (corridorCopyBuffers.length < desired) {
+      const buffer = device.createBuffer({
+        size: corridorCopyCapacity * 8 * 4,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        label: `SpiroStar Corridor Web copies ${corridorCopyBuffers.length}`,
+      });
+      corridorCopyBuffers.push(buffer);
+      corridorCopyBinds.push(
+        device.createBindGroup({
+          layout: corridorCopyLayout,
+          entries: [{ binding: 0, resource: { buffer } }],
+        }),
+      );
+    }
+  }
+  const sharedCorridorCopyBinds = new WeakMap();
+  let sharedCorridorCopyReuse = 0;
+  function prepareCorridorCopies(copies, alphas, frameCtx, footprint) {
+    const shared = WebGPUCorridorCopyStore.acquire(
+      device,
+      hubGeneration,
+      frameCtx,
+      copies,
+      alphas,
+      'web',
+      footprint,
+      frameCtx?.layer,
+    );
+    if (shared?.buffer) {
+      let bg = sharedCorridorCopyBinds.get(shared.buffer);
+      if (!bg) {
+        bg = device.createBindGroup({
+          layout: corridorCopyLayout,
+          entries: [{ binding: 0, resource: { buffer: shared.buffer } }],
+        });
+        sharedCorridorCopyBinds.set(shared.buffer, bg);
+      }
+      sharedCorridorCopyReuse++;
+      return { buffer: shared.buffer, bindGroup: bg, k: shared.k };
+    }
+    ensureCorridorCopyCapacity(copies.length);
+    const k = packTunnelEffectCopyRecords(
+      corridorCopyData,
+      copies,
+      alphas,
+      frameCtx,
+      'web',
+      footprint,
+      frameCtx?.layer,
+    );
+    if (!k) return { buffer: null, bindGroup: null, k: 0 };
+    const slot = corridorCopyCursor++ % corridorCopyBuffers.length,
+      buffer = corridorCopyBuffers[slot];
+    device.queue.writeBuffer(buffer, 0, corridorCopyData.buffer, corridorCopyData.byteOffset, k * 8 * 4);
+    corridorCopyUploads += k * 8 * 4;
+    return { buffer, bindGroup: corridorCopyBinds[slot], k };
+  }
+  function sameF32Prefix(a, b, n) {
+    if (!a || !b || b.length < n) return false;
+    for (let i = 0; i < n; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+  function maskRecord(frameCtx, floatCount) {
+    const key = frameCtx?.layer && typeof frameCtx.layer === 'object' ? frameCtx.layer : null;
+    if (!key) return null;
+    let rec = maskRecords.get(key);
+    if (rec && rec.generation === hubGeneration && rec.buffer && rec.capacity >= floatCount) return rec;
+    if (rec?.buffer) {
+      maskRecordSet.delete(rec);
+      retireDynamicBuffer(rec.buffer);
+    }
+    const capacity = performanceGovernor.capacityFor(floatCount, rec?.capacity || 0, 768, 1.6),
+      buffer = device.createBuffer({
+        size: Math.max(8, capacity * 4),
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        label: 'SpiroStar resident Web parity mask',
+      });
+    rec = {
+      buffer,
+      capacity,
+      snapshot: new Float32Array(capacity),
+      floatCount: 0,
+      hasLast: false,
+      generation: hubGeneration,
+    };
+    maskRecords.set(key, rec);
+    maskRecordSet.add(rec);
+    maskResidentBuilds++;
+    return rec;
+  }
+  function uploadMask(clipGeometry, corridorCopyCount = 0, frameCtx = null) {
+    const verts = clipGeometry?.vertices instanceof Float32Array ? clipGeometry.vertices : null,
+      vertexCount = verts ? Math.floor(verts.length / 2) : 0;
+    let maskBuffer = null;
+    if (vertexCount) {
+      const floatCount = vertexCount * 2,
+        bytes = floatCount * 4,
+        rec = maskRecord(frameCtx, floatCount);
+      if (rec) {
+        maskBuffer = rec.buffer;
+        const same =
+          rec.hasLast && rec.floatCount === floatCount && sameF32Prefix(verts, rec.snapshot, floatCount);
+        if (same) {
+          maskUploadSkips++;
+          maskUploadBytesAvoided += bytes;
+        } else {
+          device.queue.writeBuffer(maskBuffer, 0, verts.buffer, verts.byteOffset, bytes);
+          rec.snapshot.set(verts.subarray(0, floatCount), 0);
+          rec.floatCount = floatCount;
+          rec.hasLast = true;
+          maskUploads += bytes;
+        }
+      } else {
+        ensureMask(vertexCount);
+        const slot = maskCursor++ % maskBuffers.length;
+        maskBuffer = maskBuffers[slot];
+        device.queue.writeBuffer(maskBuffer, 0, verts.buffer, verts.byteOffset, bytes);
+        maskUploads += bytes;
+      }
+      if (corridorCopyCount > 0) corridorMaskTriangles += Math.floor(vertexCount / 3) * corridorCopyCount;
+      else maskTriangles += Math.floor(vertexCount / 3);
+    }
+    return { maskBuffer, vertexCount };
+  }
+  function sameWebUniform(a, b) {
+    for (let i = 0; i < 8; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+  function webUniformRecord(frameCtx) {
+    const key = frameCtx?.layer && typeof frameCtx.layer === 'object' ? frameCtx.layer : null;
+    if (!key || !uniformLayout)
+      return {
+        buffer: uniformBuffer,
+        bindGroup: uniformBind,
+        snapshot: null,
+        hasLast: false,
+        fallback: true,
+      };
+    let rec = webUniformRecords.get(key);
+    if (rec && rec.generation === hubGeneration && rec.buffer) return rec;
+    const buffer = device.createBuffer({
+      size: 32,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      label: 'SpiroStar resident Web Threads uniforms',
+    });
+    rec = {
+      buffer,
+      bindGroup: device.createBindGroup({
+        layout: uniformLayout,
+        entries: [{ binding: 0, resource: { buffer } }],
+      }),
+      snapshot: new Float32Array(8),
+      hasLast: false,
+      generation: hubGeneration,
+    };
+    webUniformRecords.set(key, rec);
+    webUniformRecordSet.add(rec);
+    webUniformBuilds++;
+    return rec;
+  }
+  function prepareWebUniform(frameCtx, alphaScale, haloRadius) {
+    webUniformData[0] = width;
+    webUniformData[1] = height;
+    webUniformData[2] = 0;
+    webUniformData[3] = 0;
+    webUniformData[4] = 0;
+    webUniformData[5] = Math.max(0, Number(alphaScale) || 0);
+    webUniformData[6] = Math.max(0.1, Number(haloRadius) || 0.1);
+    webUniformData[7] = 0;
+    const rec = webUniformRecord(frameCtx),
+      changed = rec.fallback || !rec.hasLast || !sameWebUniform(webUniformData, rec.snapshot);
+    if (changed) {
+      device.queue.writeBuffer(rec.buffer, 0, webUniformData);
+      webUniformUploads++;
+      if (rec.snapshot) {
+        rec.snapshot.set(webUniformData);
+        rec.hasLast = true;
+      }
+    } else webUniformUploadSkips++;
+    return rec;
+  }
+  function compositeScratch(encoder, targetTexture) {
+    let view = targetViews.get(targetTexture);
+    if (!view) {
+      view = targetTexture.createView();
+      targetViews.set(targetTexture, view);
+    }
+    const pass = encoder.beginRenderPass({ colorAttachments: [{ view, loadOp: 'load', storeOp: 'store' }] });
+    pass.setPipeline(compositePipeline);
+    pass.setBindGroup(0, compositeScratchBindGroup);
+    pass.draw(3);
+    pass.end();
+    compositePasses++;
+  }
+  function beginStencilPass(encoder, colorView, stencilView, vertexCount) {
+    return encoder.beginRenderPass({
+      colorAttachments: [
+        { view: colorView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'discard' },
+      ],
+      depthStencilAttachment: {
+        view: stencilView,
+        depthClearValue: 1,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store',
+        stencilClearValue: vertexCount ? 0 : 1,
+        stencilLoadOp: 'clear',
+        stencilStoreOp: 'store',
+      },
+    });
+  }
+  function beginThreadPass(encoder, haloView, coreView, stencilView) {
+    return encoder.beginRenderPass({
+      colorAttachments: [
+        { view: haloView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+        { view: coreView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+      ],
+      depthStencilAttachment: {
+        view: stencilView,
+        depthLoadOp: 'load',
+        depthStoreOp: 'store',
+        stencilLoadOp: 'load',
+        stencilStoreOp: 'store',
+      },
+    });
+  }
+  // Corridor copies are nested. Building one parity stencil from every copy at once
+  // XORs their interiors, which made Web visible only on alternating Corridor copies.
+  // Keep one scratch accumulation but rebuild parity independently for each copy.
+  function clearThreadScratch(encoder, haloView, coreView) {
+    const p = encoder.beginRenderPass({
+      colorAttachments: [
+        { view: haloView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+        { view: coreView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+      ],
+    });
+    p.end();
+  }
+  function beginCorridorStencilPass(encoder, colorView, stencilView, vertexCount) {
+    return encoder.beginRenderPass({
+      colorAttachments: [{ view: colorView, loadOp: 'load', storeOp: 'store' }],
+      depthStencilAttachment: {
+        view: stencilView,
+        depthClearValue: 1,
+        depthLoadOp: 'clear',
+        depthStoreOp: 'store',
+        stencilClearValue: vertexCount ? 0 : 1,
+        stencilLoadOp: 'clear',
+        stencilStoreOp: 'store',
+      },
+    });
+  }
+  function beginCorridorThreadPass(encoder, haloView, coreView, stencilView) {
+    return encoder.beginRenderPass({
+      colorAttachments: [
+        { view: haloView, loadOp: 'load', storeOp: 'store' },
+        { view: coreView, loadOp: 'load', storeOp: 'store' },
+      ],
+      depthStencilAttachment: {
+        view: stencilView,
+        depthLoadOp: 'load',
+        depthStoreOp: 'store',
+        stencilLoadOp: 'load',
+        stencilStoreOp: 'store',
+      },
+    });
+  }
+  function encodeToLayerScene(
+    targetTexture,
+    commands,
+    clipGeometry,
+    haloRadius,
+    alphaScale = 1,
+    frameCtx = null,
+    clipMode = 'inside',
+  ) {
+    if (!targetTexture || !warmup() || !ready || lost || !ensureSize(mainCanvas.width, mainCanvas.height))
+      return null;
+    try {
+      const seg = getWebSegmentRecord(commands);
+      if (!seg?.k) return { handled: true, commandBuffer: null };
+      const ur = prepareWebUniform(frameCtx, alphaScale, haloRadius),
+        segBuffer = seg.buffer;
+      const { maskBuffer, vertexCount } = uploadMask(clipGeometry, 0, frameCtx),
+        encoder = device.createCommandEncoder({ label: 'Somata 7.5 Web Threads → Layer Scene' }),
+        haloView = haloTextureView,
+        coreView = coreTextureView,
+        stencilView = stencilTextureView;
+      const maskPass = beginStencilPass(encoder, haloView, stencilView, vertexCount);
+      if (vertexCount) {
+        maskPass.setPipeline(maskPipeline);
+        maskPass.setBindGroup(0, ur.bindGroup);
+        maskPass.setVertexBuffer(0, maskBuffer);
+        maskPass.draw(vertexCount);
+      }
+      maskPass.end();
+      const stencilRef = clipMode === 'outside' ? 0 : 1;
+      const webPass = beginThreadPass(encoder, haloView, coreView, stencilView);
+      webPass.setStencilReference(stencilRef);
+      webPass.setPipeline(combinedPipeline);
+      webPass.setBindGroup(0, ur.bindGroup);
+      webPass.setVertexBuffer(0, cornerBuffer);
+      webPass.setVertexBuffer(1, segBuffer);
+      webPass.draw(4, seg.k);
+      webPass.end();
+      compositeScratch(encoder, targetTexture);
+      fusedColorPasses++;
+      fullScreenCompositesAvoided++;
+      msaaSamplesAvoided += 3;
+      frames++;
+      if (vertexCount) clippedFrames++;
+      else openFrames++;
+      return { handled: true, commandBuffer: encoder.finish() };
+    } catch (err) {
+      failures++;
+      lastError = String(err?.message || err);
+      return null;
+    }
+  }
+  function sameWebCorridorUniform(a, b) {
+    for (let i = 0; i < 8; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+  function webCorridorUniformRecord(frameCtx) {
+    const key = frameCtx?.layer && typeof frameCtx.layer === 'object' ? frameCtx.layer : null;
+    if (!key || !uniformLayout)
+      return {
+        buffer: uniformBuffer,
+        bindGroup: uniformBind,
+        snapshot: null,
+        hasLast: false,
+        fallback: true,
+      };
+    let rec = corridorUniformRecords.get(key);
+    if (rec && rec.generation === hubGeneration && rec.buffer) return rec;
+    const buffer = device.createBuffer({
+      size: 32,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+      label: 'SpiroStar resident Corridor Web uniforms',
+    });
+    rec = {
+      buffer,
+      bindGroup: device.createBindGroup({
+        layout: uniformLayout,
+        entries: [{ binding: 0, resource: { buffer } }],
+      }),
+      snapshot: new Float32Array(8),
+      hasLast: false,
+      generation: hubGeneration,
+    };
+    corridorUniformRecords.set(key, rec);
+    corridorUniformRecordSet.add(rec);
+    corridorUniformBuilds++;
+    return rec;
+  }
+  function encodeCorridorToLayerScene(
+    targetTexture,
+    commands,
+    clipGeometry,
+    haloRadius,
+    alphaScale,
+    copies,
+    alphas,
+    frameCtx,
+    footprint = 1,
+    ctx = mainCtx,
+    clipMode = 'inside',
+  ) {
+    if (
+      !targetTexture ||
+      !warmup() ||
+      !ready ||
+      lost ||
+      !ensureSize(mainCanvas.width, mainCanvas.height) ||
+      !Array.isArray(copies) ||
+      !copies.length
+    )
+      return null;
+    try {
+      const seg = getCorridorSegmentRecord(commands);
+      if (!seg?.k) return { handled: true, commandBuffer: null };
+      const copy = prepareCorridorCopies(copies, alphas, frameCtx, footprint);
+      if (!copy?.k) return { handled: true, commandBuffer: null };
+      const tr = ctx?.getTransform?.(),
+        originX = Number(tr?.e) || 0,
+        originY = Number(tr?.f) || 0;
+      corridorUniformData[0] = width;
+      corridorUniformData[1] = height;
+      corridorUniformData[2] = originX;
+      corridorUniformData[3] = originY;
+      corridorUniformData[4] = seg.k;
+      corridorUniformData[5] = Math.max(0, Number(alphaScale) || 0);
+      corridorUniformData[6] = Math.max(0.1, Number(haloRadius) || 0.1);
+      corridorUniformData[7] = 0;
+      const ur = webCorridorUniformRecord(frameCtx),
+        uniformChanged =
+          ur.fallback || !ur.hasLast || !sameWebCorridorUniform(corridorUniformData, ur.snapshot);
+      if (uniformChanged) {
+        device.queue.writeBuffer(ur.buffer, 0, corridorUniformData);
+        corridorUniformUploads++;
+        if (ur.snapshot) {
+          ur.snapshot.set(corridorUniformData);
+          ur.hasLast = true;
+        }
+      } else corridorUniformUploadSkips++;
+      const { maskBuffer, vertexCount } = uploadMask(clipGeometry, copy.k, frameCtx),
+        encoder = device.createCommandEncoder({ label: 'Somata 7.5 Corridor Web Threads → Layer Scene' }),
+        haloView = haloTextureView,
+        coreView = coreTextureView,
+        stencilView = stencilTextureView;
+      const logical = seg.k * copy.k,
+        stencilRef = clipMode === 'outside' ? 0 : 1;
+      if (vertexCount && copy.k > 1) {
+        clearThreadScratch(encoder, haloView, coreView);
+        for (let ci = 0; ci < copy.k; ci++) {
+          const maskPass = beginCorridorStencilPass(encoder, haloView, stencilView, vertexCount);
+          maskPass.setPipeline(corridorMaskPipeline);
+          maskPass.setBindGroup(0, ur.bindGroup);
+          maskPass.setBindGroup(1, copy.bindGroup);
+          maskPass.setVertexBuffer(0, maskBuffer);
+          maskPass.draw(vertexCount, 1, 0, ci);
+          maskPass.end();
+          const webPass = beginCorridorThreadPass(encoder, haloView, coreView, stencilView);
+          webPass.setStencilReference(stencilRef);
+          webPass.setPipeline(corridorCombinedPipeline);
+          webPass.setBindGroup(0, ur.bindGroup);
+          webPass.setBindGroup(1, seg.bindGroup);
+          webPass.setBindGroup(2, copy.bindGroup);
+          webPass.setVertexBuffer(0, cornerBuffer);
+          webPass.draw(4, seg.k, 0, ci * seg.k);
+          webPass.end();
+        }
+      } else {
+        const maskPass = beginStencilPass(encoder, haloView, stencilView, vertexCount);
+        if (vertexCount) {
+          maskPass.setPipeline(corridorMaskPipeline);
+          maskPass.setBindGroup(0, ur.bindGroup);
+          maskPass.setBindGroup(1, copy.bindGroup);
+          maskPass.setVertexBuffer(0, maskBuffer);
+          maskPass.draw(vertexCount, copy.k);
+        }
+        maskPass.end();
+        const webPass = beginThreadPass(encoder, haloView, coreView, stencilView);
+        webPass.setStencilReference(stencilRef);
+        webPass.setPipeline(corridorCombinedPipeline);
+        webPass.setBindGroup(0, ur.bindGroup);
+        webPass.setBindGroup(1, seg.bindGroup);
+        webPass.setBindGroup(2, copy.bindGroup);
+        webPass.setVertexBuffer(0, cornerBuffer);
+        webPass.draw(4, logical);
+        webPass.end();
+      }
+      compositeScratch(encoder, targetTexture);
+      fusedColorPasses++;
+      fullScreenCompositesAvoided++;
+      msaaSamplesAvoided += 3;
+      frames++;
+      corridorFrames++;
+      corridorCopies += copy.k;
+      corridorLogicalSegments += logical;
+      if (vertexCount) clippedFrames++;
+      else openFrames++;
+      return { handled: true, commandBuffer: encoder.finish() };
+    } catch (err) {
+      failures++;
+      lastError = String(err?.message || err);
+      return null;
+    }
+  }
+  function status() {
+    warmup();
+    return {
+      supported: !!navigator?.gpu,
+      available: ready && !lost && WebGPUDeviceHub.isReady(),
+      attempted,
+      initializing,
+      lost,
+      lastError,
+      width,
+      height,
+      frames,
+      clippedFrames,
+      openFrames,
+      maskTriangles,
+      segmentUploads,
+      maskUploads,
+      compositePasses,
+      fusedColorPasses,
+      fullScreenCompositesAvoided,
+      msaaSamplesAvoided,
+      failures,
+      sceneStorage: 'gpu-dual-texture+single-sample-stencil',
+      retiredDynamicBuffers: retiredDynamicBuffers.length,
+      bufferLifetimePolicy:
+        'dynamic Web buffers are never destroyed while same-frame deferred command buffers may still reference them',
+      webResidency: {
+        staticBuffers: webStaticSegments.size,
+        staticBuilds: webStaticBuilds,
+        staticHits: webStaticHits,
+        staticUploadBytes: webStaticUploads,
+        staticEvictions: webStaticEvictions,
+        uniformRecords: webUniformRecordSet.size,
+        uniformBuilds: webUniformBuilds,
+        uniformUploads: webUniformUploads,
+        uniformUploadSkips: webUniformUploadSkips,
+        maskRecords: maskRecordSet.size,
+        maskBuilds: maskResidentBuilds,
+        maskUploadSkips,
+        maskUploadBytesAvoided,
+        policy:
+          'stable Web segment geometry resident in VRAM; alpha/halo in per-layer uniforms; exact parity-mask upload dedup',
+      },
+      corridor: {
+        frames: corridorFrames,
+        copies: corridorCopies,
+        logicalSegments: corridorLogicalSegments,
+        maskTriangles: corridorMaskTriangles,
+        copyUploadBytes: corridorCopyUploads,
+        sharedCopyReuse: sharedCorridorCopyReuse,
+        dynamicUploadBytes: corridorDynamicUploads,
+        staticUploadBytes: corridorStaticUploads,
+        staticBuilds: corridorStaticBuilds,
+        staticHits: corridorStaticHits,
+        staticEvictions: corridorStaticEvictions,
+        staticBuffers: corridorStaticSegments.size,
+        copyRingBuffers: corridorCopyBuffers.length,
+        uniformResidency: {
+          records: corridorUniformRecordSet.size,
+          builds: corridorUniformBuilds,
+          uploads: corridorUniformUploads,
+          uploadSkips: corridorUniformUploadSkips,
+          policy: 'per-layer persistent Corridor Web uniform buffer; exact upload dedup',
+        },
+      },
+      hub: WebGPUDeviceHub.status(),
+    };
+  }
+  return {
+    warmup,
+    isReady: () => {
+      warmup();
+      return ready && !lost;
+    },
+    encodeToLayerScene,
+    encodeCorridorToLayerScene,
+    status,
+  };
+})();
+
+export { WebGPUWebThreadSceneRenderer };

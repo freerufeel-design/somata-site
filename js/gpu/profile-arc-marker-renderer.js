@@ -1,16 +1,45 @@
-
-
-window.__spiroRegisterModule?.('js/gpu/profile-arc-marker-renderer');
+import './morph-arc-resource.js'; // initialisation order: this module runs after it
+import { mainCanvas } from '../ui/profile-presets.js';
+import { requestMainCanvasRender } from '../core/scheduler.js';
+import { WebGPUDeviceHub } from './device-hub.js';
+import { GPUColorCache, assertWebGPUShaderModule } from './gpu-utils.js';
+import { WebGPUCorridorCopyStore } from './corridor-copy-store.js';
+import { encodeGpuMorphArcTable, noteGpuMorphArcTableSubmitted } from './morph-arc-resource.js';
+import { spiroGpuPrepareArcForLayerScene } from '../render/gpu-command-scheduler.js';
+import { noteSuppressedError } from '../core/suppressed-errors.js';
 
 const WebGPUProfileArcMarkerRenderer = (() => {
-    let device=null,generation=-1,format=null,ready=false,initializing=null,lastError='';
-    let pipeline=null,corridorPipeline=null,cornerBuffer=null,dummyCopyBuffer=null;
-    const targetViews=new WeakMap(),normalArcBinds=new WeakMap(),corridorArcBinds=new WeakMap();
-    const uniformRecords=new WeakMap(),uniformRecordSet=new Set();
-    const stats={frames:0,draws:0,corridorDraws:0,arcBinds:0,arcBindHits:0,corridorBindHits:0,uniformBuilds:0,uniformUploads:0,uniformUploadSkips:0,arcPrerequisiteReuses:0,errors:0};
-    const uF32=new Float32Array(24);
+  let device = null,
+    generation = -1,
+    format = null,
+    ready = false,
+    initializing = null,
+    lastError = '';
+  let pipeline = null,
+    corridorPipeline = null,
+    cornerBuffer = null,
+    dummyCopyBuffer = null;
+  const targetViews = new WeakMap(),
+    normalArcBinds = new WeakMap(),
+    corridorArcBinds = new WeakMap();
+  const uniformRecords = new WeakMap(),
+    uniformRecordSet = new Set();
+  const stats = {
+    frames: 0,
+    draws: 0,
+    corridorDraws: 0,
+    arcBinds: 0,
+    arcBindHits: 0,
+    corridorBindHits: 0,
+    uniformBuilds: 0,
+    uniformUploads: 0,
+    uniformUploadSkips: 0,
+    arcPrerequisiteReuses: 0,
+    errors: 0,
+  };
+  const uF32 = new Float32Array(24);
 
-    const WGSL=`
+  const WGSL = `
 struct Uniforms {
     viewport: vec2<f32>, markerType: f32, aaLocal: f32,
     row0: vec4<f32>, row1: vec4<f32>, params: vec4<f32>, color: vec4<f32>, extra: vec4<f32>,
@@ -61,26 +90,386 @@ fn markerSd(p:vec2<f32>)->f32{
     let a=clamp(u.color.a*u.params.w*v.copyAlpha*cov,0.0,1.0);if(a<0.00015){discard;}return vec4<f32>(u.color.rgb*a,a);
 }`;
 
-    function reset(){ready=false;pipeline=corridorPipeline=null;try{cornerBuffer?.destroy?.();}catch(_){}try{dummyCopyBuffer?.destroy?.();}catch(_){}cornerBuffer=dummyCopyBuffer=null;for(const rec of uniformRecordSet)try{rec.buffer?.destroy?.();}catch(_){}uniformRecordSet.clear();device=null;generation=-1;}
-    async function ensureReady(){
-        const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration?.():-1;if(ready&&device&&gen===generation)return true;if(initializing)return initializing;if(ready&&gen!==generation)reset();
-        initializing=(async()=>{try{const shared=await WebGPUDeviceHub.acquire();device=shared.device;generation=shared.generation;format=navigator.gpu.getPreferredCanvasFormat();const mod=device.createShaderModule({label:'Somata Spiral profile Arc markers WGSL',code:WGSL});if(typeof assertWebGPUShaderModule==='function')await assertWebGPUShaderModule(mod,'Somata Spiral profile Arc markers WGSL');const target={format,blend:{color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}}};pipeline=device.createRenderPipeline({label:'Somata Spiral profile Arc markers',layout:'auto',vertex:{module:mod,entryPoint:'vsArc',buffers:[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}]},fragment:{module:mod,entryPoint:'fsMain',targets:[target]},primitive:{topology:'triangle-list'}});corridorPipeline=device.createRenderPipeline({label:'Somata Spiral Corridor profile Arc markers',layout:'auto',vertex:{module:mod,entryPoint:'vsArcCorridor',buffers:[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}]},fragment:{module:mod,entryPoint:'fsMain',targets:[target]},primitive:{topology:'triangle-list'}});cornerBuffer=device.createBuffer({label:'Somata profile Arc marker corners',size:48,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(cornerBuffer,0,new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]));dummyCopyBuffer=device.createBuffer({label:'Somata profile Arc dummy copy',size:32,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});device.queue.writeBuffer(dummyCopyBuffer,0,new Float32Array([1,0,1,0,0,1,1,0]));ready=true;lastError='';
+  function reset() {
+    ready = false;
+    pipeline = corridorPipeline = null;
+    try {
+      cornerBuffer?.destroy?.();
+    } catch (error) {
+      noteSuppressedError('gpu/profile-arc-marker-renderer#reset', error);
+    }
+    try {
+      dummyCopyBuffer?.destroy?.();
+    } catch (error) {
+      noteSuppressedError('gpu/profile-arc-marker-renderer#reset', error);
+    }
+    cornerBuffer = dummyCopyBuffer = null;
+    for (const rec of uniformRecordSet)
+      try {
+        rec.buffer?.destroy?.();
+      } catch (error) {
+        noteSuppressedError('gpu/profile-arc-marker-renderer#reset', error);
+      }
+    uniformRecordSet.clear();
+    device = null;
+    generation = -1;
+  }
+  async function ensureReady() {
+    const gen = typeof WebGPUDeviceHub !== 'undefined' ? WebGPUDeviceHub.getGeneration?.() : -1;
+    if (ready && device && gen === generation) return true;
+    if (initializing) return initializing;
+    if (ready && gen !== generation) reset();
+    initializing = (async () => {
+      try {
+        const shared = await WebGPUDeviceHub.acquire();
+        device = shared.device;
+        generation = shared.generation;
+        format = navigator.gpu.getPreferredCanvasFormat();
+        const mod = device.createShaderModule({
+          label: 'Somata Spiral profile Arc markers WGSL',
+          code: WGSL,
+        });
+        await assertWebGPUShaderModule(mod, 'Somata Spiral profile Arc markers WGSL');
+        const target = {
+          format,
+          blend: {
+            color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+          },
+        };
+        pipeline = device.createRenderPipeline({
+          label: 'Somata Spiral profile Arc markers',
+          layout: 'auto',
+          vertex: {
+            module: mod,
+            entryPoint: 'vsArc',
+            buffers: [
+              {
+                arrayStride: 8,
+                stepMode: 'vertex',
+                attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }],
+              },
+            ],
+          },
+          fragment: { module: mod, entryPoint: 'fsMain', targets: [target] },
+          primitive: { topology: 'triangle-list' },
+        });
+        corridorPipeline = device.createRenderPipeline({
+          label: 'Somata Spiral Corridor profile Arc markers',
+          layout: 'auto',
+          vertex: {
+            module: mod,
+            entryPoint: 'vsArcCorridor',
+            buffers: [
+              {
+                arrayStride: 8,
+                stepMode: 'vertex',
+                attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }],
+              },
+            ],
+          },
+          fragment: { module: mod, entryPoint: 'fsMain', targets: [target] },
+          primitive: { topology: 'triangle-list' },
+        });
+        cornerBuffer = device.createBuffer({
+          label: 'Somata profile Arc marker corners',
+          size: 48,
+          usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(
+          cornerBuffer,
+          0,
+          new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]),
+        );
+        dummyCopyBuffer = device.createBuffer({
+          label: 'Somata profile Arc dummy copy',
+          size: 32,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(dummyCopyBuffer, 0, new Float32Array([1, 0, 1, 0, 0, 1, 1, 0]));
+        ready = true;
+        lastError = '';
 
-            try{requestMainCanvasRender?.();}catch(_){}
-            return true;}catch(err){lastError=String(err?.message||err);stats.errors++;ready=false;return false;}finally{initializing=null;}})();return initializing;
+        try {
+          requestMainCanvasRender?.();
+        } catch (error) {
+          noteSuppressedError('gpu/profile-arc-marker-renderer#ensureReady', error);
+        }
+        return true;
+      } catch (err) {
+        lastError = String(err?.message || err);
+        stats.errors++;
+        ready = false;
+        return false;
+      } finally {
+        initializing = null;
+      }
+    })();
+    return initializing;
+  }
+  function warmup() {
+    void ensureReady();
+    return ready;
+  }
+  function rgba(css) {
+    if (typeof GPUColorCache !== 'undefined' && GPUColorCache.rgba) return GPUColorCache.rgba(css);
+    const s = String(css || '#fff').trim();
+    if (/^#[0-9a-f]{6}$/i.test(s))
+      return [
+        parseInt(s.slice(1, 3), 16) / 255,
+        parseInt(s.slice(3, 5), 16) / 255,
+        parseInt(s.slice(5, 7), 16) / 255,
+        1,
+      ];
+    return [1, 1, 1, 1];
+  }
+  function same(a, b) {
+    for (let i = 0; i < 24; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+  function uniformRecord(layer, key) {
+    let map = uniformRecords.get(layer);
+    if (!map) {
+      map = new Map();
+      uniformRecords.set(layer, map);
     }
-    function warmup(){void ensureReady();return ready;}
-    function rgba(css){if(typeof GPUColorCache!=='undefined'&&GPUColorCache.rgba)return GPUColorCache.rgba(css);const s=String(css||'#fff').trim();if(/^#[0-9a-f]{6}$/i.test(s))return[parseInt(s.slice(1,3),16)/255,parseInt(s.slice(3,5),16)/255,parseInt(s.slice(5,7),16)/255,1];return[1,1,1,1];}
-    function same(a,b){for(let i=0;i<24;i++)if(a[i]!==b[i])return false;return true;}
-    function uniformRecord(layer,key){let map=uniformRecords.get(layer);if(!map){map=new Map();uniformRecords.set(layer,map);}let rec=map.get(key);if(rec&&rec.generation===generation)return rec;const buffer=device.createBuffer({label:`Somata profile Arc marker uniform ${key}`,size:96,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});rec={buffer,generation,snapshot:new Float32Array(24),hasLast:false,normalBind:device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer}}]}),corridorBind:device.createBindGroup({layout:corridorPipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer}}]})};map.set(key,rec);uniformRecordSet.add(rec);stats.uniformBuilds++;return rec;}
-    function prepareUniform(layer,alpha,ctx,prepared,count,subdiv,opts={}){const type=prepared?.type||layer?.lineProfile,tr=ctx?.getTransform?.(),a=Number(tr?.a)||1,b=Number(tr?.b)||0,c=Number(tr?.c)||0,d=Number(tr?.d)||1,e=Number(tr?.e)||0,f=Number(tr?.f)||0,scale=Math.sqrt(Math.max(1e-12,Math.abs(a*d-b*c))),baseW=Math.max(.001,Number(prepared?.w)||Math.max(.5,Number(layer?.strokeWidth)||1.5)),w=Math.max(.001,baseW+(Number(opts.widthDeltaLocal)||0)),spacing=Math.max(2.4,Number(prepared?.spacing)||baseW*(type==='slash'?1.85:1.55)),halfLen=type==='slash'?Math.max(w*1.25,spacing*.58):0,halfWidth=type==='slash'?Math.max(.65,w*.78)*.5:0,halfSize=type==='circle'?Math.max(.9,w*.72):Math.max(1.4,Math.max(w*1.35,spacing*.78))*.5,col=rgba(opts.colorOverride||layer?.strokeColor||'#ffffff'),globalAlpha=Math.max(0,Math.min(1,Number(alpha)||0)),markerType=type==='square'?1:type==='circle'?2:type==='cross'?3:0,effectMode=opts.mode==='glow'?1:opts.mode==='outline'?2:0,extraLocal=Math.max(0,Number.isFinite(Number(opts.extraLocal))?Number(opts.extraLocal):(Number(opts.extraPx)||0)/Math.max(.0001,scale));uF32.fill(0);uF32[0]=Math.max(1,Number(mainCanvas?.width)||1);uF32[1]=Math.max(1,Number(mainCanvas?.height)||1);uF32[2]=markerType;uF32[3]=Math.max(.0001,.75/Math.max(.0001,scale));uF32[4]=a;uF32[5]=c;uF32[6]=e;uF32[8]=b;uF32[9]=d;uF32[10]=f;uF32[12]=halfLen;uF32[13]=halfWidth;uF32[14]=halfSize;uF32[15]=globalAlpha;uF32[16]=col[0];uF32[17]=col[1];uF32[18]=col[2];uF32[19]=col[3];uF32[20]=count;uF32[21]=effectMode;uF32[22]=extraLocal;uF32[23]=Math.max(1,Number(subdiv)||6);const uniformKey=`${type}|${effectMode}|${Number(opts.widthDeltaLocal)||0}|${extraLocal}|${String(opts.colorOverride||'')}`;const rec=uniformRecord(layer,uniformKey);if(!rec.hasLast||!same(uF32,rec.snapshot)){device.queue.writeBuffer(rec.buffer,0,uF32);rec.snapshot.set(uF32);rec.hasLast=true;stats.uniformUploads++;}else stats.uniformUploadSkips++;return{rec,alpha:globalAlpha};}
-    function view(texture){let v=targetViews.get(texture);if(v)return v;v=texture.createView();targetViews.set(texture,v);return v;}
-    function arcBind(pipe,arcRec,copyBuffer){if(!arcRec?.segmentBuffer||!arcRec?.metaBuffer||!arcRec?.morphRec?.cubicBuffer)return null;if(copyBuffer===dummyCopyBuffer){let hit=normalArcBinds.get(arcRec);if(hit){stats.arcBindHits++;return hit;}hit=device.createBindGroup({layout:pipe.getBindGroupLayout(1),entries:[{binding:0,resource:{buffer:arcRec.segmentBuffer}},{binding:1,resource:{buffer:arcRec.metaBuffer}},{binding:2,resource:{buffer:arcRec.morphRec.cubicBuffer}},{binding:3,resource:{buffer:dummyCopyBuffer}}]});normalArcBinds.set(arcRec,hit);stats.arcBinds++;return hit;}let byCopy=corridorArcBinds.get(arcRec);if(!byCopy){byCopy=new WeakMap();corridorArcBinds.set(arcRec,byCopy);}let hit=byCopy.get(copyBuffer);if(hit){stats.corridorBindHits++;return hit;}hit=device.createBindGroup({layout:pipe.getBindGroupLayout(1),entries:[{binding:0,resource:{buffer:arcRec.segmentBuffer}},{binding:1,resource:{buffer:arcRec.metaBuffer}},{binding:2,resource:{buffer:arcRec.morphRec.cubicBuffer}},{binding:3,resource:{buffer:copyBuffer}}]});byCopy.set(copyBuffer,hit);stats.arcBinds++;return hit;}
-    function encodeToLayerScene(targetTexture,prepared,layer,alpha,ctx,frameCtx,opts={},copies=null,alphas=null,footprint=1){
-        if(!targetTexture||!warmup()||!ready||!prepared?.gpuArcNative||!prepared?.table?.gpuArcResident)return null;const type=prepared.type||layer?.lineProfile;if(!['slash','square','circle','cross'].includes(type))return null;const count=Math.max(0,Math.round(Number(prepared.count)||0));if(!count)return{handled:true,commandBuffer:null};const table=prepared.table,arcRec=table._gpuMorphArcResource;if(!arcRec?.ready)return null;
-        try{const corridor=Array.isArray(copies)&&copies.length>0,pipe=corridor?corridorPipeline:pipeline;let copyBuffer=dummyCopyBuffer,copyCount=1;if(corridor){const shared=WebGPUCorridorCopyStore.acquire(device,generation,frameCtx,copies,alphas,'profile',footprint,layer);if(!shared?.buffer||!shared.k)return{handled:true,commandBuffer:null};copyBuffer=shared.buffer;copyCount=shared.k;}const ur=prepareUniform(layer,alpha,ctx,prepared,count,arcRec.subdiv||arcRec.morphRec?.bezierSubdiv||6,opts);if(ur.alpha<=.0001)return{handled:true,commandBuffer:null};const encoder=device.createCommandEncoder({label:'Somata Spiral profile Arc marker → Layer Scene'});if(typeof spiroGpuPrepareArcForLayerScene==='function'){if(!spiroGpuPrepareArcForLayerScene(frameCtx,table,encoder))return null;stats.arcPrerequisiteReuses++;}else if(typeof encodeGpuMorphArcTable==='function'&&!encodeGpuMorphArcTable(table,encoder))return null;const bg=arcBind(pipe,arcRec,copyBuffer);if(!bg)return null;const pass=encoder.beginRenderPass({colorAttachments:[{view:view(targetTexture),loadOp:'load',storeOp:'store'}]});pass.setPipeline(pipe);pass.setBindGroup(0,corridor?ur.rec.corridorBind:ur.rec.normalBind);pass.setBindGroup(1,bg);pass.setVertexBuffer(0,cornerBuffer);pass.draw(6,count*copyCount);pass.end();stats.frames++;stats.draws++;if(corridor)stats.corridorDraws++;return{handled:true,commandBuffer:encoder.finish(),onSubmitted:()=>{try{noteGpuMorphArcTableSubmitted?.(table);}catch(_){}}};}catch(err){lastError=String(err?.message||err);stats.errors++;return null;}
+    let rec = map.get(key);
+    if (rec && rec.generation === generation) return rec;
+    const buffer = device.createBuffer({
+      label: `Somata profile Arc marker uniform ${key}`,
+      size: 96,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    rec = {
+      buffer,
+      generation,
+      snapshot: new Float32Array(24),
+      hasLast: false,
+      normalBind: device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer } }],
+      }),
+      corridorBind: device.createBindGroup({
+        layout: corridorPipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer } }],
+      }),
+    };
+    map.set(key, rec);
+    uniformRecordSet.add(rec);
+    stats.uniformBuilds++;
+    return rec;
+  }
+  function prepareUniform(layer, alpha, ctx, prepared, count, subdiv, opts = {}) {
+    const type = prepared?.type || layer?.lineProfile,
+      tr = ctx?.getTransform?.(),
+      a = Number(tr?.a) || 1,
+      b = Number(tr?.b) || 0,
+      c = Number(tr?.c) || 0,
+      d = Number(tr?.d) || 1,
+      e = Number(tr?.e) || 0,
+      f = Number(tr?.f) || 0,
+      scale = Math.sqrt(Math.max(1e-12, Math.abs(a * d - b * c))),
+      baseW = Math.max(0.001, Number(prepared?.w) || Math.max(0.5, Number(layer?.strokeWidth) || 1.5)),
+      w = Math.max(0.001, baseW + (Number(opts.widthDeltaLocal) || 0)),
+      spacing = Math.max(2.4, Number(prepared?.spacing) || baseW * (type === 'slash' ? 1.85 : 1.55)),
+      halfLen = type === 'slash' ? Math.max(w * 1.25, spacing * 0.58) : 0,
+      halfWidth = type === 'slash' ? Math.max(0.65, w * 0.78) * 0.5 : 0,
+      halfSize =
+        type === 'circle' ? Math.max(0.9, w * 0.72) : Math.max(1.4, Math.max(w * 1.35, spacing * 0.78)) * 0.5,
+      col = rgba(opts.colorOverride || layer?.strokeColor || '#ffffff'),
+      globalAlpha = Math.max(0, Math.min(1, Number(alpha) || 0)),
+      markerType = type === 'square' ? 1 : type === 'circle' ? 2 : type === 'cross' ? 3 : 0,
+      effectMode = opts.mode === 'glow' ? 1 : opts.mode === 'outline' ? 2 : 0,
+      extraLocal = Math.max(
+        0,
+        Number.isFinite(Number(opts.extraLocal))
+          ? Number(opts.extraLocal)
+          : (Number(opts.extraPx) || 0) / Math.max(0.0001, scale),
+      );
+    uF32.fill(0);
+    uF32[0] = Math.max(1, Number(mainCanvas?.width) || 1);
+    uF32[1] = Math.max(1, Number(mainCanvas?.height) || 1);
+    uF32[2] = markerType;
+    uF32[3] = Math.max(0.0001, 0.75 / Math.max(0.0001, scale));
+    uF32[4] = a;
+    uF32[5] = c;
+    uF32[6] = e;
+    uF32[8] = b;
+    uF32[9] = d;
+    uF32[10] = f;
+    uF32[12] = halfLen;
+    uF32[13] = halfWidth;
+    uF32[14] = halfSize;
+    uF32[15] = globalAlpha;
+    uF32[16] = col[0];
+    uF32[17] = col[1];
+    uF32[18] = col[2];
+    uF32[19] = col[3];
+    uF32[20] = count;
+    uF32[21] = effectMode;
+    uF32[22] = extraLocal;
+    uF32[23] = Math.max(1, Number(subdiv) || 6);
+    const uniformKey = `${type}|${effectMode}|${Number(opts.widthDeltaLocal) || 0}|${extraLocal}|${String(opts.colorOverride || '')}`;
+    const rec = uniformRecord(layer, uniformKey);
+    if (!rec.hasLast || !same(uF32, rec.snapshot)) {
+      device.queue.writeBuffer(rec.buffer, 0, uF32);
+      rec.snapshot.set(uF32);
+      rec.hasLast = true;
+      stats.uniformUploads++;
+    } else stats.uniformUploadSkips++;
+    return { rec, alpha: globalAlpha };
+  }
+  function view(texture) {
+    let v = targetViews.get(texture);
+    if (v) return v;
+    v = texture.createView();
+    targetViews.set(texture, v);
+    return v;
+  }
+  function arcBind(pipe, arcRec, copyBuffer) {
+    if (!arcRec?.segmentBuffer || !arcRec?.metaBuffer || !arcRec?.morphRec?.cubicBuffer) return null;
+    if (copyBuffer === dummyCopyBuffer) {
+      let hit = normalArcBinds.get(arcRec);
+      if (hit) {
+        stats.arcBindHits++;
+        return hit;
+      }
+      hit = device.createBindGroup({
+        layout: pipe.getBindGroupLayout(1),
+        entries: [
+          { binding: 0, resource: { buffer: arcRec.segmentBuffer } },
+          { binding: 1, resource: { buffer: arcRec.metaBuffer } },
+          { binding: 2, resource: { buffer: arcRec.morphRec.cubicBuffer } },
+          { binding: 3, resource: { buffer: dummyCopyBuffer } },
+        ],
+      });
+      normalArcBinds.set(arcRec, hit);
+      stats.arcBinds++;
+      return hit;
     }
-    function status(){return{available:ready,lastError,generation,...stats,contract:'strict Spiral profile markers sample the shared retained cubic Bézier GPU Arc in WGSL; marker centers are never materialized on CPU and no Canvas presentation bridge exists'};}
-    return{warmup,isReady:()=>ready,encodeToLayerScene,status};
+    let byCopy = corridorArcBinds.get(arcRec);
+    if (!byCopy) {
+      byCopy = new WeakMap();
+      corridorArcBinds.set(arcRec, byCopy);
+    }
+    let hit = byCopy.get(copyBuffer);
+    if (hit) {
+      stats.corridorBindHits++;
+      return hit;
+    }
+    hit = device.createBindGroup({
+      layout: pipe.getBindGroupLayout(1),
+      entries: [
+        { binding: 0, resource: { buffer: arcRec.segmentBuffer } },
+        { binding: 1, resource: { buffer: arcRec.metaBuffer } },
+        { binding: 2, resource: { buffer: arcRec.morphRec.cubicBuffer } },
+        { binding: 3, resource: { buffer: copyBuffer } },
+      ],
+    });
+    byCopy.set(copyBuffer, hit);
+    stats.arcBinds++;
+    return hit;
+  }
+  function encodeToLayerScene(
+    targetTexture,
+    prepared,
+    layer,
+    alpha,
+    ctx,
+    frameCtx,
+    opts = {},
+    copies = null,
+    alphas = null,
+    footprint = 1,
+  ) {
+    if (!targetTexture || !warmup() || !ready || !prepared?.gpuArcNative || !prepared?.table?.gpuArcResident)
+      return null;
+    const type = prepared.type || layer?.lineProfile;
+    if (!['slash', 'square', 'circle', 'cross'].includes(type)) return null;
+    const count = Math.max(0, Math.round(Number(prepared.count) || 0));
+    if (!count) return { handled: true, commandBuffer: null };
+    const table = prepared.table,
+      arcRec = table._gpuMorphArcResource;
+    if (!arcRec?.ready) return null;
+    try {
+      const corridor = Array.isArray(copies) && copies.length > 0,
+        pipe = corridor ? corridorPipeline : pipeline;
+      let copyBuffer = dummyCopyBuffer,
+        copyCount = 1;
+      if (corridor) {
+        const shared = WebGPUCorridorCopyStore.acquire(
+          device,
+          generation,
+          frameCtx,
+          copies,
+          alphas,
+          'profile',
+          footprint,
+          layer,
+        );
+        if (!shared?.buffer || !shared.k) return { handled: true, commandBuffer: null };
+        copyBuffer = shared.buffer;
+        copyCount = shared.k;
+      }
+      const ur = prepareUniform(
+        layer,
+        alpha,
+        ctx,
+        prepared,
+        count,
+        arcRec.subdiv || arcRec.morphRec?.bezierSubdiv || 6,
+        opts,
+      );
+      if (ur.alpha <= 0.0001) return { handled: true, commandBuffer: null };
+      const encoder = device.createCommandEncoder({
+        label: 'Somata Spiral profile Arc marker → Layer Scene',
+      });
+      if (typeof spiroGpuPrepareArcForLayerScene === 'function') {
+        if (!spiroGpuPrepareArcForLayerScene(frameCtx, table, encoder)) return null;
+        stats.arcPrerequisiteReuses++;
+      } else if (!encodeGpuMorphArcTable(table, encoder)) return null;
+      const bg = arcBind(pipe, arcRec, copyBuffer);
+      if (!bg) return null;
+      const pass = encoder.beginRenderPass({
+        colorAttachments: [{ view: view(targetTexture), loadOp: 'load', storeOp: 'store' }],
+      });
+      pass.setPipeline(pipe);
+      pass.setBindGroup(0, corridor ? ur.rec.corridorBind : ur.rec.normalBind);
+      pass.setBindGroup(1, bg);
+      pass.setVertexBuffer(0, cornerBuffer);
+      pass.draw(6, count * copyCount);
+      pass.end();
+      stats.frames++;
+      stats.draws++;
+      if (corridor) stats.corridorDraws++;
+      return {
+        handled: true,
+        commandBuffer: encoder.finish(),
+        onSubmitted: () => {
+          try {
+            noteGpuMorphArcTableSubmitted?.(table);
+          } catch (error) {
+            noteSuppressedError('gpu/profile-arc-marker-renderer#onSubmitted', error);
+          }
+        },
+      };
+    } catch (err) {
+      lastError = String(err?.message || err);
+      stats.errors++;
+      return null;
+    }
+  }
+  function status() {
+    return {
+      available: ready,
+      lastError,
+      generation,
+      ...stats,
+      contract:
+        'strict Spiral profile markers sample the shared retained cubic Bézier GPU Arc in WGSL; marker centers are never materialized on CPU and no Canvas presentation bridge exists',
+    };
+  }
+  return { warmup, isReady: () => ready, encodeToLayerScene, status };
 })();
-window.__spiroProfileArcMarkerStatus=()=>WebGPUProfileArcMarkerRenderer.status();
+
+export { WebGPUProfileArcMarkerRenderer };

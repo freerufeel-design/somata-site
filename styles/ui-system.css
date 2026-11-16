@@ -1,0 +1,935 @@
+/* Somata UI system — one look for every settings panel.
+   Reference: the Lamp settings and the head of the Geometry menu (label + value on one line,
+   slider with × multiplier box below, ◀ select ▶ rows). Loaded after app.css; the rules here
+   intentionally win over the older per-panel styles.
+   Explanatory notes are hidden here and shown as hover tooltips (js/ui/hint-tooltips.js). */
+
+:root {
+  --ui-font: 11px;
+  --ui-font-value: 10.5px;
+  --ui-font-title: 12px;
+  --ui-control-h: 24px;
+  --ui-input-h: 22px;
+  --ui-radius: 6px;
+  --ui-gap: 8px;
+  --ui-row-gap: 3px;
+  --ui-label: var(--text-muted, #94a3b8);
+  --ui-text: var(--text-main, #e2e8f0);
+  --ui-field-bg: rgba(15, 23, 42, 0.72);
+  --ui-field-border: rgba(100, 116, 139, 0.55);
+}
+
+/* ---- Notes become tooltips ---------------------------------------------------------- */
+.ui-note-as-tooltip {
+  display: none !important;
+}
+
+/* ---- Panel scope -------------------------------------------------------------------- */
+/* Everything below applies to the sidebar and the floating settings panels. */
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  .control-group {
+  gap: var(--ui-gap) !important;
+  padding: 10px !important;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  .control-row {
+  gap: var(--ui-row-gap) !important;
+}
+
+/* Text: one size for labels, one for values, one for group titles. */
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  :is(label, .hint-text, .row-label, .row-label > span:first-child, p, small) {
+  font-size: var(--ui-font) !important;
+  line-height: 1.3 !important;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  .row-label {
+  color: var(--ui-label) !important;
+  min-height: 14px;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  .text-mono {
+  font-size: var(--ui-font-value) !important;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  :is(.control-group-title, .control-group-title label, .control-group-title > span) {
+  font-size: var(--ui-font-title) !important;
+  font-weight: 600 !important;
+  color: var(--ui-text) !important;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  :is(strong, b, h3, h4) {
+  font-size: var(--ui-font-title) !important;
+}
+
+/* Fields: compact and the same everywhere. */
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  select {
+  height: var(--ui-control-h) !important;
+  min-height: var(--ui-control-h) !important;
+  padding: 0 22px 0 8px !important;
+  font-size: var(--ui-font) !important;
+  line-height: 1 !important;
+  border-radius: var(--ui-radius) !important;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  input:is([type='number'], [type='text']):not(.color-picker-hex) {
+  height: var(--ui-input-h) !important;
+  min-height: var(--ui-input-h) !important;
+  padding: 0 4px !important;
+  font-size: var(--ui-font) !important;
+  line-height: 1 !important;
+  border-radius: var(--ui-radius) !important;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  button:not(.btn-icon):not(.sidebar-tool-btn):not(.mobile-panel-close):not(:has(svg, img)) {
+  font-size: var(--ui-font) !important;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  input[type='checkbox'] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  flex: 0 0 auto;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  label:has(> input[type='checkbox']) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ui-text);
+}
+
+/* Slider + × multiplier, as in Lamp settings. Flex, so any mix works: slider only, slider +
+   number, slider + base number + × + multiplier (line width), number + × + multiplier. */
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  :is(.lamp-slider-mult, .line-slider-mult, .motion-slider-mult) {
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  min-width: 0;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  :is(.lamp-slider-mult, .line-slider-mult, .motion-slider-mult, .row-inputs)
+  > :is(input[type='range'], .blue-morph-range-host, .generic-morph-range-host) {
+  flex: 1 1 auto !important;
+  width: auto !important;
+  min-width: 0 !important;
+}
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  :is(.lamp-slider-mult, .line-slider-mult, .motion-slider-mult, .row-inputs)
+  > input[type='number'] {
+  flex: 0 0 52px !important;
+  width: 52px !important;
+  min-width: 0 !important;
+}
+/* A number field alone in the row (no slider) stays field-sized instead of stretching. */
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  .line-slider-with-base
+  > input[type='number']:not([id$='Multiplier']) {
+  flex-basis: 44px !important;
+  width: 44px !important;
+}
+/* The × between a value and its multiplier: one small muted sign everywhere. */
+:is(
+    #settingsSidebar,
+    #morphSettingsPanel,
+    #randomSettingsPanel,
+    #projectMorphSettingsPanel,
+    #tunnelSettingsPanel,
+    #tapSettingsPanel
+  )
+  :is(
+    .lamp-mult-label,
+    .morph-multiplier-label,
+    /* The slider wrapper is a span too: never treat it as the × sign (it shrank every slider). */
+    .lamp-slider-mult > span:not(.blue-morph-range-host, .generic-morph-range-host),
+    .line-slider-mult > span:not(.blue-morph-range-host, .generic-morph-range-host),
+    .motion-slider-mult > span:not(.blue-morph-range-host, .generic-morph-range-host),
+    .row-inputs > :is(input, .blue-morph-range-host, .generic-morph-range-host) + span,
+    label[for$='Multiplier']
+  ) {
+  flex: 0 0 auto !important;
+  font-size: 9px !important;
+  font-weight: 400 !important;
+  color: var(--ui-label) !important;
+  margin: 0 !important;
+}
+/* −/+ stepper buttons next to a slider: small, like the multiplier box. */
+#settingsSidebar .row-inputs > .btn-icon {
+  flex: 0 0 22px !important;
+  width: 22px !important;
+  min-width: 22px !important;
+  height: 22px !important;
+  min-height: 22px !important;
+  padding: 0 !important;
+  font-size: 12px !important;
+}
+#settingsSidebar .row-inputs {
+  gap: 4px !important;
+}
+
+/* Long live values (e.g. Lightning strike rate) stay on one line; the full text shows on hover. */
+#settingsSidebar .sweep-inline-meta {
+  min-width: 0;
+  overflow: hidden;
+}
+#settingsSidebar :is(.row-label, .sweep-inline-meta) > .text-mono {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+#settingsSidebar .row-label > span:first-child {
+  flex: 0 0 auto;
+}
+
+/* ---- Sub-sections (Sweep, Lightning, Motion): flat, separated by a line ------------ */
+#settingsSidebar :is(.sweep-subsection, .sweep-appearance-section, .lightning-slider-block) {
+  border: 0 !important;
+  border-top: 1px solid rgba(71, 85, 105, 0.45) !important;
+  border-radius: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  margin: 4px 0 0 !important;
+  padding: 8px 0 0 !important;
+  gap: var(--ui-row-gap) !important;
+}
+#settingsSidebar :is(.sweep-subsection-title, .sweep-appearance-title) {
+  font-size: var(--ui-font) !important;
+  font-weight: 600 !important;
+  color: var(--ui-text) !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  margin: 0 0 2px !important;
+  padding: 0 !important;
+  border: 0 !important;
+}
+/* Motion: one control per line, like everywhere else (was a cramped two-column grid). */
+#settingsSidebar .gpu-line-fx-grid {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+}
+
+/* ---- Geometry: "Спираль и фокус" used its own large type -------------------------- */
+#settingsSidebar
+  :is(.spiral-focus-group, .spiral-order-group, [class*='spiral-'])
+  :is(label, span, div):not(.control-group-title) {
+  font-size: var(--ui-font);
+}
+#settingsSidebar [class*='spiral-'] input[type='number'] {
+  font-size: var(--ui-font) !important;
+  height: var(--ui-input-h) !important;
+}
+
+/* ---- Ambient: flat sections like every other group (no card inside a card) -------- */
+#ambientSettingsGroup .ambient-effect-row {
+  border: 0 !important;
+  border-top: 1px solid rgba(71, 85, 105, 0.45) !important;
+  border-radius: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  padding: 8px 0 4px !important;
+  gap: var(--ui-row-gap) !important;
+}
+#ambientSettingsGroup .ambient-effect-row > label:first-child {
+  min-height: 20px !important;
+  font-size: var(--ui-font-title) !important;
+  font-weight: 600 !important;
+  color: var(--ui-text) !important;
+  gap: 6px !important;
+}
+/* Inline "Цвет", "Цветов" and similar: label left, control right, label typography. */
+#ambientSettingsGroup .ambient-effect-row > label:not(:first-child) {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  font-size: var(--ui-font) !important;
+  font-weight: 400 !important;
+  color: var(--ui-label) !important;
+  min-height: 22px;
+}
+#ambientSettingsGroup .somata-effect-control {
+  margin: 2px 0 4px !important;
+}
+#ambientSettingsGroup .somata-effect-control .row-label {
+  font-size: var(--ui-font) !important;
+}
+#ambientSettingsGroup .somata-effect-control .lamp-slider-mult input[type='number'] {
+  width: 52px !important;
+  height: var(--ui-input-h) !important;
+  font-size: var(--ui-font) !important;
+}
+#ambientSettingsGroup .control-group-title.ambient-heading {
+  padding-bottom: 2px !important;
+}
+
+/* ---- Morph panels: one header style for Blue, Orange and Green -------------------- */
+:is(#morphSettingsPanel, #randomSettingsPanel, #projectMorphSettingsPanel) :is(label, span, .hint-text) {
+  font-size: var(--ui-font) !important;
+}
+:is(#morphSettingsPanel, #randomSettingsPanel, #projectMorphSettingsPanel)
+  :is(h2, h3, .morph-panel-title, [class*='panel-title']) {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+}
+:is(#morphSettingsPanel, #randomSettingsPanel)
+  button:is([class*='profile-group'], [class*='group-dropdown'], [class*='sets']) {
+  font-size: var(--ui-font) !important;
+  height: var(--ui-control-h) !important;
+  padding: 0 8px !important;
+}
+/* Labels in the Blue/Orange top rows: same weight and colour as every other field label. */
+:is(#morphSettingsPanel, #randomSettingsPanel)
+  :is(.morph-setting-row, .morph-speed-toolbar-field, .morph-top-cycle-row) {
+  font-size: var(--ui-font) !important;
+}
+:is(#morphSettingsPanel, #randomSettingsPanel) .morph-speed-toolbar-field > label {
+  font-weight: 400 !important;
+  color: var(--ui-label) !important;
+}
+:is(#morphSettingsPanel, #randomSettingsPanel) .morph-profile-group-dropdown > summary {
+  font-size: var(--ui-font) !important;
+  line-height: var(--ui-control-h) !important;
+  min-height: var(--ui-control-h) !important;
+  padding-block: 0 !important;
+}
+:is(#morphSettingsPanel, #randomSettingsPanel) .morph-special-config-name {
+  font-size: var(--ui-font) !important;
+  font-weight: 650 !important;
+}
+/* Panel headers: the same title line for Blue, Orange and Green. */
+:is(.project-morph-settings-head, .morph-settings-head, .random-settings-head) > strong,
+#projectMorphSettingsPanel .project-morph-settings-head strong {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: var(--ui-text) !important;
+}
+/* Green (project morph) rows: same density and row style as the Blue/Orange setting rows. */
+#projectMorphSettingsPanel .project-morph-setting {
+  min-height: 30px !important;
+  padding: 3px 8px !important;
+  gap: 8px !important;
+  border-radius: var(--ui-radius) !important;
+}
+#projectMorphSettingsPanel .project-morph-setting > label,
+#projectMorphSettingsPanel .project-morph-setting > label > span {
+  font-size: var(--ui-font) !important;
+  font-weight: 400 !important;
+  color: var(--ui-label) !important;
+}
+#projectMorphSettingsPanel .project-morph-setting select {
+  max-width: 170px;
+}
+
+/* ==== Blocks ======================================================================== */
+/* A settings group (Лампочки, Линия…) is split into semantic blocks. A block is flat: no
+   card inside a card, just a thin divider line and an optional title. The older containers
+   that used to be cards (motion, FreezeLight, fill, outline, spiral, sprite…) get the same look. */
+:root {
+  --ui-divider: rgba(71, 85, 105, 0.45);
+  --ui-accent: var(--accent, #6366f1);
+  --ui-seg-active: rgba(99, 102, 241, 0.32);
+}
+#settingsSidebar
+  :is(
+    .ui-block,
+    .motion-block,
+    .gpu-line-fx-block,
+    .lamp-freeze-block,
+    .fill-settings-block,
+    .line-outline-row,
+    .test-morph-controls,
+    .chaos-star-toggle-row,
+    .spiral-geometry-controls,
+    .somata-extended-contour-block,
+    .geometry-circles-row,
+    .prism-color-grid,
+    .playlist-global-hue-control
+  ) {
+  border: 0 !important;
+  border-top: 1px solid var(--ui-divider) !important;
+  border-radius: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+  margin: 6px 0 0 !important;
+  padding: 8px 0 0 !important;
+}
+#settingsSidebar .ui-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+#settingsSidebar .ui-block.hidden {
+  display: none !important;
+}
+/* The first block right under the group title needs no divider. */
+#settingsSidebar .control-group-title + :is(.ui-block, .test-morph-controls) {
+  border-top: 0 !important;
+  margin-top: 0 !important;
+  padding-top: 2px !important;
+}
+/* Whole-container wrappers are not blocks: no frame at all. */
+#settingsSidebar :is(.sweep-glint-settings, .sweep-lightning-settings, .sweep-control-grid, .spiral-settings-block) {
+  border: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+/* Rows inside a spiral block used to be framed cards of their own. */
+#settingsSidebar :is(.spiral-settings-row, .spiral-zero-mode-setting, .somata-focus-layout, .chaos-star-settings) {
+  border: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Block titles. A title may hold the block's on/off checkbox and a short badge on the right. */
+#settingsSidebar
+  :is(
+    .ui-block-title,
+    .motion-head,
+    .gpu-line-fx-head,
+    .fill-settings-title,
+    .line-outline-head,
+    .spiral-geometry-heading,
+    .chaos-star-head,
+    .geometry-circles-head,
+    .lamp-freeze-block > .lamp-freeze-block-toggle,
+    .ambient-effect-row > label:first-child,
+    .sweep-subsection-title,
+    .sweep-appearance-title
+  ) {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between;
+  gap: 8px !important;
+  min-height: 20px;
+  margin: 0 0 2px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: none !important;
+  font-size: var(--ui-font-title) !important;
+  font-weight: 600 !important;
+  color: var(--ui-text) !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+#settingsSidebar
+  :is(.ui-block-title, .motion-head, .gpu-line-fx-head, .fill-settings-title, .line-outline-head, .chaos-star-head, .geometry-circles-head)
+  :is(label, label > span) {
+  font-size: var(--ui-font-title) !important;
+  font-weight: 600 !important;
+  color: var(--ui-text) !important;
+}
+/* Second-level titles inside a block (Проблеск: ядро / ореол) are a step quieter. */
+#settingsSidebar .sweep-appearance-title {
+  font-size: var(--ui-font) !important;
+  color: var(--ui-label) !important;
+}
+#settingsSidebar :is(.ui-block-title, .spiral-geometry-heading) :is(.badge, .hint-text, .text-mono) {
+  font-size: var(--ui-font-value) !important;
+  font-weight: 400 !important;
+  color: var(--ui-label) !important;
+  margin-left: auto;
+}
+/* A block switched off by its title checkbox keeps its controls visible but dimmed. */
+#settingsSidebar :is(.motion-block.disabled, .gpu-line-fx-block.gpu-line-fx-disabled) > :not(.motion-head, .gpu-line-fx-head) {
+  opacity: 0.55;
+}
+
+/* ==== One look for choices =========================================================== */
+/* Segmented switches: one row of equal buttons; they wrap to a second line instead of
+   overlapping when the labels do not fit. */
+#settingsSidebar
+  :is(
+    .btn-group-toggle,
+    .rounding-mode-toggle,
+    .profile-spline-render-switch,
+    .morph-segmented-switch,
+    .contour-mode-toggle,
+    .lamp-position-mode,
+    .lamp-color-mode,
+    .prism-mode-switch
+  ) {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 2px !important;
+  width: 100%;
+  min-width: 0 !important;
+  padding: 2px !important;
+  margin: 0 !important;
+  border: 1px solid var(--ui-field-border) !important;
+  border-radius: var(--ui-radius) !important;
+  background: var(--ui-field-bg) !important;
+  box-shadow: none !important;
+  grid-template-columns: none !important;
+}
+#settingsSidebar
+  :is(
+    .btn-group-toggle,
+    .rounding-mode-toggle,
+    .profile-spline-render-switch,
+    .morph-segmented-switch,
+    .contour-mode-toggle,
+    .lamp-position-mode,
+    .lamp-color-mode,
+    .prism-mode-switch
+  )
+  > button {
+  flex: 1 1 auto !important;
+  min-width: fit-content !important;
+  width: auto !important;
+  height: calc(var(--ui-control-h) - 4px) !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 8px !important;
+  border: 0 !important;
+  border-radius: calc(var(--ui-radius) - 2px) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--ui-label) !important;
+  font-size: var(--ui-font) !important;
+  font-weight: 500 !important;
+  line-height: 1 !important;
+  white-space: nowrap !important;
+  text-align: center !important;
+}
+#settingsSidebar
+  :is(
+    .btn-group-toggle,
+    .rounding-mode-toggle,
+    .profile-spline-render-switch,
+    .morph-segmented-switch,
+    .contour-mode-toggle,
+    .lamp-position-mode,
+    .lamp-color-mode,
+    .prism-mode-switch
+  )
+  > button:is(.active, [aria-pressed='true']) {
+  background: var(--ui-seg-active) !important;
+  color: var(--ui-text) !important;
+  box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.55) !important;
+}
+#settingsSidebar
+  :is(
+    .btn-group-toggle,
+    .rounding-mode-toggle,
+    .profile-spline-render-switch,
+    .morph-segmented-switch,
+    .contour-mode-toggle,
+    .lamp-position-mode,
+    .lamp-color-mode,
+    .prism-mode-switch
+  )
+  > button:not(.active, [aria-pressed='true']):hover {
+  color: var(--ui-text) !important;
+  background: rgba(148, 163, 184, 0.12) !important;
+}
+/* A label + switch pair (Тип скругления, Режим сплайна…): label above, switch full width. */
+#settingsSidebar :is(.rounding-mode-row, .profile-spline-render-row) {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 4px 8px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  background: none !important;
+  grid-template-columns: none !important;
+}
+#settingsSidebar :is(.rounding-mode-row, .profile-spline-render-row) > :is(span, .hint-text):first-child {
+  flex: 1 0 100%;
+  color: var(--ui-label) !important;
+  font-size: var(--ui-font) !important;
+}
+#settingsSidebar .profile-spline-render-row > .profile-spline-render-switch {
+  flex: 1 1 auto;
+  width: auto;
+}
+
+/* Checkbox groups (Тип паутины, расположение обводки, окружности, фокус): plain checkboxes
+   in a wrapping row, no card around each one. */
+#settingsSidebar :is(.web-branch-toggles, .line-outline-modes, .geometry-circle-modes:not(.hidden), .somata-focus-toggles) {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 4px 14px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  background: none !important;
+  grid-template-columns: none !important;
+}
+#settingsSidebar :is(.web-branch-toggle, .line-outline-mode, .geometry-circle-modes > label, .somata-focus-highlight-toggle) {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  width: auto !important;
+  min-height: 20px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  color: var(--ui-text) !important;
+  font-size: var(--ui-font) !important;
+  font-weight: 400 !important;
+  text-align: left !important;
+  white-space: nowrap;
+}
+/* Every stand-alone checkbox row looks the same: box + text, no frame. */
+#settingsSidebar :is(.display-enable-toggle, .lamp-compact-toggle, .sweep-check-row, .rounding-extension-guide) {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  width: auto !important;
+  min-height: 20px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  background: none !important;
+  box-shadow: none !important;
+  color: var(--ui-text) !important;
+}
+#settingsSidebar :is(.display-enable-toggle, .lamp-compact-toggle, .sweep-check-row, .rounding-extension-guide) > span {
+  font-size: var(--ui-font) !important;
+  color: var(--ui-text) !important;
+  margin: 0 !important;
+}
+#settingsSidebar .ui-check-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+}
+
+/* Label on the left, a small control on the right (colour, short number, compact select). */
+#settingsSidebar .ui-inline-row {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  min-height: var(--ui-control-h);
+}
+#settingsSidebar .ui-inline-row > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ui-label);
+  font-size: var(--ui-font);
+}
+#settingsSidebar .ui-inline-row > .row-label {
+  min-height: 0;
+}
+#settingsSidebar .ui-inline-row :is(input[type='number'], input[type='text']) {
+  flex: 0 0 56px !important;
+  width: 56px !important;
+}
+#settingsSidebar .ui-inline-row > .row-inputs {
+  flex: 0 0 auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  width: auto !important;
+}
+#settingsSidebar .ui-inline-row > select {
+  flex: 0 1 60% !important;
+  width: auto !important;
+  min-width: 0 !important;
+}
+#settingsSidebar :is(.ui-inline-row, .lamp-color-row) input[type='color'] {
+  flex: 0 0 auto;
+}
+
+/* Block fine-tuning ------------------------------------------------------------------- */
+/* Titles that are checkbox labels start at the left edge (the on/off box + its name). */
+#settingsSidebar :is(.lamp-freeze-block > .lamp-freeze-block-toggle, .ambient-effect-row > label:first-child, .gpu-line-fx-head > label, .motion-head > label) {
+  justify-content: flex-start !important;
+}
+/* "Контур" block: its first row is the title (label + status badges). */
+#settingsSidebar .ui-block-contour > .row-label {
+  margin: 0 0 2px !important;
+  min-height: 20px;
+}
+#settingsSidebar .ui-block-contour > .row-label > span:first-child {
+  font-size: var(--ui-font-title) !important;
+  font-weight: 600 !important;
+  color: var(--ui-text) !important;
+}
+#settingsSidebar .ui-block-contour,
+#settingsSidebar .ui-block-rounding {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#settingsSidebar .ui-block-contour > * {
+  margin-top: 0 !important;
+}
+/* Rows that used inline margins to separate themselves rely on the block gap now. */
+#settingsSidebar .ui-block > * {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+#settingsSidebar .ui-block > .ui-block-title {
+  margin-bottom: 0 !important;
+}
+/* Groups that now begin with blocks: drop the first divider. */
+#settingsSidebar .control-group-title + .ui-block,
+#settingsSidebar .control-group-title + .test-morph-controls.hidden + .ui-block {
+  border-top: 0 !important;
+  margin-top: 0 !important;
+  padding-top: 2px !important;
+}
+#settingsSidebar .ui-block .ui-block {
+  margin-top: 4px !important;
+}
+
+/* ==== One checkbox everywhere ========================================================= */
+/* Blue, yellow, white-square and switch-style boxes all became the same 14px box. */
+#settingsSidebar input[type='checkbox']:not(.hidden):not([hidden]):not([data-morph-profile-group]) {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  position: relative;
+  flex: 0 0 14px !important;
+  width: 14px !important;
+  min-width: 14px !important;
+  height: 14px !important;
+  min-height: 14px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 1px solid var(--ui-field-border) !important;
+  border-radius: 3px !important;
+  background: var(--ui-field-bg) !important;
+  box-shadow: none !important;
+  cursor: pointer;
+  accent-color: var(--ui-accent);
+}
+#settingsSidebar input[type='checkbox']:not(.hidden):not([hidden]):not([data-morph-profile-group]):checked {
+  background: var(--ui-accent) !important;
+  border-color: var(--ui-accent) !important;
+}
+#settingsSidebar input[type='checkbox']:not(.hidden):not([hidden]):not([data-morph-profile-group])::after {
+  content: '' !important;
+  display: none;
+  position: absolute;
+  left: 3.5px;
+  top: 0.5px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  background: none !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+}
+#settingsSidebar input[type='checkbox']:not(.hidden):not([hidden]):not([data-morph-profile-group]):checked::after {
+  display: block;
+}
+#settingsSidebar input[type='checkbox']:not(.hidden):not([hidden]):not([data-morph-profile-group]):disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+#settingsSidebar input[type='checkbox']:focus-visible {
+  outline: 2px solid rgba(129, 140, 248, 0.7) !important;
+  outline-offset: 1px;
+}
+/* A row that holds only a checkbox and its name: left aligned, not pushed to the right. */
+#settingsSidebar .control-row:has(> label:only-child > input[type='checkbox']),
+#settingsSidebar .control-row:has(> label.row-label:only-child) {
+  justify-content: flex-start !important;
+}
+#settingsSidebar .control-row > label:only-child {
+  margin-right: auto;
+}
+#settingsSidebar .control-row > label:only-child:has(> input[type='checkbox']) {
+  justify-content: flex-start !important;
+  width: auto !important;
+  gap: 6px !important;
+}
+
+/* ==== Morph panels: wrap instead of scroll ============================================ */
+/* Rows used to be one unbreakable line (min-width 540–760px, nowrap), so extra controls were cut off
+   at the panel edge or forced a horizontal scrollbar, and the layer-percent field (38px) clipped "100". */
+:is(#morphProfileBindings, #orangeMorphBindings) .morph-route-row {
+  flex-wrap: wrap !important;
+  min-width: 0 !important;
+  row-gap: 4px !important;
+}
+:is(#morphProfileBindings, #orangeMorphBindings) .morph-route-layer-percent {
+  width: 46px !important;
+  min-width: 46px !important;
+  max-width: 46px !important;
+}
+:is(#morphProfileBindings, #orangeMorphBindings) :is(.morph-route-inline-control, .morph-route-inline-check) {
+  flex: 0 1 auto !important;
+  max-width: 100%;
+  height: auto !important;
+  min-height: 25px;
+  white-space: normal !important;
+}
+:is(#morphProfileBindings, #orangeMorphBindings) .morph-route-inline-check > span {
+  line-height: 1.2;
+}
+:is(#morphProfileBindings, #orangeMorphBindings) .morph-binding-remove {
+  margin-left: auto !important;
+}
+:is(#morphSettingsPanel, #randomSettingsPanel) :is(.morph-compact-profile-controls, .morph-profile-toolbar) {
+  min-width: 0 !important;
+}
+:is(#morphSettingsPanel, #randomSettingsPanel) :is(.morph-profile-toolbar, .morph-routing-visible-head) {
+  overflow-x: visible !important;
+  flex-wrap: wrap !important;
+}
+:is(#morphSettingsPanel, #randomSettingsPanel) :is(.morph-routing-main, .audio-routing-main) {
+  overflow-x: hidden !important;
+}
+/* Fold button: phones only (see mobile.css). */
+.morph-row-fold {
+  display: none;
+}
+#minimalMorphFade {
+  min-width: 50px !important;
+}
+
+/* Lightning "Частота ударов": the label, the Sync checkbox and the live value are three things on one
+   line; the value goes to its own line instead of overlapping the checkbox. */
+#settingsSidebar .lightning-rate-top .row-label {
+  flex-wrap: wrap !important;
+  row-gap: 2px;
+}
+#settingsSidebar .lightning-rate-top .sweep-inline-meta {
+  flex: 1 1 auto;
+  justify-content: flex-end;
+  gap: 8px;
+}
+#settingsSidebar :is(.motion-head, .gpu-line-fx-head) :is(.motion-toggle, label) {
+  justify-content: flex-start !important;
+  width: auto !important;
+  text-align: left !important;
+}
+/* Block titles are always a row (a mobile rule in app.css made some of them a column, which centred them). */
+#settingsSidebar :is(.ui-block-title, .motion-head, .gpu-line-fx-head, .fill-settings-title, .line-outline-head, .chaos-star-head, .geometry-circles-head, .spiral-geometry-heading) {
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+}

@@ -1,20 +1,88 @@
-
-
-window.__spiroRegisterModule?.('js/gpu/topology-morph-base-renderer');
+import './profile-arc-marker-renderer.js'; // initialisation order: this module runs after it
+import { state } from '../core/state.js';
+import { mainCanvas } from '../ui/profile-presets.js';
+import { requestMainCanvasRender } from '../core/scheduler.js';
+import { getMotionTunnelLagRadians } from '../effects/motion.js';
+import { isSpiralLayer } from '../geometry/spiral/order-params.js';
+import { WebGPUDeviceHub } from './device-hub.js';
+import { GPUColorCache, assertWebGPUShaderModule } from './gpu-utils.js';
+import { applyLayerFrameEffectTransform } from '../geometry/frame-paths.js';
+import { morphInterpolationTForCurrentMode } from '../geometry/morph-frame.js';
+import {
+  encodeSharedGpuMorphPath,
+  getSharedGpuMorphPathResource,
+  noteSharedGpuMorphPathSubmitted,
+} from './morph-path-resource.js';
+import { warmupGpuMorphArcResource } from './morph-arc-resource.js';
+import { getTunnelCopyColor } from '../corridor/corridor-appearance.js';
+import { noteSuppressedError } from '../core/suppressed-errors.js';
 
 const WebGPUTopologyMorphBaseRenderer = (() => {
-    const BEZIER_SUBDIV=8;
-    const canvas=document.createElement('canvas');
-    let device=null,context=null,format=null,pipeline=null,cornerBuffer=null,uniformBuffers=[],uniformBinds=[],uniformCursor=0;
-    let copyBuffer=null,copyCapacity=0,copyBind=null,copyPackedFrameId=-1,copyPackedLayer=null,copyPackedCount=0;
-    let attempted=false,initializing=false,ready=false,lost=false,lastError='not-initialized',lastLoggedError='',hubGeneration=-1,width=0,height=0;
-    let segmentBindCache=new WeakMap(),renderBundleCache=new WeakMap();
-    const uniformBytes=new ArrayBuffer(64),uniformF32=new Float32Array(uniformBytes),uniformU32=new Uint32Array(uniformBytes);
-    let copyData=new Float32Array(0);
-    const stats={frames:0,baseFrames:0,glowFrames:0,fusedGlowBaseFrames:0,corridorFrames:0,spiralFrames:0,variableWidthSegments:0,draws:0,segments:0,copies:0,cpuPathBuildsAvoided:0,arcBuildsAvoided:0,copyPackReuses:0,uniformBindReuses:0,bundleBuilds:0,bundleHits:0,bundleExecutes:0,bundleFallbacks:0,submissionsAvoided:0,canvasCompositesAvoided:0,fallbacks:0,uploads:0,errors:0};
-    const lastDecision={eligible:false,reason:'not-requested',mode:'base',layerIndex:-1,frameId:-1};
+  const BEZIER_SUBDIV = 8;
+  const canvas = document.createElement('canvas');
+  let device = null,
+    context = null,
+    format = null,
+    pipeline = null,
+    cornerBuffer = null,
+    uniformBuffers = [],
+    uniformBinds = [],
+    uniformCursor = 0;
+  let copyBuffer = null,
+    copyCapacity = 0,
+    copyBind = null,
+    copyPackedFrameId = -1,
+    copyPackedLayer = null,
+    copyPackedCount = 0;
+  let attempted = false,
+    initializing = false,
+    ready = false,
+    lost = false,
+    lastError = 'not-initialized',
+    lastLoggedError = '',
+    hubGeneration = -1,
+    width = 0,
+    height = 0;
+  let segmentBindCache = new WeakMap(),
+    renderBundleCache = new WeakMap();
+  const uniformBytes = new ArrayBuffer(64),
+    uniformF32 = new Float32Array(uniformBytes),
+    uniformU32 = new Uint32Array(uniformBytes);
+  let copyData = new Float32Array(0);
+  const stats = {
+    frames: 0,
+    baseFrames: 0,
+    glowFrames: 0,
+    fusedGlowBaseFrames: 0,
+    corridorFrames: 0,
+    spiralFrames: 0,
+    variableWidthSegments: 0,
+    draws: 0,
+    segments: 0,
+    copies: 0,
+    cpuPathBuildsAvoided: 0,
+    arcBuildsAvoided: 0,
+    copyPackReuses: 0,
+    uniformBindReuses: 0,
+    bundleBuilds: 0,
+    bundleHits: 0,
+    bundleExecutes: 0,
+    bundleFallbacks: 0,
+    submissionsAvoided: 0,
+    canvasCompositesAvoided: 0,
+    fallbacks: 0,
+    uploads: 0,
+    errors: 0,
+  };
+  const lastDecision = {
+    eligible: false,
+    reason: 'not-requested',
+    mode: 'base',
+    layerIndex: -1,
+    frameId: -1,
+  };
 
-    const WGSL=`
+  const WGSL = `
 struct U {
     viewport:vec2<f32>,
     segCount:u32,
@@ -75,159 +143,605 @@ fn screenPoint(p:vec2<f32>)->vec2<f32>{
     return vec4<f32>(v.color.rgb*a,a);
 }`;
 
-    function resetGpu(){
-        try{context?.unconfigure?.();}catch(_){}
-        try{cornerBuffer?.destroy?.();}catch(_){}for(const b of uniformBuffers)try{b?.destroy?.();}catch(_){}try{copyBuffer?.destroy?.();}catch(_){}
-        cornerBuffer=null;uniformBuffers=[];uniformBinds=[];uniformCursor=0;copyBuffer=null;copyBind=null;copyCapacity=0;copyPackedFrameId=-1;copyPackedLayer=null;copyPackedCount=0;copyData=new Float32Array(0);segmentBindCache=new WeakMap();renderBundleCache=new WeakMap();pipeline=null;context=null;format=null;width=0;height=0;
+  function resetGpu() {
+    try {
+      context?.unconfigure?.();
+    } catch (error) {
+      noteSuppressedError('gpu/topology-morph-base-renderer#resetGpu', error);
     }
-    async function initAsync(){
-        if(ready&&!lost)return true;if(initializing)return false;if(attempted&&!ready&&!lost)return false;
-        attempted=true;initializing=true;lastError='';
-        try{
-            if(typeof WebGPUDeviceHub==='undefined')throw new Error('WebGPUDeviceHub unavailable');
-            const shared=await WebGPUDeviceHub.acquire();device=shared.device;hubGeneration=shared.generation;lost=false;
-            context=canvas.getContext('webgpu');if(!context)throw new Error('WebGPU topology Morph canvas context unavailable');
-            format=navigator.gpu.getPreferredCanvasFormat();
-            const module=device.createShaderModule({label:'SpiroStar topology Morph base WGSL',code:WGSL});
-            if(typeof assertWebGPUShaderModule==='function')await assertWebGPUShaderModule(module,'SpiroStar topology Morph base WGSL');
-            const blend={color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}};
-            pipeline=device.createRenderPipeline({label:'SpiroStar topology Morph base',layout:'auto',vertex:{module,entryPoint:'vsMain',buffers:[{arrayStride:8,stepMode:'vertex',attributes:[{shaderLocation:0,offset:0,format:'float32x2'}]}]},fragment:{module,entryPoint:'fsMain',targets:[{format,blend}]},primitive:{topology:'triangle-strip',cullMode:'none'}});
-            cornerBuffer=device.createBuffer({label:'SpiroStar topology Morph corners',size:32,usage:GPUBufferUsage.VERTEX|GPUBufferUsage.COPY_DST});
-            device.queue.writeBuffer(cornerBuffer,0,new Float32Array([-1,-1,1,-1,-1,1,1,1]));
-            uniformBuffers=Array.from({length:32},(_,i)=>device.createBuffer({label:`SpiroStar topology Morph uniforms ${i}`,size:64,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}));
-            uniformBinds=uniformBuffers.map(buffer=>device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer}}]}));uniformCursor=0;
-            ready=true;lastError='';try{requestMainCanvasRender?.();}catch(_){}return true;
-        }catch(err){ready=false;lastError=String(err?.message||err);stats.errors++;if(lastLoggedError!==`init:${lastError}`){lastLoggedError=`init:${lastError}`;console.warn('[SpiroStar Topology Morph GPU] init:',err);}return false;}
-        finally{initializing=false;}
+    try {
+      cornerBuffer?.destroy?.();
+    } catch (error) {
+      noteSuppressedError('gpu/topology-morph-base-renderer#resetGpu', error);
     }
-    function warmup(){
-        const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration?.():-1;
-        if(ready&&gen!==hubGeneration){ready=false;attempted=false;lost=true;resetGpu();}
-        if(!ready&&!initializing&&(!attempted||lost)){lost=false;void initAsync();}
-        if(typeof warmupGpuMorphArcResource==='function')warmupGpuMorphArcResource();
-        return ready&&!lost;
+    for (const b of uniformBuffers)
+      try {
+        b?.destroy?.();
+      } catch (error) {
+        noteSuppressedError('gpu/topology-morph-base-renderer#resetGpu', error);
+      }
+    try {
+      copyBuffer?.destroy?.();
+    } catch (error) {
+      noteSuppressedError('gpu/topology-morph-base-renderer#resetGpu', error);
     }
-    function ensureSize(){
-        if(!warmup())return false;const w=Math.max(1,mainCanvas.width|0),h=Math.max(1,mainCanvas.height|0);
-        if(width===w&&height===h&&canvas.width===w&&canvas.height===h)return true;
-        width=w;height=h;canvas.width=w;canvas.height=h;context.configure({device,format,alphaMode:'premultiplied'});return true;
+    cornerBuffer = null;
+    uniformBuffers = [];
+    uniformBinds = [];
+    uniformCursor = 0;
+    copyBuffer = null;
+    copyBind = null;
+    copyCapacity = 0;
+    copyPackedFrameId = -1;
+    copyPackedLayer = null;
+    copyPackedCount = 0;
+    copyData = new Float32Array(0);
+    segmentBindCache = new WeakMap();
+    renderBundleCache = new WeakMap();
+    pipeline = null;
+    context = null;
+    format = null;
+    width = 0;
+    height = 0;
+  }
+  async function initAsync() {
+    if (ready && !lost) return true;
+    if (initializing) return false;
+    if (attempted && !ready && !lost) return false;
+    attempted = true;
+    initializing = true;
+    lastError = '';
+    try {
+      if (typeof WebGPUDeviceHub === 'undefined') throw new Error('WebGPUDeviceHub unavailable');
+      const shared = await WebGPUDeviceHub.acquire();
+      device = shared.device;
+      hubGeneration = shared.generation;
+      lost = false;
+      context = canvas.getContext('webgpu');
+      if (!context) throw new Error('WebGPU topology Morph canvas context unavailable');
+      format = navigator.gpu.getPreferredCanvasFormat();
+      const module = device.createShaderModule({ label: 'SpiroStar topology Morph base WGSL', code: WGSL });
+      await assertWebGPUShaderModule(module, 'SpiroStar topology Morph base WGSL');
+      const blend = {
+        color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+        alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      };
+      pipeline = device.createRenderPipeline({
+        label: 'SpiroStar topology Morph base',
+        layout: 'auto',
+        vertex: {
+          module,
+          entryPoint: 'vsMain',
+          buffers: [
+            {
+              arrayStride: 8,
+              stepMode: 'vertex',
+              attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x2' }],
+            },
+          ],
+        },
+        fragment: { module, entryPoint: 'fsMain', targets: [{ format, blend }] },
+        primitive: { topology: 'triangle-strip', cullMode: 'none' },
+      });
+      cornerBuffer = device.createBuffer({
+        label: 'SpiroStar topology Morph corners',
+        size: 32,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      });
+      device.queue.writeBuffer(cornerBuffer, 0, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]));
+      uniformBuffers = Array.from({ length: 32 }, (_, i) =>
+        device.createBuffer({
+          label: `SpiroStar topology Morph uniforms ${i}`,
+          size: 64,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        }),
+      );
+      uniformBinds = uniformBuffers.map((buffer) =>
+        device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(0),
+          entries: [{ binding: 0, resource: { buffer } }],
+        }),
+      );
+      uniformCursor = 0;
+      ready = true;
+      lastError = '';
+      try {
+        requestMainCanvasRender?.();
+      } catch (error) {
+        noteSuppressedError('gpu/topology-morph-base-renderer#initAsync', error);
+      }
+      return true;
+    } catch (err) {
+      ready = false;
+      lastError = String(err?.message || err);
+      stats.errors++;
+      if (lastLoggedError !== `init:${lastError}`) {
+        lastLoggedError = `init:${lastError}`;
+        console.warn('[SpiroStar Topology Morph GPU] init:', err);
+      }
+      return false;
+    } finally {
+      initializing = false;
     }
-    function reason(frameCtx,mode='base'){
-        if(!frameCtx)return'frame-missing';
-        if(!frameCtx.topologyMorphEnabled||!frameCtx.morphFrameActive)return'not-topology-morph';
-        if(frameCtx.geometryProvider!==frameCtx.blueMorphProvider)return'another-geometry-provider';
-        if(frameCtx.geometryPlan?.kind!=='blue-prepared')return'geometry-kind-'+String(frameCtx.geometryPlan?.kind||'unknown');
-        if(frameCtx.geometryPlan?.kind==='lightning')return'lightning';
-        if((state?.morph?.mode==='circleSlide'||state?.morph?.mode==='topoCircle'))return'circle-slide';
-        if(state?.showRoundingGuides)return'rounding-guides';
-        if(frameCtx.lineProfileStrokeOnly)return'profile-replaces-base';
-        if(mode==='base'&&!frameCtx.lineDisplayEnabled)return'line-hidden';
-        if(state?.fourierMode===true)return'fourier';
-        const shared=typeof getSharedGpuMorphPathResource==='function'?getSharedGpuMorphPathResource(frameCtx.layerIndex):null;
-        if(!shared?.bezierVisualRail)return'bezier-rail-unavailable';
-        return'';
+  }
+  function warmup() {
+    const gen = typeof WebGPUDeviceHub !== 'undefined' ? WebGPUDeviceHub.getGeneration?.() : -1;
+    if (ready && gen !== hubGeneration) {
+      ready = false;
+      attempted = false;
+      lost = true;
+      resetGpu();
     }
-    function isEligible(frameCtx,mode='base'){
-        const r=reason(frameCtx,mode);lastDecision.eligible=!r;lastDecision.reason=r||'gpu-topology-base';lastDecision.mode=mode;lastDecision.layerIndex=Number(frameCtx?.layerIndex)||0;lastDecision.frameId=Number(frameCtx?.frameId)||0;return !r;
+    if (!ready && !initializing && (!attempted || lost)) {
+      lost = false;
+      void initAsync();
     }
-    function ensureCopyCapacity(n){
-        const need=Math.max(1,n|0);if(copyBuffer&&copyCapacity>=need)return true;
-        const cap=Math.max(8,1<<Math.ceil(Math.log2(need)));try{copyBuffer?.destroy?.();}catch(_){}
-        copyCapacity=cap;copyData=new Float32Array(cap*12);renderBundleCache=new WeakMap();copyBuffer=device.createBuffer({label:'SpiroStar topology Morph copies',size:copyData.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});copyBind=device.createBindGroup({layout:pipeline.getBindGroupLayout(2),entries:[{binding:0,resource:{buffer:copyBuffer}}]});copyPackedFrameId=-1;copyPackedLayer=null;copyPackedCount=0;return true;
+    warmupGpuMorphArcResource();
+    return ready && !lost;
+  }
+  function ensureSize() {
+    if (!warmup()) return false;
+    const w = Math.max(1, mainCanvas.width | 0),
+      h = Math.max(1, mainCanvas.height | 0);
+    if (width === w && height === h && canvas.width === w && canvas.height === h) return true;
+    width = w;
+    height = h;
+    canvas.width = w;
+    canvas.height = h;
+    context.configure({ device, format, alphaMode: 'premultiplied' });
+    return true;
+  }
+  function reason(frameCtx, mode = 'base') {
+    if (!frameCtx) return 'frame-missing';
+    if (!frameCtx.topologyMorphEnabled || !frameCtx.morphFrameActive) return 'not-topology-morph';
+    if (frameCtx.geometryProvider !== frameCtx.blueMorphProvider) return 'another-geometry-provider';
+    if (frameCtx.geometryPlan?.kind !== 'blue-prepared')
+      return 'geometry-kind-' + String(frameCtx.geometryPlan?.kind || 'unknown');
+    if (frameCtx.geometryPlan?.kind === 'lightning') return 'lightning';
+    if (
+      state?.morph?.mode === 'circleSlide' ||
+      state?.morph?.mode === 'topoCircle' ||
+      state?.morph?.mode === 'topoCircleOpacity'
+    )
+      return 'circle-slide';
+    if (state?.showRoundingGuides) return 'rounding-guides';
+    if (frameCtx.lineProfileStrokeOnly) return 'profile-replaces-base';
+    if (mode === 'base' && !frameCtx.lineDisplayEnabled) return 'line-hidden';
+    if (state?.fourierMode === true) return 'fourier';
+    const shared = getSharedGpuMorphPathResource(frameCtx.layerIndex);
+    if (!shared?.bezierVisualRail) return 'bezier-rail-unavailable';
+    return '';
+  }
+  function isEligible(frameCtx, mode = 'base') {
+    const r = reason(frameCtx, mode);
+    lastDecision.eligible = !r;
+    lastDecision.reason = r || 'gpu-topology-base';
+    lastDecision.mode = mode;
+    lastDecision.layerIndex = Number(frameCtx?.layerIndex) || 0;
+    lastDecision.frameId = Number(frameCtx?.frameId) || 0;
+    return !r;
+  }
+  function ensureCopyCapacity(n) {
+    const need = Math.max(1, n | 0);
+    if (copyBuffer && copyCapacity >= need) return true;
+    const cap = Math.max(8, 1 << Math.ceil(Math.log2(need)));
+    try {
+      copyBuffer?.destroy?.();
+    } catch (error) {
+      noteSuppressedError('gpu/topology-morph-base-renderer#ensureCopyCapacity', error);
     }
-    function segmentBind(rec){
-        let bg=segmentBindCache.get(rec);if(bg)return bg;bg=device.createBindGroup({layout:pipeline.getBindGroupLayout(1),entries:[{binding:0,resource:{buffer:rec.cubicBuffer}},{binding:1,resource:{buffer:rec.outputBuffer}},{binding:2,resource:{buffer:rec.segmentMetaBuffer}}]});segmentBindCache.set(rec,bg);return bg;
+    copyCapacity = cap;
+    copyData = new Float32Array(cap * 12);
+    renderBundleCache = new WeakMap();
+    copyBuffer = device.createBuffer({
+      label: 'SpiroStar topology Morph copies',
+      size: copyData.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    copyBind = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(2),
+      entries: [{ binding: 0, resource: { buffer: copyBuffer } }],
+    });
+    copyPackedFrameId = -1;
+    copyPackedLayer = null;
+    copyPackedCount = 0;
+    return true;
+  }
+  function segmentBind(rec) {
+    let bg = segmentBindCache.get(rec);
+    if (bg) return bg;
+    bg = device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(1),
+      entries: [
+        { binding: 0, resource: { buffer: rec.cubicBuffer } },
+        { binding: 1, resource: { buffer: rec.outputBuffer } },
+        { binding: 2, resource: { buffer: rec.segmentMetaBuffer } },
+      ],
+    });
+    segmentBindCache.set(rec, bg);
+    return bg;
+  }
+  function colorRgba(style) {
+    try {
+      return GPUColorCache.rgba(style || '#ffffff');
+    } catch (_) {
+      return [1, 1, 1, 1];
     }
-    function colorRgba(style){
-        try{return GPUColorCache.rgba(style||'#ffffff');}catch(_){return[1,1,1,1];}
+  }
+  function packCopies(frameCtx) {
+    const fid = Number(frameCtx?.frameId) || Number(frameCtx?.frame?.id) || 0,
+      layerKey = frameCtx?.layer || null;
+    if (copyBuffer && copyPackedFrameId === fid && copyPackedLayer === layerKey) {
+      stats.copyPackReuses++;
+      return copyPackedCount;
     }
-    function packCopies(frameCtx){
-        const fid=Number(frameCtx?.frameId)||Number(frameCtx?.frame?.id)||0,layerKey=frameCtx?.layer||null;
-        if(copyBuffer&&copyPackedFrameId===fid&&copyPackedLayer===layerKey){stats.copyPackReuses++;return copyPackedCount;}
-        const copies=state.tunnel?.active===true?frameCtx.visibleInstances?.copies:[{scale:1,copyId:0,position:0}],alphas=state.tunnel?.active===true?frameCtx.visibleInstances?.alphas:[1];
-        const src=Array.isArray(copies)&&copies.length?copies:[{scale:1}],countMax=src.length;ensureCopyCapacity(countMax);let k=0;
-        for(let i=0;i<countMax;i++){
+    const copies =
+        state.tunnel?.active === true
+          ? frameCtx.visibleInstances?.copies
+          : [{ scale: 1, copyId: 0, position: 0 }],
+      alphas = state.tunnel?.active === true ? frameCtx.visibleInstances?.alphas : [1];
+    const src = Array.isArray(copies) && copies.length ? copies : [{ scale: 1 }],
+      countMax = src.length;
+    ensureCopyCapacity(countMax);
+    let k = 0;
+    for (let i = 0; i < countMax; i++) {
+      const ca = Math.max(0, Math.min(1, Number(alphas?.[i] ?? 1)));
+      if (ca <= 0.0001) continue;
+      const copy = src[i] || {},
+        sc = state.tunnel?.active === true ? Math.max(0.000001, Math.abs(Number(copy.scale) || 0)) : 1;
+      const ang =
+          state.tunnel?.active === true && typeof getMotionTunnelLagRadians === 'function'
+            ? getMotionTunnelLagRadians(copy, frameCtx.layer)
+            : 0,
+        cs = Math.cos(ang),
+        sn = Math.sin(ang);
+      const style =
+        state.tunnel?.active === true && typeof getTunnelCopyColor === 'function'
+          ? getTunnelCopyColor(
+              frameCtx.tunnelBaseStrokeColor,
+              copy,
+              frameCtx.tunnelPaletteProfile,
+              frameCtx.layer,
+            )
+          : frameCtx.lightningStroke || frameCtx.layer?.strokeColor || '#ffffff';
+      const c = colorRgba(style),
+        o = k * 12;
+      copyData[o] = sc * cs;
+      copyData[o + 1] = -sc * sn;
+      copyData[o + 2] = ca;
+      copyData[o + 3] = sc;
+      copyData[o + 4] = sc * sn;
+      copyData[o + 5] = sc * cs;
+      copyData[o + 6] = c[0];
+      copyData[o + 7] = c[1];
+      copyData[o + 8] = c[2];
+      copyData[o + 9] = c[3];
+      copyData[o + 10] = 0;
+      copyData[o + 11] = 0;
+      k++;
+    }
+    if (k) device.queue.writeBuffer(copyBuffer, 0, copyData.buffer, 0, k * 12 * 4);
+    stats.uploads += k * 12 * 4;
+    copyPackedFrameId = fid;
+    copyPackedLayer = layerKey;
+    copyPackedCount = k;
+    return k;
+  }
+  function prepareUniforms(frameCtx, segmentCount, copyCount, ctx, mode, opts) {
+    const tr = ctx.getTransform(),
+      a = Number(tr.a) || 1,
+      b = Number(tr.b) || 0,
+      c = Number(tr.c) || 0,
+      d = Number(tr.d) || 1,
+      e = Number(tr.e) || 0,
+      f = Number(tr.f) || 0;
+    const matrixScale = Math.sqrt(Math.max(1e-12, Math.abs(a * d - b * c))),
+      combined = Math.max(0.001, Math.abs(Number(frameCtx.combinedScale) || 1)),
+      outerScale = matrixScale / combined;
+    const halfWidth = Math.max(0.18, Math.max(0.001, Number(frameCtx.strokeWidth) || 1.5) * outerScale * 0.5);
+    const glowRadius = mode === 'glow' ? Math.max(0.5, Number(opts?.radiusPx) || 0) : 0;
+    const coreAlpha =
+      mode === 'base'
+        ? Math.max(0, Math.min(1, Number(opts?.alphaScale ?? 1))) *
+          Math.max(0, Math.min(1, Number(frameCtx.baseAlpha) || 0))
+        : 0;
+    const glowAlpha =
+      mode === 'glow'
+        ? Math.max(0, Math.min(1, Number(opts?.alphaScale ?? 1))) *
+          Math.max(0, Math.min(1, Number(frameCtx.baseAlpha) || 0))
+        : 0;
+    uniformF32.fill(0);
+    uniformF32[0] = width;
+    uniformF32[1] = height;
+    uniformU32[2] = Math.max(0, segmentCount) >>> 0;
+    uniformU32[3] = Math.max(0, copyCount) >>> 0;
+    uniformF32[4] = a;
+    uniformF32[5] = c;
+    uniformF32[6] = e;
+    uniformF32[8] = b;
+    uniformF32[9] = d;
+    uniformF32[10] = f;
+    uniformF32[12] = halfWidth;
+    uniformF32[13] = glowRadius;
+    uniformF32[14] = coreAlpha;
+    uniformF32[15] = glowAlpha;
+    const slot = uniformCursor++ % uniformBuffers.length,
+      buffer = uniformBuffers[slot];
+    device.queue.writeBuffer(buffer, 0, uniformBytes);
+    stats.uploads += 64;
+    stats.uniformBindReuses++;
+    return { bind: uniformBinds[slot], slot };
+  }
 
-            const ca=Math.max(0,Math.min(1,Number(alphas?.[i]??1)));if(ca<=.0001)continue;
-            const copy=src[i]||{},sc=state.tunnel?.active===true?Math.max(.000001,Math.abs(Number(copy.scale)||0)):1;
-            const ang=state.tunnel?.active===true&&typeof getMotionTunnelLagRadians==='function'?getMotionTunnelLagRadians(copy,frameCtx.layer):0,cs=Math.cos(ang),sn=Math.sin(ang);
-            const style=state.tunnel?.active===true&&typeof getTunnelCopyColor==='function'?getTunnelCopyColor(frameCtx.tunnelBaseStrokeColor,copy,frameCtx.tunnelPaletteProfile,frameCtx.layer):(frameCtx.lightningStroke||frameCtx.layer?.strokeColor||'#ffffff');
-            const c=colorRgba(style),o=k*12;
-            copyData[o]=sc*cs;copyData[o+1]=-sc*sn;copyData[o+2]=ca;copyData[o+3]=sc;
-            copyData[o+4]=sc*sn;copyData[o+5]=sc*cs;copyData[o+6]=c[0];copyData[o+7]=c[1];
-            copyData[o+8]=c[2];copyData[o+9]=c[3];copyData[o+10]=0;copyData[o+11]=0;k++;
-        }
-        if(k)device.queue.writeBuffer(copyBuffer,0,copyData.buffer,0,k*12*4);stats.uploads+=k*12*4;copyPackedFrameId=fid;copyPackedLayer=layerKey;copyPackedCount=k;return k;
+  function renderBundleFor(rec, instanceCount, uniformRows, label) {
+    if (typeof device?.createRenderBundleEncoder !== 'function') return null;
+    let cache = renderBundleCache.get(rec);
+    if (!cache || cache.copyBind !== copyBind) {
+      cache = { copyBind, items: new Map() };
+      renderBundleCache.set(rec, cache);
     }
-    function prepareUniforms(frameCtx,segmentCount,copyCount,ctx,mode,opts){
-        const tr=ctx.getTransform(),a=Number(tr.a)||1,b=Number(tr.b)||0,c=Number(tr.c)||0,d=Number(tr.d)||1,e=Number(tr.e)||0,f=Number(tr.f)||0;
-        const matrixScale=Math.sqrt(Math.max(1e-12,Math.abs(a*d-b*c))),combined=Math.max(.001,Math.abs(Number(frameCtx.combinedScale)||1)),outerScale=matrixScale/combined;
-        const halfWidth=Math.max(.18,Math.max(.001,Number(frameCtx.strokeWidth)||1.5)*outerScale*.5);
-        const glowRadius=mode==='glow'?Math.max(.5,Number(opts?.radiusPx)||0):0;
-        const coreAlpha=mode==='base'?Math.max(0,Math.min(1,Number(opts?.alphaScale??1)))*Math.max(0,Math.min(1,Number(frameCtx.baseAlpha)||0)):0;
-        const glowAlpha=mode==='glow'?Math.max(0,Math.min(1,Number(opts?.alphaScale??1)))*Math.max(0,Math.min(1,Number(frameCtx.baseAlpha)||0)):0;
-        uniformF32.fill(0);uniformF32[0]=width;uniformF32[1]=height;uniformU32[2]=Math.max(0,segmentCount)>>>0;uniformU32[3]=Math.max(0,copyCount)>>>0;
-        uniformF32[4]=a;uniformF32[5]=c;uniformF32[6]=e;uniformF32[8]=b;uniformF32[9]=d;uniformF32[10]=f;
-        uniformF32[12]=halfWidth;uniformF32[13]=glowRadius;uniformF32[14]=coreAlpha;uniformF32[15]=glowAlpha;const slot=uniformCursor++%uniformBuffers.length,buffer=uniformBuffers[slot];device.queue.writeBuffer(buffer,0,uniformBytes);stats.uploads+=64;stats.uniformBindReuses++;return{bind:uniformBinds[slot],slot};
+    const key = `${instanceCount}|${uniformRows.map((row) => row.slot).join(':')}`;
+    let hit = cache.items.get(key);
+    if (hit) {
+      stats.bundleHits++;
+      return hit;
     }
+    try {
+      const rbe = device.createRenderBundleEncoder({ label, colorFormats: [format] });
+      rbe.setPipeline(pipeline);
+      rbe.setBindGroup(1, segmentBind(rec));
+      rbe.setBindGroup(2, copyBind);
+      rbe.setVertexBuffer(0, cornerBuffer);
+      for (const row of uniformRows) {
+        rbe.setBindGroup(0, row.bind);
+        rbe.draw(4, instanceCount);
+      }
+      const bundle = rbe.finish();
+      hit = { bundle, list: [bundle] };
+      cache.items.set(key, hit);
+      stats.bundleBuilds++;
+      return hit;
+    } catch (_) {
+      stats.bundleFallbacks++;
+      return null;
+    }
+  }
+  function composite(ctx) {
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.filter = 'none';
+    ctx.drawImage(canvas, 0, 0);
+    ctx.restore();
+  }
 
-    function renderBundleFor(rec,instanceCount,uniformRows,label){
-        if(typeof device?.createRenderBundleEncoder!=='function')return null;
-        let cache=renderBundleCache.get(rec);
-        if(!cache||cache.copyBind!==copyBind){cache={copyBind,items:new Map()};renderBundleCache.set(rec,cache);}
-        const key=`${instanceCount}|${uniformRows.map(row=>row.slot).join(':')}`;let hit=cache.items.get(key);
-        if(hit){stats.bundleHits++;return hit;}
-        try{
-            const rbe=device.createRenderBundleEncoder({label,colorFormats:[format]});
-            rbe.setPipeline(pipeline);rbe.setBindGroup(1,segmentBind(rec));rbe.setBindGroup(2,copyBind);rbe.setVertexBuffer(0,cornerBuffer);
-            for(const row of uniformRows){rbe.setBindGroup(0,row.bind);rbe.draw(4,instanceCount);}
-            const bundle=rbe.finish();hit={bundle,list:[bundle]};cache.items.set(key,hit);stats.bundleBuilds++;return hit;
-        }catch(_){stats.bundleFallbacks++;return null;}
+  function renderGlowAndBase(frameCtx, targetCtx, opts = {}) {
+    if (!isEligible(frameCtx, 'glow') || !isEligible(frameCtx, 'base') || !ensureSize()) {
+      stats.fallbacks++;
+      return false;
     }
-    function composite(ctx){ctx.save();ctx.setTransform(1,0,0,1,0,0);ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';ctx.filter='none';ctx.drawImage(canvas,0,0);ctx.restore();}
-
-    function renderGlowAndBase(frameCtx,targetCtx,opts={}){
-        if(!isEligible(frameCtx,'glow')||!isEligible(frameCtx,'base')||!ensureSize()){stats.fallbacks++;return false;}
-        const rec=typeof getSharedGpuMorphPathResource==='function'?getSharedGpuMorphPathResource(frameCtx.layerIndex):null;
-        if(!rec?.ready){lastDecision.reason='gpu-morph-path-not-ready';stats.fallbacks++;return false;}
-        try{
-            const t=typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress):Math.max(0,Math.min(1,Number(frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress)||0));
-            targetCtx.save();applyLayerFrameEffectTransform(targetCtx,frameCtx);const copyCount=packCopies(frameCtx);if(!copyCount){targetCtx.restore();return true;}
-            const glowUniform=prepareUniforms(frameCtx,rec.segmentCount,copyCount,targetCtx,'glow',{radiusPx:Math.max(.5,Number(opts?.radiusPx)||0),alphaScale:Math.max(0,Math.min(1,Number(opts?.glowAlphaScale??1)))});
-            const baseUniform=prepareUniforms(frameCtx,rec.segmentCount,copyCount,targetCtx,'base',{alphaScale:Math.max(0,Math.min(1,Number(opts?.baseAlphaScale??1)))});targetCtx.restore();
-            const enc=device.createCommandEncoder({label:'SpiroStar topology Morph fused Glow+Base'});
-            if(typeof encodeSharedGpuMorphPath!=='function'||!encodeSharedGpuMorphPath(enc,frameCtx.layerIndex,t)){lastDecision.reason='gpu-morph-compute-encode-failed';stats.fallbacks++;return false;}
-            const pass=enc.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
-            const bundled=renderBundleFor(rec,rec.segmentCount*BEZIER_SUBDIV*copyCount,[glowUniform,baseUniform],'SpiroStar topology Morph fused bundle');
-            if(bundled){pass.executeBundles(bundled.list);stats.bundleExecutes++;}
-            else{pass.setPipeline(pipeline);pass.setBindGroup(1,segmentBind(rec));pass.setBindGroup(2,copyBind);pass.setVertexBuffer(0,cornerBuffer);pass.setBindGroup(0,glowUniform.bind);pass.draw(4,rec.segmentCount*BEZIER_SUBDIV*copyCount);pass.setBindGroup(0,baseUniform.bind);pass.draw(4,rec.segmentCount*BEZIER_SUBDIV*copyCount);}
-            pass.end();
-            device.queue.submit([enc.finish()]);try{noteSharedGpuMorphPathSubmitted?.(rec,t,frameCtx.frameId);}catch(_){}composite(targetCtx);
-            const logical=rec.segmentCount*copyCount;stats.frames++;stats.glowFrames++;stats.baseFrames++;stats.fusedGlowBaseFrames++;stats.draws+=2;stats.segments+=logical*2;stats.copies+=copyCount;stats.cpuPathBuildsAvoided+=(Number(rec.pointCount)||rec.segmentCount);stats.arcBuildsAvoided+=rec.segmentCount;stats.submissionsAvoided++;stats.canvasCompositesAvoided++;
-            if(typeof isSpiralLayer==='function'&&isSpiralLayer(frameCtx.layer)){stats.spiralFrames++;stats.variableWidthSegments+=logical*2;}if(state.tunnel?.active===true)stats.corridorFrames++;lastDecision.reason='webgpu-fused-glow-base';return true;
-        }catch(err){lastError=String(err?.message||err);lastDecision.reason=lastError;stats.errors++;stats.fallbacks++;return false;}
+    const rec = getSharedGpuMorphPathResource(frameCtx.layerIndex);
+    if (!rec?.ready) {
+      lastDecision.reason = 'gpu-morph-path-not-ready';
+      stats.fallbacks++;
+      return false;
     }
-    function render(frameCtx,targetCtx,opts={}){
-        const mode=opts.mode==='glow'?'glow':'base';if(!isEligible(frameCtx,mode)){stats.fallbacks++;return false;}if(!ensureSize()){stats.fallbacks++;return false;}
-        const rec=typeof getSharedGpuMorphPathResource==='function'?getSharedGpuMorphPathResource(frameCtx.layerIndex):null;
-        if(!rec?.ready){lastDecision.reason='gpu-morph-path-not-ready';stats.fallbacks++;return false;}
-        try{
-            const t=typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress):Math.max(0,Math.min(1,Number(frameCtx.blueMorphProvider?.geometryT??frameCtx.geometryPlan?.progress)||0));
-            targetCtx.save();applyLayerFrameEffectTransform(targetCtx,frameCtx);const copyCount=packCopies(frameCtx);if(!copyCount){targetCtx.restore();return true;}
-            const frameUniform=prepareUniforms(frameCtx,rec.segmentCount,copyCount,targetCtx,mode,opts);targetCtx.restore();
-            const enc=device.createCommandEncoder({label:`SpiroStar topology Morph ${mode}`});
-            if(typeof encodeSharedGpuMorphPath!=='function'||!encodeSharedGpuMorphPath(enc,frameCtx.layerIndex,t)){lastDecision.reason='gpu-morph-compute-encode-failed';stats.fallbacks++;return false;}
-            const pass=enc.beginRenderPass({colorAttachments:[{view:context.getCurrentTexture().createView(),clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});
-            const bundled=renderBundleFor(rec,rec.segmentCount*BEZIER_SUBDIV*copyCount,[frameUniform],`SpiroStar topology Morph ${mode} bundle`);if(bundled){pass.executeBundles(bundled.list);stats.bundleExecutes++;}else{pass.setPipeline(pipeline);pass.setBindGroup(0,frameUniform.bind);pass.setBindGroup(1,segmentBind(rec));pass.setBindGroup(2,copyBind);pass.setVertexBuffer(0,cornerBuffer);pass.draw(4,rec.segmentCount*BEZIER_SUBDIV*copyCount);}pass.end();device.queue.submit([enc.finish()]);try{noteSharedGpuMorphPathSubmitted?.(rec,t,frameCtx.frameId);}catch(_){}
-            composite(targetCtx);lastError='';lastLoggedError='';lastDecision.reason=(typeof isSpiralLayer==='function'&&isSpiralLayer(frameCtx.layer))?'webgpu-variable-width-spiral':'webgpu';stats.frames++;stats.draws++;stats.segments+=rec.segmentCount*copyCount;stats.copies+=copyCount;stats.cpuPathBuildsAvoided+=Number(rec.pointCount)||rec.segmentCount;stats.arcBuildsAvoided+=rec.segmentCount;if(typeof isSpiralLayer==='function'&&isSpiralLayer(frameCtx.layer)){stats.spiralFrames++;stats.variableWidthSegments+=rec.segmentCount*copyCount;}if(mode==='glow')stats.glowFrames++;else stats.baseFrames++;if(state.tunnel?.active===true)stats.corridorFrames++;return true;
-        }catch(err){lastError=String(err?.message||err);lastDecision.reason=lastError;stats.errors++;stats.fallbacks++;if(lastLoggedError!==`draw:${lastError}`){lastLoggedError=`draw:${lastError}`;console.warn('[SpiroStar Topology Morph GPU] draw:',err);}return false;}
+    try {
+      const t = morphInterpolationTForCurrentMode(
+        frameCtx.blueMorphProvider?.geometryT ?? frameCtx.geometryPlan?.progress,
+      );
+      targetCtx.save();
+      applyLayerFrameEffectTransform(targetCtx, frameCtx);
+      const copyCount = packCopies(frameCtx);
+      if (!copyCount) {
+        targetCtx.restore();
+        return true;
+      }
+      const glowUniform = prepareUniforms(frameCtx, rec.segmentCount, copyCount, targetCtx, 'glow', {
+        radiusPx: Math.max(0.5, Number(opts?.radiusPx) || 0),
+        alphaScale: Math.max(0, Math.min(1, Number(opts?.glowAlphaScale ?? 1))),
+      });
+      const baseUniform = prepareUniforms(frameCtx, rec.segmentCount, copyCount, targetCtx, 'base', {
+        alphaScale: Math.max(0, Math.min(1, Number(opts?.baseAlphaScale ?? 1))),
+      });
+      targetCtx.restore();
+      const enc = device.createCommandEncoder({ label: 'SpiroStar topology Morph fused Glow+Base' });
+      if (
+        typeof encodeSharedGpuMorphPath !== 'function' ||
+        !encodeSharedGpuMorphPath(enc, frameCtx.layerIndex, t)
+      ) {
+        lastDecision.reason = 'gpu-morph-compute-encode-failed';
+        stats.fallbacks++;
+        return false;
+      }
+      const pass = enc.beginRenderPass({
+        colorAttachments: [
+          {
+            view: context.getCurrentTexture().createView(),
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: 'clear',
+            storeOp: 'store',
+          },
+        ],
+      });
+      const bundled = renderBundleFor(
+        rec,
+        rec.segmentCount * BEZIER_SUBDIV * copyCount,
+        [glowUniform, baseUniform],
+        'SpiroStar topology Morph fused bundle',
+      );
+      if (bundled) {
+        pass.executeBundles(bundled.list);
+        stats.bundleExecutes++;
+      } else {
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(1, segmentBind(rec));
+        pass.setBindGroup(2, copyBind);
+        pass.setVertexBuffer(0, cornerBuffer);
+        pass.setBindGroup(0, glowUniform.bind);
+        pass.draw(4, rec.segmentCount * BEZIER_SUBDIV * copyCount);
+        pass.setBindGroup(0, baseUniform.bind);
+        pass.draw(4, rec.segmentCount * BEZIER_SUBDIV * copyCount);
+      }
+      pass.end();
+      device.queue.submit([enc.finish()]);
+      try {
+        noteSharedGpuMorphPathSubmitted?.(rec, t, frameCtx.frameId);
+      } catch (error) {
+        noteSuppressedError('gpu/topology-morph-base-renderer#renderGlowAndBase', error);
+      }
+      composite(targetCtx);
+      const logical = rec.segmentCount * copyCount;
+      stats.frames++;
+      stats.glowFrames++;
+      stats.baseFrames++;
+      stats.fusedGlowBaseFrames++;
+      stats.draws += 2;
+      stats.segments += logical * 2;
+      stats.copies += copyCount;
+      stats.cpuPathBuildsAvoided += Number(rec.pointCount) || rec.segmentCount;
+      stats.arcBuildsAvoided += rec.segmentCount;
+      stats.submissionsAvoided++;
+      stats.canvasCompositesAvoided++;
+      if (isSpiralLayer(frameCtx.layer)) {
+        stats.spiralFrames++;
+        stats.variableWidthSegments += logical * 2;
+      }
+      if (state.tunnel?.active === true) stats.corridorFrames++;
+      lastDecision.reason = 'webgpu-fused-glow-base';
+      return true;
+    } catch (err) {
+      lastError = String(err?.message || err);
+      lastDecision.reason = lastError;
+      stats.errors++;
+      stats.fallbacks++;
+      return false;
     }
-    function status(){warmup();return{supported:!!navigator?.gpu,available:ready&&!lost&&(typeof WebGPUDeviceHub==='undefined'||WebGPUDeviceHub.isReady?.()!==false),attempted,initializing,lost,lastError,width,height,rasterBackend:'webgpu',presentation:'canvas2d-bridge',lastDecision:{...lastDecision},stats:{...stats},contract:'topology Morph base/glow reads one retained cubic per logical topology edge from SharedGpuMorphPath and evaluates it on WebGPU; straight/hard edges remain exact degenerate cubics, while Spiral/smooth rails share the same curved carrier as effects. Arc construction is reserved for effects that need arc distance. v531 fuses Glow+Base into one WebGPU submit/composite when no Fill/Web ordering barrier exists; v534 caches render bundles for stable pipeline/bind/vertex/draw state so rAF usually only updates resident uniforms and executes a bundle.'};}
-    return{warmup,isReady:()=>warmup(),isEligible,reason,render,renderGlowAndBase,status};
+  }
+  function render(frameCtx, targetCtx, opts = {}) {
+    const mode = opts.mode === 'glow' ? 'glow' : 'base';
+    if (!isEligible(frameCtx, mode)) {
+      stats.fallbacks++;
+      return false;
+    }
+    if (!ensureSize()) {
+      stats.fallbacks++;
+      return false;
+    }
+    const rec = getSharedGpuMorphPathResource(frameCtx.layerIndex);
+    if (!rec?.ready) {
+      lastDecision.reason = 'gpu-morph-path-not-ready';
+      stats.fallbacks++;
+      return false;
+    }
+    try {
+      const t = morphInterpolationTForCurrentMode(
+        frameCtx.blueMorphProvider?.geometryT ?? frameCtx.geometryPlan?.progress,
+      );
+      targetCtx.save();
+      applyLayerFrameEffectTransform(targetCtx, frameCtx);
+      const copyCount = packCopies(frameCtx);
+      if (!copyCount) {
+        targetCtx.restore();
+        return true;
+      }
+      const frameUniform = prepareUniforms(frameCtx, rec.segmentCount, copyCount, targetCtx, mode, opts);
+      targetCtx.restore();
+      const enc = device.createCommandEncoder({ label: `SpiroStar topology Morph ${mode}` });
+      if (
+        typeof encodeSharedGpuMorphPath !== 'function' ||
+        !encodeSharedGpuMorphPath(enc, frameCtx.layerIndex, t)
+      ) {
+        lastDecision.reason = 'gpu-morph-compute-encode-failed';
+        stats.fallbacks++;
+        return false;
+      }
+      const pass = enc.beginRenderPass({
+        colorAttachments: [
+          {
+            view: context.getCurrentTexture().createView(),
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: 'clear',
+            storeOp: 'store',
+          },
+        ],
+      });
+      const bundled = renderBundleFor(
+        rec,
+        rec.segmentCount * BEZIER_SUBDIV * copyCount,
+        [frameUniform],
+        `SpiroStar topology Morph ${mode} bundle`,
+      );
+      if (bundled) {
+        pass.executeBundles(bundled.list);
+        stats.bundleExecutes++;
+      } else {
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, frameUniform.bind);
+        pass.setBindGroup(1, segmentBind(rec));
+        pass.setBindGroup(2, copyBind);
+        pass.setVertexBuffer(0, cornerBuffer);
+        pass.draw(4, rec.segmentCount * BEZIER_SUBDIV * copyCount);
+      }
+      pass.end();
+      device.queue.submit([enc.finish()]);
+      try {
+        noteSharedGpuMorphPathSubmitted?.(rec, t, frameCtx.frameId);
+      } catch (error) {
+        noteSuppressedError('gpu/topology-morph-base-renderer#render', error);
+      }
+      composite(targetCtx);
+      lastError = '';
+      lastLoggedError = '';
+      lastDecision.reason = isSpiralLayer(frameCtx.layer) ? 'webgpu-variable-width-spiral' : 'webgpu';
+      stats.frames++;
+      stats.draws++;
+      stats.segments += rec.segmentCount * copyCount;
+      stats.copies += copyCount;
+      stats.cpuPathBuildsAvoided += Number(rec.pointCount) || rec.segmentCount;
+      stats.arcBuildsAvoided += rec.segmentCount;
+      if (isSpiralLayer(frameCtx.layer)) {
+        stats.spiralFrames++;
+        stats.variableWidthSegments += rec.segmentCount * copyCount;
+      }
+      if (mode === 'glow') stats.glowFrames++;
+      else stats.baseFrames++;
+      if (state.tunnel?.active === true) stats.corridorFrames++;
+      return true;
+    } catch (err) {
+      lastError = String(err?.message || err);
+      lastDecision.reason = lastError;
+      stats.errors++;
+      stats.fallbacks++;
+      if (lastLoggedError !== `draw:${lastError}`) {
+        lastLoggedError = `draw:${lastError}`;
+        console.warn('[SpiroStar Topology Morph GPU] draw:', err);
+      }
+      return false;
+    }
+  }
+  function status() {
+    warmup();
+    return {
+      supported: !!navigator?.gpu,
+      available:
+        ready && !lost && (typeof WebGPUDeviceHub === 'undefined' || WebGPUDeviceHub.isReady?.() !== false),
+      attempted,
+      initializing,
+      lost,
+      lastError,
+      width,
+      height,
+      rasterBackend: 'webgpu',
+      presentation: 'canvas2d-bridge',
+      lastDecision: { ...lastDecision },
+      stats: { ...stats },
+      contract:
+        'topology Morph base/glow reads one retained cubic per logical topology edge from SharedGpuMorphPath and evaluates it on WebGPU; straight/hard edges remain exact degenerate cubics, while Spiral/smooth rails share the same curved carrier as effects. Arc construction is reserved for effects that need arc distance. v531 fuses Glow+Base into one WebGPU submit/composite when no Fill/Web ordering barrier exists; v534 caches render bundles for stable pipeline/bind/vertex/draw state so rAF usually only updates resident uniforms and executes a bundle.',
+    };
+  }
+  return { warmup, isReady: () => warmup(), isEligible, reason, render, renderGlowAndBase, status };
 })();
-window.__spiroTopologyMorphGpuStatus=()=>WebGPUTopologyMorphBaseRenderer.status();
-window.__spiroTopologyMorphRenderStatus=()=>{
-    const s=WebGPUTopologyMorphBaseRenderer.status();
-    try{console.info('[SpiroStar Topology Morph GPU]',s);}catch(_){}
-    return s;
-};
+
+export { WebGPUTopologyMorphBaseRenderer };

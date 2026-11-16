@@ -1,18 +1,95 @@
+import './web-morph-renderer.js'; // initialisation order: this module runs after it
+import { mainCanvas } from '../ui/profile-presets.js';
+import {
+  SWEEP_BLEND_MODES,
+  sweepBlendGpuState,
+  sweepCoreBlendMode,
+  sweepGlowBlendMode,
+} from '../core/defaults-layers.js';
+import { WebGPUDeviceHub } from './device-hub.js';
+import { GPUColorCache, assertWebGPUShaderModule } from './gpu-utils.js';
+import { WebGPUCorridorCopyStore } from './corridor-copy-store.js';
+import { SomataSweepLampBlend } from './sweep-lamp-blend.js';
+import { lightningOnePassColor, lightningVisualGlowRadius } from '../effects/effect-animation.js';
+import { encodeGpuMorphArcTable, noteGpuMorphArcTableSubmitted } from './morph-arc-resource.js';
+import { spiroGpuPrepareArcForLayerScene } from '../render/gpu-command-scheduler.js';
+import { noteSuppressedError } from '../core/suppressed-errors.js';
 
+const WebGPULightningArcRenderer = (() => {
+  let device = null,
+    generation = -1,
+    format = null,
+    ready = false,
+    initializing = null,
+    lastError = 'not-initialized';
+  let uniformLayout = null,
+    pathLayout = null,
+    copyLayout = null,
+    compositeLayout = null;
+  let strokePipeline = null,
+    strokeCorridorPipeline = null,
+    maskPipeline = null,
+    compositePipeline = null,
+    compositeStencilPipeline = null,
+    compositeOverPipeline = null,
+    compositeOverStencilPipeline = null,
+    compositePipelines = Object.create(null),
+    compositeStencilPipelines = Object.create(null);
+  let scratchTexture = null,
+    scratchView = null,
+    stencilTexture = null,
+    stencilView = null,
+    compositeBind = null,
+    width = 0,
+    height = 0,
+    targetViews = new WeakMap();
+  let uniformBuffers = [],
+    uniformBinds = [],
+    uniformCursor = 0,
+    pathBinds = new WeakMap(),
+    copyBinds = new WeakMap(),
+    strokeBundleCache = new WeakMap(),
+    bundleObjectIds = new WeakMap(),
+    bundleObjectSerial = 0;
+  const uniformData = new Float32Array(32);
+  const stats = {
+    frames: 0,
+    draws: 0,
+    strokeDraws: 0,
+    uniformBindReuses: 0,
+    corridorFrames: 0,
+    corridorCopies: 0,
+    logicalSegments: 0,
+    exactRasterSubsegments: 0,
+    arcEncodes: 0,
+    arcReuses: 0,
+    clippedFrames: 0,
+    stencilEdges: 0,
+    blurredHaloPasses: 0,
+    analyticHaloPasses: 0,
+    strikeBlurBypasses: 0,
+    bundleBuilds: 0,
+    bundleHits: 0,
+    bundleExecutes: 0,
+    bundleFallbacks: 0,
+    cpuPathBuildsAvoided: 0,
+    cpuExactRailBuildsAvoided: 0,
+    cpuPieceBuildsAvoided: 0,
+    cpuSegmentUploadsAvoided: 0,
+    failures: 0,
+    lastEncodeCpuMs: 0,
+    emaEncodeCpuMs: 0,
+    maxEncodeCpuMs: 0,
+    lastArcPrepareCpuMs: 0,
+    lastInstances: 0,
+    lastStyleCount: 0,
+    lastRasterSubdiv: 0,
+    lastStage: 'idle',
+    lastBehavior: 'symmetric',
+    lastPrecision: 'exact',
+  };
 
-window.__spiroRegisterModule?.('js/gpu/lightning-arc-renderer');
-
-const WebGPULightningArcRenderer=(()=>{
-    let device=null,generation=-1,format=null,ready=false,initializing=null,lastError='not-initialized';
-    let uniformLayout=null,pathLayout=null,copyLayout=null,compositeLayout=null;
-    let strokePipeline=null,strokeCorridorPipeline=null,maskPipeline=null,compositePipeline=null,compositeStencilPipeline=null,compositeOverPipeline=null,compositeOverStencilPipeline=null,compositePipelines=Object.create(null),compositeStencilPipelines=Object.create(null);
-    let scratchTexture=null,scratchView=null,stencilTexture=null,stencilView=null,compositeBind=null,width=0,height=0,targetViews=new WeakMap();
-    let uniformBuffers=[],uniformBinds=[],uniformCursor=0,pathBinds=new WeakMap(),copyBinds=new WeakMap(),strokeBundleCache=new WeakMap(),bundleObjectIds=new WeakMap(),bundleObjectSerial=0;
-    const uniformData=new Float32Array(32);
-    const stats={frames:0,draws:0,strokeDraws:0,uniformBindReuses:0,corridorFrames:0,corridorCopies:0,logicalSegments:0,exactRasterSubsegments:0,arcEncodes:0,arcReuses:0,
-        clippedFrames:0,stencilEdges:0,blurredHaloPasses:0,analyticHaloPasses:0,strikeBlurBypasses:0,bundleBuilds:0,bundleHits:0,bundleExecutes:0,bundleFallbacks:0,cpuPathBuildsAvoided:0,cpuExactRailBuildsAvoided:0,cpuPieceBuildsAvoided:0,cpuSegmentUploadsAvoided:0,failures:0,lastEncodeCpuMs:0,emaEncodeCpuMs:0,maxEncodeCpuMs:0,lastArcPrepareCpuMs:0,lastInstances:0,lastStyleCount:0,lastRasterSubdiv:0,lastStage:'idle',lastBehavior:'symmetric',lastPrecision:'exact'};
-
-    const WGSL=`
+  const WGSL = `
 struct U {
     viewport:vec2<f32>, _pad0:vec2<f32>,
     row0:vec4<f32>, row1:vec4<f32>, color:vec4<f32>,
@@ -60,6 +137,9 @@ fn selectedCellDelta(localD:f32,pathIndex:u32,pathTotal:f32,cell:i32)->f32{
 }
 fn nearestActiveDelta(globalD:f32,pathIndex:u32,pathStart:f32,pathTotal:f32)->f32{
     let mode=i32(u.select0.x+0.5);let frac=clamp(u.select0.y,0.01,1.0);let random=u.select0.z>0.5;let cycle=u32(max(0.0,u.select0.w)+0.5);
+    // Across is a geometric X-band evaluated later in screen space. All
+    // canonical retained segments must reach the fragment stage.
+    if(mode==4){return 0.0;}
     if(mode==3){
         let total=max(0.000001,arcMeta[0].x);let len=total*frac;let room=max(0.0,total-len);let off=select(0.0,stableUnit(cycle*4099u+73u)*room,random);return flashedDelta(globalD,off,len);
     }
@@ -109,7 +189,14 @@ fn makeStrokeVertex(si:u32,ri:u32,rs:u32,vid:u32,c0:vec4<f32>,c1:vec4<f32>,useCo
     let segCount=max(1u,u32(u.extra.x+0.5));let rs=max(1u,u32(u.color.w+0.5));let perCopy=segCount*rs;let ci=iid/perCopy;let unit=iid%perCopy;let si=unit/rs;let ri=unit%rs;return makeStrokeVertex(si,ri,rs,vid,copyData[ci*2u],copyData[ci*2u+1u],true);
 }
 @fragment fn fs(v:VOut)->@location(0) vec4<f32>{
-    if(v.copyAlpha<=0.00001){discard;}let sourceX=v.sourceStart+(v.local.x/v.screenLen)*v.sourceLen;let da=nearestActiveDelta(sourceX,v.pathIndex,v.pathStart,v.pathTotal);let along=da*(v.screenLen/v.sourceLen);let d=length(vec2<f32>(along,v.local.y));
+    if(v.copyAlpha<=0.00001){discard;}let sourceX=v.sourceStart+(v.local.x/v.screenLen)*v.sourceLen;let da=nearestActiveDelta(sourceX,v.pathIndex,v.pathStart,v.pathTotal);var along=da*(v.screenLen/v.sourceLen);
+    if(i32(u.select0.x+0.5)==4){
+       let reach=max(1.0,u.select1.x);
+       let center=u.row0.z+(clamp(u.select1.y,0.0,1.0)*2.0-1.0)*reach;
+       let band=max(0.25,reach*clamp(u.select0.y,0.01,1.0));
+       along=max(0.0,abs(v.position.x-center)-band);
+    }
+    let d=length(vec2<f32>(along,v.local.y));
     let centerCoverage=min(1.0,2.0*v.halfWidth);let core=min(centerCoverage,clamp(v.halfWidth+0.5-d,0.0,1.0));let edge=max(0.0,d-v.halfWidth);var glow=0.0;
     if(v.glowRadius>0.01){let qq=edge/max(0.0001,v.glowRadius);let ss=max(0.0,u.extra.z);let start=mix(0.84,0.02,min(1.0,ss));glow=1.0-smoothstep(start,1.0,qq);if(ss>1.0){glow=pow(max(0.0,glow),1.0/(1.0+(ss-1.0)*0.84));}}
     let intensity=max(0.0,(u.style.z*core+u.style.w*glow)*v.copyAlpha);let aa=clamp(intensity,0.0,1.0);if(aa<0.00015){discard;}return vec4<f32>(u.color.rgb*aa,aa);
@@ -121,112 +208,657 @@ struct MaskOut{@builtin(position) position:vec4<f32>};
 }
 @fragment fn fsMask()->@location(0) vec4<f32>{return vec4<f32>(0.0);}
 `;
-    const COMPOSITE_WGSL=`
+  const COMPOSITE_WGSL = `
 @group(0) @binding(0) var srcTex:texture_2d<f32>;
 struct V{@builtin(position) p:vec4<f32>};
 @vertex fn vs(@builtin(vertex_index) i:u32)->V{let q=array<vec2<f32>,3>(vec2<f32>(-1.0,-1.0),vec2<f32>(3.0,-1.0),vec2<f32>(-1.0,3.0))[i];var o:V;o.p=vec4<f32>(q,0.0,1.0);return o;}
 @fragment fn fs(@builtin(position) p:vec4<f32>)->@location(0) vec4<f32>{let d=textureDimensions(srcTex);let q=vec2<i32>(clamp(i32(p.x),0,i32(d.x)-1),clamp(i32(p.y),0,i32(d.y)-1));return textureLoad(srcTex,q,0);}`;
 
-    function blendMax(){return{color:{srcFactor:'one',dstFactor:'one',operation:'max'},alpha:{srcFactor:'one',dstFactor:'one',operation:'max'}};}
-    async function initAsync(){
-        if(ready&&device&&generation===WebGPUDeviceHub.getGeneration())return true;if(initializing)return initializing;
-        const task=(async()=>{try{
-            const shared=await WebGPUDeviceHub.acquire();device=shared.device;generation=shared.generation;format=navigator.gpu.getPreferredCanvasFormat();
-            const mod=device.createShaderModule({label:'SpiroStar GPU Lightning Arc WGSL',code:WGSL}),comp=device.createShaderModule({label:'SpiroStar GPU Lightning Arc composite WGSL',code:COMPOSITE_WGSL});
-            if(typeof assertWebGPUShaderModule==='function'){await assertWebGPUShaderModule(mod,'SpiroStar GPU Lightning Arc WGSL');await assertWebGPUShaderModule(comp,'SpiroStar GPU Lightning Arc composite WGSL');}
-            uniformLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'uniform'}}]});
-            pathLayout=device.createBindGroupLayout({entries:[0,1,2,3,4].map(binding=>({binding,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'read-only-storage'}}))});
-            copyLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
-            const maxTarget={format,blend:blendMax()};
-            strokePipeline=device.createRenderPipeline({label:'SpiroStar GPU Lightning Arc',layout:device.createPipelineLayout({bindGroupLayouts:[uniformLayout,pathLayout]}),vertex:{module:mod,entryPoint:'vs'},fragment:{module:mod,entryPoint:'fs',targets:[maxTarget]},primitive:{topology:'triangle-strip'}});
-            strokeCorridorPipeline=device.createRenderPipeline({label:'SpiroStar GPU Lightning Arc Corridor',layout:device.createPipelineLayout({bindGroupLayouts:[uniformLayout,pathLayout,copyLayout]}),vertex:{module:mod,entryPoint:'vsCorridor'},fragment:{module:mod,entryPoint:'fs',targets:[maxTarget]},primitive:{topology:'triangle-strip'}});
-            maskPipeline=device.createRenderPipeline({label:'SpiroStar GPU Lightning Arc parity mask',layout:device.createPipelineLayout({bindGroupLayouts:[uniformLayout,pathLayout]}),vertex:{module:mod,entryPoint:'vsMask'},fragment:{module:mod,entryPoint:'fsMask',targets:[{format,writeMask:0}]},primitive:{topology:'triangle-list'},depthStencil:{format:'depth24plus-stencil8',depthWriteEnabled:false,depthCompare:'always',stencilFront:{compare:'always',failOp:'keep',depthFailOp:'keep',passOp:'invert'},stencilBack:{compare:'always',failOp:'keep',depthFailOp:'keep',passOp:'invert'},stencilReadMask:1,stencilWriteMask:1}});
+  function blendMax() {
+    return {
+      color: { srcFactor: 'one', dstFactor: 'one', operation: 'max' },
+      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'max' },
+    };
+  }
+  async function initAsync() {
+    if (ready && device && generation === WebGPUDeviceHub.getGeneration()) return true;
+    if (initializing) return initializing;
+    const task = (async () => {
+      try {
+        const shared = await WebGPUDeviceHub.acquire();
+        device = shared.device;
+        generation = shared.generation;
+        format = navigator.gpu.getPreferredCanvasFormat();
+        const mod = device.createShaderModule({ label: 'SpiroStar GPU Lightning Arc WGSL', code: WGSL }),
+          comp = device.createShaderModule({
+            label: 'SpiroStar GPU Lightning Arc composite WGSL',
+            code: COMPOSITE_WGSL,
+          });
+        {
+          await assertWebGPUShaderModule(mod, 'SpiroStar GPU Lightning Arc WGSL');
+          await assertWebGPUShaderModule(comp, 'SpiroStar GPU Lightning Arc composite WGSL');
+        }
+        uniformLayout = device.createBindGroupLayout({
+          entries: [
+            {
+              binding: 0,
+              visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+              buffer: { type: 'uniform' },
+            },
+          ],
+        });
+        pathLayout = device.createBindGroupLayout({
+          entries: [0, 1, 2, 3, 4].map((binding) => ({
+            binding,
+            visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+            buffer: { type: 'read-only-storage' },
+          })),
+        });
+        copyLayout = device.createBindGroupLayout({
+          entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } }],
+        });
+        const maxTarget = { format, blend: blendMax() };
+        strokePipeline = device.createRenderPipeline({
+          label: 'SpiroStar GPU Lightning Arc',
+          layout: device.createPipelineLayout({ bindGroupLayouts: [uniformLayout, pathLayout] }),
+          vertex: { module: mod, entryPoint: 'vs' },
+          fragment: { module: mod, entryPoint: 'fs', targets: [maxTarget] },
+          primitive: { topology: 'triangle-strip' },
+        });
+        strokeCorridorPipeline = device.createRenderPipeline({
+          label: 'SpiroStar GPU Lightning Arc Corridor',
+          layout: device.createPipelineLayout({ bindGroupLayouts: [uniformLayout, pathLayout, copyLayout] }),
+          vertex: { module: mod, entryPoint: 'vsCorridor' },
+          fragment: { module: mod, entryPoint: 'fs', targets: [maxTarget] },
+          primitive: { topology: 'triangle-strip' },
+        });
+        maskPipeline = device.createRenderPipeline({
+          label: 'SpiroStar GPU Lightning Arc parity mask',
+          layout: device.createPipelineLayout({ bindGroupLayouts: [uniformLayout, pathLayout] }),
+          vertex: { module: mod, entryPoint: 'vsMask' },
+          fragment: { module: mod, entryPoint: 'fsMask', targets: [{ format, writeMask: 0 }] },
+          primitive: { topology: 'triangle-list' },
+          depthStencil: {
+            format: 'depth24plus-stencil8',
+            depthWriteEnabled: false,
+            depthCompare: 'always',
+            stencilFront: { compare: 'always', failOp: 'keep', depthFailOp: 'keep', passOp: 'invert' },
+            stencilBack: { compare: 'always', failOp: 'keep', depthFailOp: 'keep', passOp: 'invert' },
+            stencilReadMask: 1,
+            stencilWriteMask: 1,
+          },
+        });
 
-            compositeLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.FRAGMENT,texture:{sampleType:'float'}}]});
-            const compLayout=device.createPipelineLayout({bindGroupLayouts:[compositeLayout]}),stencilState={format:'depth24plus-stencil8',depthWriteEnabled:false,depthCompare:'always',stencilFront:{compare:'equal',failOp:'keep',depthFailOp:'keep',passOp:'keep'},stencilBack:{compare:'equal',failOp:'keep',depthFailOp:'keep',passOp:'keep'},stencilReadMask:1,stencilWriteMask:0};
-            compositePipelines=Object.create(null);compositeStencilPipelines=Object.create(null);
-            for(const mode of (typeof SWEEP_BLEND_MODES!=='undefined'?SWEEP_BLEND_MODES:['normal','screen','multiply','add','darken','lighten'])){
-                const blend=sweepBlendGpuState(mode);
-                compositePipelines[mode]=device.createRenderPipeline({label:`SpiroStar GPU Lightning Arc ${mode} composite`,layout:compLayout,vertex:{module:comp,entryPoint:'vs'},fragment:{module:comp,entryPoint:'fs',targets:[{format,blend}]},primitive:{topology:'triangle-list'}});
-                compositeStencilPipelines[mode]=device.createRenderPipeline({label:`SpiroStar GPU Lightning Arc ${mode} stencil composite`,layout:compLayout,vertex:{module:comp,entryPoint:'vs'},fragment:{module:comp,entryPoint:'fs',targets:[{format,blend}]},primitive:{topology:'triangle-list'},depthStencil:stencilState});
-            }
-            compositePipeline=compositePipelines.add;compositeStencilPipeline=compositeStencilPipelines.add;compositeOverPipeline=compositePipelines.normal;compositeOverStencilPipeline=compositeStencilPipelines.normal;
-            uniformBuffers=Array.from({length:96},(_,i)=>device.createBuffer({label:`SpiroStar Lightning Arc uniforms ${i}`,size:128,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}));uniformBinds=uniformBuffers.map(buffer=>device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer}}]}));uniformCursor=0;pathBinds=new WeakMap();copyBinds=new WeakMap();strokeBundleCache=new WeakMap();bundleObjectIds=new WeakMap();bundleObjectSerial=0;ready=true;lastError='';return true;
-        }catch(err){ready=false;lastError=String(err?.message||err);stats.failures++;return false;}})();initializing=task;try{return await task;}finally{if(initializing===task)initializing=null;}
+        compositeLayout = device.createBindGroupLayout({
+          entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } }],
+        });
+        const compLayout = device.createPipelineLayout({ bindGroupLayouts: [compositeLayout] }),
+          stencilState = {
+            format: 'depth24plus-stencil8',
+            depthWriteEnabled: false,
+            depthCompare: 'always',
+            stencilFront: { compare: 'equal', failOp: 'keep', depthFailOp: 'keep', passOp: 'keep' },
+            stencilBack: { compare: 'equal', failOp: 'keep', depthFailOp: 'keep', passOp: 'keep' },
+            stencilReadMask: 1,
+            stencilWriteMask: 0,
+          };
+        compositePipelines = Object.create(null);
+        compositeStencilPipelines = Object.create(null);
+        for (const mode of typeof SWEEP_BLEND_MODES !== 'undefined'
+          ? SWEEP_BLEND_MODES
+          : ['normal', 'screen', 'multiply', 'add', 'darken', 'lighten']) {
+          const blend = sweepBlendGpuState(mode);
+          compositePipelines[mode] = device.createRenderPipeline({
+            label: `SpiroStar GPU Lightning Arc ${mode} composite`,
+            layout: compLayout,
+            vertex: { module: comp, entryPoint: 'vs' },
+            fragment: { module: comp, entryPoint: 'fs', targets: [{ format, blend }] },
+            primitive: { topology: 'triangle-list' },
+          });
+          compositeStencilPipelines[mode] = device.createRenderPipeline({
+            label: `SpiroStar GPU Lightning Arc ${mode} stencil composite`,
+            layout: compLayout,
+            vertex: { module: comp, entryPoint: 'vs' },
+            fragment: { module: comp, entryPoint: 'fs', targets: [{ format, blend }] },
+            primitive: { topology: 'triangle-list' },
+            depthStencil: stencilState,
+          });
+        }
+        compositePipeline = compositePipelines.add;
+        compositeStencilPipeline = compositeStencilPipelines.add;
+        compositeOverPipeline = compositePipelines.normal;
+        compositeOverStencilPipeline = compositeStencilPipelines.normal;
+        uniformBuffers = Array.from({ length: 96 }, (_, i) =>
+          device.createBuffer({
+            label: `SpiroStar Lightning Arc uniforms ${i}`,
+            size: 128,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+          }),
+        );
+        uniformBinds = uniformBuffers.map((buffer) =>
+          device.createBindGroup({ layout: uniformLayout, entries: [{ binding: 0, resource: { buffer } }] }),
+        );
+        uniformCursor = 0;
+        pathBinds = new WeakMap();
+        copyBinds = new WeakMap();
+        strokeBundleCache = new WeakMap();
+        bundleObjectIds = new WeakMap();
+        bundleObjectSerial = 0;
+        ready = true;
+        lastError = '';
+        return true;
+      } catch (err) {
+        ready = false;
+        lastError = String(err?.message || err);
+        stats.failures++;
+        return false;
+      }
+    })();
+    initializing = task;
+    try {
+      return await task;
+    } finally {
+      if (initializing === task) initializing = null;
     }
-    function destroySize(){try{scratchTexture?.destroy?.();}catch(_){}try{stencilTexture?.destroy?.();}catch(_){}scratchTexture=scratchView=stencilTexture=stencilView=compositeBind=null;width=height=0;}
-    function warmup(){const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(ready&&gen!==generation){ready=false;device=null;destroySize();uniformBuffers=[];uniformBinds=[];pathBinds=new WeakMap();copyBinds=new WeakMap();strokeBundleCache=new WeakMap();bundleObjectIds=new WeakMap();bundleObjectSerial=0;targetViews=new WeakMap();compositeLayout=null;}if(!ready&&!initializing)void initAsync();return ready;}
-    function ensureSize(){if(!ready||!device)return false;const w=Math.max(1,mainCanvas.width|0),h=Math.max(1,mainCanvas.height|0);if(w===width&&h===height&&scratchTexture&&stencilTexture)return true;destroySize();width=w;height=h;scratchTexture=device.createTexture({label:'SpiroStar Lightning Arc scratch',size:[w,h,1],format,usage:GPUTextureUsage.RENDER_ATTACHMENT|GPUTextureUsage.TEXTURE_BINDING});scratchView=scratchTexture.createView();stencilTexture=device.createTexture({label:'SpiroStar Lightning Arc stencil',size:[w,h,1],format:'depth24plus-stencil8',usage:GPUTextureUsage.RENDER_ATTACHMENT});stencilView=stencilTexture.createView();compositeBind=device.createBindGroup({layout:compositeLayout,entries:[{binding:0,resource:scratchView}]});return true;}
-    function pathBind(table){const arcRec=table?._gpuMorphArcResource,currentGen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(!arcRec?.ready||arcRec.generation!==generation||generation!==currentGen)return null;let bg=pathBinds.get(arcRec);if(bg)return bg;const morph=arcRec.morphRec;if(!morph?.cubicBuffer)return null;bg=device.createBindGroup({layout:pathLayout,entries:[{binding:0,resource:{buffer:arcRec.segmentBuffer}},{binding:1,resource:{buffer:arcRec.segmentMetaBuffer}},{binding:2,resource:{buffer:morph.pathRangeBuffer}},{binding:3,resource:{buffer:arcRec.metaBuffer}},{binding:4,resource:{buffer:morph.cubicBuffer}}]});pathBinds.set(arcRec,bg);return bg;}
-    function copyBind(buffer){let bg=copyBinds.get(buffer);if(bg)return bg;bg=device.createBindGroup({layout:copyLayout,entries:[{binding:0,resource:{buffer}}]});copyBinds.set(buffer,bg);return bg;}
-    const EXACT_BEZIER_RASTER_SUBDIV=4;
-    function lightningRasterSubdiv(prepared){return String(prepared?.cfg?.lightningPrecision||'exact').toLowerCase()==='simple'?1:EXACT_BEZIER_RASTER_SUBDIV;}
-    function fillUniform(ctx,prepared,style,copyMode=false){
-        const tr=ctx?.getTransform?.();if(!tr)return null;const cfg=prepared.cfg,sel=prepared.lightningSelection||{},rgb=GPUColorCache.rgb(style.color),sx=Math.hypot(Number(tr.a)||0,Number(tr.b)||0),sy=Math.hypot(Number(tr.c)||0,Number(tr.d)||0),screenScale=Math.sqrt(Math.max(1e-12,sx*sy));
-        uniformData.fill(0);uniformData[0]=width;uniformData[1]=height;uniformData[4]=tr.a;uniformData[5]=tr.c;uniformData[6]=tr.e;uniformData[8]=tr.b;uniformData[9]=tr.d;uniformData[10]=tr.f;uniformData[12]=rgb[0];uniformData[13]=rgb[1];uniformData[14]=rgb[2];uniformData[15]=lightningRasterSubdiv(prepared);
-        uniformData[16]=Math.max(.18,Math.abs(Number(style.width)||1)*screenScale*.5);uniformData[17]=Math.max(0,Number(style.glowRadius)||0)*screenScale;uniformData[18]=Math.max(0,Math.min(8,Number(style.coreAlpha)||0));uniformData[19]=Math.max(0,Math.min(32,Number(style.glowAlpha)||0));
-        uniformData[20]=Number(sel.modeCode)||0;uniformData[21]=Math.max(.01,Math.min(1,Number(sel.frac)||1));uniformData[22]=sel.random?1:0;uniformData[23]=Math.max(0,Number(sel.cycle)||0);
-        uniformData[24]=Math.max(1,Number(sel.constructionSegments)||1);uniformData[25]=Math.max(1,Number(sel.nth)||1);uniformData[26]=Math.max(.01,Math.min(1,Number(style.flashFrac)||1));uniformData[27]=Math.max(0,Math.min(1,Number(style.travel)||0));
-        uniformData[28]=Math.max(1,Number(prepared.table?._gpuMorphArcResource?.segmentCount)||1);uniformData[29]=Math.max(1,Number(prepared.table?._gpuMorphArcResource?.subdiv)||1);uniformData[30]=Math.max(0,Number(style.softness)||0);uniformData[31]=prepared.table?._gpuMorphArcResource?.morphRec?.cubicBuffer?1:0;
-        const slot=uniformCursor++%uniformBuffers.length,ub=uniformBuffers[slot];device.queue.writeBuffer(ub,0,uniformData.buffer,0,128);stats.uniformBindReuses++;return{bind:uniformBinds[slot],slot};
+  }
+  function destroySize() {
+    try {
+      scratchTexture?.destroy?.();
+    } catch (error) {
+      noteSuppressedError('gpu/lightning-arc-renderer#destroySize', error);
     }
-    function bundleObjectId(obj){if(!obj)return 0;let id=bundleObjectIds.get(obj);if(id)return id;id=++bundleObjectSerial;bundleObjectIds.set(obj,id);return id;}
-    function strokeBundle(arcRec,pbg,copyBg,uniformRow,instances){
-        if(typeof device?.createRenderBundleEncoder!=='function'||!arcRec||!pbg||!uniformRow?.bind)return null;
-        let cache=strokeBundleCache.get(arcRec);if(!cache){cache=new Map();strokeBundleCache.set(arcRec,cache);}
-        const corridor=Boolean(copyBg),key=`${corridor?1:0}|${bundleObjectId(copyBg)}|${uniformRow.slot}|${instances}`;let hit=cache.get(key);
-        if(hit){stats.bundleHits++;return hit;}
-        try{
-            const rbe=device.createRenderBundleEncoder({label:'SpiroStar exact Lightning retained stroke',colorFormats:[format]});
-            rbe.setPipeline(corridor?strokeCorridorPipeline:strokePipeline);rbe.setBindGroup(0,uniformRow.bind);rbe.setBindGroup(1,pbg);if(corridor)rbe.setBindGroup(2,copyBg);rbe.draw(4,instances);
-            const bundle=rbe.finish();hit={bundle,list:[bundle]};cache.set(key,hit);stats.bundleBuilds++;return hit;
-        }catch(_){stats.bundleFallbacks++;return null;}
+    try {
+      stencilTexture?.destroy?.();
+    } catch (error) {
+      noteSuppressedError('gpu/lightning-arc-renderer#destroySize', error);
     }
-    function strokeStyles(frame,baseAlpha,cfg){
-        if(!frame||frame.stage==='idle')return [];
-        const a=Math.max(0,Math.min(1,(Number(baseAlpha)||0)*Math.max(0,Number(frame.intensity)||0)));
-        if(a<=.001)return [];
-        // Same exact retained Arc for every alpha pulse: one raster + composite,
-        // not a separate halo, core and a new stroke for each micro-strike.
-        return [{width:Math.max(.2,frame.boltW),color:lightningOnePassColor(frame.primary,frame.secondary),
-            coreAlpha:a*Math.max(0,Math.min(1,frame.glowIntensity)),
-            glowRadius:lightningVisualGlowRadius(frame.glow),
-            glowAlpha:a*.82*frame.glowIntensity*Math.max(0,frame.brightness||0)*(frame.smoothLighting?.34:.27),
-            softness:frame.softness,flashFrac:1,travel:0}];
+    scratchTexture = scratchView = stencilTexture = stencilView = compositeBind = null;
+    width = height = 0;
+  }
+  function warmup() {
+    const gen = typeof WebGPUDeviceHub !== 'undefined' ? WebGPUDeviceHub.getGeneration() : -1;
+    if (ready && gen !== generation) {
+      ready = false;
+      device = null;
+      destroySize();
+      uniformBuffers = [];
+      uniformBinds = [];
+      pathBinds = new WeakMap();
+      copyBinds = new WeakMap();
+      strokeBundleCache = new WeakMap();
+      bundleObjectIds = new WeakMap();
+      bundleObjectSerial = 0;
+      targetViews = new WeakMap();
+      compositeLayout = null;
     }
-    function encode(targetTexture,prepared,frame,ctx,baseAlpha,behavior='symmetric',copies=null,alphas=null,frameCtx=null,footprint=1){
-        const encodeStartedAt=performance.now();
-        if(!targetTexture||!prepared?.gpuMorphArcLightning||!prepared.table?.gpuArcResident||!frame||frame.showBase===true||!warmup()||!ensureSize())return{handled:false,commandBuffer:null};
-        if(behavior!=='symmetric'&&Array.isArray(copies)&&copies.length)return{handled:false,commandBuffer:null,reason:'clipped-corridor-exact-fallback'};
-        const arcRec=prepared.table._gpuMorphArcResource,morph=arcRec?.morphRec,currentGen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;if(!arcRec?.ready||!morph?.ready||generation!==currentGen||arcRec.generation!==generation||(Number.isFinite(Number(morph.generation))&&Number(morph.generation)!==generation))return{handled:false,commandBuffer:null,reason:'stale-gpu-generation'};
-        if(frame.stage==='idle')return{handled:true,commandBuffer:null};
-        try{
-            const styles=strokeStyles(frame,baseAlpha,prepared.cfg);if(!styles.length)return{handled:true,commandBuffer:null};
-            const encoder=device.createCommandEncoder({label:`SpiroStar exact GPU Lightning Arc L${morph.layerIndex}`});
-            const arcStartedAt=performance.now();const hadCommitted=arcRec.hasCommittedData&&arcRec.lastCommittedT===prepared.table.gpuMorphT;const arcReady=typeof spiroGpuPrepareArcForLayerScene==='function'?spiroGpuPrepareArcForLayerScene(frameCtx,prepared.table,encoder):(typeof encodeGpuMorphArcTable==='function'&&encodeGpuMorphArcTable(prepared.table,encoder));stats.lastArcPrepareCpuMs=Math.max(0,performance.now()-arcStartedAt);if(!arcReady)throw new Error('GPU Morph Arc encode failed');if(hadCommitted||frameCtx?.frame?.gpuLayerSceneDeferred)stats.arcReuses++;else stats.arcEncodes++;
-            const pbg=pathBind(prepared.table);if(!pbg)throw new Error('Lightning Arc path bind unavailable');let copyBg=null,copyCount=1;
-            if(Array.isArray(copies)&&copies.length){const shared=WebGPUCorridorCopyStore.acquire(device,generation,frameCtx,copies,alphas,'sweep',footprint,frameCtx?.layer);if(!shared?.buffer||!shared.k)return{handled:true,commandBuffer:null};copyCount=shared.k;copyBg=copyBind(shared.buffer);stats.corridorFrames++;stats.corridorCopies+=copyCount;}
-            const rasterSubdiv=lightningRasterSubdiv(prepared),instances=arcRec.segmentCount*rasterSubdiv*copyCount,combinedStyles=styles;stats.lastInstances=instances;stats.lastStyleCount=styles.length;stats.lastRasterSubdiv=rasterSubdiv;stats.lastStage=String(frame.stage||'idle');stats.lastBehavior=String(behavior||'symmetric');stats.lastPrecision=String(prepared?.cfg?.lightningPrecision||'exact');let targetView=targetViews.get(targetTexture);if(!targetView){targetView=targetTexture.createView();targetViews.set(targetTexture,targetView);}const clipped=behavior==='inside'||behavior==='outside';let pass;
-            if(clipped){const maskUniform=fillUniform(ctx,prepared,{width:1,color:'#ffffff',coreAlpha:0,glowRadius:0,glowAlpha:0,flashFrac:1,travel:0},false);pass=encoder.beginRenderPass({colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}],depthStencilAttachment:{view:stencilView,depthClearValue:1,depthLoadOp:'clear',depthStoreOp:'discard',stencilClearValue:0,stencilLoadOp:'clear',stencilStoreOp:'store'}});pass.setPipeline(maskPipeline);pass.setBindGroup(0,maskUniform.bind);pass.setBindGroup(1,pbg);pass.draw(3,arcRec.segmentCount);pass.end();stats.clippedFrames++;stats.stencilEdges+=arcRec.segmentCount;}
-            const drawAnalyticGroup=(group,core)=>{if(!group.length)return;pass=encoder.beginRenderPass({colorAttachments:[{view:scratchView,clearValue:{r:0,g:0,b:0,a:0},loadOp:'clear',storeOp:'store'}]});for(const style of group){const ub=fillUniform(ctx,prepared,style,Boolean(copyBg));if(!ub)continue;const bundled=strokeBundle(arcRec,pbg,copyBg,ub,instances);if(bundled){pass.executeBundles(bundled.list);stats.bundleExecutes++;}else{pass.setPipeline(copyBg?strokeCorridorPipeline:strokePipeline);pass.setBindGroup(0,ub.bind);pass.setBindGroup(1,pbg);if(copyBg)pass.setBindGroup(2,copyBg);pass.draw(4,instances);}stats.strokeDraws++;}pass.end();const blendMode=core?sweepCoreBlendMode(prepared.cfg):sweepGlowBlendMode(prepared.cfg);
-                if(SomataSweepLampBlend.encode(encoder,device,format,scratchTexture,targetTexture,blendMode,
-                    {width,height,stencilView:clipped?stencilView:null,stencilReference:behavior==='inside'?1:0}))return;
-                const desc={colorAttachments:[{view:targetView,loadOp:'load',storeOp:'store'}]};if(clipped)desc.depthStencilAttachment={view:stencilView,depthLoadOp:'load',depthStoreOp:'discard',stencilLoadOp:'load',stencilStoreOp:'discard'};pass=encoder.beginRenderPass(desc);if(clipped)pass.setStencilReference(behavior==='inside'?1:0);const pipelines=clipped?compositeStencilPipelines:compositePipelines;pass.setPipeline(pipelines[blendMode]||pipelines.normal);pass.setBindGroup(0,compositeBind);pass.draw(3);pass.end();};
+    if (!ready && !initializing) void initAsync();
+    return ready;
+  }
+  function ensureSize() {
+    if (!ready || !device) return false;
+    const w = Math.max(1, mainCanvas.width | 0),
+      h = Math.max(1, mainCanvas.height | 0);
+    if (w === width && h === height && scratchTexture && stencilTexture) return true;
+    destroySize();
+    width = w;
+    height = h;
+    scratchTexture = device.createTexture({
+      label: 'SpiroStar Lightning Arc scratch',
+      size: [w, h, 1],
+      format,
+      usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+    });
+    scratchView = scratchTexture.createView();
+    stencilTexture = device.createTexture({
+      label: 'SpiroStar Lightning Arc stencil',
+      size: [w, h, 1],
+      format: 'depth24plus-stencil8',
+      usage: GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    stencilView = stencilTexture.createView();
+    compositeBind = device.createBindGroup({
+      layout: compositeLayout,
+      entries: [{ binding: 0, resource: scratchView }],
+    });
+    return true;
+  }
+  function pathBind(table) {
+    const arcRec = table?._gpuMorphArcResource,
+      currentGen = typeof WebGPUDeviceHub !== 'undefined' ? WebGPUDeviceHub.getGeneration() : -1;
+    if (!arcRec?.ready || arcRec.generation !== generation || generation !== currentGen) return null;
+    let bg = pathBinds.get(arcRec);
+    if (bg) return bg;
+    const morph = arcRec.morphRec;
+    if (!morph?.cubicBuffer) return null;
+    bg = device.createBindGroup({
+      layout: pathLayout,
+      entries: [
+        { binding: 0, resource: { buffer: arcRec.segmentBuffer } },
+        { binding: 1, resource: { buffer: arcRec.segmentMetaBuffer } },
+        { binding: 2, resource: { buffer: morph.pathRangeBuffer } },
+        { binding: 3, resource: { buffer: arcRec.metaBuffer } },
+        { binding: 4, resource: { buffer: morph.cubicBuffer } },
+      ],
+    });
+    pathBinds.set(arcRec, bg);
+    return bg;
+  }
+  function copyBind(buffer) {
+    let bg = copyBinds.get(buffer);
+    if (bg) return bg;
+    bg = device.createBindGroup({ layout: copyLayout, entries: [{ binding: 0, resource: { buffer } }] });
+    copyBinds.set(buffer, bg);
+    return bg;
+  }
+  const EXACT_BEZIER_RASTER_SUBDIV = 4;
+  function lightningRasterSubdiv(prepared) {
+    // In strict Spiral mode the actual Line is already the retained fastRail
+    // of straight GPU microsegments. Extra Bézier substeps cannot improve
+    // their appearance and only duplicate work for each flash/corridor copy.
+    if (prepared?.table?._gpuMorphArcResource?.visibleRailExact === true) return 1;
+    return String(prepared?.cfg?.lightningPrecision || 'exact').toLowerCase() === 'simple'
+      ? 1
+      : EXACT_BEZIER_RASTER_SUBDIV;
+  }
+  function fillUniform(ctx, prepared, style, copyMode = false) {
+    const tr = ctx?.getTransform?.();
+    if (!tr) return null;
+    const cfg = prepared.cfg,
+      sel = prepared.lightningSelection || {},
+      rgb = GPUColorCache.rgb(style.color),
+      sx = Math.hypot(Number(tr.a) || 0, Number(tr.b) || 0),
+      sy = Math.hypot(Number(tr.c) || 0, Number(tr.d) || 0),
+      screenScale = Math.sqrt(Math.max(1e-12, sx * sy));
+    uniformData.fill(0);
+    uniformData[0] = width;
+    uniformData[1] = height;
+    uniformData[4] = tr.a;
+    uniformData[5] = tr.c;
+    uniformData[6] = tr.e;
+    uniformData[8] = tr.b;
+    uniformData[9] = tr.d;
+    uniformData[10] = tr.f;
+    uniformData[12] = rgb[0];
+    uniformData[13] = rgb[1];
+    uniformData[14] = rgb[2];
+    uniformData[15] = lightningRasterSubdiv(prepared);
+    uniformData[16] = Math.max(0.18, Math.abs(Number(style.width) || 1) * screenScale * 0.5);
+    uniformData[17] = Math.max(0, Number(style.glowRadius) || 0) * screenScale;
+    uniformData[18] = Math.max(0, Math.min(8, Number(style.coreAlpha) || 0));
+    uniformData[19] = Math.max(0, Math.min(32, Number(style.glowAlpha) || 0));
+    uniformData[20] = Number(sel.modeCode) || 0;
+    uniformData[21] = Math.max(0.01, Math.min(1, Number(sel.frac) || 1));
+    uniformData[22] = sel.random ? 1 : 0;
+    uniformData[23] = Math.max(0, Number(sel.cycle) || 0);
+    // Across uses the same screen-space moving X-band as GPU Glint,
+    // while the other modes retain exact per-segment/path selection.
+    const across = sel.modeCode === 4;
+    const pair = prepared.table?._gpuMorphArcResource?.morphRec;
+    const extent = Math.max(
+      1,
+      Math.abs(Number(pair?.sourceLayer?.radius) || 0),
+      Math.abs(Number(pair?.targetLayer?.radius) || 0),
+      Math.abs(Number(pair?.sourceLayer?.R) || 0),
+      Math.abs(Number(pair?.targetLayer?.R) || 0),
+    );
+    uniformData[24] = across
+      ? Math.max(1, extent * Math.hypot(Number(tr.a) || 0, Number(tr.c) || 0) * 1.5)
+      : Math.max(1, Number(sel.constructionSegments) || 1);
+    uniformData[25] = across
+      ? Math.max(0, Math.min(1, Number(sel.acrossPhase) || 0))
+      : Math.max(1, Number(sel.nth) || 1);
+    uniformData[26] = Math.max(0.01, Math.min(1, Number(style.flashFrac) || 1));
+    uniformData[27] = Math.max(0, Math.min(1, Number(style.travel) || 0));
+    uniformData[28] = Math.max(1, Number(prepared.table?._gpuMorphArcResource?.segmentCount) || 1);
+    uniformData[29] = Math.max(1, Number(prepared.table?._gpuMorphArcResource?.subdiv) || 1);
+    uniformData[30] = Math.max(0, Number(style.softness) || 0); // Match the visible Line carrier, not an invisible retained Bézier curve.
+    // The non-fastRail exact mode deliberately retains its cubic sampler.
+    uniformData[31] =
+      prepared.table?._gpuMorphArcResource?.visibleRailExact === true
+        ? 0
+        : prepared.table?._gpuMorphArcResource?.morphRec?.cubicBuffer
+          ? 1
+          : 0;
+    const slot = uniformCursor++ % uniformBuffers.length,
+      ub = uniformBuffers[slot];
+    device.queue.writeBuffer(ub, 0, uniformData.buffer, 0, 128);
+    stats.uniformBindReuses++;
+    return { bind: uniformBinds[slot], slot };
+  }
+  function bundleObjectId(obj) {
+    if (!obj) return 0;
+    let id = bundleObjectIds.get(obj);
+    if (id) return id;
+    id = ++bundleObjectSerial;
+    bundleObjectIds.set(obj, id);
+    return id;
+  }
+  function strokeBundle(arcRec, pbg, copyBg, uniformRow, instances) {
+    if (typeof device?.createRenderBundleEncoder !== 'function' || !arcRec || !pbg || !uniformRow?.bind)
+      return null;
+    let cache = strokeBundleCache.get(arcRec);
+    if (!cache) {
+      cache = new Map();
+      strokeBundleCache.set(arcRec, cache);
+    }
+    const corridor = Boolean(copyBg),
+      key = `${corridor ? 1 : 0}|${bundleObjectId(copyBg)}|${uniformRow.slot}|${instances}`;
+    let hit = cache.get(key);
+    if (hit) {
+      stats.bundleHits++;
+      return hit;
+    }
+    try {
+      const rbe = device.createRenderBundleEncoder({
+        label: 'SpiroStar exact Lightning retained stroke',
+        colorFormats: [format],
+      });
+      rbe.setPipeline(corridor ? strokeCorridorPipeline : strokePipeline);
+      rbe.setBindGroup(0, uniformRow.bind);
+      rbe.setBindGroup(1, pbg);
+      if (corridor) rbe.setBindGroup(2, copyBg);
+      rbe.draw(4, instances);
+      const bundle = rbe.finish();
+      hit = { bundle, list: [bundle] };
+      cache.set(key, hit);
+      stats.bundleBuilds++;
+      return hit;
+    } catch (_) {
+      stats.bundleFallbacks++;
+      return null;
+    }
+  }
+  function strokeStyles(frame, baseAlpha, cfg) {
+    if (!frame || frame.stage === 'idle') return [];
+    const a = Math.max(0, Math.min(1, (Number(baseAlpha) || 0) * Math.max(0, Number(frame.intensity) || 0)));
+    if (a <= 0.001) return [];
+    // Same exact retained Arc for every alpha pulse: one raster + composite,
+    // not a separate halo, core and a new stroke for each micro-strike.
+    return [
+      {
+        width: Math.max(0.2, frame.boltW),
+        color: lightningOnePassColor(frame.primary, frame.secondary),
+        coreAlpha: a * Math.max(0, Math.min(1, frame.glowIntensity)),
+        glowRadius: lightningVisualGlowRadius(frame.glow),
+        glowAlpha:
+          a *
+          0.82 *
+          frame.glowIntensity *
+          Math.max(0, frame.brightness || 0) *
+          (frame.smoothLighting ? 0.34 : 0.27),
+        softness: frame.softness,
+        flashFrac: 1,
+        travel: 0,
+      },
+    ];
+  }
+  function encode(
+    targetTexture,
+    prepared,
+    frame,
+    ctx,
+    baseAlpha,
+    behavior = 'symmetric',
+    copies = null,
+    alphas = null,
+    frameCtx = null,
+    footprint = 1,
+  ) {
+    const encodeStartedAt = performance.now();
+    if (
+      !targetTexture ||
+      !prepared?.gpuMorphArcLightning ||
+      !prepared.table?.gpuArcResident ||
+      !frame ||
+      frame.showBase === true ||
+      !warmup() ||
+      !ensureSize()
+    )
+      return { handled: false, commandBuffer: null };
+    if (behavior !== 'symmetric' && Array.isArray(copies) && copies.length)
+      return { handled: false, commandBuffer: null, reason: 'clipped-corridor-exact-fallback' };
+    const arcRec = prepared.table._gpuMorphArcResource,
+      morph = arcRec?.morphRec,
+      currentGen = typeof WebGPUDeviceHub !== 'undefined' ? WebGPUDeviceHub.getGeneration() : -1;
+    if (
+      !arcRec?.ready ||
+      !morph?.ready ||
+      generation !== currentGen ||
+      arcRec.generation !== generation ||
+      (Number.isFinite(Number(morph.generation)) && Number(morph.generation) !== generation)
+    )
+      return { handled: false, commandBuffer: null, reason: 'stale-gpu-generation' };
+    if (frame.stage === 'idle') return { handled: true, commandBuffer: null };
+    try {
+      const styles = strokeStyles(frame, baseAlpha, prepared.cfg);
+      if (!styles.length) return { handled: true, commandBuffer: null };
+      const encoder = device.createCommandEncoder({
+        label: `SpiroStar exact GPU Lightning Arc L${morph.layerIndex}`,
+      });
+      const arcStartedAt = performance.now();
+      const hadCommitted = arcRec.hasCommittedData && arcRec.lastCommittedT === prepared.table.gpuMorphT;
+      const arcReady = spiroGpuPrepareArcForLayerScene(frameCtx, prepared.table, encoder);
+      stats.lastArcPrepareCpuMs = Math.max(0, performance.now() - arcStartedAt);
+      if (!arcReady) throw new Error('GPU Morph Arc encode failed');
+      if (hadCommitted || frameCtx?.frame?.gpuLayerSceneDeferred) stats.arcReuses++;
+      else stats.arcEncodes++;
+      const pbg = pathBind(prepared.table);
+      if (!pbg) throw new Error('Lightning Arc path bind unavailable');
+      let copyBg = null,
+        copyCount = 1;
+      if (Array.isArray(copies) && copies.length) {
+        const shared = WebGPUCorridorCopyStore.acquire(
+          device,
+          generation,
+          frameCtx,
+          copies,
+          alphas,
+          'sweep',
+          footprint,
+          frameCtx?.layer,
+        );
+        if (!shared?.buffer || !shared.k) return { handled: true, commandBuffer: null };
+        copyCount = shared.k;
+        copyBg = copyBind(shared.buffer);
+        stats.corridorFrames++;
+        stats.corridorCopies += copyCount;
+      }
+      const rasterSubdiv = lightningRasterSubdiv(prepared),
+        instances = arcRec.segmentCount * rasterSubdiv * copyCount,
+        combinedStyles = styles;
+      stats.lastInstances = instances;
+      stats.lastStyleCount = styles.length;
+      stats.lastRasterSubdiv = rasterSubdiv;
+      stats.lastStage = String(frame.stage || 'idle');
+      stats.lastBehavior = String(behavior || 'symmetric');
+      stats.lastPrecision = String(prepared?.cfg?.lightningPrecision || 'exact');
+      let targetView = targetViews.get(targetTexture);
+      if (!targetView) {
+        targetView = targetTexture.createView();
+        targetViews.set(targetTexture, targetView);
+      }
+      const clipped = behavior === 'inside' || behavior === 'outside';
+      let pass;
+      if (clipped) {
+        const maskUniform = fillUniform(
+          ctx,
+          prepared,
+          { width: 1, color: '#ffffff', coreAlpha: 0, glowRadius: 0, glowAlpha: 0, flashFrac: 1, travel: 0 },
+          false,
+        );
+        pass = encoder.beginRenderPass({
+          colorAttachments: [{ view: targetView, loadOp: 'load', storeOp: 'store' }],
+          depthStencilAttachment: {
+            view: stencilView,
+            depthClearValue: 1,
+            depthLoadOp: 'clear',
+            depthStoreOp: 'discard',
+            stencilClearValue: 0,
+            stencilLoadOp: 'clear',
+            stencilStoreOp: 'store',
+          },
+        });
+        pass.setPipeline(maskPipeline);
+        pass.setBindGroup(0, maskUniform.bind);
+        pass.setBindGroup(1, pbg);
+        pass.draw(3, arcRec.segmentCount);
+        pass.end();
+        stats.clippedFrames++;
+        stats.stencilEdges += arcRec.segmentCount;
+      }
+      const drawAnalyticGroup = (group, core) => {
+        if (!group.length) return;
+        pass = encoder.beginRenderPass({
+          colorAttachments: [
+            { view: scratchView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
+          ],
+        });
+        for (const style of group) {
+          const ub = fillUniform(ctx, prepared, style, Boolean(copyBg));
+          if (!ub) continue;
+          const bundled = strokeBundle(arcRec, pbg, copyBg, ub, instances);
+          if (bundled) {
+            pass.executeBundles(bundled.list);
+            stats.bundleExecutes++;
+          } else {
+            pass.setPipeline(copyBg ? strokeCorridorPipeline : strokePipeline);
+            pass.setBindGroup(0, ub.bind);
+            pass.setBindGroup(1, pbg);
+            if (copyBg) pass.setBindGroup(2, copyBg);
+            pass.draw(4, instances);
+          }
+          stats.strokeDraws++;
+        }
+        pass.end();
+        const blendMode = core ? sweepCoreBlendMode(prepared.cfg) : sweepGlowBlendMode(prepared.cfg);
+        if (
+          SomataSweepLampBlend.encode(encoder, device, format, scratchTexture, targetTexture, blendMode, {
+            width,
+            height,
+            stencilView: clipped ? stencilView : null,
+            stencilReference: behavior === 'inside' ? 1 : 0,
+          })
+        )
+          return;
+        const desc = { colorAttachments: [{ view: targetView, loadOp: 'load', storeOp: 'store' }] };
+        if (clipped)
+          desc.depthStencilAttachment = {
+            view: stencilView,
+            depthLoadOp: 'load',
+            depthStoreOp: 'discard',
+            stencilLoadOp: 'load',
+            stencilStoreOp: 'discard',
+          };
+        pass = encoder.beginRenderPass(desc);
+        if (clipped) pass.setStencilReference(behavior === 'inside' ? 1 : 0);
+        const pipelines = clipped ? compositeStencilPipelines : compositePipelines;
+        pass.setPipeline(pipelines[blendMode] || pipelines.normal);
+        pass.setBindGroup(0, compositeBind);
+        pass.draw(3);
+        pass.end();
+      };
 
-            // 7.5: one analytic halo path for strike and afterglow. The former
-            // separable-blur branch duplicated the whole contour into an extra mask + blur chain
-            // and was the dominant flash-time stall on real GPUs. Analytic softness keeps the
-            // same controls while avoiding that cross-renderer dependency and extra passes.
-            drawAnalyticGroup(combinedStyles,true);stats.analyticHaloPasses+=combinedStyles.length;stats.strikeBlurBypasses+=combinedStyles.length;
-            stats.frames++;stats.draws++;stats.logicalSegments+=arcRec.segmentCount*copyCount*styles.length;stats.exactRasterSubsegments+=arcRec.segmentCount*rasterSubdiv*copyCount*styles.length;stats.cpuPathBuildsAvoided++;stats.cpuExactRailBuildsAvoided++;stats.cpuPieceBuildsAvoided++;stats.cpuSegmentUploadsAvoided+=arcRec.segmentCount;
-            const commandBuffer=encoder.finish(),encodeMs=Math.max(0,performance.now()-encodeStartedAt);stats.lastEncodeCpuMs=encodeMs;stats.emaEncodeCpuMs=stats.emaEncodeCpuMs?stats.emaEncodeCpuMs*.82+encodeMs*.18:encodeMs;stats.maxEncodeCpuMs=Math.max(stats.maxEncodeCpuMs,encodeMs);lastError='';return{handled:true,commandBuffer,onSubmitted:()=>noteGpuMorphArcTableSubmitted?.(prepared.table)};
-        }catch(err){lastError=String(err?.message||err);const encodeMs=Math.max(0,performance.now()-encodeStartedAt);stats.lastEncodeCpuMs=encodeMs;stats.emaEncodeCpuMs=stats.emaEncodeCpuMs?stats.emaEncodeCpuMs*.82+encodeMs*.18:encodeMs;stats.maxEncodeCpuMs=Math.max(stats.maxEncodeCpuMs,encodeMs);stats.failures++;return{handled:false,commandBuffer:null,reason:lastError};}
+      // 7.5: one analytic halo path for strike and afterglow. The former
+      // separable-blur branch duplicated the whole contour into an extra mask + blur chain
+      // and was the dominant flash-time stall on real GPUs. Analytic softness keeps the
+      // same controls while avoiding that cross-renderer dependency and extra passes.
+      drawAnalyticGroup(combinedStyles, true);
+      stats.analyticHaloPasses += combinedStyles.length;
+      stats.strikeBlurBypasses += combinedStyles.length;
+      stats.frames++;
+      stats.draws++;
+      stats.logicalSegments += arcRec.segmentCount * copyCount * styles.length;
+      stats.exactRasterSubsegments += arcRec.segmentCount * rasterSubdiv * copyCount * styles.length;
+      stats.cpuPathBuildsAvoided++;
+      stats.cpuExactRailBuildsAvoided++;
+      stats.cpuPieceBuildsAvoided++;
+      stats.cpuSegmentUploadsAvoided += arcRec.segmentCount;
+      const commandBuffer = encoder.finish(),
+        encodeMs = Math.max(0, performance.now() - encodeStartedAt);
+      stats.lastEncodeCpuMs = encodeMs;
+      stats.emaEncodeCpuMs = stats.emaEncodeCpuMs ? stats.emaEncodeCpuMs * 0.82 + encodeMs * 0.18 : encodeMs;
+      stats.maxEncodeCpuMs = Math.max(stats.maxEncodeCpuMs, encodeMs);
+      lastError = '';
+      return {
+        handled: true,
+        commandBuffer,
+        onSubmitted: () => noteGpuMorphArcTableSubmitted?.(prepared.table),
+      };
+    } catch (err) {
+      lastError = String(err?.message || err);
+      const encodeMs = Math.max(0, performance.now() - encodeStartedAt);
+      stats.lastEncodeCpuMs = encodeMs;
+      stats.emaEncodeCpuMs = stats.emaEncodeCpuMs ? stats.emaEncodeCpuMs * 0.82 + encodeMs * 0.18 : encodeMs;
+      stats.maxEncodeCpuMs = Math.max(stats.maxEncodeCpuMs, encodeMs);
+      stats.failures++;
+      return { handled: false, commandBuffer: null, reason: lastError };
     }
-    function encodeToLayerScene(targetTexture,prepared,frame,ctx,baseAlpha,behavior='symmetric',frameCtx=null){return encode(targetTexture,prepared,frame,ctx,baseAlpha,behavior,null,null,frameCtx,1);}
-    function encodeCorridorToLayerScene(targetTexture,prepared,frame,ctx,baseAlpha,copies,alphas,frameCtx,footprint=1,behavior='symmetric'){return encode(targetTexture,prepared,frame,ctx,baseAlpha,behavior,copies,alphas,frameCtx,footprint);}
-    function peekStatus(){return{available:ready,generation,lastError,width,height,exactBezierRasterSubdiv:EXACT_BEZIER_RASTER_SUBDIV,...stats};}
-    function status(){warmup();return{...peekStatus(),contract:'Somata 7.5 Lightning uses the shared resident GPU Arc and authoritative retained cubic Bézier carrier. Exact precision uses a balanced 4x direct cubic raster per Arc microsegment; simple precision keeps the lightweight chord path. The strike alone uses the analytic GPU stroke field, so flashes do not enter the legacy separable-blur chain. No CPU geometry or Canvas carrier is rebuilt.'};}
-    return{warmup,isReady:()=>warmup(),encodeToLayerScene,encodeCorridorToLayerScene,status,peekStatus};
+  }
+  function encodeToLayerScene(
+    targetTexture,
+    prepared,
+    frame,
+    ctx,
+    baseAlpha,
+    behavior = 'symmetric',
+    frameCtx = null,
+  ) {
+    return encode(targetTexture, prepared, frame, ctx, baseAlpha, behavior, null, null, frameCtx, 1);
+  }
+  function encodeCorridorToLayerScene(
+    targetTexture,
+    prepared,
+    frame,
+    ctx,
+    baseAlpha,
+    copies,
+    alphas,
+    frameCtx,
+    footprint = 1,
+    behavior = 'symmetric',
+  ) {
+    return encode(
+      targetTexture,
+      prepared,
+      frame,
+      ctx,
+      baseAlpha,
+      behavior,
+      copies,
+      alphas,
+      frameCtx,
+      footprint,
+    );
+  }
+  function peekStatus() {
+    return {
+      available: ready,
+      generation,
+      lastError,
+      width,
+      height,
+      exactBezierRasterSubdiv: EXACT_BEZIER_RASTER_SUBDIV,
+      ...stats,
+    };
+  }
+  function status() {
+    warmup();
+    return {
+      ...peekStatus(),
+      contract:
+        'Somata 7.5 Lightning uses the shared resident GPU Arc and authoritative retained cubic Bézier carrier. Exact precision uses a balanced 4x direct cubic raster per Arc microsegment; simple precision keeps the lightweight chord path. The strike alone uses the analytic GPU stroke field, so flashes do not enter the legacy separable-blur chain. No CPU geometry or Canvas carrier is rebuilt.',
+    };
+  }
+  return {
+    warmup,
+    isReady: () => warmup(),
+    encodeToLayerScene,
+    encodeCorridorToLayerScene,
+    status,
+    peekStatus,
+  };
 })();
-window.__spiroGpuLightningArcStatus=()=>WebGPULightningArcRenderer.status();
-window.__spiroGpuLightningArcPeekStatus=()=>WebGPULightningArcRenderer.peekStatus();
+
+window.__spiroGpuLightningArcPeekStatus = () => WebGPULightningArcRenderer.peekStatus();
+
+export { WebGPULightningArcRenderer };

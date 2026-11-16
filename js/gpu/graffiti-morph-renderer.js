@@ -1,22 +1,104 @@
+import './graffiti-sample-resource.js'; // initialisation order: this module runs after it
+import { mainCanvas } from '../ui/profile-presets.js';
+import { requestMainCanvasRender } from '../core/scheduler.js';
+import { getEffectiveLayerRadius, getLayerStrokeWidthMultiplier } from '../effects/motion.js';
+import { WebGPUDeviceHub } from './device-hub.js';
+import { GPUColorCache, assertWebGPUShaderModule } from './gpu-utils.js';
+import { WebGPUCorridorCopyStore } from './corridor-copy-store.js';
+import { WebGPUGraffitiContourGlow } from './graffiti-ribbon-renderer.js';
+import { graffitiNibStretch, graffitiNibWidthFactor } from '../effects/graffiti-ribbon.js';
+import { morphInterpolationTForCurrentMode } from '../geometry/morph-frame.js';
+import { encodeSharedGpuMorphPath, noteSharedGpuMorphPathSubmitted } from './morph-path-resource.js';
+import {
+  GPU_GRAFFITI_SAMPLE_INTERVALS_MAX,
+  encodeGpuGraffitiSampleResource,
+  noteGpuGraffitiSampleSubmitted,
+} from './graffiti-sample-resource.js';
+import { spiroGpuPrepareMorphForLayerScene } from '../render/gpu-command-scheduler.js';
+import { noteSuppressedError } from '../core/suppressed-errors.js';
 
+const WebGPUGraffitiMorphRenderer = (() => {
+  const DIRECT_BEZIER_SUBDIV = 8,
+    DIRECT_JOIN_VERTS = 12,
+    DIRECT_VERTS_PER_SEGMENT = DIRECT_BEZIER_SUBDIV * 6 + DIRECT_JOIN_VERTS;
+  let device = null,
+    format = null,
+    generation = -1,
+    ready = false,
+    initializing = null,
+    lastError = 'not-initialized',
+    targetViews = new WeakMap();
+  const diagnostic = {
+    stage: 'idle',
+    reason: '',
+    lastBackend: 'none',
+    geometryPreparation: 'GPU-native morph expansion',
+    gpuDraw: false,
+    failures: 0,
+  };
+  let lastLoggedFailure = '';
+  function noteFailure(stage, reason, err = null) {
+    const msg = String(reason || err?.message || err || 'unknown failure');
+    lastError = msg;
+    diagnostic.stage = stage;
+    diagnostic.reason = msg;
+    diagnostic.failures++;
+    const sig = stage + '|' + msg;
+    if (sig !== lastLoggedFailure) {
+      lastLoggedFailure = sig;
+      console.error(
+        `[SpiroStar Graffiti Morph GPU] ${stage}: ${msg}`,
+        { stage, reason: msg, geometryPreparation: diagnostic.geometryPreparation },
+        err || '',
+      );
+    }
+  }
+  function noteSuccess(stage) {
+    diagnostic.stage = stage;
+    diagnostic.reason = '';
+    diagnostic.lastBackend = 'webgpu-layer-scene';
+    diagnostic.gpuDraw = true;
+    lastError = '';
+  }
+  let pipelineOver = null,
+    pipelineBehind = null,
+    corridorPipelineOver = null,
+    corridorPipelineBehind = null;
+  let sampledPipelineOver = null,
+    sampledPipelineBehind = null,
+    sampledCorridorPipelineOver = null,
+    sampledCorridorPipelineBehind = null;
+  let uniformLayout = null,
+    pathLayout = null,
+    sampledPathLayout = null,
+    corridorLayout = null,
+    uniformBuffers = [],
+    uniformBinds = [],
+    uniformCursor = 0;
+  let pathBinds = new WeakMap(),
+    sampledPathBinds = new WeakMap(),
+    copyBinds = new WeakMap();
+  const uniformData = new Float32Array(32);
+  const stats = {
+    frames: 0,
+    draws: 0,
+    corridorDraws: 0,
+    logicalVertices: 0,
+    cpuMeshesAvoided: 0,
+    cpuPointTouchesAvoided: 0,
+    morphComputesFused: 0,
+    sampledFrames: 0,
+    sampleComputesFused: 0,
+    arcComputesFused: 0,
+    sampledLogicalVertices: 0,
+    contourGlowFrames: 0,
+    contourGlowMasks: 0,
+    failures: 0,
+    sharedCopyReuses: 0,
+    uniformBindReuses: 0,
+  };
 
-window.__spiroRegisterModule?.('js/gpu/graffiti-morph-renderer');
-
-const WebGPUGraffitiMorphRenderer=(()=>{
-    const DIRECT_BEZIER_SUBDIV=8,DIRECT_JOIN_VERTS=12,DIRECT_VERTS_PER_SEGMENT=DIRECT_BEZIER_SUBDIV*6+DIRECT_JOIN_VERTS;
-    let device=null,format=null,generation=-1,ready=false,initializing=null,lastError='not-initialized',targetViews=new WeakMap();
-    const diagnostic={stage:'idle',reason:'',lastBackend:'none',geometryPreparation:'GPU-native morph expansion',gpuDraw:false,failures:0};let lastLoggedFailure='';
-    function noteFailure(stage,reason,err=null){const msg=String(reason||err?.message||err||'unknown failure');lastError=msg;diagnostic.stage=stage;diagnostic.reason=msg;diagnostic.failures++;const sig=stage+'|'+msg;if(sig!==lastLoggedFailure){lastLoggedFailure=sig;console.error(`[SpiroStar Graffiti Morph GPU] ${stage}: ${msg}`,{stage,reason:msg,geometryPreparation:diagnostic.geometryPreparation},err||'');}}
-    function noteSuccess(stage){diagnostic.stage=stage;diagnostic.reason='';diagnostic.lastBackend='webgpu-layer-scene';diagnostic.gpuDraw=true;lastError='';}
-    let pipelineOver=null,pipelineBehind=null,corridorPipelineOver=null,corridorPipelineBehind=null;
-    let sampledPipelineOver=null,sampledPipelineBehind=null,sampledCorridorPipelineOver=null,sampledCorridorPipelineBehind=null;
-    let uniformLayout=null,pathLayout=null,sampledPathLayout=null,corridorLayout=null,uniformBuffers=[],uniformBinds=[],uniformCursor=0;
-    let pathBinds=new WeakMap(),sampledPathBinds=new WeakMap(),copyBinds=new WeakMap();
-    const uniformData=new Float32Array(32);
-    const stats={frames:0,draws:0,corridorDraws:0,logicalVertices:0,cpuMeshesAvoided:0,cpuPointTouchesAvoided:0,morphComputesFused:0,
-        sampledFrames:0,sampleComputesFused:0,arcComputesFused:0,sampledLogicalVertices:0,contourGlowFrames:0,contourGlowMasks:0,failures:0,sharedCopyReuses:0,uniformBindReuses:0};
-
-    const COMMON_HEAD=`
+  const COMMON_HEAD = `
 struct U {
     viewport:vec2<f32>, _pad0:vec2<f32>,
     row0:vec4<f32>, row1:vec4<f32>, color:vec4<f32>,
@@ -48,7 +130,9 @@ fn finishFragment(v:Out)->vec4<f32>{
     let a=clamp(u.color.a*v.copyAlpha*(core+halo)*cov,0.0,1.0);if(a<0.0001){discard;}return vec4<f32>(u.color.rgb*a,a);
 }`;
 
-    const DIRECT_WGSL=COMMON_HEAD+`
+  const DIRECT_WGSL =
+    COMMON_HEAD +
+    `
 const BEZIER_SUBDIV:u32=8u;
 @group(1) @binding(0) var<storage,read> cubics:array<vec4<f32>>;
 @group(1) @binding(1) var<storage,read> segmentMeta:array<vec4<u32>>;
@@ -110,7 +194,9 @@ fn makeVertex(vid:u32,copy0:vec4<f32>,copy1:vec4<f32>,useCopy:bool)->Out{
 @vertex fn vsCorridor(@builtin(vertex_index) vid:u32,@builtin(instance_index) iid:u32)->Out{return makeVertex(vid,copyData[iid*2u],copyData[iid*2u+1u],true);}
 @fragment fn fs(v:Out)->@location(0) vec4<f32>{return finishFragment(v);}`;
 
-    const SAMPLED_WGSL=COMMON_HEAD+`
+  const SAMPLED_WGSL =
+    COMMON_HEAD +
+    `
 const SAMPLE_STRIDE:u32=224u;
 const MAX_RENDER_SEGMENTS:u32=221u;
 @group(1) @binding(0) var<storage,read> sampled:array<vec4<f32>>;
@@ -165,138 +251,729 @@ fn makeSampledVertex(vid:u32,copy0:vec4<f32>,copy1:vec4<f32>,useCopy:bool)->Out{
 @vertex fn vsCorridor(@builtin(vertex_index) vid:u32,@builtin(instance_index) iid:u32)->Out{return makeSampledVertex(vid,copyData[iid*2u],copyData[iid*2u+1u],true);}
 @fragment fn fs(v:Out)->@location(0) vec4<f32>{return finishFragment(v);}`;
 
-    function blend(kind){if(kind==='behind')return{color:{srcFactor:'one-minus-dst-alpha',dstFactor:'one',operation:'add'},alpha:{srcFactor:'one-minus-dst-alpha',dstFactor:'one',operation:'add'}};return{color:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'},alpha:{srcFactor:'one',dstFactor:'one-minus-src-alpha',operation:'add'}};}
-    async function initAsync(){
-        if(ready&&device&&generation===WebGPUDeviceHub.getGeneration())return true;if(initializing)return initializing;
-        const task=(async()=>{try{
-            const shared=await WebGPUDeviceHub.acquire();device=shared.device;generation=shared.generation;format=navigator.gpu.getPreferredCanvasFormat();
-            const directMod=device.createShaderModule({label:'SpiroStar GPU-native Morph Graffiti WGSL',code:DIRECT_WGSL});
-            const sampledMod=device.createShaderModule({label:'SpiroStar GPU-sampled Morph Graffiti WGSL',code:SAMPLED_WGSL});
-            if(typeof assertWebGPUShaderModule==='function'){await assertWebGPUShaderModule(directMod,'SpiroStar GPU-native Morph Graffiti WGSL');await assertWebGPUShaderModule(sampledMod,'SpiroStar GPU-sampled Morph Graffiti WGSL');}
-            uniformLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX|GPUShaderStage.FRAGMENT,buffer:{type:'uniform'}}]});
-            pathLayout=device.createBindGroupLayout({entries:[0,1,2,3].map(binding=>({binding,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}))});
-            sampledPathLayout=device.createBindGroupLayout({entries:[0,1,2,3].map(binding=>({binding,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}))});
-            corridorLayout=device.createBindGroupLayout({entries:[{binding:0,visibility:GPUShaderStage.VERTEX,buffer:{type:'read-only-storage'}}]});
-            const make=(mod,kind,corridor=false,sampled=false)=>device.createRenderPipeline({label:`SpiroStar ${sampled?'sampled ':' '}Morph Graffiti ${kind}${corridor?' corridor':''}`,
-                layout:device.createPipelineLayout({bindGroupLayouts:corridor?[uniformLayout,sampled?sampledPathLayout:pathLayout,corridorLayout]:[uniformLayout,sampled?sampledPathLayout:pathLayout]}),
-                vertex:{module:mod,entryPoint:corridor?'vsCorridor':'vs'},fragment:{module:mod,entryPoint:'fs',targets:[{format,blend:blend(kind)}]},primitive:{topology:'triangle-list',cullMode:'none'}});
-            pipelineOver=make(directMod,'over');pipelineBehind=make(directMod,'behind');corridorPipelineOver=make(directMod,'over',true);corridorPipelineBehind=make(directMod,'behind',true);
-            sampledPipelineOver=make(sampledMod,'over',false,true);sampledPipelineBehind=make(sampledMod,'behind',false,true);sampledCorridorPipelineOver=make(sampledMod,'over',true,true);sampledCorridorPipelineBehind=make(sampledMod,'behind',true,true);
-            uniformBuffers=Array.from({length:64},(_,i)=>device.createBuffer({label:`SpiroStar Morph Graffiti uniforms ${i}`,size:128,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST}));
-            uniformBinds=uniformBuffers.map(buffer=>device.createBindGroup({layout:uniformLayout,entries:[{binding:0,resource:{buffer}}]}));
-            uniformCursor=0;pathBinds=new WeakMap();sampledPathBinds=new WeakMap();copyBinds=new WeakMap();ready=true;lastError='';try{requestMainCanvasRender?.();}catch(_){}return true;
-        }catch(err){ready=false;lastError=String(err?.message||err);stats.failures++;return false;}})();initializing=task;try{return await task;}finally{if(initializing===task)initializing=null;}
+  function blend(kind) {
+    if (kind === 'behind')
+      return {
+        color: { srcFactor: 'one-minus-dst-alpha', dstFactor: 'one', operation: 'add' },
+        alpha: { srcFactor: 'one-minus-dst-alpha', dstFactor: 'one', operation: 'add' },
+      };
+    return {
+      color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+      alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+    };
+  }
+  async function initAsync() {
+    if (ready && device && generation === WebGPUDeviceHub.getGeneration()) return true;
+    if (initializing) return initializing;
+    const task = (async () => {
+      try {
+        const shared = await WebGPUDeviceHub.acquire();
+        device = shared.device;
+        generation = shared.generation;
+        format = navigator.gpu.getPreferredCanvasFormat();
+        const directMod = device.createShaderModule({
+          label: 'SpiroStar GPU-native Morph Graffiti WGSL',
+          code: DIRECT_WGSL,
+        });
+        const sampledMod = device.createShaderModule({
+          label: 'SpiroStar GPU-sampled Morph Graffiti WGSL',
+          code: SAMPLED_WGSL,
+        });
+        {
+          await assertWebGPUShaderModule(directMod, 'SpiroStar GPU-native Morph Graffiti WGSL');
+          await assertWebGPUShaderModule(sampledMod, 'SpiroStar GPU-sampled Morph Graffiti WGSL');
+        }
+        uniformLayout = device.createBindGroupLayout({
+          entries: [
+            {
+              binding: 0,
+              visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+              buffer: { type: 'uniform' },
+            },
+          ],
+        });
+        pathLayout = device.createBindGroupLayout({
+          entries: [0, 1, 2, 3].map((binding) => ({
+            binding,
+            visibility: GPUShaderStage.VERTEX,
+            buffer: { type: 'read-only-storage' },
+          })),
+        });
+        sampledPathLayout = device.createBindGroupLayout({
+          entries: [0, 1, 2, 3].map((binding) => ({
+            binding,
+            visibility: GPUShaderStage.VERTEX,
+            buffer: { type: 'read-only-storage' },
+          })),
+        });
+        corridorLayout = device.createBindGroupLayout({
+          entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } }],
+        });
+        const make = (mod, kind, corridor = false, sampled = false) =>
+          device.createRenderPipeline({
+            label: `SpiroStar ${sampled ? 'sampled ' : ' '}Morph Graffiti ${kind}${corridor ? ' corridor' : ''}`,
+            layout: device.createPipelineLayout({
+              bindGroupLayouts: corridor
+                ? [uniformLayout, sampled ? sampledPathLayout : pathLayout, corridorLayout]
+                : [uniformLayout, sampled ? sampledPathLayout : pathLayout],
+            }),
+            vertex: { module: mod, entryPoint: corridor ? 'vsCorridor' : 'vs' },
+            fragment: { module: mod, entryPoint: 'fs', targets: [{ format, blend: blend(kind) }] },
+            primitive: { topology: 'triangle-list', cullMode: 'none' },
+          });
+        pipelineOver = make(directMod, 'over');
+        pipelineBehind = make(directMod, 'behind');
+        corridorPipelineOver = make(directMod, 'over', true);
+        corridorPipelineBehind = make(directMod, 'behind', true);
+        sampledPipelineOver = make(sampledMod, 'over', false, true);
+        sampledPipelineBehind = make(sampledMod, 'behind', false, true);
+        sampledCorridorPipelineOver = make(sampledMod, 'over', true, true);
+        sampledCorridorPipelineBehind = make(sampledMod, 'behind', true, true);
+        uniformBuffers = Array.from({ length: 64 }, (_, i) =>
+          device.createBuffer({
+            label: `SpiroStar Morph Graffiti uniforms ${i}`,
+            size: 128,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+          }),
+        );
+        uniformBinds = uniformBuffers.map((buffer) =>
+          device.createBindGroup({ layout: uniformLayout, entries: [{ binding: 0, resource: { buffer } }] }),
+        );
+        uniformCursor = 0;
+        pathBinds = new WeakMap();
+        sampledPathBinds = new WeakMap();
+        copyBinds = new WeakMap();
+        ready = true;
+        lastError = '';
+        try {
+          requestMainCanvasRender?.();
+        } catch (error) {
+          noteSuppressedError('gpu/graffiti-morph-renderer#initAsync', error);
+        }
+        return true;
+      } catch (err) {
+        ready = false;
+        lastError = String(err?.message || err);
+        stats.failures++;
+        return false;
+      }
+    })();
+    initializing = task;
+    try {
+      return await task;
+    } finally {
+      if (initializing === task) initializing = null;
     }
-    function warmup(){
-        try{WebGPUGraffitiContourGlow?.warmup?.();}catch(_){}
-        const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;
-        if(ready&&gen!==generation){ready=false;device=null;pipelineOver=pipelineBehind=corridorPipelineOver=corridorPipelineBehind=null;sampledPipelineOver=sampledPipelineBehind=sampledCorridorPipelineOver=sampledCorridorPipelineBehind=null;uniformBuffers=[];uniformBinds=[];pathBinds=new WeakMap();sampledPathBinds=new WeakMap();copyBinds=new WeakMap();targetViews=new WeakMap();}
-        if(!ready&&!initializing)void initAsync();return ready;
+  }
+  function warmup() {
+    try {
+      WebGPUGraffitiContourGlow?.warmup?.();
+    } catch (error) {
+      noteSuppressedError('gpu/graffiti-morph-renderer#warmup', error);
     }
-    function styleParams(layer,widthOverride=null,colorOverride=null){
-        const type=['round','slash','square'].includes(layer?.lineProfileGraffiti)?layer.lineProfileGraffiti:'slash';
-        const shape=['pointed','blunt','pinched','round'].includes(layer?.graffitiNibShape)?layer.graffitiNibShape:'pointed';
-        const nibBase=Math.max(1,Math.min(20,Number(layer?.graffitiNibLength)||10)),nibMul=Math.max(.01,Number.isFinite(Number(layer?.graffitiNibLengthMultiplier))?Number(layer.graffitiNibLengthMultiplier):1),ratio=nibBase*nibMul;
-        const stretch=typeof graffitiNibStretch==='function'?graffitiNibStretch(type,ratio,shape):(type==='slash'?(shape==='pinched'?1:shape==='round'?Math.max(1,ratio*.72):shape==='blunt'?Math.max(1,ratio*.92):ratio):1);
-        const widthFactor=typeof graffitiNibWidthFactor==='function'?graffitiNibWidthFactor(type,shape):((type==='square'?1.04:1)*(shape==='round'?1.06:shape==='blunt' ? .96 : 1));
-        const rawAngle=Number(layer?.graffitiAngle),angle=Math.max(-90,Math.min(90,Number.isFinite(rawAngle)?rawAngle:45))*Math.PI/180;
-        const sizeStrength=layer?.graffitiSizeVariationEnabled===true&&Math.max(0,Number(layer?.graffitiSizeVariation)||0)>0?Math.max(0,Math.min(1,(Number(layer?.graffitiSizeVariation)||0)/100)):0;
-        const sizeFocus=Math.max(0,Math.min(1,(Number.isFinite(Number(layer?.graffitiSizeFocus))?Number(layer.graffitiSizeFocus):50)/100));
-        const rawMul=Number(layer?.graffitiRotationMultiplier),rotDeg=layer?.graffitiRotationVariationEnabled===true&&Math.max(0,Number(layer?.graffitiRotationVariation)||0)>0?Math.max(0,Number(layer?.graffitiRotationVariation)||0)*Math.max(0,Number.isFinite(rawMul)?rawMul:1):0;
-        const rotationFocus=Math.max(0,Math.min(1,(Number.isFinite(Number(layer?.graffitiRotationFocus))?Number(layer.graffitiRotationFocus):50)/100));
-        const variationActive=sizeStrength>0||rotDeg>0;
-        const rawMode=['perSegment','everyNth','across','perPath','whole'].includes(layer?.graffitiVariationMode)?layer.graffitiVariationMode:'perSegment';
-        const modeCode={perPath:1,whole:2,perSegment:3,everyNth:4,across:5}[rawMode]||3;
-        const n=Math.max(2,Math.round(Number(layer?.N)||4)),k=Math.max(1,Math.round(Number(layer?.K)||1));let a=n,b=k;while(b){const r=a%b;a=b;b=r;}const logicalSegments=Math.max(1,Math.round(n/Math.max(1,a)));
-        const everyN=Math.max(1,Math.min(24,Math.round(Number(layer?.graffitiVariationEveryN)||2)));
-        const variationAux=rawMode==='across'?Math.max(1e-3,Number(typeof getEffectiveLayerRadius==='function'?getEffectiveLayerRadius(layer,220):layer?.radius)||220):(rawMode==='everyNth'?Math.max(1,logicalSegments/everyN):logicalSegments);
-        return{width:Math.max(.001,Number(widthOverride??((Number(layer?.strokeWidth)||1.5)*getLayerStrokeWidthMultiplier(layer)))||1.5),color:String(colorOverride??layer?.strokeColor??'#ffffff'),
-            angle,angleMode:layer?.graffitiAngleMode==='relative'?'relative':'absolute',stretch,widthFactor,nibRatio:ratio,pinched:shape==='pinched',shapeCode:shape==='pointed'?0:(shape==='pinched'?1:2),sizeStrength,sizeFocus,rotationTotal:rotDeg*Math.PI/180,rotationFocus,variationMode:modeCode,variationAux,variationActive};
+    const gen = typeof WebGPUDeviceHub !== 'undefined' ? WebGPUDeviceHub.getGeneration() : -1;
+    if (ready && gen !== generation) {
+      ready = false;
+      device = null;
+      pipelineOver = pipelineBehind = corridorPipelineOver = corridorPipelineBehind = null;
+      sampledPipelineOver =
+        sampledPipelineBehind =
+        sampledCorridorPipelineOver =
+        sampledCorridorPipelineBehind =
+          null;
+      uniformBuffers = [];
+      uniformBinds = [];
+      pathBinds = new WeakMap();
+      sampledPathBinds = new WeakMap();
+      copyBinds = new WeakMap();
+      targetViews = new WeakMap();
     }
-    function sceneView(texture){let view=targetViews.get(texture);if(view)return view;view=texture.createView();targetViews.set(texture,view);return view;}
-    function pathBind(rec){let bg=pathBinds.get(rec);if(bg)return bg;bg=device.createBindGroup({layout:pathLayout,entries:[{binding:0,resource:{buffer:rec.cubicBuffer}},{binding:1,resource:{buffer:rec.segmentMetaBuffer}},{binding:2,resource:{buffer:rec.pathRangeBuffer}},{binding:3,resource:{buffer:rec.pathSegmentRangeBuffer}}]});pathBinds.set(rec,bg);return bg;}
-    function sampledPathBind(sampleRec,arcRec){
-        let byArc=sampledPathBinds.get(sampleRec);if(!byArc){byArc=new WeakMap();sampledPathBinds.set(sampleRec,byArc);}let bg=byArc.get(arcRec);if(bg)return bg;
-        bg=device.createBindGroup({layout:sampledPathLayout,entries:[{binding:0,resource:{buffer:sampleRec.samplePointBuffer}},{binding:1,resource:{buffer:sampleRec.sampleInfoBuffer}},{binding:2,resource:{buffer:arcRec.pathMetricsBuffer}},{binding:3,resource:{buffer:arcRec.metaBuffer}}]});byArc.set(arcRec,bg);return bg;
+    if (!ready && !initializing) void initAsync();
+    return ready;
+  }
+  function styleParams(layer, widthOverride = null, colorOverride = null) {
+    const type = ['round', 'slash', 'square'].includes(layer?.lineProfileGraffiti)
+      ? layer.lineProfileGraffiti
+      : 'slash';
+    const shape = ['pointed', 'blunt', 'pinched', 'round'].includes(layer?.graffitiNibShape)
+      ? layer.graffitiNibShape
+      : 'pointed';
+    const nibBase = Math.max(1, Math.min(20, Number(layer?.graffitiNibLength) || 3)),
+      nibMul = Math.max(
+        0.01,
+        Number.isFinite(Number(layer?.graffitiNibLengthMultiplier))
+          ? Number(layer.graffitiNibLengthMultiplier)
+          : 1,
+      ),
+      ratio = nibBase * nibMul;
+    const stretch = graffitiNibStretch(type, ratio, shape);
+    const widthFactor = graffitiNibWidthFactor(type, shape);
+    const rawAngle = Number(layer?.graffitiAngle),
+      angle = (Math.max(-90, Math.min(90, Number.isFinite(rawAngle) ? rawAngle : 45)) * Math.PI) / 180;
+    const sizeStrength =
+      layer?.graffitiSizeVariationEnabled === true &&
+      Math.max(0, Number(layer?.graffitiSizeVariation) || 0) > 0
+        ? Math.max(0, Math.min(1, (Number(layer?.graffitiSizeVariation) || 0) / 100))
+        : 0;
+    const sizeFocus = Math.max(
+      0,
+      Math.min(
+        1,
+        (Number.isFinite(Number(layer?.graffitiSizeFocus)) ? Number(layer.graffitiSizeFocus) : 75) / 100,
+      ),
+    );
+    const rawMul = Number(layer?.graffitiRotationMultiplier),
+      rotDeg =
+        layer?.graffitiRotationVariationEnabled === true &&
+        Math.max(0, Number(layer?.graffitiRotationVariation) || 0) > 0
+          ? Math.max(0, Number(layer?.graffitiRotationVariation) || 0) *
+            Math.max(0, Number.isFinite(rawMul) ? rawMul : 1)
+          : 0;
+    const rotationFocus = Math.max(
+      0,
+      Math.min(
+        1,
+        (Number.isFinite(Number(layer?.graffitiRotationFocus)) ? Number(layer.graffitiRotationFocus) : 50) /
+          100,
+      ),
+    );
+    const variationActive = sizeStrength > 0 || rotDeg > 0;
+    const rawMode = ['perSegment', 'everyNth', 'across', 'perPath', 'whole'].includes(
+      layer?.graffitiVariationMode,
+    )
+      ? layer.graffitiVariationMode
+      : 'perSegment';
+    const modeCode = { perPath: 1, whole: 2, perSegment: 3, everyNth: 4, across: 5 }[rawMode] || 3;
+    const n = Math.max(2, Math.round(Number(layer?.N) || 4)),
+      k = Math.max(1, Math.round(Number(layer?.K) || 1));
+    let a = n,
+      b = k;
+    while (b) {
+      const r = a % b;
+      a = b;
+      b = r;
     }
-    function copyBind(buffer){let bg=copyBinds.get(buffer);if(bg)return bg;bg=device.createBindGroup({layout:corridorLayout,entries:[{binding:0,resource:{buffer}}]});copyBinds.set(buffer,bg);return bg;}
-    function uniformBind(targetCtx,style,alpha,outerWidth){
-        const m=targetCtx?.getTransform?.();if(!m||!uniformBuffers.length)return null;const c=GPUColorCache.rgba(style.color);
+    const logicalSegments = Math.max(1, Math.round(n / Math.max(1, a)));
+    const everyN = Math.max(1, Math.min(24, Math.round(Number(layer?.graffitiVariationEveryN) || 2)));
+    const variationAux =
+      rawMode === 'across'
+        ? Math.max(1e-3, Number(getEffectiveLayerRadius(layer, 220)) || 220)
+        : rawMode === 'everyNth'
+          ? Math.max(1, logicalSegments / everyN)
+          : logicalSegments;
+    return {
+      width: Math.max(
+        0.001,
+        Number(widthOverride ?? (Number(layer?.strokeWidth) || 1.5) * getLayerStrokeWidthMultiplier(layer)) ||
+          1.5,
+      ),
+      color: String(colorOverride ?? layer?.strokeColor ?? '#ffffff'),
+      angle,
+      angleMode: layer?.graffitiAngleMode === 'relative' ? 'relative' : 'absolute',
+      stretch,
+      widthFactor,
+      nibRatio: ratio,
+      pinched: shape === 'pinched',
+      shapeCode: shape === 'pointed' ? 0 : shape === 'pinched' ? 1 : 2,
+      sizeStrength,
+      sizeFocus,
+      rotationTotal: (rotDeg * Math.PI) / 180,
+      rotationFocus,
+      variationMode: modeCode,
+      variationAux,
+      variationActive,
+    };
+  }
+  function sceneView(texture) {
+    let view = targetViews.get(texture);
+    if (view) return view;
+    view = texture.createView();
+    targetViews.set(texture, view);
+    return view;
+  }
+  function pathBind(rec) {
+    let bg = pathBinds.get(rec);
+    if (bg) return bg;
+    bg = device.createBindGroup({
+      layout: pathLayout,
+      entries: [
+        { binding: 0, resource: { buffer: rec.cubicBuffer } },
+        { binding: 1, resource: { buffer: rec.segmentMetaBuffer } },
+        { binding: 2, resource: { buffer: rec.pathRangeBuffer } },
+        { binding: 3, resource: { buffer: rec.pathSegmentRangeBuffer } },
+      ],
+    });
+    pathBinds.set(rec, bg);
+    return bg;
+  }
+  function sampledPathBind(sampleRec, arcRec) {
+    let byArc = sampledPathBinds.get(sampleRec);
+    if (!byArc) {
+      byArc = new WeakMap();
+      sampledPathBinds.set(sampleRec, byArc);
+    }
+    let bg = byArc.get(arcRec);
+    if (bg) return bg;
+    bg = device.createBindGroup({
+      layout: sampledPathLayout,
+      entries: [
+        { binding: 0, resource: { buffer: sampleRec.samplePointBuffer } },
+        { binding: 1, resource: { buffer: sampleRec.sampleInfoBuffer } },
+        { binding: 2, resource: { buffer: arcRec.pathMetricsBuffer } },
+        { binding: 3, resource: { buffer: arcRec.metaBuffer } },
+      ],
+    });
+    byArc.set(arcRec, bg);
+    return bg;
+  }
+  function copyBind(buffer) {
+    let bg = copyBinds.get(buffer);
+    if (bg) return bg;
+    bg = device.createBindGroup({ layout: corridorLayout, entries: [{ binding: 0, resource: { buffer } }] });
+    copyBinds.set(buffer, bg);
+    return bg;
+  }
+  function uniformBind(targetCtx, style, alpha, outerWidth) {
+    const m = targetCtx?.getTransform?.();
+    if (!m || !uniformBuffers.length) return null;
+    const c = GPUColorCache.rgba(style.color);
 
-        const actualOuter=style.width,coreRatio=1,haloStrength=0;
-        uniformData.fill(0);uniformData[0]=mainCanvas.width;uniformData[1]=mainCanvas.height;uniformData[4]=m.a;uniformData[5]=m.c;uniformData[6]=m.e;uniformData[8]=m.b;uniformData[9]=m.d;uniformData[10]=m.f;
-        uniformData[12]=c[0];uniformData[13]=c[1];uniformData[14]=c[2];uniformData[15]=Math.max(0,Math.min(1,Number(alpha)||0));
-        uniformData[16]=actualOuter;uniformData[17]=style.angle;uniformData[18]=style.stretch;uniformData[19]=style.widthFactor;uniformData[20]=coreRatio;uniformData[21]=haloStrength;uniformData[22]=style.angleMode==='relative'?1:0;uniformData[23]=Math.max(1e-6,Number(style.variationAux)||1);
-        uniformData[24]=style.sizeStrength;uniformData[25]=style.sizeFocus;uniformData[26]=style.rotationTotal;uniformData[27]=style.rotationFocus;
-        uniformData[28]=style.variationMode;uniformData[29]=style.shapeCode;uniformData[30]=style.nibRatio;uniformData[31]=style.variationActive?1:0;
-        const slot=uniformCursor++%uniformBuffers.length,ub=uniformBuffers[slot];device.queue.writeBuffer(ub,0,uniformData.buffer,0,128);stats.uniformBindReuses++;return uniformBinds[slot]||null;
+    const actualOuter = style.width,
+      coreRatio = 1,
+      haloStrength = 0;
+    uniformData.fill(0);
+    uniformData[0] = mainCanvas.width;
+    uniformData[1] = mainCanvas.height;
+    uniformData[4] = m.a;
+    uniformData[5] = m.c;
+    uniformData[6] = m.e;
+    uniformData[8] = m.b;
+    uniformData[9] = m.d;
+    uniformData[10] = m.f;
+    uniformData[12] = c[0];
+    uniformData[13] = c[1];
+    uniformData[14] = c[2];
+    uniformData[15] = Math.max(0, Math.min(1, Number(alpha) || 0));
+    uniformData[16] = actualOuter;
+    uniformData[17] = style.angle;
+    uniformData[18] = style.stretch;
+    uniformData[19] = style.widthFactor;
+    uniformData[20] = coreRatio;
+    uniformData[21] = haloStrength;
+    uniformData[22] = style.angleMode === 'relative' ? 1 : 0;
+    uniformData[23] = Math.max(1e-6, Number(style.variationAux) || 1);
+    uniformData[24] = style.sizeStrength;
+    uniformData[25] = style.sizeFocus;
+    uniformData[26] = style.rotationTotal;
+    uniformData[27] = style.rotationFocus;
+    uniformData[28] = style.variationMode;
+    uniformData[29] = style.shapeCode;
+    uniformData[30] = style.nibRatio;
+    uniformData[31] = style.variationActive ? 1 : 0;
+    const slot = uniformCursor++ % uniformBuffers.length,
+      ub = uniformBuffers[slot];
+    device.queue.writeBuffer(ub, 0, uniformData.buffer, 0, 128);
+    stats.uniformBindReuses++;
+    return uniformBinds[slot] || null;
+  }
+  function canEncode(prepared) {
+    if (!warmup() || prepared?.gpuMorphNative !== true) return false;
+    if (prepared?.gpuMorphSampled === true)
+      return Boolean(
+        prepared.gpuGraffitiSampleResource?.ready && prepared.gpuMorphArcTable?._gpuMorphArcResource?.ready,
+      );
+    return Boolean(prepared.gpuMorphResource?.ready && prepared.gpuMorphResource.segmentCount > 0);
+  }
+  function encode(
+    targetTexture,
+    prepared,
+    layer,
+    alpha,
+    targetCtx,
+    composite = 'source-over',
+    copies = null,
+    alphas = null,
+    frameCtx = null,
+    footprint = 1,
+    override = null,
+  ) {
+    if (!targetTexture || alpha <= 0.001 || !canEncode(prepared))
+      return { handled: false, commandBuffer: null };
+    try {
+      const sampled = prepared.gpuMorphSampled === true,
+        style = { ...styleParams(layer, override?.width, override?.color), layer };
+      const outerWidth = style.width;
+      const ub = uniformBind(targetCtx, style, alpha, outerWidth);
+      if (!ub) return { handled: false, commandBuffer: null };
+      let instanceCount = 1,
+        copyBg = null;
+      if (Array.isArray(copies) && copies.length) {
+        const shared = WebGPUCorridorCopyStore.acquire(
+          device,
+          generation,
+          frameCtx,
+          copies,
+          alphas,
+          'graffiti',
+          footprint,
+          layer,
+        );
+        if (!shared?.buffer || !shared.k) return { handled: false, commandBuffer: null };
+        instanceCount = shared.k;
+        copyBg = copyBind(shared.buffer);
+        stats.sharedCopyReuses++;
+      }
+      const enc = device.createCommandEncoder({
+        label: `SpiroStar ${sampled ? 'GPU-sampled' : 'GPU-native'} Morph Graffiti`,
+      });
+      let drawVertices = 0,
+        pathBg = null,
+        onSubmitted = null;
+      if (sampled) {
+        const table = prepared.gpuMorphArcTable,
+          sampleRec = prepared.gpuGraffitiSampleResource,
+          arcRec = table?._gpuMorphArcResource;
+        if (
+          !sampleRec?.ready ||
+          !arcRec?.ready ||
+          typeof encodeGpuGraffitiSampleResource !== 'function' ||
+          !encodeGpuGraffitiSampleResource(sampleRec, table, enc, frameCtx)
+        )
+          throw new Error('GPU Graffiti sample encode failed');
+        stats.sampleComputesFused++;
+        stats.arcComputesFused++;
+        pathBg = sampledPathBind(sampleRec, arcRec);
+        drawVertices = sampleRec.pathCount * GPU_GRAFFITI_SAMPLE_INTERVALS_MAX * 6 + sampleRec.pathCount * 6;
+        onSubmitted = () => noteGpuGraffitiSampleSubmitted?.(sampleRec, table);
+      } else {
+        const rec = prepared.gpuMorphResource,
+          t =
+            typeof rec.resolveMorphT === 'function'
+              ? rec.resolveMorphT(prepared.gpuMorphT)
+              : morphInterpolationTForCurrentMode(prepared.gpuMorphT);
+        const morphReady = spiroGpuPrepareMorphForLayerScene(frameCtx, rec, t, enc);
+        if (!morphReady) throw new Error('shared GPU Bézier Morph encode failed');
+        stats.morphComputesFused++;
+        pathBg = pathBind(rec);
+        drawVertices = rec.segmentCount * DIRECT_VERTS_PER_SEGMENT;
+        onSubmitted = () => {
+          if (typeof rec.encodeCurrentCubics !== 'function')
+            noteSharedGpuMorphPathSubmitted?.(rec, t, prepared.frameId);
+        };
+      }
+      const pass = enc.beginRenderPass({
+        colorAttachments: [{ view: sceneView(targetTexture), loadOp: 'load', storeOp: 'store' }],
+      });
+      const over = composite !== 'destination-over';
+      pass.setPipeline(
+        sampled
+          ? copyBg
+            ? over
+              ? sampledCorridorPipelineOver
+              : sampledCorridorPipelineBehind
+            : over
+              ? sampledPipelineOver
+              : sampledPipelineBehind
+          : copyBg
+            ? over
+              ? corridorPipelineOver
+              : corridorPipelineBehind
+            : over
+              ? pipelineOver
+              : pipelineBehind,
+      );
+      pass.setBindGroup(0, ub);
+      pass.setBindGroup(1, pathBg);
+      if (copyBg) pass.setBindGroup(2, copyBg);
+      pass.draw(drawVertices, instanceCount, 0, 0);
+      pass.end();
+      stats.frames++;
+      stats.draws++;
+      if (copyBg) stats.corridorDraws++;
+      stats.logicalVertices += drawVertices * instanceCount;
+      stats.cpuMeshesAvoided++;
+      if (sampled) {
+        stats.sampledFrames++;
+        stats.sampledLogicalVertices += drawVertices * instanceCount;
+        stats.cpuPointTouchesAvoided +=
+          prepared.gpuMorphResource?.pointCount ||
+          prepared.gpuMorphArcTable?._gpuMorphArcResource?.morphRec?.pointCount ||
+          0;
+      } else stats.cpuPointTouchesAvoided += prepared.gpuMorphResource?.pointCount || 0;
+      noteSuccess(sampled ? 'sampled encode/draw' : 'native encode/draw');
+      return { handled: true, commandBuffer: enc.finish(), onSubmitted };
+    } catch (err) {
+      stats.failures++;
+      noteFailure('encode/draw', err?.message || err, err);
+      return { handled: false, commandBuffer: null };
     }
-    function canEncode(prepared){
-        if(!warmup()||prepared?.gpuMorphNative!==true)return false;
-        if(prepared?.gpuMorphSampled===true)return Boolean(prepared.gpuGraffitiSampleResource?.ready&&prepared.gpuMorphArcTable?._gpuMorphArcResource?.ready);
-        return Boolean(prepared.gpuMorphResource?.ready&&prepared.gpuMorphResource.segmentCount>0);
+  }
+  function encodeGlow(
+    targetTexture,
+    prepared,
+    layer,
+    maskAlpha,
+    targetCtx,
+    opts = {},
+    copies = null,
+    alphas = null,
+    frameCtx = null,
+    footprint = 1,
+  ) {
+    const radiusPx = Math.max(0.5, Number(opts?.radiusPx) || 0),
+      alphaScale = Math.max(0, Math.min(1, Number(opts?.alphaScale) || 0));
+    if (
+      !targetTexture ||
+      alphaScale <= 0.001 ||
+      !canEncode(prepared) ||
+      typeof WebGPUGraffitiContourGlow === 'undefined' ||
+      !WebGPUGraffitiContourGlow.isReady?.()
+    )
+      return { handled: false, commandBuffer: null };
+    try {
+      const sampled = prepared.gpuMorphSampled === true,
+        style = { ...styleParams(layer, opts?.width, opts?.color), layer },
+        maskStyle = { ...style, color: '#ffffff' };
+      const ub = uniformBind(
+        targetCtx,
+        maskStyle,
+        Math.max(0, Math.min(1, Number(maskAlpha) || 0)),
+        style.width,
+      );
+      if (!ub) return { handled: false, commandBuffer: null };
+      let instanceCount = 1,
+        copyBg = null;
+      if (Array.isArray(copies) && copies.length) {
+        const shared = WebGPUCorridorCopyStore.acquire(
+          device,
+          generation,
+          frameCtx,
+          copies,
+          alphas,
+          'graffiti',
+          footprint,
+          layer,
+        );
+        if (!shared?.buffer || !shared.k) return { handled: false, commandBuffer: null };
+        instanceCount = shared.k;
+        copyBg = copyBind(shared.buffer);
+        stats.sharedCopyReuses++;
+      }
+      const slot = WebGPUGraffitiContourGlow.acquire(mainCanvas.width, mainCanvas.height);
+      if (!slot) {
+        noteFailure('contour-glow acquire', 'GPU contour Glow scratch textures unavailable');
+        return { handled: false, commandBuffer: null };
+      }
+      const enc = device.createCommandEncoder({
+        label: `Somata ${sampled ? 'GPU-sampled' : 'GPU-native'} Morph Graffiti contour Glow`,
+      });
+      let drawVertices = 0,
+        pathBg = null,
+        onSubmitted = null;
+      if (sampled) {
+        const table = prepared.gpuMorphArcTable,
+          sampleRec = prepared.gpuGraffitiSampleResource,
+          arcRec = table?._gpuMorphArcResource;
+        if (
+          !sampleRec?.ready ||
+          !arcRec?.ready ||
+          typeof encodeGpuGraffitiSampleResource !== 'function' ||
+          !encodeGpuGraffitiSampleResource(sampleRec, table, enc, frameCtx)
+        )
+          throw new Error('GPU Graffiti sample encode failed for contour Glow');
+        stats.sampleComputesFused++;
+        stats.arcComputesFused++;
+        pathBg = sampledPathBind(sampleRec, arcRec);
+        drawVertices = sampleRec.pathCount * GPU_GRAFFITI_SAMPLE_INTERVALS_MAX * 6 + sampleRec.pathCount * 6;
+        onSubmitted = () => noteGpuGraffitiSampleSubmitted?.(sampleRec, table);
+      } else {
+        const rec = prepared.gpuMorphResource,
+          t =
+            typeof rec.resolveMorphT === 'function'
+              ? rec.resolveMorphT(prepared.gpuMorphT)
+              : morphInterpolationTForCurrentMode(prepared.gpuMorphT);
+        const morphReady = spiroGpuPrepareMorphForLayerScene(frameCtx, rec, t, enc);
+        if (!morphReady) throw new Error('shared GPU Bézier Morph encode failed for contour Glow');
+        stats.morphComputesFused++;
+        pathBg = pathBind(rec);
+        drawVertices = rec.segmentCount * DIRECT_VERTS_PER_SEGMENT;
+        onSubmitted = () => {
+          if (typeof rec.encodeCurrentCubics !== 'function')
+            noteSharedGpuMorphPathSubmitted?.(rec, t, prepared.frameId);
+        };
+      }
+      let pass = enc.beginRenderPass({
+        colorAttachments: [
+          {
+            view: slot.mask.createView(),
+            loadOp: 'clear',
+            storeOp: 'store',
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          },
+        ],
+      });
+      const over = true;
+      pass.setPipeline(
+        sampled
+          ? copyBg
+            ? sampledCorridorPipelineOver
+            : sampledPipelineOver
+          : copyBg
+            ? corridorPipelineOver
+            : pipelineOver,
+      );
+      pass.setBindGroup(0, ub);
+      pass.setBindGroup(1, pathBg);
+      if (copyBg) pass.setBindGroup(2, copyBg);
+      pass.draw(drawVertices, instanceCount, 0, 0);
+      pass.end();
+      const color = GPUColorCache.rgba(style.color);
+      if (
+        !WebGPUGraffitiContourGlow.encodeBlurComposite(enc, slot, targetTexture, {
+          radiusPx,
+          alphaScale,
+          color,
+          composite: opts?.composite || 'source-over',
+        })
+      )
+        throw new Error('GPU contour Glow blur/composite encode failed');
+      stats.frames++;
+      stats.draws++;
+      if (copyBg) stats.corridorDraws++;
+      stats.logicalVertices += drawVertices * instanceCount;
+      stats.cpuMeshesAvoided++;
+      stats.contourGlowFrames++;
+      stats.contourGlowMasks++;
+      if (sampled) {
+        stats.sampledFrames++;
+        stats.sampledLogicalVertices += drawVertices * instanceCount;
+        stats.cpuPointTouchesAvoided +=
+          prepared.gpuMorphResource?.pointCount ||
+          prepared.gpuMorphArcTable?._gpuMorphArcResource?.morphRec?.pointCount ||
+          0;
+      } else stats.cpuPointTouchesAvoided += prepared.gpuMorphResource?.pointCount || 0;
+      noteSuccess(sampled ? 'sampled contour-glow encode/draw' : 'native contour-glow encode/draw');
+      return { handled: true, commandBuffer: enc.finish(), onSubmitted };
+    } catch (err) {
+      stats.failures++;
+      noteFailure('contour-glow encode/draw', err?.message || err, err);
+      return { handled: false, commandBuffer: null };
     }
-    function encode(targetTexture,prepared,layer,alpha,targetCtx,composite='source-over',copies=null,alphas=null,frameCtx=null,footprint=1,override=null){
-        if(!targetTexture||alpha<=.001||!canEncode(prepared))return{handled:false,commandBuffer:null};
-        try{
-            const sampled=prepared.gpuMorphSampled===true,style={...styleParams(layer,override?.width,override?.color),layer};
-            const outerWidth=style.width;
-            const ub=uniformBind(targetCtx,style,alpha,outerWidth);if(!ub)return{handled:false,commandBuffer:null};
-            let instanceCount=1,copyBg=null;
-            if(Array.isArray(copies)&&copies.length){const shared=WebGPUCorridorCopyStore.acquire(device,generation,frameCtx,copies,alphas,'graffiti',footprint,layer);if(!shared?.buffer||!shared.k)return{handled:false,commandBuffer:null};instanceCount=shared.k;copyBg=copyBind(shared.buffer);stats.sharedCopyReuses++;}
-            const enc=device.createCommandEncoder({label:`SpiroStar ${sampled?'GPU-sampled':'GPU-native'} Morph Graffiti`});
-            let drawVertices=0,pathBg=null,onSubmitted=null;
-            if(sampled){
-                const table=prepared.gpuMorphArcTable,sampleRec=prepared.gpuGraffitiSampleResource,arcRec=table?._gpuMorphArcResource;
-                if(!sampleRec?.ready||!arcRec?.ready||typeof encodeGpuGraffitiSampleResource!=='function'||!encodeGpuGraffitiSampleResource(sampleRec,table,enc,frameCtx))throw new Error('GPU Graffiti sample encode failed');
-                stats.sampleComputesFused++;stats.arcComputesFused++;pathBg=sampledPathBind(sampleRec,arcRec);drawVertices=sampleRec.pathCount*GPU_GRAFFITI_SAMPLE_INTERVALS_MAX*6+sampleRec.pathCount*6;
-                onSubmitted=()=>noteGpuGraffitiSampleSubmitted?.(sampleRec,table);
-            }else{
-                const rec=prepared.gpuMorphResource,t=typeof rec.resolveMorphT==='function'?rec.resolveMorphT(prepared.gpuMorphT):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(prepared.gpuMorphT):Math.max(0,Math.min(1,Number(prepared.gpuMorphT)||0)));
-                const morphReady=typeof spiroGpuPrepareMorphForLayerScene==='function'?spiroGpuPrepareMorphForLayerScene(frameCtx,rec,t,enc):(typeof rec.encodeCurrentCubics==='function'?rec.encodeCurrentCubics(enc,t):(typeof encodeSharedGpuMorphPath==='function'&&encodeSharedGpuMorphPath(enc,rec.layerIndex,t)));if(!morphReady)throw new Error('shared GPU Bézier Morph encode failed');
-                stats.morphComputesFused++;pathBg=pathBind(rec);drawVertices=rec.segmentCount*DIRECT_VERTS_PER_SEGMENT;onSubmitted=()=>{if(typeof rec.encodeCurrentCubics!=='function')noteSharedGpuMorphPathSubmitted?.(rec,t,prepared.frameId);};
-            }
-            const pass=enc.beginRenderPass({colorAttachments:[{view:sceneView(targetTexture),loadOp:'load',storeOp:'store'}]});
-            const over=composite!=='destination-over';
-            pass.setPipeline(sampled?(copyBg?(over?sampledCorridorPipelineOver:sampledCorridorPipelineBehind):(over?sampledPipelineOver:sampledPipelineBehind)):(copyBg?(over?corridorPipelineOver:corridorPipelineBehind):(over?pipelineOver:pipelineBehind)));
-            pass.setBindGroup(0,ub);pass.setBindGroup(1,pathBg);if(copyBg)pass.setBindGroup(2,copyBg);pass.draw(drawVertices,instanceCount,0,0);pass.end();
-            stats.frames++;stats.draws++;if(copyBg)stats.corridorDraws++;stats.logicalVertices+=drawVertices*instanceCount;stats.cpuMeshesAvoided++;
-            if(sampled){stats.sampledFrames++;stats.sampledLogicalVertices+=drawVertices*instanceCount;stats.cpuPointTouchesAvoided+=prepared.gpuMorphResource?.pointCount||prepared.gpuMorphArcTable?._gpuMorphArcResource?.morphRec?.pointCount||0;}
-            else stats.cpuPointTouchesAvoided+=prepared.gpuMorphResource?.pointCount||0;
-            noteSuccess(sampled?'sampled encode/draw':'native encode/draw');return{handled:true,commandBuffer:enc.finish(),onSubmitted};
-        }catch(err){stats.failures++;noteFailure('encode/draw',err?.message||err,err);return{handled:false,commandBuffer:null};}
-    }
-    function encodeGlow(targetTexture,prepared,layer,maskAlpha,targetCtx,opts={},copies=null,alphas=null,frameCtx=null,footprint=1){
-        const radiusPx=Math.max(.5,Number(opts?.radiusPx)||0),alphaScale=Math.max(0,Math.min(1,Number(opts?.alphaScale)||0));
-        if(!targetTexture||alphaScale<=.001||!canEncode(prepared)||typeof WebGPUGraffitiContourGlow==='undefined'||!WebGPUGraffitiContourGlow.isReady?.())return{handled:false,commandBuffer:null};
-        try{
-            const sampled=prepared.gpuMorphSampled===true,style={...styleParams(layer,opts?.width,opts?.color),layer},maskStyle={...style,color:'#ffffff'};
-            const ub=uniformBind(targetCtx,maskStyle,Math.max(0,Math.min(1,Number(maskAlpha)||0)),style.width);if(!ub)return{handled:false,commandBuffer:null};
-            let instanceCount=1,copyBg=null;if(Array.isArray(copies)&&copies.length){const shared=WebGPUCorridorCopyStore.acquire(device,generation,frameCtx,copies,alphas,'graffiti',footprint,layer);if(!shared?.buffer||!shared.k)return{handled:false,commandBuffer:null};instanceCount=shared.k;copyBg=copyBind(shared.buffer);stats.sharedCopyReuses++;}
-            const slot=WebGPUGraffitiContourGlow.acquire(mainCanvas.width,mainCanvas.height);if(!slot){noteFailure('contour-glow acquire','GPU contour Glow scratch textures unavailable');return{handled:false,commandBuffer:null};}
-            const enc=device.createCommandEncoder({label:`Somata ${sampled?'GPU-sampled':'GPU-native'} Morph Graffiti contour Glow`});let drawVertices=0,pathBg=null,onSubmitted=null;
-            if(sampled){
-                const table=prepared.gpuMorphArcTable,sampleRec=prepared.gpuGraffitiSampleResource,arcRec=table?._gpuMorphArcResource;if(!sampleRec?.ready||!arcRec?.ready||typeof encodeGpuGraffitiSampleResource!=='function'||!encodeGpuGraffitiSampleResource(sampleRec,table,enc,frameCtx))throw new Error('GPU Graffiti sample encode failed for contour Glow');
-                stats.sampleComputesFused++;stats.arcComputesFused++;pathBg=sampledPathBind(sampleRec,arcRec);drawVertices=sampleRec.pathCount*GPU_GRAFFITI_SAMPLE_INTERVALS_MAX*6+sampleRec.pathCount*6;onSubmitted=()=>noteGpuGraffitiSampleSubmitted?.(sampleRec,table);
-            }else{
-                const rec=prepared.gpuMorphResource,t=typeof rec.resolveMorphT==='function'?rec.resolveMorphT(prepared.gpuMorphT):(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(prepared.gpuMorphT):Math.max(0,Math.min(1,Number(prepared.gpuMorphT)||0)));
-                const morphReady=typeof spiroGpuPrepareMorphForLayerScene==='function'?spiroGpuPrepareMorphForLayerScene(frameCtx,rec,t,enc):(typeof rec.encodeCurrentCubics==='function'?rec.encodeCurrentCubics(enc,t):(typeof encodeSharedGpuMorphPath==='function'&&encodeSharedGpuMorphPath(enc,rec.layerIndex,t)));if(!morphReady)throw new Error('shared GPU Bézier Morph encode failed for contour Glow');
-                stats.morphComputesFused++;pathBg=pathBind(rec);drawVertices=rec.segmentCount*DIRECT_VERTS_PER_SEGMENT;onSubmitted=()=>{if(typeof rec.encodeCurrentCubics!=='function')noteSharedGpuMorphPathSubmitted?.(rec,t,prepared.frameId);};
-            }
-            let pass=enc.beginRenderPass({colorAttachments:[{view:slot.mask.createView(),loadOp:'clear',storeOp:'store',clearValue:{r:0,g:0,b:0,a:0}}]});const over=true;
-            pass.setPipeline(sampled?(copyBg?sampledCorridorPipelineOver:sampledPipelineOver):(copyBg?corridorPipelineOver:pipelineOver));pass.setBindGroup(0,ub);pass.setBindGroup(1,pathBg);if(copyBg)pass.setBindGroup(2,copyBg);pass.draw(drawVertices,instanceCount,0,0);pass.end();
-            const color=GPUColorCache.rgba(style.color);if(!WebGPUGraffitiContourGlow.encodeBlurComposite(enc,slot,targetTexture,{radiusPx,alphaScale,color,composite:opts?.composite||'source-over'}))throw new Error('GPU contour Glow blur/composite encode failed');
-            stats.frames++;stats.draws++;if(copyBg)stats.corridorDraws++;stats.logicalVertices+=drawVertices*instanceCount;stats.cpuMeshesAvoided++;stats.contourGlowFrames++;stats.contourGlowMasks++;
-            if(sampled){stats.sampledFrames++;stats.sampledLogicalVertices+=drawVertices*instanceCount;stats.cpuPointTouchesAvoided+=prepared.gpuMorphResource?.pointCount||prepared.gpuMorphArcTable?._gpuMorphArcResource?.morphRec?.pointCount||0;}else stats.cpuPointTouchesAvoided+=prepared.gpuMorphResource?.pointCount||0;
-            noteSuccess(sampled?'sampled contour-glow encode/draw':'native contour-glow encode/draw');return{handled:true,commandBuffer:enc.finish(),onSubmitted};
-        }catch(err){stats.failures++;noteFailure('contour-glow encode/draw',err?.message||err,err);return{handled:false,commandBuffer:null};}
-    }
-    function encodeGlowToLayerScene(targetTexture,prepared,layer,maskAlpha,targetCtx,opts={},frameCtx=null){return encodeGlow(targetTexture,prepared,layer,maskAlpha,targetCtx,opts,null,null,frameCtx,1);}
-    function encodeCorridorGlowToLayerScene(targetTexture,prepared,layer,targetCtx,copies,alphas,frameCtx,footprint=1,opts={}){return encodeGlow(targetTexture,prepared,layer,1,targetCtx,opts,copies,alphas,frameCtx,footprint);}
+  }
+  function encodeGlowToLayerScene(
+    targetTexture,
+    prepared,
+    layer,
+    maskAlpha,
+    targetCtx,
+    opts = {},
+    frameCtx = null,
+  ) {
+    return encodeGlow(targetTexture, prepared, layer, maskAlpha, targetCtx, opts, null, null, frameCtx, 1);
+  }
+  function encodeCorridorGlowToLayerScene(
+    targetTexture,
+    prepared,
+    layer,
+    targetCtx,
+    copies,
+    alphas,
+    frameCtx,
+    footprint = 1,
+    opts = {},
+  ) {
+    return encodeGlow(
+      targetTexture,
+      prepared,
+      layer,
+      1,
+      targetCtx,
+      opts,
+      copies,
+      alphas,
+      frameCtx,
+      footprint,
+    );
+  }
 
-    function encodeToLayerScene(targetTexture,prepared,layer,alpha,targetCtx,composite='source-over',override=null,frameCtx=null){return encode(targetTexture,prepared,layer,alpha,targetCtx,composite,null,null,frameCtx,1,override);}
-    function encodeCorridorToLayerScene(targetTexture,prepared,layer,alpha,targetCtx,copies,alphas,frameCtx,footprint=1,composite='source-over',override=null){return encode(targetTexture,prepared,layer,alpha,targetCtx,composite,copies,alphas,frameCtx,footprint,override);}
-    function status(){warmup();return{available:ready,lastError,generation,diagnostic:{...diagnostic},geometryPreparation:diagnostic.geometryPreparation,...stats,contourGlow:typeof WebGPUGraffitiContourGlow!=='undefined'?WebGPUGraffitiContourGlow.status?.()||null:null,contract:'topology/Spiral Morph Graffiti stays GPU-native: plain evaluates the shared retained cubic rail directly; pinched and all variation modes use the exact Bézier-derived GPU Arc + bounded GPU-resident sampling. Glow is exact-ribbon GPU mask blur. No strict-Spiral variation mode requires CPU geometry or Canvas presentation.'};}
-    return{warmup,isReady:()=>warmup(),canEncode,encodeToLayerScene,encodeCorridorToLayerScene,encodeGlowToLayerScene,encodeCorridorGlowToLayerScene,status};
+  function encodeToLayerScene(
+    targetTexture,
+    prepared,
+    layer,
+    alpha,
+    targetCtx,
+    composite = 'source-over',
+    override = null,
+    frameCtx = null,
+  ) {
+    return encode(
+      targetTexture,
+      prepared,
+      layer,
+      alpha,
+      targetCtx,
+      composite,
+      null,
+      null,
+      frameCtx,
+      1,
+      override,
+    );
+  }
+  function encodeCorridorToLayerScene(
+    targetTexture,
+    prepared,
+    layer,
+    alpha,
+    targetCtx,
+    copies,
+    alphas,
+    frameCtx,
+    footprint = 1,
+    composite = 'source-over',
+    override = null,
+  ) {
+    return encode(
+      targetTexture,
+      prepared,
+      layer,
+      alpha,
+      targetCtx,
+      composite,
+      copies,
+      alphas,
+      frameCtx,
+      footprint,
+      override,
+    );
+  }
+  function status() {
+    warmup();
+    return {
+      available: ready,
+      lastError,
+      generation,
+      diagnostic: { ...diagnostic },
+      geometryPreparation: diagnostic.geometryPreparation,
+      ...stats,
+      contourGlow:
+        typeof WebGPUGraffitiContourGlow !== 'undefined'
+          ? WebGPUGraffitiContourGlow.status?.() || null
+          : null,
+      contract:
+        'topology/Spiral Morph Graffiti stays GPU-native: plain evaluates the shared retained cubic rail directly; pinched and all variation modes use the exact Bézier-derived GPU Arc + bounded GPU-resident sampling. Glow is exact-ribbon GPU mask blur. No strict-Spiral variation mode requires CPU geometry or Canvas presentation.',
+    };
+  }
+  return {
+    warmup,
+    isReady: () => warmup(),
+    canEncode,
+    encodeToLayerScene,
+    encodeCorridorToLayerScene,
+    encodeGlowToLayerScene,
+    encodeCorridorGlowToLayerScene,
+    status,
+  };
 })();
-window.__spiroGpuMorphGraffitiStatus=()=>WebGPUGraffitiMorphRenderer.status();
+
+export { WebGPUGraffitiMorphRenderer };

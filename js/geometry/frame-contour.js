@@ -1,241 +1,644 @@
-window.__spiroRegisterModule?.('js/geometry/frame-contour');
+import '../lamps/lamp-anchors.js'; // initialisation order: this module runs after it
+import { SomataGeometryPolicy } from '../render/geometry-policy.js';
+import { state } from '../core/state.js';
+import { GeometryKernel } from './kernel.js';
+import { mainCtx } from '../core/render-runtime.js';
+import { isSpiralLayer } from './spiral/order-params.js';
+import {
+  canUseSpiralCorridorMasterInstancing,
+  getDynamicTunnelMorphMasterStrokeCommands,
+  getFrameGLStrokeCommands,
+  getTunnelMasterStrokeCommands,
+} from '../render/stroke-command-cache.js';
+import { buildPathLengthTable, frameGeometryRuntime, getLayerFrameAuxiliaryPaths } from './frame-paths.js';
 
-// Somata 7.8: one authoritative contour per ordinary layer/frame.
-//
-// The contour is not reconstructed independently by Fill/Web/Graffiti/Lightning.
-// We first record the actual ordinary Line geometry for the current frame once, then
-// normalize its stroke subpaths into connected contours.  The same record owns:
-//   - commands: exact screen-space stroke commands used by Line/GPU batch
-//   - screenPaths: connected screen-space topology used by Fill
-//   - paths: connected line-command topology mapped back to layer-local space
-//   - anchorPaths: semantic/key-point carrier (the 7.5 Web corner authority)
-//   - visualLinePaths: the exact ordinary Line carrier used for Web distance/clipping
-//
-// Strict retained Spiral keeps its specialized authoritative GPU carrier; ordinary Corridor shares the master Line FrameContour.
-const SomataFrameContourService=(()=>{
-    const JOIN_EPS=1e-3;
-    const stats={requests:0,builds:0,hits:0,ineligible:0,empty:0,points:0,paths:0,joins:0,closed:0,open:0,webViews:0,webViewHits:0,lastReason:'',lastFrameId:0};
+const SomataFrameContourService = (() => {
+  const JOIN_EPS = 1e-3;
+  const stats = {
+    requests: 0,
+    builds: 0,
+    hits: 0,
+    ineligible: 0,
+    empty: 0,
+    points: 0,
+    paths: 0,
+    joins: 0,
+    closed: 0,
+    open: 0,
+    webViews: 0,
+    webViewHits: 0,
+    lastReason: '',
+    lastFrameId: 0,
+  };
 
-    function frameOwner(frameCtx){let cur=frameCtx,guard=0;while(cur?.__somataFeatureParent&&guard++<8)cur=cur.__somataFeatureParent;return cur||frameCtx;}
-    function isStrict(frameCtx){const owner=frameOwner(frameCtx);try{return SomataGeometryPolicy?.isStrict?.(owner)===true;}catch(_){return false;}}
-    function eligibility(frameCtx){
-        if(!frameCtx)return'no-frame';
-        if(!frameCtx.drawLayerInstances)return'line-recorder-not-ready';
-        if(isStrict(frameCtx))return'strict-spiral-gpu-carrier';
-        if(typeof isSpiralLayer==='function'&&isSpiralLayer(frameCtx.layer))return'spiral-specialized-carrier';
-        // Ordinary Corridor is not a different geometry family. Its visible copies are
-        // transforms of one master Line carrier, so FrameContour owns that master too.
-        // Only Spiral Corridor keeps the specialized retained-GPU carrier above.
+  function frameOwner(frameCtx) {
+    let cur = frameCtx,
+      guard = 0;
+    while (cur?.__somataFeatureParent && guard++ < 8) cur = cur.__somataFeatureParent;
+    return cur || frameCtx;
+  }
+  function isStrict(frameCtx) {
+    const owner = frameOwner(frameCtx);
+    try {
+      return SomataGeometryPolicy?.isStrict?.(owner) === true;
+    } catch (_) {
+      return false;
+    }
+  }
 
-        if(frameCtx.geometryPlan?.kind==='lightning')return'geometry-lightning-special-case';
-        return'';
+  function usesSpiralCorridorMaster(frameCtx) {
+    if (
+      !frameCtx?.layer ||
+      state?.tunnel?.active !== true ||
+      typeof isSpiralLayer !== 'function' ||
+      !isSpiralLayer(frameCtx.layer) ||
+      frameCtx.geometryPlan?.kind === 'lightning'
+    )
+      return false;
+
+    if (isStrict(frameCtx)) return false;
+
+    return canUseSpiralCorridorMasterInstancing(frameCtx) === true;
+  }
+  function eligibility(frameCtx) {
+    if (!frameCtx) return 'no-frame';
+    if (!frameCtx.drawLayerInstances) return 'line-recorder-not-ready';
+    if (usesSpiralCorridorMaster(frameCtx)) return '';
+    if (isStrict(frameCtx)) return 'strict-spiral-gpu-carrier';
+    if (isSpiralLayer(frameCtx.layer)) {
+      const staticVisibleSpiralFill =
+        state?.tunnel?.active !== true &&
+        frameCtx.geometryPlan?.dynamic !== true &&
+        frameCtx.layer.spiralFillEnabled === true &&
+        ['mathematical', 'interwinding'].includes(frameCtx.layer.spiralFillType) &&
+        typeof getFrameGLStrokeCommands === 'function';
+      if (!staticVisibleSpiralFill) return 'spiral-specialized-carrier';
     }
 
-    function samePoint(a,b){
-        const ax=Number(a?.x),ay=Number(a?.y),bx=Number(b?.x),by=Number(b?.y);
-        return Number.isFinite(ax)&&Number.isFinite(ay)&&Number.isFinite(bx)&&Number.isFinite(by)&&Math.abs(ax-bx)<=JOIN_EPS&&Math.abs(ay-by)<=JOIN_EPS;
+    if (frameCtx.geometryPlan?.kind === 'lightning') return 'geometry-lightning-special-case';
+    return '';
+  }
+
+  function samePoint(a, b) {
+    const ax = Number(a?.x),
+      ay = Number(a?.y),
+      bx = Number(b?.x),
+      by = Number(b?.y);
+    return (
+      Number.isFinite(ax) &&
+      Number.isFinite(ay) &&
+      Number.isFinite(bx) &&
+      Number.isFinite(by) &&
+      Math.abs(ax - bx) <= JOIN_EPS &&
+      Math.abs(ay - by) <= JOIN_EPS
+    );
+  }
+  function cleanPoints(src) {
+    if (!Array.isArray(src) || src.length < 2) return null;
+    const out = [];
+    for (const p of src) {
+      const x = Number(p?.x),
+        y = Number(p?.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      const q = { x, y };
+      if (Number.isFinite(Number(p?.widthScale))) q.widthScale = Number(p.widthScale);
+      if (p?.__profileCorner === true) q.__profileCorner = true;
+      if (p?.__profileKeyCorner === true) q.__profileKeyCorner = true;
+      if (!out.length || !samePoint(out[out.length - 1], q)) out.push(q);
     }
-    function cleanPoints(src){
-        if(!Array.isArray(src)||src.length<2)return null;const out=[];
-        for(const p of src){const x=Number(p?.x),y=Number(p?.y);if(!Number.isFinite(x)||!Number.isFinite(y))return null;const q={x,y};if(Number.isFinite(Number(p?.widthScale)))q.widthScale=Number(p.widthScale);if(p?.__profileCorner===true)q.__profileCorner=true;if(p?.__profileKeyCorner===true)q.__profileKeyCorner=true;if(!out.length||!samePoint(out[out.length-1],q))out.push(q);}
-        return out.length>=2?out:null;
+    return out.length >= 2 ? out : null;
+  }
+
+  function buildScreenPaths(stroke, preserveGrowth = false) {
+    const closed = [],
+      open = [];
+    for (const contour of stroke?.contours || []) {
+      const pts = cleanPoints(contour?.points);
+      if (!pts) continue;
+      const strokeGrowth = preserveGrowth ? (contour.command?.strokeGrowth ?? 1) : 1;
+      if (contour.closed === true) {
+        if (pts.length > 2 && samePoint(pts[0], pts[pts.length - 1])) pts.pop();
+        closed.push({ points: pts, closed: true, strokeGrowth, source: [contour] });
+      } else open.push({ points: pts, closed: false, strokeGrowth, source: [contour], used: false });
     }
-    // A stroke can contain thousands of separately recorded Bezier sides. Keep
-    // connected pieces in endpoint order and flatten only once: prepending into
-    // an ever-growing array repeatedly copied every point already assembled.
-    // Each piece skips the endpoint shared with its neighbour, exactly as the
-    // former appendChain/prependChain helpers did.
-    function buildScreenPaths(stroke){
-        const closed=[],open=[];
-        for(const contour of stroke?.contours||[]){
-            const pts=cleanPoints(contour?.points);if(!pts)continue;
-            if(contour.closed===true){if(pts.length>2&&samePoint(pts[0],pts[pts.length-1]))pts.pop();closed.push({points:pts,closed:true,source:[contour]});}
-            else open.push({points:pts,closed:false,source:[contour],used:false});
+
+    const grid = JOIN_EPS * 2;
+    const indexable =
+      open.length >= 48 &&
+      open.every((rec) => {
+        const a = rec.points[0],
+          b = rec.points[rec.points.length - 1];
+        return (
+          Number.isFinite(a.x) &&
+          Number.isFinite(a.y) &&
+          Number.isFinite(b.x) &&
+          Number.isFinite(b.y) &&
+          Math.abs(a.x) < 1e9 &&
+          Math.abs(a.y) < 1e9 &&
+          Math.abs(b.x) < 1e9 &&
+          Math.abs(b.y) < 1e9
+        );
+      });
+    const endpointIndex = indexable ? new Map() : null;
+    if (endpointIndex) {
+      for (let j = 0; j < open.length; j++) {
+        const p = open[j].points;
+        for (const pt of [p[0], p[p.length - 1]]) {
+          const key = `${Math.floor(pt.x / grid)},${Math.floor(pt.y / grid)}`;
+          let ids = endpointIndex.get(key);
+          if (!ids) {
+            ids = [];
+            endpointIndex.set(key, ids);
+          }
+          ids.push(j);
         }
-        // Large stroke recordings used to re-scan every previously joined side
-        // after each merge. Index both endpoints in JOIN_EPS-sized neighbourhoods
-        // while preserving the original lowest-index, four-orientation priority.
-        // Unusually large coordinates use the reference linear search to avoid
-        // floating-point bucket ambiguity.
-        const grid=JOIN_EPS*2;
-        const indexable=open.length>=48&&open.every(rec=>{
-            const a=rec.points[0],b=rec.points[rec.points.length-1];
-            return Number.isFinite(a.x)&&Number.isFinite(a.y)&&Number.isFinite(b.x)&&Number.isFinite(b.y)&&
-                Math.abs(a.x)<1e9&&Math.abs(a.y)<1e9&&Math.abs(b.x)<1e9&&Math.abs(b.y)<1e9;
-        });
-        const endpointIndex=indexable?new Map():null;
-        if(endpointIndex){
-            for(let j=0;j<open.length;j++){
-                const p=open[j].points;
-                for(const pt of [p[0],p[p.length-1]]){
-                    const key=`${Math.floor(pt.x/grid)},${Math.floor(pt.y/grid)}`;
-                    let ids=endpointIndex.get(key);
-                    if(!ids){ids=[];endpointIndex.set(key,ids);}
-                    ids.push(j);
-                }
+      }
+    }
+    function findNextJoin(head, tail, strokeGrowth) {
+      let best = open.length;
+      for (let end = 0; end < 2; end++) {
+        const pt = end === 0 ? tail : head,
+          x = Math.floor(pt.x / grid),
+          y = Math.floor(pt.y / grid);
+        for (let dx = -1; dx <= 1; dx++)
+          for (let dy = -1; dy <= 1; dy++) {
+            const ids = endpointIndex.get(`${x + dx},${y + dy}`);
+            if (!ids) continue;
+            for (const j of ids) {
+              if (j >= best || open[j].used || open[j].strokeGrowth !== strokeGrowth) continue;
+              const p = open[j].points,
+                first = p[0],
+                last = p[p.length - 1];
+              if (
+                samePoint(tail, first) ||
+                samePoint(tail, last) ||
+                samePoint(head, last) ||
+                samePoint(head, first)
+              )
+                best = j;
             }
-        }
-        function findNextJoin(head,tail){
-            let best=open.length;
-            for(let end=0;end<2;end++){
-                const pt=end===0?tail:head,x=Math.floor(pt.x/grid),y=Math.floor(pt.y/grid);
-                for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){
-                    const ids=endpointIndex.get(`${x+dx},${y+dy}`);
-                    if(!ids)continue;
-                    for(const j of ids){
-                        if(j>=best||open[j].used)continue;
-                        const p=open[j].points,first=p[0],last=p[p.length-1];
-                        if(samePoint(tail,first)||samePoint(tail,last)||samePoint(head,last)||samePoint(head,first))best=j;
-                    }
-                }
-            }
-            return best===open.length?-1:best;
-        }
-        const joined=[];
-        for(let i=0;i<open.length;i++){
-            if(open[i].used)continue;
-            open[i].used=true;
-            const initial=open[i].points;
-            const frontParts=[],backParts=[],frontSources=[],backSources=[];
-            let head=initial[0],tail=initial[initial.length-1],pointCount=initial.length;
-            let changed=true;
-            while(changed){changed=false;
-                const next=endpointIndex?findNextJoin(head,tail):-1;
-                if(endpointIndex&&next<0)break;
-                const searchStart=endpointIndex?next:0,searchEnd=endpointIndex?next+1:open.length;
-                for(let j=searchStart;j<searchEnd;j++){
-                    const q=open[j];if(q.used)continue;const p=q.points;if(!p?.length)continue;
-                    const first=p[0],last=p[p.length-1];
-                    if(samePoint(tail,first)){
-                        backParts.push({points:p,start:1,step:1,count:p.length-1});
-                        backSources.push(q.source);tail=last;
-                    }else if(samePoint(tail,last)){
-                        backParts.push({points:p,start:p.length-2,step:-1,count:p.length-1});
-                        backSources.push(q.source);tail=first;
-                    }else if(samePoint(head,last)){
-                        frontParts.push({points:p,start:0,step:1,count:p.length-1});
-                        frontSources.push(q.source);head=first;
-                    }else if(samePoint(head,first)){
-                        frontParts.push({points:p,start:p.length-1,step:-1,count:p.length-1});
-                        frontSources.push(q.source);head=last;
-                    }else continue;
-                    q.used=true;pointCount+=p.length-1;stats.joins++;changed=true;break;
-                }
-            }
-            // Flatten once, preserving the exact ordering of both the points and
-            // the source commands (including head-first and tail-last reversals).
-            const chain=new Array(pointCount),source=[];
-            let write=0;
-            function appendPart(part){
-                const {points,start,step,count}=part;
-                for(let k=0,index=start;k<count;k++,index+=step)chain[write++]=points[index];
-            }
-            for(let k=frontParts.length-1;k>=0;k--){appendPart(frontParts[k]);source.push(...frontSources[k]);}
-            for(let k=0;k<initial.length;k++)chain[write++]=initial[k];
-            source.push(...open[i].source);
-            for(let k=0;k<backParts.length;k++){appendPart(backParts[k]);source.push(...backSources[k]);}
-            const isClosed=chain.length>=3&&samePoint(chain[0],chain[chain.length-1]);if(isClosed)chain.pop();
-            joined.push({points:chain,closed:isClosed,source});if(isClosed)stats.closed++;else stats.open++;
-        }
-        for(const p of closed){joined.push(p);stats.closed++;}
-        return joined;
+          }
+      }
+      return best === open.length ? -1 : best;
     }
+    const joined = [];
+    for (let i = 0; i < open.length; i++) {
+      if (open[i].used) continue;
+      open[i].used = true;
+      const initial = open[i].points,
+        strokeGrowth = open[i].strokeGrowth;
+      const frontParts = [],
+        backParts = [],
+        frontSources = [],
+        backSources = [];
+      let head = initial[0],
+        tail = initial[initial.length - 1],
+        pointCount = initial.length;
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const next = endpointIndex ? findNextJoin(head, tail, strokeGrowth) : -1;
+        if (endpointIndex && next < 0) break;
+        const searchStart = endpointIndex ? next : 0,
+          searchEnd = endpointIndex ? next + 1 : open.length;
+        for (let j = searchStart; j < searchEnd; j++) {
+          const q = open[j];
+          if (q.used || q.strokeGrowth !== strokeGrowth) continue;
+          const p = q.points;
+          if (!p?.length) continue;
+          const first = p[0],
+            last = p[p.length - 1];
+          if (samePoint(tail, first)) {
+            backParts.push({ points: p, start: 1, step: 1, count: p.length - 1 });
+            backSources.push(q.source);
+            tail = last;
+          } else if (samePoint(tail, last)) {
+            backParts.push({ points: p, start: p.length - 2, step: -1, count: p.length - 1 });
+            backSources.push(q.source);
+            tail = first;
+          } else if (samePoint(head, last)) {
+            frontParts.push({ points: p, start: 0, step: 1, count: p.length - 1 });
+            frontSources.push(q.source);
+            head = first;
+          } else if (samePoint(head, first)) {
+            frontParts.push({ points: p, start: p.length - 1, step: -1, count: p.length - 1 });
+            frontSources.push(q.source);
+            head = last;
+          } else continue;
+          q.used = true;
+          pointCount += p.length - 1;
+          stats.joins++;
+          changed = true;
+          break;
+        }
+      }
+      // Flatten once, preserving the exact ordering of both the points and
+      // the source commands (including head-first and tail-last reversals).
+      const chain = new Array(pointCount),
+        source = [];
+      let write = 0;
+      function appendPart(part) {
+        const { points, start, step, count } = part;
+        for (let k = 0, index = start; k < count; k++, index += step) chain[write++] = points[index];
+      }
+      for (let k = frontParts.length - 1; k >= 0; k--) {
+        appendPart(frontParts[k]);
+        source.push(...frontSources[k]);
+      }
+      for (let k = 0; k < initial.length; k++) chain[write++] = initial[k];
+      source.push(...open[i].source);
+      for (let k = 0; k < backParts.length; k++) {
+        appendPart(backParts[k]);
+        source.push(...backSources[k]);
+      }
+      const isClosed = chain.length >= 3 && samePoint(chain[0], chain[chain.length - 1]);
+      if (isClosed) chain.pop();
+      joined.push({ points: chain, closed: isClosed, strokeGrowth, source });
+      if (isClosed) stats.closed++;
+      else stats.open++;
+    }
+    for (const p of closed) {
+      joined.push(p);
+      stats.closed++;
+    }
+    return joined;
+  }
 
-    function multiply(a,b){return[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5]];}
-    function invert(m){const det=m[0]*m[3]-m[1]*m[2];if(!Number.isFinite(det)||Math.abs(det)<1e-12)return null;const inv=1/det;return[m[3]*inv,-m[1]*inv,-m[2]*inv,m[0]*inv,(m[2]*m[5]-m[3]*m[4])*inv,(m[1]*m[4]-m[0]*m[5])*inv];}
-    function lineLocalToScreenMatrix(frameCtx){
-        const t=mainCtx?.getTransform?.();const root=t?[Number(t.a)||0,Number(t.b)||0,Number(t.c)||0,Number(t.d)||0,Number(t.e)||0,Number(t.f)||0]:[1,0,0,1,0,0];
-        const s=Number.isFinite(Number(frameCtx?.combinedScale))?Number(frameCtx.combinedScale):1,r=Number.isFinite(Number(frameCtx?.combinedRotationRad))?Number(frameCtx.combinedRotationRad):0,c=Math.cos(r)*s,q=Math.sin(r)*s;
-        return multiply(root,[c,q,-q,c,0,0]);
+  function multiply(a, b) {
+    return [
+      a[0] * b[0] + a[2] * b[1],
+      a[1] * b[0] + a[3] * b[1],
+      a[0] * b[2] + a[2] * b[3],
+      a[1] * b[2] + a[3] * b[3],
+      a[0] * b[4] + a[2] * b[5] + a[4],
+      a[1] * b[4] + a[3] * b[5] + a[5],
+    ];
+  }
+  function invert(m) {
+    const det = m[0] * m[3] - m[1] * m[2];
+    if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null;
+    const inv = 1 / det;
+    return [
+      m[3] * inv,
+      -m[1] * inv,
+      -m[2] * inv,
+      m[0] * inv,
+      (m[2] * m[5] - m[3] * m[4]) * inv,
+      (m[1] * m[4] - m[0] * m[5]) * inv,
+    ];
+  }
+  function lineLocalToScreenMatrix(frameCtx) {
+    const t = mainCtx?.getTransform?.();
+    const root = t
+      ? [
+          Number(t.a) || 0,
+          Number(t.b) || 0,
+          Number(t.c) || 0,
+          Number(t.d) || 0,
+          Number(t.e) || 0,
+          Number(t.f) || 0,
+        ]
+      : [1, 0, 0, 1, 0, 0];
+    const s = Number.isFinite(Number(frameCtx?.combinedScale)) ? Number(frameCtx.combinedScale) : 1,
+      r = Number.isFinite(Number(frameCtx?.combinedRotationRad)) ? Number(frameCtx.combinedRotationRad) : 0,
+      c = Math.cos(r) * s,
+      q = Math.sin(r) * s;
+    return multiply(root, [c, q, -q, c, 0, 0]);
+  }
+  function mapPoint(p, inv) {
+    const x = Number(p?.x) || 0,
+      y = Number(p?.y) || 0,
+      q = { x: inv[0] * x + inv[2] * y + inv[4], y: inv[1] * x + inv[3] * y + inv[5] };
+    if (Number.isFinite(Number(p?.widthScale))) q.widthScale = Number(p.widthScale);
+    if (p?.__profileCorner === true) q.__profileCorner = true;
+    if (p?.__profileKeyCorner === true) q.__profileKeyCorner = true;
+    return q;
+  }
+  // Reuse the actual retained Bezier control points from the GPU Line command.
+  // Its subpath.points are only KNOTS; interpreting their chords as the visible
+  // curve would recreate the detached-Web regression even with a shared master.
+  function makeExactGpuSpiralPath(source, inv, screenPathIndex) {
+    if (source?.length !== 1) return null;
+    const contour = source[0],
+      cmd = contour?.command;
+    if (
+      cmd?.__variableWidthBezierSpiral !== true ||
+      contour?.subpath !== cmd.subpaths?.[0] ||
+      !Array.isArray(cmd.bezierSegments) ||
+      !cmd.bezierSegments.length
+    )
+      return null;
+    const cubics = new Array(cmd.bezierSegments.length),
+      pts = [];
+    const samplesPerCubic = 6; // Arclength preview only; endpoints use exact Cubics.
+    for (let qi = 0; qi < cubics.length; qi++) {
+      const src = cmd.bezierSegments[qi],
+        q = {
+          p0: mapPoint(src.p0, inv),
+          c1: mapPoint(src.c1, inv),
+          c2: mapPoint(src.c2, inv),
+          p3: mapPoint(src.p3, inv),
+          widthScale0: Math.max(0.02, Number(src.widthScale0) || 1),
+          widthScale1: Math.max(0.02, Number(src.widthScale1) || 1),
+        };
+      cubics[qi] = q;
+      if (qi === 0) {
+        pts.push({ ...q.p0, widthScale: q.widthScale0, __webExactCubicIndex: 0, __webExactCubicT: 0 });
+      }
+      const w0 = Math.log(q.widthScale0),
+        dw = Math.log(q.widthScale1) - w0;
+      for (let j = 1; j <= samplesPerCubic; j++) {
+        const t = j / samplesPerCubic,
+          u = 1 - t;
+        const p = {
+          x: u * u * u * q.p0.x + 3 * u * u * t * q.c1.x + 3 * u * t * t * q.c2.x + t * t * t * q.p3.x,
+          y: u * u * u * q.p0.y + 3 * u * u * t * q.c1.y + 3 * u * t * t * q.c2.y + t * t * t * q.p3.y,
+          widthScale: Math.exp(w0 + dw * t),
+          __webExactCubicIndex: qi,
+          __webExactCubicT: t,
+        };
+        if (j === samplesPerCubic && src.__profileCorner1 === true) p.__profileCorner = true;
+        pts.push(p);
+      }
     }
-    function mapPoint(p,inv){const x=Number(p?.x)||0,y=Number(p?.y)||0,q={x:inv[0]*x+inv[2]*y+inv[4],y:inv[1]*x+inv[3]*y+inv[5]};if(Number.isFinite(Number(p?.widthScale)))q.widthScale=Number(p.widthScale);if(p?.__profileCorner===true)q.__profileCorner=true;if(p?.__profileKeyCorner===true)q.__profileKeyCorner=true;return q;}
-    function buildLocalPaths(screenPaths,inv,frameCtx){
-        const out=[];for(let i=0;i<screenPaths.length;i++){const s=screenPaths[i];if(!s?.points?.length)continue;out.push({points:s.points.map(p=>mapPoint(p,inv)),closed:s.closed===true,__frameContour:true,__screenPathIndex:i});}
-        try{Object.defineProperties(out,{_frameGeometryId:{value:Number(frameGeometryRuntime?.frameId)||Number(frameCtx.frameId)||0,writable:true,configurable:true},__somataFrameContour:{value:true,writable:true,configurable:true},__somataFrameId:{value:Number(frameCtx.frameId)||0,writable:true,configurable:true}});}catch(_){out._frameGeometryId=Number(frameGeometryRuntime?.frameId)||Number(frameCtx.frameId)||0;out.__somataFrameContour=true;out.__somataFrameId=Number(frameCtx.frameId)||0;}
-        return out;
+    if (pts.length < 2) return null;
+    return {
+      points: pts,
+      closed: contour.closed === true,
+      __frameContour: true,
+      __screenPathIndex: screenPathIndex,
+      _exactSpiralEffectRail: true,
+      _spiralWebAuthoredCorners: true,
+      _bezierSegments: cubics,
+      _spiralGpuBezierRail: true,
+    };
+  }
+  function buildLocalPaths(screenPaths, inv, frameCtx) {
+    const out = [];
+    for (let i = 0; i < screenPaths.length; i++) {
+      const s = screenPaths[i];
+      if (!s?.points?.length) continue;
+      const exact = makeExactGpuSpiralPath(s.source, inv, i);
+      // Ordinary Polygon and Fourier retain the existing stroke-path representation.
+      const path = exact || {
+        points: s.points.map((p) => mapPoint(p, inv)),
+        closed: s.closed === true,
+        __frameContour: true,
+        __screenPathIndex: i,
+      };
+      if (s.strokeGrowth !== 1) path.strokeGrowth = s.strokeGrowth;
+      out.push(path);
     }
+    try {
+      Object.defineProperties(out, {
+        _frameGeometryId: {
+          value: Number(frameGeometryRuntime?.frameId) || Number(frameCtx.frameId) || 0,
+          writable: true,
+          configurable: true,
+        },
+        __somataFrameContour: { value: true, writable: true, configurable: true },
+        __somataFrameId: { value: Number(frameCtx.frameId) || 0, writable: true, configurable: true },
+      });
+    } catch (_) {
+      out._frameGeometryId = Number(frameGeometryRuntime?.frameId) || Number(frameCtx.frameId) || 0;
+      out.__somataFrameContour = true;
+      out.__somataFrameId = Number(frameCtx.frameId) || 0;
+    }
+    return out;
+  }
 
-    function recordLineCarrier(frameCtx){
-        const owner=frameOwner(frameCtx);
-        // Geometry carrier existence must not depend on whether the visible Line is enabled
-        // or replaced by a profile. Fill/Web still need the same underlying geometry.
-        // Corridor is copies of one master Line, therefore its FrameContour MUST be built
-        // from the exact same master command object later consumed by Corridor Base.
-        if(state?.tunnel?.active===true){
-            try{
-                return owner?.geometryPlan?.dynamic===true
-                    ? (getDynamicTunnelMorphMasterStrokeCommands?.(owner,true)||null)
-                    : (getTunnelMasterStrokeCommands?.(owner,true)||null);
-            }catch(_){return null;}
-        }
-        const oldVisible=owner.lineDisplayEnabled,oldStrokeOnly=owner.lineProfileStrokeOnly;
-        // drawLayerInstances/drawLayerGeometry are closures over the full layer frame context.
-        // Toggling only a scoped FeatureHost child does not open the carrier when Line is hidden.
-        try{owner.lineDisplayEnabled=true;owner.lineProfileStrokeOnly=false;return getFrameGLStrokeCommands(owner,false)||null;}
-        finally{owner.lineDisplayEnabled=oldVisible;owner.lineProfileStrokeOnly=oldStrokeOnly;}
+  function recordLineCarrier(frameCtx) {
+    const owner = frameOwner(frameCtx);
+    // Geometry carrier existence must not depend on whether the visible Line is enabled
+    // or replaced by a profile. Fill/Web still need the same underlying geometry.
+    // Corridor is copies of one master Line, therefore its FrameContour MUST be built
+    // from the exact same master command object later consumed by Corridor Base.
+    if (state?.tunnel?.active === true) {
+      try {
+        return owner?.geometryPlan?.dynamic === true
+          ? getDynamicTunnelMorphMasterStrokeCommands?.(owner, true) || null
+          : getTunnelMasterStrokeCommands?.(owner, true) || null;
+      } catch (_) {
+        return null;
+      }
     }
+    const oldVisible = owner.lineDisplayEnabled,
+      oldStrokeOnly = owner.lineProfileStrokeOnly;
+    // drawLayerInstances/drawLayerGeometry are closures over the full layer frame context.
+    // Toggling only a scoped FeatureHost child does not open the carrier when Line is hidden.
+    try {
+      owner.lineDisplayEnabled = true;
+      owner.lineProfileStrokeOnly = false;
+      return getFrameGLStrokeCommands(owner, false) || null;
+    } finally {
+      owner.lineDisplayEnabled = oldVisible;
+      owner.lineProfileStrokeOnly = oldStrokeOnly;
+    }
+  }
 
-    function get(frameCtx){
-        stats.requests++;const owner=frameOwner(frameCtx),fid=Number(owner?.frameId)||Number(frameCtx?.frameId)||0;
-        if(owner?._frameContourRecord&&Number(owner._frameContourRecord.frameId)===fid){stats.hits++;owner._sharedFrameContourRequired=true;return owner._frameContourRecord;}
-        const reason=eligibility(owner);if(reason){stats.ineligible++;stats.lastReason=reason;return null;}
-        let commands=null;try{commands=recordLineCarrier(owner);}catch(_){commands=null;}
-        if(!commands?.length){stats.empty++;stats.lastReason='line-commands-empty';return null;}
-        const stroke=GeometryKernel?.inspectStrokeCommands?.(commands);if(!stroke||stroke.continuityRisk===true||!stroke.contours?.length){stats.empty++;stats.lastReason='line-contour-invalid';return null;}
-        const screenPaths=buildScreenPaths(stroke);if(!screenPaths.length){stats.empty++;stats.lastReason='line-topology-empty';return null;}
-        const matrix=lineLocalToScreenMatrix(owner),inv=invert(matrix);if(!inv){stats.empty++;stats.lastReason='line-transform-not-invertible';return null;}
-        const localPaths=buildLocalPaths(screenPaths,inv,owner);if(!localPaths.length){stats.empty++;stats.lastReason='line-contour-empty';return null;}
-        const pointCount=screenPaths.reduce((n,p)=>n+(p?.points?.length||0),0),rec=owner._frameContourRecord||{};
-        rec.frameId=fid;rec.layerId=owner.layer?.id||null;rec.commands=commands;rec.stroke=stroke;rec.screenPaths=screenPaths;rec.paths=localPaths;rec.pointCount=pointCount;rec.pathCount=localPaths.length;rec.closedPathCount=screenPaths.filter(p=>p.closed===true).length;rec.localToScreen=matrix;rec.screenToLocal=inv;rec.authority='shared-line-command-topology';rec.pathTable=null;rec.pathTableFrameId=-1;
-        // Web needs two views of the SAME shape, exactly as the proven 7.5 implementation did:
-        // authored/key vertices identify corners; the exact Bezier rail defines where those
-        // anchors and thread endpoints lie on the visible curve.  Keep both views on this
-        // one frame record instead of letting Web reconstruct an unrelated contour.
-        rec.anchorPaths=null;rec.visualLinePaths=null;rec.visualBezierPaths=null;rec.webViewFrameId=-1;
-        owner._frameContourRecord=rec;owner._sharedFrameContourRequired=true;stats.builds++;stats.points+=pointCount;stats.paths+=localPaths.length;stats.lastReason='';stats.lastFrameId=fid;return rec;
+  function get(frameCtx) {
+    stats.requests++;
+    const owner = frameOwner(frameCtx),
+      fid = Number(owner?.frameId) || Number(frameCtx?.frameId) || 0;
+    if (owner?._frameContourRecord && Number(owner._frameContourRecord.frameId) === fid) {
+      stats.hits++;
+      owner._sharedFrameContourRequired = true;
+      return owner._frameContourRecord;
     }
-    function current(frameCtx){const owner=frameOwner(frameCtx),rec=owner?._frameContourRecord;return rec&&Number(rec.frameId)===Number(owner?.frameId)?rec:null;}
-    function has(frameCtx){return Boolean(current(frameCtx));}
-    function paths(frameCtx){return get(frameCtx)?.paths||null;}
-    function screenPaths(frameCtx){return get(frameCtx)?.screenPaths||null;}
-    function pathTable(frameCtx){const rec=get(frameCtx);if(!rec)return null;if(rec.pathTable&&rec.pathTableFrameId===rec.frameId)return rec.pathTable;if(typeof buildPathLengthTable!=='function')return null;rec.pathTable=buildPathLengthTable(rec.paths);rec.pathTableFrameId=rec.frameId;return rec.pathTable;}
-    function webView(frameCtx){
-        const rec=get(frameCtx);if(!rec)return null;const fid=Number(rec.frameId)||0;
-        if(rec.webViewFrameId===fid&&Array.isArray(rec.anchorPaths)&&Array.isArray(rec.visualLinePaths)){stats.webViewHits++;return{anchorPaths:rec.anchorPaths,visualPaths:rec.visualLinePaths,record:rec};}
-        let anchors=null;
-        try{anchors=typeof getLayerFrameAuxiliaryPaths==='function'?(getLayerFrameAuxiliaryPaths(frameCtx)||[]):[];}catch(_){anchors=[];}
-        // The visible ordinary Line in 7.8 is drawn from rec.commands/rec.paths.  Therefore
-        // Web distance, clipping and thread endpoints MUST use rec.paths too.  Rebuilding a
-        // second "exact Bézier" rail from authored geometry can be mathematically nicer but
-        // it is not the pixels the Line renderer actually consumes, so the web drifts off Line.
-        const visual=rec.paths;
-        if(!Array.isArray(anchors)||!anchors.length||!Array.isArray(visual)||!visual.length)return null;
-        rec.anchorPaths=anchors;rec.visualLinePaths=visual;
-        // Compatibility alias for older diagnostics/tests. It no longer means a second rail.
-        rec.visualBezierPaths=visual;rec.webViewFrameId=fid;stats.webViews++;
-        return{anchorPaths:anchors,visualPaths:visual,record:rec};
+    const reason = eligibility(owner);
+    if (reason) {
+      stats.ineligible++;
+      stats.lastReason = reason;
+      return null;
     }
-    function reset(frameCtx){const owner=frameOwner(frameCtx);if(!owner)return;owner._frameContourRecord=null;owner._sharedFrameContourRequired=false;}
-    function status(){return{...stats,contract:'Somata 7.11.0 ordinary geometry: one FrameContour record owns Line/Fill/Web, including ordinary Corridor master geometry. Web uses semantic anchorPaths only to detect corners, then projects every corner and every thread endpoint onto visualLinePaths = the actual Line/Corridor-master carrier. No separately rebuilt ordinary Web rail is allowed. Strict Spiral keeps its specialized retained carrier.'};}
-    return{get,current,has,paths,screenPaths,pathTable,webView,reset,eligibility,status};
+    let commands = null;
+    try {
+      commands = recordLineCarrier(owner);
+    } catch (_) {
+      commands = null;
+    }
+    if (!commands?.length) {
+      stats.empty++;
+      stats.lastReason = 'line-commands-empty';
+      return null;
+    }
+    const stroke = GeometryKernel?.inspectStrokeCommands?.(commands);
+    if (!stroke || stroke.continuityRisk === true || !stroke.contours?.length) {
+      stats.empty++;
+      stats.lastReason = 'line-contour-invalid';
+      return null;
+    }
+    const screenPaths = buildScreenPaths(stroke);
+    if (!screenPaths.length) {
+      stats.empty++;
+      stats.lastReason = 'line-topology-empty';
+      return null;
+    }
+    const matrix = lineLocalToScreenMatrix(owner),
+      inv = invert(matrix);
+    if (!inv) {
+      stats.empty++;
+      stats.lastReason = 'line-transform-not-invertible';
+      return null;
+    }
+    const localPaths = buildLocalPaths(screenPaths, inv, owner);
+    if (!localPaths.length) {
+      stats.empty++;
+      stats.lastReason = 'line-contour-empty';
+      return null;
+    }
+    const pointCount = screenPaths.reduce((n, p) => n + (p?.points?.length || 0), 0),
+      rec = owner._frameContourRecord || {};
+    rec.frameId = fid;
+    rec.layerId = owner.layer?.id || null;
+    rec.commands = commands;
+    rec.stroke = stroke;
+    rec.screenPaths = screenPaths;
+    rec.paths = localPaths;
+    rec.pointCount = pointCount;
+    rec.pathCount = localPaths.length;
+    rec.closedPathCount = screenPaths.filter((p) => p.closed === true).length;
+    rec.localToScreen = matrix;
+    rec.screenToLocal = inv;
+    rec.authority = 'shared-line-command-topology';
+    rec.pathTable = null;
+    rec.pathTableFrameId = -1;
+    // Web needs two views of the SAME shape, exactly as the proven 7.5 implementation did:
+    // authored/key vertices identify corners; the exact Bezier rail defines where those
+    // anchors and thread endpoints lie on the visible curve.  Keep both views on this
+    // one frame record instead of letting Web reconstruct an unrelated contour.
+    rec.graffitiPaths = null;
+    rec.anchorPaths = null;
+    rec.visualLinePaths = null;
+    rec.visualBezierPaths = null;
+    rec.webViewFrameId = -1;
+    owner._frameContourRecord = rec;
+    owner._sharedFrameContourRequired = true;
+    if (usesSpiralCorridorMaster(owner)) owner._spiralCorridorSharedLineAuthority = true;
+    stats.builds++;
+    stats.points += pointCount;
+    stats.paths += localPaths.length;
+    stats.lastReason = '';
+    stats.lastFrameId = fid;
+    return rec;
+  }
+  // Keep independent growth envelopes separate without changing the Fill/Web contour.
+  function graffitiPaths(frameCtx) {
+    const rec = get(frameCtx);
+    if (!rec) return null;
+    if (!rec.graffitiPaths)
+      rec.graffitiPaths = rec.commands.some((cmd) => cmd.strokeGrowth < 1)
+        ? buildLocalPaths(buildScreenPaths(rec.stroke, true), rec.screenToLocal, frameCtx)
+        : rec.paths;
+    return rec.graffitiPaths;
+  }
+  function current(frameCtx) {
+    const owner = frameOwner(frameCtx),
+      rec = owner?._frameContourRecord;
+    return rec && Number(rec.frameId) === Number(owner?.frameId) ? rec : null;
+  }
+  function has(frameCtx) {
+    return Boolean(current(frameCtx));
+  }
+  function paths(frameCtx) {
+    return get(frameCtx)?.paths || null;
+  }
+  function screenPaths(frameCtx) {
+    return get(frameCtx)?.screenPaths || null;
+  }
+  function pathTable(frameCtx) {
+    const rec = get(frameCtx);
+    if (!rec) return null;
+    if (rec.pathTable && rec.pathTableFrameId === rec.frameId) return rec.pathTable;
+    if (typeof buildPathLengthTable !== 'function') return null;
+    rec.pathTable = buildPathLengthTable(rec.paths);
+    rec.pathTableFrameId = rec.frameId;
+    return rec.pathTable;
+  }
+  function webView(frameCtx) {
+    const rec = get(frameCtx);
+    if (!rec) return null;
+    const fid = Number(rec.frameId) || 0;
+    if (rec.webViewFrameId === fid && Array.isArray(rec.anchorPaths) && Array.isArray(rec.visualLinePaths)) {
+      stats.webViewHits++;
+      return { anchorPaths: rec.anchorPaths, visualPaths: rec.visualLinePaths, record: rec };
+    }
+    let anchors = null;
+    try {
+      anchors = getLayerFrameAuxiliaryPaths(frameCtx) || [];
+    } catch (_) {
+      anchors = [];
+    }
+    // The visible ordinary Line in 7.8 is drawn from rec.commands/rec.paths.  Therefore
+    // Web distance, clipping and thread endpoints MUST use rec.paths too.  Rebuilding a
+    // second "exact Bézier" rail from authored geometry can be mathematically nicer but
+    // it is not the pixels the Line renderer actually consumes, so the web drifts off Line.
+    const visual = rec.paths;
+    // Spiral's recorded master is the only source of visible corners.
+    // Its auxiliary authored paths may belong to a different Morph state.
+    if (usesSpiralCorridorMaster(frameOwner(frameCtx))) anchors = visual;
+    if (!Array.isArray(anchors) || !anchors.length || !Array.isArray(visual) || !visual.length) return null;
+    rec.anchorPaths = anchors;
+    rec.visualLinePaths = visual;
+    // Compatibility alias for older diagnostics/tests. It no longer means a second rail.
+    rec.visualBezierPaths = visual;
+    rec.webViewFrameId = fid;
+    stats.webViews++;
+    return { anchorPaths: anchors, visualPaths: visual, record: rec };
+  }
+  function reset(frameCtx) {
+    const owner = frameOwner(frameCtx);
+    if (!owner) return;
+    owner._frameContourRecord = null;
+    owner._sharedFrameContourRequired = false;
+  }
+  function status() {
+    return {
+      ...stats,
+      contract:
+        'Somata 7.11.0 ordinary geometry: one FrameContour record owns Line/Fill/Web, including ordinary Corridor master geometry. Web uses semantic anchorPaths only to detect corners, then projects every corner and every thread endpoint onto visualLinePaths = the actual Line/Corridor-master carrier. No separately rebuilt ordinary Web rail is allowed. Strict Spiral keeps its specialized retained carrier.',
+    };
+  }
+  return {
+    get,
+    graffitiPaths,
+    current,
+    has,
+    paths,
+    screenPaths,
+    pathTable,
+    webView,
+    reset,
+    eligibility,
+    usesSpiralCorridorMaster,
+    status,
+  };
 })();
-window.SomataFrameContourService=SomataFrameContourService;
-window.__somataFrameContourStatus=()=>SomataFrameContourService.status();
+window.SomataFrameContourService = SomataFrameContourService;
 
 // Ordinary Topology/Calm Morph effects that visually attach to the contour must use the
 // exact current-frame Line/Profile carrier. Identity/transport may come from a specialised
 // Morph system, but the final attachment rail is FrameContour.paths. Strict Spiral keeps
 // its retained exact rail and never enters this ordinary-geometry bridge.
-function useTopologyVisualProfileRail(frameCtx){
-    let owner=frameCtx,guard=0;while(owner?.__somataFeatureParent&&guard++<8)owner=owner.__somataFeatureParent;
-    try{
-        if(!owner?.layer||SomataGeometryPolicy?.isStrict?.(owner)===true)return false;
-        if(!owner.morphFrameActive||owner.greenMorphEnabled||owner.minimalFadeEnabled)return false;
-        if(owner.blueMorphProvider?.mode==='fade')return false;
-        return ['topology','calm'].includes(state?.morph?.mode);
-    }catch(_){return false;}
+function useTopologyVisualProfileRail(frameCtx) {
+  let owner = frameCtx,
+    guard = 0;
+  while (owner?.__somataFeatureParent && guard++ < 8) owner = owner.__somataFeatureParent;
+  try {
+    if (!owner?.layer || SomataGeometryPolicy?.isStrict?.(owner) === true) return false;
+    if (!owner.morphFrameActive || owner.greenMorphEnabled || owner.minimalFadeEnabled) return false;
+    if (owner.blueMorphProvider?.mode === 'fade') return false;
+    return ['topology', 'calm'].includes(state?.morph?.mode);
+  } catch (_) {
+    return false;
+  }
 }
-window.useTopologyVisualProfileRail=useTopologyVisualProfileRail;
+window.useTopologyVisualProfileRail = useTopologyVisualProfileRail;
 
-function getLayerFrameAuthoritativePaths(frameCtx){const shared=SomataFrameContourService.paths(frameCtx);if(shared?.length)return shared;return typeof getLayerFrameAuxiliaryPaths==='function'?(getLayerFrameAuxiliaryPaths(frameCtx)||[]):[];}
-function getLayerFrameAuthoritativePathTable(frameCtx){const shared=SomataFrameContourService.pathTable(frameCtx);if(shared)return shared;const paths=typeof getLayerFrameAuxiliaryPaths==='function'?(getLayerFrameAuxiliaryPaths(frameCtx)||[]):[];return typeof buildPathLengthTable==='function'?buildPathLengthTable(paths):null;}
+function getLayerFrameAuthoritativePaths(frameCtx) {
+  const shared = SomataFrameContourService.paths(frameCtx);
+  if (shared?.length) return shared;
+  return getLayerFrameAuxiliaryPaths(frameCtx) || [];
+}
+
+export { SomataFrameContourService, getLayerFrameAuthoritativePaths, useTopologyVisualProfileRail };

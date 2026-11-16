@@ -1,18 +1,42 @@
+import './lightning-arc-renderer.js'; // initialisation order: this module runs after it
+import { WebGPUDeviceHub } from './device-hub.js';
+import { assertWebGPUShaderModule } from './gpu-utils.js';
+import { morphInterpolationTForCurrentMode } from '../geometry/morph-frame.js';
+import {
+  encodeGpuMorphArcTable,
+  getGpuMorphArcTableForFrame,
+  noteGpuMorphArcTableSubmitted,
+} from './morph-arc-resource.js';
+import { spiroGpuPrepareArcForLayerScene } from '../render/gpu-command-scheduler.js';
+import { noteSuppressedError } from '../core/suppressed-errors.js';
 
+const GPU_GRAFFITI_SAMPLE_INTERVALS_MAX = 220;
+const GPU_GRAFFITI_SAMPLE_STRIDE = 224;
 
-window.__spiroRegisterModule?.('js/gpu/graffiti-sample-resource');
-
-const GPU_GRAFFITI_SAMPLE_INTERVALS_MAX=220;
-const GPU_GRAFFITI_SAMPLE_STRIDE=224;
-
-const gpuGraffitiSampleRuntime={
-    device:null,generation:-1,initializing:null,ready:false,lastError:'not-initialized',
-    pipeline:null,resources:new WeakMap(),resourceSet:new Set(),
-    stats:{requests:0,resourceBuilds:0,resourceHits:0,encodes:0,reuses:0,submissions:0,arcPrerequisites:0,
-        cpuResamplesAvoided:0,cpuPointMaterializationsAvoided:0,deviceResets:0}
+const gpuGraffitiSampleRuntime = {
+  device: null,
+  generation: -1,
+  initializing: null,
+  ready: false,
+  lastError: 'not-initialized',
+  pipeline: null,
+  resources: new WeakMap(),
+  resourceSet: new Set(),
+  stats: {
+    requests: 0,
+    resourceBuilds: 0,
+    resourceHits: 0,
+    encodes: 0,
+    reuses: 0,
+    submissions: 0,
+    arcPrerequisites: 0,
+    cpuResamplesAvoided: 0,
+    cpuPointMaterializationsAvoided: 0,
+    deviceResets: 0,
+  },
 };
 
-const GPU_GRAFFITI_SAMPLE_WGSL=`
+const GPU_GRAFFITI_SAMPLE_WGSL = `
 const STRIDE:u32=224u;
 const MAX_INTERVALS:u32=220u;
 @group(0) @binding(0) var<storage,read> segments:array<vec4<f32>>;
@@ -97,85 +121,212 @@ fn main(@builtin(workgroup_id) wid:vec3<u32>,@builtin(local_invocation_id) lid3:
     if(lid==0u){sampleInfo[pathIndex]=vec4<f32>(f32(pointCount),f32(renderSegments),openTotal,select(0.0,1.0,closed));}
 }`;
 
-function destroyGpuGraffitiSampleResource(rec){
-    if(!rec)return;for(const b of rec.ownedBuffers||[])try{b?.destroy?.();}catch(_){}
-    rec.ownedBuffers=[];rec.ready=false;
+function destroyGpuGraffitiSampleResource(rec) {
+  if (!rec) return;
+  for (const b of rec.ownedBuffers || [])
+    try {
+      b?.destroy?.();
+    } catch (error) {
+      noteSuppressedError('gpu/graffiti-sample-resource#destroyGpuGraffitiSampleResource', error);
+    }
+  rec.ownedBuffers = [];
+  rec.ready = false;
 }
-function resetGpuGraffitiSampleDevice(device,generation){
-    if(gpuGraffitiSampleRuntime.device===device&&gpuGraffitiSampleRuntime.generation===generation)return;
-    for(const rec of gpuGraffitiSampleRuntime.resourceSet)destroyGpuGraffitiSampleResource(rec);
-    gpuGraffitiSampleRuntime.resources=new WeakMap();gpuGraffitiSampleRuntime.resourceSet.clear();
-    gpuGraffitiSampleRuntime.device=device;gpuGraffitiSampleRuntime.generation=generation;gpuGraffitiSampleRuntime.pipeline=null;
-    gpuGraffitiSampleRuntime.ready=false;gpuGraffitiSampleRuntime.stats.deviceResets++;
+function resetGpuGraffitiSampleDevice(device, generation) {
+  if (gpuGraffitiSampleRuntime.device === device && gpuGraffitiSampleRuntime.generation === generation)
+    return;
+  for (const rec of gpuGraffitiSampleRuntime.resourceSet) destroyGpuGraffitiSampleResource(rec);
+  gpuGraffitiSampleRuntime.resources = new WeakMap();
+  gpuGraffitiSampleRuntime.resourceSet.clear();
+  gpuGraffitiSampleRuntime.device = device;
+  gpuGraffitiSampleRuntime.generation = generation;
+  gpuGraffitiSampleRuntime.pipeline = null;
+  gpuGraffitiSampleRuntime.ready = false;
+  gpuGraffitiSampleRuntime.stats.deviceResets++;
 }
-async function ensureGpuGraffitiSamplePipeline(){
-    const gen=typeof WebGPUDeviceHub!=='undefined'?WebGPUDeviceHub.getGeneration():-1;
-    if(gpuGraffitiSampleRuntime.ready&&gpuGraffitiSampleRuntime.device&&gpuGraffitiSampleRuntime.generation===gen)return true;
-    if(gpuGraffitiSampleRuntime.initializing)return gpuGraffitiSampleRuntime.initializing;
-    const task=(async()=>{try{
-        if(typeof WebGPUDeviceHub==='undefined')throw new Error('WebGPUDeviceHub unavailable');
-        const shared=await WebGPUDeviceHub.acquire();resetGpuGraffitiSampleDevice(shared.device,shared.generation);
-        const mod=shared.device.createShaderModule({label:'SpiroStar GPU Graffiti arc sampler WGSL',code:GPU_GRAFFITI_SAMPLE_WGSL});
-        if(typeof assertWebGPUShaderModule==='function')await assertWebGPUShaderModule(mod,'SpiroStar GPU Graffiti arc sampler WGSL');
-        gpuGraffitiSampleRuntime.pipeline=shared.device.createComputePipeline({label:'SpiroStar GPU Graffiti arc sampler',layout:'auto',compute:{module:mod,entryPoint:'main'}});
-        gpuGraffitiSampleRuntime.ready=true;gpuGraffitiSampleRuntime.lastError='';return true;
-    }catch(err){gpuGraffitiSampleRuntime.ready=false;gpuGraffitiSampleRuntime.lastError=String(err?.message||err);return false;}})();
-    gpuGraffitiSampleRuntime.initializing=task;try{return await task;}finally{if(gpuGraffitiSampleRuntime.initializing===task)gpuGraffitiSampleRuntime.initializing=null;}
-}
-function warmupGpuGraffitiSampleResource(){if(gpuGraffitiSampleRuntime.ready)return true;if(!gpuGraffitiSampleRuntime.initializing)void ensureGpuGraffitiSamplePipeline();return false;}
-
-function buildGpuGraffitiSampleResource(arcRec){
-    if(!arcRec?.ready||!arcRec.pathCount||!gpuGraffitiSampleRuntime.ready)return null;
-    let hit=gpuGraffitiSampleRuntime.resources.get(arcRec);
-    if(hit?.ready&&hit.generation===gpuGraffitiSampleRuntime.generation){gpuGraffitiSampleRuntime.stats.resourceHits++;return hit;}
-    const device=gpuGraffitiSampleRuntime.device,pathCount=arcRec.pathCount,owned=[];
-    const make=(label,bytes)=>{const b=device.createBuffer({label,size:Math.max(16,Math.ceil(bytes/16)*16),usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});owned.push(b);return b;};
-    const samplePointBuffer=make(`SpiroStar Graffiti sampled points L${arcRec.morphRec?.layerIndex??0}`,pathCount*GPU_GRAFFITI_SAMPLE_STRIDE*16);
-    const sampleInfoBuffer=make(`SpiroStar Graffiti sampled info L${arcRec.morphRec?.layerIndex??0}`,pathCount*16);
-    const sampleUniform=device.createBuffer({label:`SpiroStar Graffiti exact cubic info L${arcRec.morphRec?.layerIndex??0}`,size:16,usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});owned.push(sampleUniform);
-    device.queue.writeBuffer(sampleUniform,0,new Uint32Array([Math.max(1,Number(arcRec.subdiv)||1),arcRec.morphRec?.cubicBuffer?1:0,0,0]));
-    const bind=device.createBindGroup({layout:gpuGraffitiSampleRuntime.pipeline.getBindGroupLayout(0),entries:[
-        {binding:0,resource:{buffer:arcRec.segmentBuffer}},
-        {binding:1,resource:{buffer:arcRec.pathSegmentRangeBuffer}},
-        {binding:2,resource:{buffer:arcRec.pathMetricsBuffer}},
-        {binding:3,resource:{buffer:arcRec.morphRec.pathRangeBuffer}},
-        {binding:4,resource:{buffer:samplePointBuffer}},
-        {binding:5,resource:{buffer:sampleInfoBuffer}},
-        {binding:6,resource:{buffer:arcRec.morphRec.cubicBuffer}},
-        {binding:7,resource:{buffer:sampleUniform}}
-    ]});
-    const rec={arcRec,generation:gpuGraffitiSampleRuntime.generation,pathCount,samplePointBuffer,sampleInfoBuffer,bind,ownedBuffers:owned,
-        ready:true,lastEncodedFrame:-1,lastEncodedT:NaN,lastCommittedFrame:-1,lastCommittedT:NaN,hasCommittedData:false};
-    gpuGraffitiSampleRuntime.resources.set(arcRec,rec);gpuGraffitiSampleRuntime.resourceSet.add(rec);gpuGraffitiSampleRuntime.stats.resourceBuilds++;return rec;
-}
-function getGpuGraffitiSampleResourceForFrame(frameCtx){
-    gpuGraffitiSampleRuntime.stats.requests++;
-    if(!frameCtx||typeof getGpuMorphArcTableForFrame!=='function')return null;
-    const table=getGpuMorphArcTableForFrame(frameCtx);if(!table)return null;
-    if(!warmupGpuGraffitiSampleResource())return null;
-    const arcRec=table._gpuMorphArcResource,resource=buildGpuGraffitiSampleResource(arcRec);if(!resource)return null;
-    return{table,resource};
-}
-function encodeGpuGraffitiSampleResource(rec,table,encoder,frameCtx=null){
-    if(!rec?.ready||!table||!encoder)return false;
-    const frameId=Math.max(0,Number(table.frameId)||0),t=(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));
-    if(rec.hasCommittedData&&rec.lastCommittedT===t){rec.lastEncodedFrame=frameId;rec.lastEncodedT=t;gpuGraffitiSampleRuntime.stats.reuses++;return true;}
-    const arcReady=typeof spiroGpuPrepareArcForLayerScene==='function'?spiroGpuPrepareArcForLayerScene(frameCtx,table,encoder):(typeof encodeGpuMorphArcTable==='function'&&encodeGpuMorphArcTable(table,encoder));if(!arcReady)return false;
-    gpuGraffitiSampleRuntime.stats.arcPrerequisites++;
-    const pass=encoder.beginComputePass({label:`SpiroStar Graffiti arc sampler L${rec.arcRec?.morphRec?.layerIndex??0}`});
-    pass.setPipeline(gpuGraffitiSampleRuntime.pipeline);pass.setBindGroup(0,rec.bind);pass.dispatchWorkgroups(rec.pathCount);pass.end();
-    rec.lastEncodedFrame=frameId;rec.lastEncodedT=t;gpuGraffitiSampleRuntime.stats.encodes++;
-    gpuGraffitiSampleRuntime.stats.cpuResamplesAvoided+=rec.pathCount;gpuGraffitiSampleRuntime.stats.cpuPointMaterializationsAvoided+=rec.pathCount*(GPU_GRAFFITI_SAMPLE_INTERVALS_MAX+1);
+async function ensureGpuGraffitiSamplePipeline() {
+  const gen = typeof WebGPUDeviceHub !== 'undefined' ? WebGPUDeviceHub.getGeneration() : -1;
+  if (
+    gpuGraffitiSampleRuntime.ready &&
+    gpuGraffitiSampleRuntime.device &&
+    gpuGraffitiSampleRuntime.generation === gen
+  )
     return true;
+  if (gpuGraffitiSampleRuntime.initializing) return gpuGraffitiSampleRuntime.initializing;
+  const task = (async () => {
+    try {
+      if (typeof WebGPUDeviceHub === 'undefined') throw new Error('WebGPUDeviceHub unavailable');
+      const shared = await WebGPUDeviceHub.acquire();
+      resetGpuGraffitiSampleDevice(shared.device, shared.generation);
+      const mod = shared.device.createShaderModule({
+        label: 'SpiroStar GPU Graffiti arc sampler WGSL',
+        code: GPU_GRAFFITI_SAMPLE_WGSL,
+      });
+      await assertWebGPUShaderModule(mod, 'SpiroStar GPU Graffiti arc sampler WGSL');
+      gpuGraffitiSampleRuntime.pipeline = shared.device.createComputePipeline({
+        label: 'SpiroStar GPU Graffiti arc sampler',
+        layout: 'auto',
+        compute: { module: mod, entryPoint: 'main' },
+      });
+      gpuGraffitiSampleRuntime.ready = true;
+      gpuGraffitiSampleRuntime.lastError = '';
+      return true;
+    } catch (err) {
+      gpuGraffitiSampleRuntime.ready = false;
+      gpuGraffitiSampleRuntime.lastError = String(err?.message || err);
+      return false;
+    }
+  })();
+  gpuGraffitiSampleRuntime.initializing = task;
+  try {
+    return await task;
+  } finally {
+    if (gpuGraffitiSampleRuntime.initializing === task) gpuGraffitiSampleRuntime.initializing = null;
+  }
 }
-function noteGpuGraffitiSampleSubmitted(rec,table){
-    if(!rec?.ready||!table)return false;
-    const frameId=Math.max(0,Number(table.frameId)||0),t=(typeof morphInterpolationTForCurrentMode==='function'?morphInterpolationTForCurrentMode(table.gpuMorphT):Math.max(0,Math.min(1,Number(table.gpuMorphT)||0)));
-    rec.hasCommittedData=true;rec.lastCommittedFrame=frameId;rec.lastCommittedT=t;
-    try{noteGpuMorphArcTableSubmitted?.(table);}catch(_){}
-    gpuGraffitiSampleRuntime.stats.submissions++;return true;
+function warmupGpuGraffitiSampleResource() {
+  if (gpuGraffitiSampleRuntime.ready) return true;
+  if (!gpuGraffitiSampleRuntime.initializing) void ensureGpuGraffitiSamplePipeline();
+  return false;
 }
-window.__spiroGpuGraffitiSampleStatus=()=>({ready:gpuGraffitiSampleRuntime.ready,generation:gpuGraffitiSampleRuntime.generation,lastError:gpuGraffitiSampleRuntime.lastError,
-    stride:GPU_GRAFFITI_SAMPLE_STRIDE,maxIntervals:GPU_GRAFFITI_SAMPLE_INTERVALS_MAX,stats:{...gpuGraffitiSampleRuntime.stats},
-    resources:[...gpuGraffitiSampleRuntime.resourceSet].map(r=>({layerIndex:r.arcRec?.morphRec?.layerIndex,pathCount:r.pathCount,lastCommittedT:r.lastCommittedT,hasCommittedData:r.hasCommittedData})),
-    contract:'exact topology/Spiral Morph arc is sampled on GPU with legacy 3px / 8..220 interval policy, but every resolved distance is evaluated back on the shared retained cubic Bézier rail; sampled cumulative arc remains GPU-resident; no CPU path, chord-final-position or Canvas carrier.'});
+
+function buildGpuGraffitiSampleResource(arcRec) {
+  if (!arcRec?.ready || !arcRec.pathCount || !gpuGraffitiSampleRuntime.ready) return null;
+  let hit = gpuGraffitiSampleRuntime.resources.get(arcRec);
+  if (hit?.ready && hit.generation === gpuGraffitiSampleRuntime.generation) {
+    gpuGraffitiSampleRuntime.stats.resourceHits++;
+    return hit;
+  }
+  const device = gpuGraffitiSampleRuntime.device,
+    pathCount = arcRec.pathCount,
+    owned = [];
+  const make = (label, bytes) => {
+    const b = device.createBuffer({
+      label,
+      size: Math.max(16, Math.ceil(bytes / 16) * 16),
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    });
+    owned.push(b);
+    return b;
+  };
+  const samplePointBuffer = make(
+    `SpiroStar Graffiti sampled points L${arcRec.morphRec?.layerIndex ?? 0}`,
+    pathCount * GPU_GRAFFITI_SAMPLE_STRIDE * 16,
+  );
+  const sampleInfoBuffer = make(
+    `SpiroStar Graffiti sampled info L${arcRec.morphRec?.layerIndex ?? 0}`,
+    pathCount * 16,
+  );
+  const sampleUniform = device.createBuffer({
+    label: `SpiroStar Graffiti exact cubic info L${arcRec.morphRec?.layerIndex ?? 0}`,
+    size: 16,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+  owned.push(sampleUniform);
+  // Graffiti must sample the same micro-rail actually rasterized by Line.
+  // When the Arc resource is backed by the retained visible fastRail, the
+  // hidden continuous cubic is NOT the stroke: use straight microsegments.
+  // Otherwise preserve the original exact retained-Bezier sampling.
+  const exactBezier = arcRec.visibleRailExact === true ? 0 : arcRec.morphRec?.cubicBuffer ? 1 : 0;
+  device.queue.writeBuffer(
+    sampleUniform,
+    0,
+    new Uint32Array([Math.max(1, Number(arcRec.subdiv) || 1), exactBezier, 0, 0]),
+  );
+  const bind = device.createBindGroup({
+    layout: gpuGraffitiSampleRuntime.pipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: arcRec.segmentBuffer } },
+      { binding: 1, resource: { buffer: arcRec.pathSegmentRangeBuffer } },
+      { binding: 2, resource: { buffer: arcRec.pathMetricsBuffer } },
+      { binding: 3, resource: { buffer: arcRec.morphRec.pathRangeBuffer } },
+      { binding: 4, resource: { buffer: samplePointBuffer } },
+      { binding: 5, resource: { buffer: sampleInfoBuffer } },
+      { binding: 6, resource: { buffer: arcRec.morphRec.cubicBuffer } },
+      { binding: 7, resource: { buffer: sampleUniform } },
+    ],
+  });
+  const rec = {
+    arcRec,
+    generation: gpuGraffitiSampleRuntime.generation,
+    pathCount,
+    samplePointBuffer,
+    sampleInfoBuffer,
+    bind,
+    ownedBuffers: owned,
+    ready: true,
+    lastEncodedFrame: -1,
+    lastEncodedT: NaN,
+    lastCommittedFrame: -1,
+    lastCommittedT: NaN,
+    hasCommittedData: false,
+  };
+  gpuGraffitiSampleRuntime.resources.set(arcRec, rec);
+  gpuGraffitiSampleRuntime.resourceSet.add(rec);
+  gpuGraffitiSampleRuntime.stats.resourceBuilds++;
+  return rec;
+}
+function getGpuGraffitiSampleResourceForFrame(frameCtx) {
+  gpuGraffitiSampleRuntime.stats.requests++;
+  if (!frameCtx || typeof getGpuMorphArcTableForFrame !== 'function') return null;
+  const table = getGpuMorphArcTableForFrame(frameCtx);
+  if (!table) return null;
+  if (!warmupGpuGraffitiSampleResource()) return null;
+  const arcRec = table._gpuMorphArcResource,
+    resource = buildGpuGraffitiSampleResource(arcRec);
+  if (!resource) return null;
+  return { table, resource };
+}
+function encodeGpuGraffitiSampleResource(rec, table, encoder, frameCtx = null) {
+  if (!rec?.ready || !table || !encoder) return false;
+  const frameId = Math.max(0, Number(table.frameId) || 0),
+    t = morphInterpolationTForCurrentMode(table.gpuMorphT);
+  if (rec.hasCommittedData && rec.lastCommittedT === t) {
+    rec.lastEncodedFrame = frameId;
+    rec.lastEncodedT = t;
+    gpuGraffitiSampleRuntime.stats.reuses++;
+    return true;
+  }
+  const arcReady = spiroGpuPrepareArcForLayerScene(frameCtx, table, encoder);
+  if (!arcReady) return false;
+  gpuGraffitiSampleRuntime.stats.arcPrerequisites++;
+  const pass = encoder.beginComputePass({
+    label: `SpiroStar Graffiti arc sampler L${rec.arcRec?.morphRec?.layerIndex ?? 0}`,
+  });
+  pass.setPipeline(gpuGraffitiSampleRuntime.pipeline);
+  pass.setBindGroup(0, rec.bind);
+  pass.dispatchWorkgroups(rec.pathCount);
+  pass.end();
+  rec.lastEncodedFrame = frameId;
+  rec.lastEncodedT = t;
+  gpuGraffitiSampleRuntime.stats.encodes++;
+  gpuGraffitiSampleRuntime.stats.cpuResamplesAvoided += rec.pathCount;
+  gpuGraffitiSampleRuntime.stats.cpuPointMaterializationsAvoided +=
+    rec.pathCount * (GPU_GRAFFITI_SAMPLE_INTERVALS_MAX + 1);
+  return true;
+}
+function noteGpuGraffitiSampleSubmitted(rec, table) {
+  if (!rec?.ready || !table) return false;
+  const frameId = Math.max(0, Number(table.frameId) || 0),
+    t = morphInterpolationTForCurrentMode(table.gpuMorphT);
+  rec.hasCommittedData = true;
+  rec.lastCommittedFrame = frameId;
+  rec.lastCommittedT = t;
+  try {
+    noteGpuMorphArcTableSubmitted?.(table);
+  } catch (error) {
+    noteSuppressedError('gpu/graffiti-sample-resource#noteGpuGraffitiSampleSubmitted', error);
+  }
+  gpuGraffitiSampleRuntime.stats.submissions++;
+  return true;
+}
+
+export {
+  GPU_GRAFFITI_SAMPLE_INTERVALS_MAX,
+  buildGpuGraffitiSampleResource,
+  encodeGpuGraffitiSampleResource,
+  ensureGpuGraffitiSamplePipeline,
+  getGpuGraffitiSampleResourceForFrame,
+  noteGpuGraffitiSampleSubmitted,
+  warmupGpuGraffitiSampleResource,
+};
