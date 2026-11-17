@@ -2,7 +2,7 @@
   "format": "SpiroStarPlaylist",
   "extension": ".plist",
   "version": 5,
-  "savedAt": "2026-11-16T19:58:12.440Z",
+  "savedAt": "2026-11-17T13:30:03.737Z",
   "currentProjectId": "project_1794859073448_0hic6t",
   "menuSettings": {
     "showFps": true,
@@ -87226,16 +87226,16 @@
     {
       "id": "project_1794859073448_0hic6t",
       "name": "Ночь",
-      "updatedAt": "2026-11-16T19:58:12.440Z",
+      "updatedAt": "2026-11-17T13:30:03.737Z",
       "project": {
         "format": "SpiroStarProject",
         "extension": ".sproj",
         "version": 58,
-        "savedAt": "2026-11-16T19:58:12.439Z",
+        "savedAt": "2026-11-17T13:30:03.736Z",
         "settings": {
           "activeProjectPaletteKey": "dichrom",
           "activeLayerId": "layer_1794858673576_ok5iz9",
-          "masterLayerEdit": false,
+          "masterLayerEdit": true,
           "graffitiDefaultActive": false,
           "bgColor": "#090d16",
           "backgroundImageDataUrl": "",
@@ -87272,7 +87272,7 @@
           "showBoundingCircle": false,
           "boundingCircleColor": "#94a3b8",
           "showVignette": false,
-          "sidebarMode": "lamps",
+          "sidebarMode": "shape",
           "motion": {
             "rotationEnabled": false,
             "rotationSpeed": 30,
@@ -87314,7 +87314,7 @@
             "mode": "perPath",
             "direction": "forward",
             "speed": 0.25,
-            "speedMultiplier": 0.125,
+            "speedMultiplier": 0.015625,
             "syncMusic": true,
             "lengthPercent": 3,
             "widthPercent": 105,
@@ -87358,13 +87358,13 @@
             "lightningAfterglow": false,
             "lightningAfterglowMs": 0,
             "lightningMicroStrikes": 2,
-            "lightningPhase": 0.41353467865994986,
-            "lightningLastUpdate": 1938254,
-            "lightningCycleCount": 55,
-            "phase": 0.4135346786599494,
-            "currentVelocity": 0.36278733303486954,
-            "lastUpdate": 1938254,
-            "cycleCount": 55
+            "lightningPhase": 0.02258644592075143,
+            "lightningLastUpdate": 9079329.6,
+            "lightningCycleCount": 480,
+            "phase": 0.022586445920771858,
+            "currentVelocity": 0.04534841662935869,
+            "lastUpdate": 9079329.6,
+            "cycleCount": 480
           },
           "web": {
             "type": "bevel",
@@ -87580,13 +87580,13 @@
             "tiltYMultiplier": 1
           },
           "zoom": 1.2914679690000006,
-          "panX": 1,
+          "panX": 0,
           "panY": -1,
           "camera": {
             "zoom": 1.2914679690000006,
-            "panX": 1,
+            "panX": 0,
             "panY": -1,
-            "normalizedPanX": 0.0008833922261484099,
+            "normalizedPanX": 0,
             "normalizedPanY": -0.0015105740181268882,
             "viewportWidth": 1132,
             "viewportHeight": 662
@@ -88714,7 +88714,7 @@
             "activeProfileId": "standard",
             "defaultActive": true,
             "pauseOnSpace": false,
-            "intervalSec": 5,
+            "intervalSec": 30,
             "intervalMultiplier": 1,
             "diversity": false,
             "featureOverrides": {
@@ -88737,7 +88737,7 @@
             "strokeWidthMax": 2,
             "opacityMin": 70,
             "opacityMax": 100,
-            "speedType": "linear",
+            "speedType": "smooth",
             "fillLayersMin": 0,
             "fillLayersMax": 1,
             "fillHueMin": -15,
@@ -88762,7 +88762,7 @@
             "fillOpacityMin": 10,
             "fillOpacityMax": 10,
             "mode": "circleSlide",
-            "spiralMode": "coordinated",
+            "spiralMode": "circleSlide",
             "fadePercent": 0,
             "circleProfileOverflow": true,
             "slideType": "minimal",
@@ -88783,8 +88783,8 @@
             "chaosMorphEnabled": false,
             "chaosMorphStepSpread": 1,
             "chaosMorphClosuresMax": 3,
-            "preserveSpiralContinuity": true,
-            "spiralMorphType": "coordinated",
+            "preserveSpiralContinuity": false,
+            "spiralMorphType": "torn",
             "spiralRotationCompensation": false,
             "options": {
               "byShape": true,
@@ -89746,7 +89746,7 @@
             "rotationEnabled": false,
             "rotationStrength": 0.3,
             "rotationMultiplier": 0.1,
-            "referenceRadius": 220,
+            "referenceRadius": 307,
             "analysisIntervalMs": 40,
             "meterIntervalMs": 40,
             "routingInitialized": true,
@@ -90015,8 +90015,8 @@
               "stickToRounding": true,
               "snapToPolygon": true
             },
-            "N": 5,
-            "K": 1,
+            "N": 15,
+            "K": 2,
             "customSuborbits": null,
             "chaosStar": false,
             "chaosStepMinus": 1,
@@ -90044,9 +90044,9 @@
             "roundingSmoothSplines": false,
             "audioNativeBand": "low",
             "audioNativeBandAuto": true,
-            "radius": 319,
+            "radius": 193,
             "radiusMultiplier": 1,
-            "rotation": 815.2914790624503,
+            "rotation": 420.13326522605905,
             "motionRotation": {
               "enabled": false,
               "speed": 30,
@@ -90060,7 +90060,7 @@
             "lineLayerMode": "uniform",
             "spiralLineType": "uniform",
             "strokeColor": "#ffffff",
-            "strokeWidth": 1.8,
+            "strokeWidth": 1.7,
             "strokeWidthMultiplier": 1,
             "glow": 10,
             "glowMultiplier": 1,
@@ -90110,7 +90110,7 @@
               "mode": "perPath",
               "direction": "forward",
               "speed": 0.25,
-              "speedMultiplier": 0.125,
+              "speedMultiplier": 0.015625,
               "syncMusic": true,
               "lengthPercent": 3,
               "widthPercent": 105,
@@ -90154,13 +90154,13 @@
               "lightningAfterglow": false,
               "lightningAfterglowMs": 0,
               "lightningMicroStrikes": 2,
-              "lightningPhase": 0.41353467865994986,
-              "lightningLastUpdate": 1938254,
-              "lightningCycleCount": 55,
-              "phase": 0.4135346786599494,
-              "currentVelocity": 0.36278733303486954,
-              "lastUpdate": 1938254,
-              "cycleCount": 55
+              "lightningPhase": 0.02258644592075143,
+              "lightningLastUpdate": 9079329.6,
+              "lightningCycleCount": 480,
+              "phase": 0.022586445920771858,
+              "currentVelocity": 0.04534841662935869,
+              "lastUpdate": 9079329.6,
+              "cycleCount": 480
             },
             "sprite": {
               "enabled": false,
@@ -90273,27 +90273,36 @@
                 "y": 0
               },
               {
-                "x": 0.3,
-                "y": 0
-              },
-              {
-                "x": 0.3,
+                "x": 0.25,
                 "y": 0.4
               },
               {
-                "x": 0.7,
-                "y": 0.4
+                "x": 0.5,
+                "y": -0.4
               },
               {
-                "x": 0.7,
-                "y": 0
+                "x": 0.75,
+                "y": 0.4
               },
               {
                 "x": 1,
                 "y": 0
               }
             ],
-            "paletteKey": "dichrom"
+            "paletteKey": "dichrom",
+            "testMorph": {
+              "enabled": true,
+              "mode": "circleSlide",
+              "spiralMode": "circleSlide",
+              "slide": "minimal",
+              "spiralSlide": "standard",
+              "spiralType": "phaseCircle",
+              "duration": 1,
+              "syncWithMorph": false,
+              "showSkeleton": false,
+              "unifiedModeVersion": 5,
+              "spiralTypeExplicit": false
+            }
           },
           {
             "id": "layer_1794858678806_jezz1p",
@@ -90357,7 +90366,7 @@
               "stickToRounding": true,
               "snapToPolygon": true
             },
-            "N": 8,
+            "N": 6,
             "K": 3,
             "customSuborbits": null,
             "chaosStar": false,
@@ -90386,9 +90395,9 @@
             "roundingSmoothSplines": false,
             "audioNativeBand": "mid",
             "audioNativeBandAuto": true,
-            "radius": 246,
+            "radius": 149,
             "radiusMultiplier": 1,
-            "rotation": -396.27800083640545,
+            "rotation": -112.14446172494655,
             "motionRotation": {
               "enabled": false,
               "speed": 30,
@@ -90402,7 +90411,7 @@
             "lineLayerMode": "uniform",
             "spiralLineType": "uniform",
             "strokeColor": "#00ff00",
-            "strokeWidth": 0.5,
+            "strokeWidth": 1.9,
             "strokeWidthMultiplier": 1,
             "glow": 10,
             "glowMultiplier": 1,
@@ -90452,7 +90461,7 @@
               "mode": "perPath",
               "direction": "forward",
               "speed": 0.25,
-              "speedMultiplier": 0.125,
+              "speedMultiplier": 0.015625,
               "syncMusic": true,
               "lengthPercent": 3,
               "widthPercent": 105,
@@ -90496,13 +90505,13 @@
               "lightningAfterglow": false,
               "lightningAfterglowMs": 0,
               "lightningMicroStrikes": 2,
-              "lightningPhase": 0.41353467865994986,
-              "lightningLastUpdate": 1938254,
-              "lightningCycleCount": 55,
-              "phase": 0.4135346786599494,
-              "currentVelocity": 0.36278733303486954,
-              "lastUpdate": 1938254,
-              "cycleCount": 55
+              "lightningPhase": 0.004206263036792279,
+              "lightningLastUpdate": 9079329.6,
+              "lightningCycleCount": 509,
+              "phase": 0.00420626303680649,
+              "currentVelocity": 0.04534841662935869,
+              "lastUpdate": 9079329.6,
+              "cycleCount": 509
             },
             "sprite": {
               "enabled": false,
@@ -90576,7 +90585,7 @@
             "graffitiRotationMultiplier": 1,
             "graffitiRotationFocus": 50,
             "graffitiBaseStrokeWidth": 0.5,
-            "fill": true,
+            "fill": false,
             "fillMatchStroke": true,
             "fillRule": "evenodd",
             "fillType": "normal",
@@ -90584,7 +90593,7 @@
             "fillFadeDirection": "fromCenter",
             "fillFadeHardness": 50,
             "fillFadePixelization": 25,
-            "fillColor": "#00ff001a",
+            "fillColor": "#00ff0000",
             "graffitiPaletteKey": "standard",
             "profileMode": "segments",
             "splineRenderMode": "smooth",
@@ -90615,27 +90624,24 @@
                 "y": 0
               },
               {
-                "x": 0.3,
-                "y": 0
-              },
-              {
-                "x": 0.3,
-                "y": 0.4
-              },
-              {
-                "x": 0.7,
-                "y": 0.4
-              },
-              {
-                "x": 0.7,
-                "y": 0
-              },
-              {
                 "x": 1,
                 "y": 0
               }
             ],
-            "paletteKey": "dichrom"
+            "paletteKey": "dichrom",
+            "testMorph": {
+              "enabled": true,
+              "mode": "circleSlide",
+              "spiralMode": "circleSlide",
+              "slide": "minimal",
+              "spiralSlide": "standard",
+              "spiralType": "phaseCircle",
+              "duration": 1,
+              "syncWithMorph": false,
+              "showSkeleton": false,
+              "unifiedModeVersion": 5,
+              "spiralTypeExplicit": false
+            }
           },
           {
             "id": "layer_1794858678957_1coqy0",
@@ -90699,8 +90705,8 @@
               "stickToRounding": true,
               "snapToPolygon": true
             },
-            "N": 7,
-            "K": 2,
+            "N": 11,
+            "K": 4,
             "customSuborbits": null,
             "chaosStar": false,
             "chaosStepMinus": 1,
@@ -90728,9 +90734,9 @@
             "roundingSmoothSplines": false,
             "audioNativeBand": "high",
             "audioNativeBandAuto": true,
-            "radius": 166,
+            "radius": 100,
             "radiusMultiplier": 1,
-            "rotation": -872.8534093421916,
+            "rotation": 299.75541071418934,
             "motionRotation": {
               "enabled": false,
               "speed": 30,
@@ -90744,7 +90750,7 @@
             "lineLayerMode": "uniform",
             "spiralLineType": "uniform",
             "strokeColor": "#000000",
-            "strokeWidth": 0.6,
+            "strokeWidth": 0.8,
             "strokeWidthMultiplier": 1,
             "glow": 10,
             "glowMultiplier": 1,
@@ -90794,7 +90800,7 @@
               "mode": "perPath",
               "direction": "forward",
               "speed": 0.25,
-              "speedMultiplier": 0.125,
+              "speedMultiplier": 0.015625,
               "syncMusic": true,
               "lengthPercent": 3,
               "widthPercent": 105,
@@ -90838,13 +90844,13 @@
               "lightningAfterglow": false,
               "lightningAfterglowMs": 0,
               "lightningMicroStrikes": 2,
-              "lightningPhase": 0.41353467865994986,
-              "lightningLastUpdate": 1938254,
-              "lightningCycleCount": 55,
-              "phase": 0.4135346786599494,
-              "currentVelocity": 0.36278733303486954,
-              "lastUpdate": 1938254,
-              "cycleCount": 55
+              "lightningPhase": 0.004206263036792279,
+              "lightningLastUpdate": 9079329.6,
+              "lightningCycleCount": 509,
+              "phase": 0.00420626303680649,
+              "currentVelocity": 0.04534841662935869,
+              "lastUpdate": 9079329.6,
+              "cycleCount": 509
             },
             "sprite": {
               "enabled": false,
@@ -90928,7 +90934,7 @@
             "fillFadePixelization": 25,
             "fillColor": "#00000000",
             "graffitiPaletteKey": "standard",
-            "profileMode": "spline",
+            "profileMode": "segments",
             "splineRenderMode": "smooth",
             "wholeCurveSpline": false,
             "spiralEnabled": false,
@@ -90958,22 +90964,35 @@
               },
               {
                 "x": 0.25,
-                "y": 0.5
+                "y": 0.4
               },
               {
                 "x": 0.5,
-                "y": 0.1
+                "y": -0.4
               },
               {
                 "x": 0.75,
-                "y": 0.5
+                "y": 0.4
               },
               {
                 "x": 1,
                 "y": 0
               }
             ],
-            "paletteKey": "dichrom"
+            "paletteKey": "dichrom",
+            "testMorph": {
+              "enabled": true,
+              "mode": "circleSlide",
+              "spiralMode": "circleSlide",
+              "slide": "minimal",
+              "spiralSlide": "standard",
+              "spiralType": "phaseCircle",
+              "duration": 1,
+              "syncWithMorph": false,
+              "showSkeleton": false,
+              "unifiedModeVersion": 5,
+              "spiralTypeExplicit": false
+            }
           }
         ],
         "library": {
