@@ -3136,6 +3136,7 @@ function bindPresetRandomMorphControls(bindingContext) {
       ),
       adaptiveBrightness: document.getElementById('lampAdaptiveBrightness')?.checked !== false,
       extinguishIntersections: document.getElementById('lampExtinguishIntersections')?.checked === true,
+      intersectionDistance: Number(document.getElementById('lampIntersectionDistance')?.value ?? 50),
       adaptiveAdjustBrightness: document.getElementById('lampAdaptiveAdjustBrightness')?.checked === true,
       adaptiveStrength: Math.max(
         0,
@@ -3180,6 +3181,7 @@ function bindPresetRandomMorphControls(bindingContext) {
     'lampBrightnessVariationMultiplier',
     'lampAdaptiveStrength',
     'lampAdaptiveStrengthMultiplier',
+    'lampIntersectionDistance',
     'lampAdaptiveExponent',
     'lampAdaptiveFadeSec',
     'lampMorphSize',
@@ -3361,7 +3363,13 @@ function bindPresetRandomMorphControls(bindingContext) {
     syncLampSettingsUI();
     requestMainCanvasRender();
   });
-  document.getElementById('lampCornerInertia')?.addEventListener('input', (e) => {
+  document.getElementById('testMorphDuration')?.addEventListener('input', () => queueMicrotask(syncLampSettingsUI));
+  document.getElementById('lampDurationLinked')?.addEventListener('change', (e) => {
+    for (const cfg of getLampConfigTargets()) cfg.cornerInertiaLinked = e.target.checked;
+    syncLampSettingsUI();
+    requestMainCanvasRender();
+  });
+  document.getElementById('lampCornerInertia')?.addEventListener('change', (e) => {
     for (const cfg of getLampConfigTargets())
       cfg.cornerInertiaSec = Math.max(0, Math.min(15, Number(e.target.value) || 0));
     syncLampSettingsUI();

@@ -243,6 +243,7 @@ const state = {
     brightnessVariationMultiplier: 1,
     adaptiveBrightness: true,
     extinguishIntersections: false,
+    intersectionDistance: 50,
     adaptiveAdjustBrightness: false,
     adaptiveStrength: 100,
     adaptiveStrengthMultiplier: 1,

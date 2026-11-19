@@ -832,7 +832,7 @@ const WebGPULampRenderer = (() => {
   let deferredLocalArcTables = [];
 
   const LAMP_WGSL = `
-struct Uniforms { viewport: vec2<f32>, lampCount: u32, _pad: u32, root0: vec4<f32>, root1: vec4<f32> };
+struct Uniforms { viewport: vec2<f32>, lampCount: u32, overlapMode: u32, root0: vec4<f32>, root1: vec4<f32> };
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(1) @binding(0) var<storage,read> corridorLampData: array<vec4<f32>>;
 @group(1) @binding(1) var<storage,read> corridorCopyData: array<vec4<f32>>;
@@ -868,6 +868,42 @@ struct VSOut {
     o.q=v.corner;o.body=v.body;o.color=v.color;o.soft=v.soft;o.bright=v.bright;o.lampType=v.lampType;o.alpha=v.alpha;
     return o;
 }
+fn copyLampPosition(ci:u32,p:vec2<f32>)->vec2<f32>{
+    let a=corridorCopyData[2u*ci].xy;
+    let b=corridorCopyData[2u*ci+1u].xy;
+    return vec2<f32>(dot(a,p),dot(b,p));
+}
+fn preparedSeamVisibility(ci:u32,p:vec2<f32>)->f32 {
+    if(ci==0u){return 1.0;}
+    let prev=ci-1u;
+    if(corridorCopyData[2u*prev].z<=0.00001){return 1.0;}
+    let pos=copyLampPosition(ci,p);
+    let tolerance=max(0.00001,length(corridorCopyData[2u*ci].xy)*0.001);
+    for(var j=0u;j<u.lampCount;j++){
+        var q:vec2<f32>;
+        
+            if(corridorLampData[3u*j+2u].w<0.5){continue;}
+            q=corridorLampData[3u*j].xy;
+        if(distance(pos,copyLampPosition(prev,q))<=tolerance){return 0.0;}
+    }
+    return 1.0;
+}
+fn arcSeamVisibility(ci:u32,p:vec2<f32>)->f32 {
+    if(ci==0u){return 1.0;}
+    let prev=ci-1u;
+    if(corridorCopyData[2u*prev].z<=0.00001){return 1.0;}
+    let pos=copyLampPosition(ci,p);
+    let tolerance=max(0.00001,length(corridorCopyData[2u*ci].xy)*0.001);
+    for(var j=0u;j<u.lampCount;j++){
+        var q:vec2<f32>;
+        
+            if(!arcEndpoint(j)){continue;}
+            q=arcLampCenter(j);
+        
+        if(distance(pos,copyLampPosition(prev,q))<=tolerance){return 0.0;}
+    }
+    return 1.0;
+}
 @vertex fn vsCorridor(@location(0) corner:vec2<f32>,@builtin(instance_index) iid:u32)->VSOut{
     var o:VSOut;
     let lampCount=max(u.lampCount,1u);
@@ -888,7 +924,7 @@ struct VSOut {
     let outer=max(1.0,l0.z*screenScale);
     let p=center+corner*outer;
     o.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);
-    o.q=corner;o.body=l0.w;o.color=l1.xyz;o.soft=l1.w;o.bright=l2.x;o.lampType=l2.y;o.alpha=l2.z*c0.z;
+    o.q=corner;o.body=l0.w;o.color=l1.xyz;o.soft=l1.w;o.bright=l2.x;o.lampType=l2.y;o.alpha=l2.z*c0.z; if(l2.w>0.5){o.alpha*=preparedSeamVisibility(ci,l0.xy);}
     return o;
 }
 
@@ -912,13 +948,43 @@ fn sampleMorphArc(pathIndex:u32,fraction:f32)->vec2<f32>{
 fn sampleMorphArcSegment(pathIndex:u32,segmentIndex:f32,segmentT:f32)->vec2<f32>{
     let r=morphPathSegmentRanges[pathIndex];let n=max(1u,r.y);let si=min(n-1u,u32(max(0.0,segmentIndex)+0.5));return sampleArcMicro(r.x+si,clamp(segmentT,0.0,1.0));
 }
+fn arcLampCenter(i:u32)->vec2<f32> {
+    let anchor = corridorLampData[4u*i];
+    let segment = corridorLampData[4u*i+3u];
+    let path = u32(anchor.x+0.5);
+    if (segment.y > 0.0) { return sampleMorphArcSegment(path,segment.z,segment.w)+anchor.zw; }
+    return sampleMorphArc(path,anchor.y)+anchor.zw;
+}
+fn arcEndpoint(i:u32)->bool {
+    let f = corridorLampData[4u*i].y;
+    return f <= 0.000001 || f >= 0.999999;
+}
+fn arcLampVisibility(i:u32, center:vec2<f32>, radius:f32, alpha:f32)->f32 {
+    let seamsOnly = u.overlapMode == 103u;
+    if (u.overlapMode == 0u || (seamsOnly && !arcEndpoint(i))) { return 1.0; }
+    var visibility = 1.0;
+    for (var j=0u; j<u.lampCount; j++) {
+        if (seamsOnly && !arcEndpoint(j)) { continue; }
+        let peer = corridorLampData[4u*j+3u];
+        if (peer.x < alpha || (peer.x == alpha && j >= i)) { continue; }
+        let d = distance(center,arcLampCenter(j));
+        let reach = max(0.0001,(radius+abs(peer.y))*f32(u.overlapMode-1u)*0.01);
+        if (u.overlapMode == 102u || seamsOnly) {
+            visibility = min(visibility,smoothstep(0.0,1.0,d));
+        } else {
+            visibility = min(visibility,clamp(d/reach,0.0,1.0));
+        }
+        if (visibility == 0.0) { break; }
+    }
+    return visibility;
+}
 fn arcLampOut(corner:vec2<f32>,li:u32,copyIndex:u32,useCopy:bool)->VSOut{
     var o:VSOut;let l0=corridorLampData[li*4u];let l1=corridorLampData[li*4u+1u];let l2=corridorLampData[li*4u+2u];let l3=corridorLampData[li*4u+3u];
-    let pathIndex=u32(max(0.0,l0.x)+0.5);let directSegment=l3.y>0.5;let railPoint=select(sampleMorphArc(pathIndex,l0.y),sampleMorphArcSegment(pathIndex,l3.z,l3.w),directSegment);let centerLocal=railPoint+l0.zw;var center:vec2<f32>;var screenScale:f32;var copyAlpha=1.0;
-    if(useCopy){let c0=corridorCopyData[copyIndex*2u];let c1=corridorCopyData[copyIndex*2u+1u];let f00=u.root0.x*c0.x+u.root0.y*c1.x;let f01=u.root0.x*c0.y+u.root0.y*c1.y;let f10=u.root0.z*c0.x+u.root0.w*c1.x;let f11=u.root0.z*c0.y+u.root0.w*c1.y;center=vec2<f32>(f00*centerLocal.x+f01*centerLocal.y+u.root1.x,f10*centerLocal.x+f11*centerLocal.y+u.root1.y);screenScale=length(vec2<f32>(f00,f10));copyAlpha=c0.z;}
+    let centerLocal=arcLampCenter(li);var center:vec2<f32>;var screenScale:f32;var copyAlpha=1.0;
+    if(useCopy){let c0=corridorCopyData[copyIndex*2u];let c1=corridorCopyData[copyIndex*2u+1u];let f00=u.root0.x*c0.x+u.root0.y*c1.x;let f01=u.root0.x*c0.y+u.root0.y*c1.y;let f10=u.root0.z*c0.x+u.root0.w*c1.x;let f11=u.root0.z*c0.y+u.root0.w*c1.y;center=vec2<f32>(f00*centerLocal.x+f01*centerLocal.y+u.root1.x,f10*centerLocal.x+f11*centerLocal.y+u.root1.y);screenScale=length(vec2<f32>(f00,f10));copyAlpha=c0.z;if(arcEndpoint(li) && u.overlapMode!=0u){copyAlpha*=arcSeamVisibility(copyIndex,centerLocal);}}
     else{center=vec2<f32>(u.root0.x*centerLocal.x+u.root0.y*centerLocal.y+u.root1.x,u.root0.z*centerLocal.x+u.root0.w*centerLocal.y+u.root1.y);screenScale=length(vec2<f32>(u.root0.x,u.root0.z));}
     let outer=max(1.0,l1.x*screenScale);let p=center+corner*outer;o.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);
-    o.q=corner;o.body=l1.y;o.color=vec3<f32>(l1.z,l1.w,l2.x);o.soft=l2.y;o.bright=l2.z;o.lampType=l2.w;o.alpha=l3.x*copyAlpha;return o;
+    o.q=corner;o.body=l1.y;o.color=vec3<f32>(l1.z,l1.w,l2.x);o.soft=l2.y;o.bright=l2.z;o.lampType=l2.w;o.alpha=l3.x*copyAlpha*arcLampVisibility(li,centerLocal,abs(l3.y),l3.x);return o;
 }
 @vertex fn vsArc(@location(0) corner:vec2<f32>,@builtin(instance_index) iid:u32)->VSOut{return arcLampOut(corner,iid,0u,false);}
 @vertex fn vsArcCorridor(@location(0) corner:vec2<f32>,@builtin(instance_index) iid:u32)->VSOut{let lampCount=max(u.lampCount,1u);return arcLampOut(corner,iid%lampCount,iid/lampCount,true);}
@@ -2244,7 +2310,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       batch.lampData[o + 8] = vb / 100;
       batch.lampData[o + 9] = typeCode;
       batch.lampData[o + 10] = lampAlpha;
-      batch.lampData[o + 11] = 0;
+      batch.lampData[o + 11] = v.lampSpiralEndpoint ? 1 : 0;
       for (let hi = 0; hi < CORRIDOR_LAMP_FLOATS; hi++)
         lampHash = lampHashMix(lampHash, batch.lampData[o + hi]);
       lk++;
@@ -2524,7 +2590,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       batch.data[o + 11] = typeCode;
       batch.data[o + 12] = lampAlpha;
       const directSeg = Number.isFinite(Number(v.gpuLampArcSegmentIndex));
-      batch.data[o + 13] = directSeg ? 1 : 0;
+      batch.data[o + 13] = directSeg ? rad : -rad;
       batch.data[o + 14] = directSeg ? Math.max(0, Number(v.gpuLampArcSegmentIndex) || 0) : 0;
       batch.data[o + 15] = directSeg ? Math.max(0, Math.min(1, Number(v.gpuLampArcSegmentT) || 0)) : 0;
       for (let hi = 0; hi < ARC_LAMP_FLOATS; hi++)
@@ -2551,7 +2617,9 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
     batch.uniformF32[0] = width;
     batch.uniformF32[1] = height;
     batch.uniformU32[2] = lk;
-    batch.uniformU32[3] = 0;
+    batch.uniformU32[3] = drawPlan.lampPhaseEdge ? 102
+      : cfg.extinguishIntersections === true ? 1 + Math.round(Math.max(0, Math.min(100, cfg.intersectionDistance ?? 50)))
+      : cfg.positionMode === 'arbitrary' ? 0 : 103;
     if (corridor) {
       const frameRot = frameCtx.hasCombinedRotation ? Number(frameCtx.combinedRotationRad) || 0 : 0,
         ct = Math.cos(frameRot),

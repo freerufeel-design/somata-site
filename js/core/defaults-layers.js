@@ -972,6 +972,8 @@ function ensureLayerLampState(layer) {
   );
   if (typeof owner.lamps.adaptiveBrightness !== 'boolean') owner.lamps.adaptiveBrightness = true;
   if (typeof owner.lamps.extinguishIntersections !== 'boolean') owner.lamps.extinguishIntersections = false;
+  const overlapDistance = Number(owner.lamps.intersectionDistance ?? 50);
+  owner.lamps.intersectionDistance = Number.isFinite(overlapDistance) ? Math.max(0, Math.min(100, overlapDistance)) : 50;
   if (typeof owner.lamps.adaptiveAdjustBrightness !== 'boolean') owner.lamps.adaptiveAdjustBrightness = false;
   if (!Number.isFinite(Number(owner.lamps.adaptiveStrength))) owner.lamps.adaptiveStrength = 100;
   if (!Number.isFinite(Number(owner.lamps.adaptiveStrengthMultiplier)))

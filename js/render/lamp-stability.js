@@ -233,7 +233,7 @@ const SomataLampStability = (() => {
         ? full : full * factor;
     }
   }
-  function suppressEndpointOverlaps(items, strength, arcPlaceholders, lampRadius = false) {
+  function suppressEndpointOverlaps(items, strength, arcPlaceholders, lampRadius = false, distanceScale = 0.5) {
     const lit = items.filter((v) => v.intensityAlpha > 0 && (arcPlaceholders || isSpatial(v)));
     lit.sort((a, b) =>
       (lampRadius ? Number(!!(b.lampSourcePresent && b.lampTargetPresent)) - Number(!!(a.lampSourcePresent && a.lampTargetPresent)) : 0) ||
@@ -242,11 +242,17 @@ const SomataLampStability = (() => {
       String(a.lampTraceId).localeCompare(String(b.lampTraceId)),
     );
     const grid = new Map();
+    const occupied = new Set();
     const gridSize = lampRadius ? lit.reduce((size, v) => Math.max(size, (v.rad || 0) * 2), cell) : cell;
     for (const v of lit) {
       const x = Math.floor(v.px / gridSize), y = Math.floor(v.py / gridSize);
       const key = arcPlaceholders ? arcKey(v) : `${x}:${y}`;
       if (key === null) continue;
+      if (lampRadius) {
+        const exact = Math.round(v.px / SAME_POINT_EPS) + ':' + Math.round(v.py / SAME_POINT_EPS);
+        if (occupied.has(exact)) { v.intensityAlpha = 0; continue; }
+        occupied.add(exact);
+      }
       let overlap = 0;
       if (arcPlaceholders) {
         overlap = grid.has(key) ? 1 : 0;
@@ -256,13 +262,13 @@ const SomataLampStability = (() => {
             for (const earlier of grid.get(`${x + dx}:${y + dy}`) || []) {
               const distance = Math.hypot(v.px - earlier.px, v.py - earlier.py);
               const d = lampRadius
-                ? separation(v, earlier, distance)
+                ? Math.min(1, distance / Math.max(SAME_POINT_EPS, ((v.rad || 0) + (earlier.rad || 0)) * distanceScale))
                 : Math.min(1, distance / cell);
               overlap = Math.max(overlap, lampRadius ? 1 - d : 1 - d * d * (3 - 2 * d));
             }
       }
       v.intensityAlpha *= 1 - strength * overlap;
-      if (v.intensityAlpha > 0) {
+      if (v.intensityAlpha > 0 && (!lampRadius || overlap === 0)) {
         let list = grid.get(key);
         if (!list) grid.set(key, (list = []));
         list.push(v);
@@ -271,7 +277,7 @@ const SomataLampStability = (() => {
   }
   function apply(scope, items, {
     now, duration, animate, arc = false, arcPlaceholders = false, merge = 0,
-    phase = null, phaseProgress = null, phaseTiming = null, extinguishIntersections = true, singleWinner = false,
+    phase = null, phaseProgress = null, phaseTiming = null, extinguishIntersections = true, singleWinner = false, intersectionDistance = 50,
   }) {
     let track = tracks.get(scope);
     if (!track || now < track.now || now - track.now > Math.max(2000, duration * 2)) {
@@ -456,8 +462,14 @@ const SomataLampStability = (() => {
         litNow = keeper.intensityAlpha;
       }
     } else track.keeperId = null;
-    if (radiusOverlap) suppressEndpointOverlaps(items, 1, false, true);
+    const phaseEdge = phase !== null && (phaseProgress === 0 || phaseProgress === 1);
+    if (radiusOverlap && !phaseEdge)
+      suppressEndpointOverlaps(items, 1, false, true, Math.max(0, Math.min(100, intersectionDistance)) / 100);
     else if (endpoint > 0) suppressEndpointOverlaps(items, endpoint, arcPlaceholders);
+    if (!arcPlaceholders && !radiusOverlap && endpoint === 0) {
+      const ends = items.filter(v => v.lampSpiralEndpoint);
+      if (ends.length > 1) suppressEndpointOverlaps(ends, 1, false);
+    }
     for (const v of items) peak = Math.max(peak, v.intensityAlpha);
     track.hadLit = rawPeak > 0.05 && litNow >= 0.5 * rawPeak;
     if (best && Number.isFinite(best.px)) track.litPos = { x: best.px, y: best.py };

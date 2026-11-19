@@ -681,6 +681,7 @@ function syncLampSettingsUI() {
     lampBrightnessVariationMultiplier: c.brightnessVariationMultiplier ?? 1,
     lampAdaptiveBrightness: c.adaptiveBrightness !== false,
     lampExtinguishIntersections: c.extinguishIntersections === true,
+    lampIntersectionDistance: c.intersectionDistance ?? 50,
     lampAdaptiveAdjustBrightness: c.adaptiveAdjustBrightness === true,
     lampAdaptiveStrength: c.adaptiveStrength ?? 100,
     lampAdaptiveStrengthMultiplier: c.adaptiveStrengthMultiplier ?? 1,
@@ -825,10 +826,22 @@ function syncLampSettingsUI() {
   document.getElementById('lampMorphSettings')?.classList.toggle('hidden', c.morphEnabled !== true);
   document.getElementById('lampDensityRow')?.classList.toggle('hidden', positionMode !== 'arbitrary');
   document.getElementById('lampBendAnimationNote')?.classList.toggle('hidden', positionMode !== 'corners');
+  const distanceRow = document.getElementById('lampIntersectionDistanceRow');
+  if (distanceRow) {
+    distanceRow.hidden = c.extinguishIntersections !== true;
+    distanceRow.style.display = distanceRow.hidden ? 'none' : '';
+  }
+  set('lampIntersectionDistanceText', (c.intersectionDistance ?? 50) + '%');
   const cornerSlider = document.getElementById('lampCornerInertia');
-  const cornerSec = lampCornerInertiaMs(c) / 1000;
-  if (cornerSlider) cornerSlider.value = String(cornerSec);
-  set('lampCornerInertiaText', `${formatTimeSeconds(cornerSec)} с`);
+  const linked = c.cornerInertiaLinked !== false;
+  const link = document.getElementById('lampDurationLinked');
+  if (link) link.checked = linked;
+  if (cornerSlider) {
+    const layer = state.layers.find(l => l.id === state.activeLayerId) || state.layers[0];
+    cornerSlider.disabled = linked;
+    cornerSlider.max = linked ? '60' : '15';
+    cornerSlider.value = String(lampCornerInertiaMs(c, layer) / 1000);
+  }
   const selected = mode === 'selected';
   const color = document.getElementById('lampColor');
   if (color) color.disabled = !selected;

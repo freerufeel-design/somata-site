@@ -338,6 +338,7 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
     let item = items[write];
     if (!item)
       item = items[write] = { px: 0, py: 0, rad: 0, color: '#ffffff', brightness: 0, intensityAlpha: 0 };
+    item.lampSpiralEndpoint = p?.lampSpiralEndpoint === true;
     item.lampTraceId = p?.lampId ?? `slot:${p?.pathIndex ?? 0}:${p?.vertexIndex ?? i}`;
     item.lampSourcePresent = p?.lampSourcePresent;
     item.lampTargetPresent = p?.lampTargetPresent;

@@ -384,7 +384,8 @@ function advanceLampAttachmentFraction(current, target, path, dtMs, responseMs =
       : responseMs;
   return advanceLampPathFraction(current, target, Boolean(path?.closed), dtMs, dynamicMs);
 }
-function lampCornerInertiaMs(cfg = getLampEvaluationConfig()) {
+function lampCornerInertiaMs(cfg = getLampEvaluationConfig(), layer) {
+  if (layer && cfg?.cornerInertiaLinked !== false) return Math.max(0.1, Math.min(60, Number(layer.testMorph?.duration) || 1)) * 1000;
   const seconds = Number(cfg?.cornerInertiaSec ?? 0.5);
   return Math.max(0, Math.min(15, Number.isFinite(seconds) ? seconds : 0.5)) * 1000;
 }
@@ -398,7 +399,8 @@ function moveLampLevel(current, target, dtMs, durationMs = 330) {
 }
 function lampBendAnimationMs(frameCtx, cfg) {
   const actual = frameCtx?.lampAnimationMs;
-  return Number.isFinite(actual) && actual > 0 ? actual : lampCornerInertiaMs(cfg);
+  if (!frameCtx?.layer && cfg?.cornerInertiaLinked !== false && actual > 0) return actual;
+  return lampCornerInertiaMs(cfg ?? frameCtx?.layerLampConfig ?? frameCtx?.layer?.lamps, frameCtx?.layer);
 }
 function updateLampBendLevel(entry, target, now, duration) {
   if (entry.bendTarget !== target) {

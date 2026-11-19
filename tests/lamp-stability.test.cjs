@@ -420,11 +420,27 @@ test('key intersection dimming leaves one lamp at full intensity inside the radi
   for (const enabled of [false, true]) {
     const items = [
       { lampTraceId: 'a', px: 0, py: 0, rad: 20, intensityAlpha: 0.8 },
-      { lampTraceId: 'b', px: 12, py: 0, rad: 5, intensityAlpha: 0.6 },
+      { lampTraceId: 'b', px: 0, py: 0, rad: 5, intensityAlpha: 0.6 },
     ];
     apply('key-intersection:' + enabled, items, {
       now: 100, animate: false, singleWinner: true, extinguishIntersections: enabled,
     });
     assert.deepEqual(items.map((p) => p.intensityAlpha), [0.8, enabled ? 0 : 0.6]);
   }
+});
+test('overlap slider changes onset while phase endpoints keep distinct key vertices', () => {
+  const sample = (pct, phaseProgress = 0.5) => {
+    const items = [0, 5, 0, 0, 30].map((x, i) => ({
+      ...lamp(String(i), x), rad: 10, lampRank: 0,
+    }));
+    apply('threshold-' + pct + '-' + phaseProgress, items, {
+      now: 100, duration: 0, animate: false, phase: 1, phaseProgress,
+      extinguishIntersections: true, singleWinner: true, intersectionDistance: pct,
+    });
+    return items.map(v => v.intensityAlpha);
+  };
+  assert.deepEqual(sample(0), [1,1,0,0,1]);
+  assert.deepEqual(sample(50), [1,.5,0,0,1]);
+  assert.deepEqual(sample(100), [1,.25,0,0,1]);
+  for(const t of [0,1]) assert.deepEqual(sample(100,t),sample(0,t));
 });

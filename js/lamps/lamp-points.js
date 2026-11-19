@@ -155,7 +155,7 @@ function collectSmoothCornerLampPoints(layerIndex, paths, maxPoints = 260, anima
     e.last = now;
     if (animate) {
       const targetLevel = Math.max(0, Math.min(1, Number(e.target) || 0));
-      updateLampBendLevel(e, targetLevel, now, lampBendAnimationMs());
+      updateLampBendLevel(e, targetLevel, now, lampBendAnimationMs({ layer: state.layers[layerIndex] }, getLampEvaluationConfig()));
       if (path) e.s = advanceLampAttachmentFraction(e.s, e.targetS, path, dt, 210);
       if (Math.abs(e.level - targetLevel) > 0.002) lampAdaptiveFrame.needsSettle = true;
     } else {

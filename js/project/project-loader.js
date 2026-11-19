@@ -897,6 +897,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
     );
     if (typeof settings.lamps.adaptiveBrightness !== 'boolean') state.lamps.adaptiveBrightness = true;
     state.lamps.extinguishIntersections = settings.lamps.extinguishIntersections === true;
+    state.lamps.intersectionDistance = Math.min(100, Math.max(0, Number(settings.lamps.intersectionDistance ?? 50)));
     if (typeof settings.lamps.adaptiveAdjustBrightness !== 'boolean')
       state.lamps.adaptiveAdjustBrightness = false;
     state.lamps.adaptiveStrength = Math.max(0, Math.min(100, Number(state.lamps.adaptiveStrength ?? 100)));

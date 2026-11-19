@@ -886,8 +886,8 @@
                     <div class="control-row"><span class="hint-text">Положение лампочек</span><div class="lamp-position-mode" role="group" aria-label="Положение лампочек"><button type="button" class="active" data-lamp-position="key">Ключевое</button><button type="button" data-lamp-position="corners">На изломах</button><button type="button" data-lamp-position="arbitrary">Произвольное</button></div></div>
                     <div id="lampBendAnimationNote" class="hint-text hidden">На изломах: ключевые точки и изломы. Дополнительные лампочки плавно загораются и гаснут за длительность анимации.</div>
                     <div id="lampCornerInertiaRow" class="control-row" title="Время загорания и угасания лампочек в секундах.">
-                        <div class="row-label"><span>Длительность анимации ламп</span><span id="lampCornerInertiaText" class="text-mono">0,5 с</span></div>
-                        <input id="lampCornerInertia" type="range" min="0" max="15" step="0.1" value="0.5" aria-label="Длительность анимации ламп в секундах">
+                        <label for="lampCornerInertia">Длительность анимации ламп</label>
+                        <div style="display:flex;align-items:center;gap:6px"><input id="lampCornerInertia" type="number" style="width:5em" min="0" max="15" step="any" value="1" disabled> с <label style="display:flex;align-items:center;gap:4px"><input id="lampDurationLinked" type="checkbox" checked> Привязать к длительности анимации геометрии</label></div>
                     </div>
                 </div>
                 <div class="ui-block">
@@ -964,6 +964,10 @@
                     <div class="lamp-adaptive-toggles">
                         <label class="display-enable-toggle lamp-compact-toggle" title="Включает адаптацию. Переключатель выше выбирает, что подстраивается: размер или свет"><input id="lampAdaptiveBrightness" type="checkbox" checked><span>Адаптация включена</span></label>
                         <label class="display-enable-toggle lamp-compact-toggle" title="Приглушает пересечения в середине фазы. В начале и конце фазы совпадающие лампы сливаются при любом положении галочки."><input id="lampExtinguishIntersections" type="checkbox"><span>Гасить пересечения</span></label>
+                    </div>
+                    <div id="lampIntersectionDistanceRow" class="control-row" hidden style="display:none">
+                        <div class="row-label"><label for="lampIntersectionDistance">Сила погашения свечения</label><span id="lampIntersectionDistanceText" class="text-mono">50%</span></div>
+                        <input id="lampIntersectionDistance" type="range" min="0" max="100" step="1" value="50" title="0% — только при совпадении центров. 100% — с момента касания радиусами.">
                     </div>
                     <div class="control-row lamp-adaptive-strength-row"><div class="row-label"><span id="lampAdaptiveStrengthLabel">Сила адаптивного размера</span><span id="lampAdaptiveStrengthText" class="text-mono">100% × 1</span></div><div class="lamp-slider-mult"><input id="lampAdaptiveStrength" type="range" min="0" max="100" step="1" value="100"><span class="lamp-mult-label">×</span><input id="lampAdaptiveStrengthMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель силы адаптации" data-log-multiplier="1"></div></div>
                     <div class="control-row lamp-adaptive-exponent-row" title="Форма кривой отклика на перегрузку. 0% — линейно (как раньше). +100% — десятичная положительная экспонента: умеренную перегрузку гасит сильнее. −100% — десятичная отрицательная экспонента: умеренную перегрузку гасит мягче. Шаг 5%."><div class="row-label"><span>Экспоненциальность</span><span id="lampAdaptiveExponentText" class="text-mono">0%</span></div><div class="lamp-slider-mult"><input id="lampAdaptiveExponent" type="range" min="-100" max="100" step="5" value="0" aria-label="Экспоненциальность адаптации"></div></div>

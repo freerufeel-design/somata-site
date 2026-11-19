@@ -10,7 +10,7 @@ import { SomataFrameContourService } from '../geometry/frame-contour.js';
 import { LampGPURenderer } from '../gpu/lamp-renderer.js';
 import { applyLayerFrameEffectTransform, getLayerFrameAuxiliaryPaths } from '../geometry/frame-paths.js';
 import { lampAdaptivePointCount, lampPhaseLightTiming, lampVisualNow } from '../lamps/lamp-motion.js';
-import { lampBendAnimationMs, lampCornerInertiaMs } from '../lamps/lamp-attachment.js';
+import { lampBendAnimationMs } from '../lamps/lamp-attachment.js';
 import { collectMorphLampPoints } from '../lamps/lamp-topology.js';
 import { lampAdaptiveFrame, prepareLampDrawStyle, prepareLampVisualPlan } from '../lamps/lamp-visual.js';
 import { SomataFeatureHost } from './feature-host.js';
@@ -48,7 +48,7 @@ function renderLayerLampPass(frameCtx) {
       const blue = !manual && (frameCtx.blueMorphProvider?.active || frameCtx.morphFrameActive);
       const phase = manual ? frameCtx.geometryProvider.lampPhase : null;
       const timing = phase
-        ? { elapsed: phase.elapsed, remaining: phase.duration - phase.elapsed, duration: lampCornerInertiaMs(drawPlan.config) }
+        ? { elapsed: phase.elapsed, remaining: phase.duration - phase.elapsed, duration }
         : blue ? lampPhaseLightTiming(now, duration) : null;
       prepareLampDrawStyle(
         drawPlan.config,
@@ -74,6 +74,8 @@ function renderLayerLampPass(frameCtx) {
         frameCtx.minimalFadeEnabled === true ||
         manual ||
         Number(frameCtx.lampAnimationMs) > 0;
+      const progress = phase ? phase.elapsed / phase.duration : blue ? Number(runtimeState.morph?.progress) : null;
+      drawPlan.lampPhaseEdge = progress === 0 || progress === 1;
       const stats = SomataLampStability.apply(
         `${frameCtx.layer?.id ?? frameCtx.layerIndex}:${set.layer?.id ?? ''}:${setIndex}`,
         plan.items,
@@ -85,9 +87,10 @@ function renderLayerLampPass(frameCtx) {
           arc,
           arcPlaceholders: arc, // retained GPU Arc publishes fractions, not real CPU centres
           phase: phase?.id ?? (blue ? runtimeState.morph?.lampCycleSerial ?? null : null),
-          phaseProgress: phase ? phase.elapsed / phase.duration : blue ? Number(runtimeState.morph?.progress) : null,
-          extinguishIntersections: drawPlan.config.extinguishIntersections === true,
-          singleWinner: drawPlan.config.positionMode !== 'arbitrary',
+          phaseProgress: progress,
+          extinguishIntersections: !arc && drawPlan.config.extinguishIntersections === true,
+          singleWinner: true,
+          intersectionDistance: drawPlan.config.intersectionDistance ?? 50,
           // «Произвольное» намеренно ставит лампы густо; в остальных режимах близкие лампы одного узла сливаются.
           merge: (set.config?.positionMode || drawPlan.config?.positionMode) === 'arbitrary' ? 0 : 0.5,
         },
