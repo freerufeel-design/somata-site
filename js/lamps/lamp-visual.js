@@ -294,7 +294,11 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
     const p = points[i],
       level = Math.max(0, Math.min(1, p?.lampLevel === undefined ? 1 : Number(p.lampLevel) || 0)),
       presence = lampPhasePresence(p, cfg, timing);
-    if (level <= 0.002 || presence <= 0.002) continue;
+    // Keep dark phase births available for the clearance measurement on
+    // the first frame, before their brightness envelope starts.
+    const awaitingClearance = timing && typeof p?.lampSourcePresent === 'boolean' &&
+      typeof p?.lampTargetPresent === 'boolean' && p.lampSourcePresent !== p.lampTargetPresent;
+    if (level <= 0.002 || (presence <= 0.002 && !awaitingClearance)) continue;
     const seed = Number.isFinite(Number(p?.lampSeed))
         ? Number(p.lampSeed) >>> 0
         : (layerSeed ^ Math.imul(i + 1, 2654435761)) >>> 0,

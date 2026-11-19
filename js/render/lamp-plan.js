@@ -19,6 +19,7 @@ import {
   lampBendAnimationMs,
   lampBendTracks,
   lampPointAtFraction,
+  nearestLampFractionOnPath,
   nearestLampFractionOnPathSegmentBound,
   trackLampBends,
 } from '../lamps/lamp-attachment.js';
@@ -287,7 +288,12 @@ function collectPreparedPolygonLampPoints(layer, paths, config, maxPoints, frame
         bend = span > 1e-12 && ax * bx + ay * by < Math.cos(Math.PI / 20) * span;
       }
       if (usesPhaseSlots ? !point.lampSourcePresent && !point.lampTargetPresent : !key && !bend) continue;
-      const hit = snap ? nearestLampFractionOnPathSegmentBound(point, rail, stations[vertexIndex]) : null;
+      // A reordered closed correspondence can start at a different vertex
+      // from the rendered rail. On a simple polygon, project by position as
+      // the static key lamps do, without a window tied to that arbitrary seam.
+      const hit = !snap ? null : usesPhaseSlots && Number(layer.K || 1) === 1
+        ? nearestLampFractionOnPath(point, rail)
+        : nearestLampFractionOnPathSegmentBound(point, rail, stations[vertexIndex]);
       const id = `animation:${path.orbitIndex ?? pathIndex}:${path.closed ? 'closed' : 'open'}:${usesPhaseSlots ? point.id : point.__profileLampKey ?? vertexIndex}`;
       group.push({
         ...point,
@@ -389,7 +395,7 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
     const strictSpiralGpuBefore = SomataGeometryPolicy.isStrict(frameCtx),
       snappedMorph = followsMorph && lampContourAttachmentEnabledForFrame(frameCtx) === true,
       gpuLampPrepared =
-        (strictSpiralGpuBefore || (followsMorph && !snappedMorph)) &&
+        (strictSpiralGpuBefore || (followsMorph && !snappedMorph && plan.baseConfig.positionMode !== 'key')) &&
         allowed && typeof prepareGpuMorphLampFrame === 'function'
           ? withLampConfig(plan.baseConfig, () => prepareGpuMorphLampFrame(frameCtx))
           : null;

@@ -388,3 +388,43 @@ test('authored source vertices are already lit after a phase changes their IDs a
   apply('source-vertices', vertices, { ...cfg, now: 16, phase: 2, phaseProgress: .001, animate: true });
   assert.deepEqual(vertices.map((p) => p.intensityAlpha), [1, 1, 0]);
 });
+test('phase births use separation and ignore elapsed time', () => {
+  for (const extinguishIntersections of [false, true]) {
+    const scope = 'birth-clearance:' + extinguishIntersections;
+    const step = (elapsed, distance) => {
+      const source = {
+        lampTraceId: 'source', px: 0, py: 0, rad: 20, intensityAlpha: 1,
+        lampSourcePresent: true, lampTargetPresent: true, lampPhaseTimed: true,
+      };
+      const birth = {
+        lampTraceId: 'birth', px: distance, py: 0, rad: 5, intensityAlpha: 0.4,
+        brightness: 40, lampSourcePresent: false, lampTargetPresent: true, lampPhaseTimed: true,
+      };
+      apply(scope, [source, birth], {
+        now: elapsed, duration: 500, phase: 1, phaseProgress: elapsed / 200,
+        phaseTiming: { elapsed, remaining: 200 - elapsed, duration: 500 },
+        animate: true, extinguishIntersections,
+      });
+      assert.equal(source.intensityAlpha, 1);
+      return birth.intensityAlpha;
+    };
+    assert.equal(step(0, 0), 0);
+    assert.equal(step(40, 12.4), 0);
+    assert.equal(step(50, 12.5), 0);
+    assert.equal(step(60, 18.75), 0.2);
+    assert.equal(step(160, 18.75), 0.2);
+    assert.equal(step(200, 60), 0.4);
+  }
+});
+test('key intersection dimming leaves one lamp at full intensity inside the radius', () => {
+  for (const enabled of [false, true]) {
+    const items = [
+      { lampTraceId: 'a', px: 0, py: 0, rad: 20, intensityAlpha: 0.8 },
+      { lampTraceId: 'b', px: 12, py: 0, rad: 5, intensityAlpha: 0.6 },
+    ];
+    apply('key-intersection:' + enabled, items, {
+      now: 100, animate: false, singleWinner: true, extinguishIntersections: enabled,
+    });
+    assert.deepEqual(items.map((p) => p.intensityAlpha), [0.8, enabled ? 0 : 0.6]);
+  }
+});

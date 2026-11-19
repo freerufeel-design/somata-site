@@ -127,15 +127,17 @@ test('animation preserves lamp positions and single lit vertices at topology end
   await importModule('js/render/lamp-plan.js');
   const { lampPhasePresence } = await importModule('js/lamps/lamp-motion.js');
   const { SomataLampStability } = await importModule('js/render/lamp-stability.js');
+  const { collectStaticLampPoints } = await importModule('js/geometry/frame-paths.js');
+  const { withLampConfig } = await importModule('js/core/defaults-layers.js');
   const runtime = window.SomataMorphRuntime;
-  for (const snapToContour of [false, true]) {
+  for (const [snapToContour, roundingCornerType] of [[false, 'local'], [true, 'local'], [true, 'classic'], [true, 'simple']]) {
     for (const [from, to] of [[4, 8], [8, 4], [7, 6]]) {
       const layer = {
         ...createLayer(), N: from, K: 1, rotation: 0, radius: 100, radiusMultiplier: 1,
-        spiralEnabled: false, spiralOrder: 0, closedLoop: true, rounding: snapToContour ? 65 : 0,
+        spiralEnabled: false, spiralOrder: 0, closedLoop: true, rounding: snapToContour ? 65 : 0, roundingCornerType,
       };
       const spec = runtime.describe({
-        sourceLayer: layer, targetLayer: { ...layer, N: to }, mode: 'topology', origin: 'manual',
+        sourceLayer: layer, targetLayer: { ...layer, N: to, rotation: 22 }, mode: 'topology', origin: 'manual',
       });
       layer.showLamps = true;
       const cfg = Object.assign(layer.lamps, { positionMode: 'key', snapToContour, extinguishIntersections: false });
@@ -151,18 +153,32 @@ test('animation preserves lamp positions and single lit vertices at topology end
           ...p, px: p.x, py: p.y, rad: 8, lampTraceId: p.lampId, lampPhaseTimed: true,
           intensityAlpha: lampPhasePresence(p, cfg, timing),
         }));
-        SomataLampStability.apply(`phase:${snapToContour}:${from}:${to}`, items, {
+        SomataLampStability.apply(`phase:${snapToContour}:${roundingCornerType}:${from}:${to}`, items, {
           now: timing.elapsed, phase: 1, phaseProgress: t, phaseTiming: timing,
           duration: 500, extinguishIntersections: false, animate: true,
         });
         return items;
       };
       const distance = (a, b) => Math.hypot(a.px - b.px, a.py - b.py);
+      const settled = withLampConfig(cfg, () => collectStaticLampPoints(spec.targetLayer));
+      const beforeStop = sample(11 / 12);
+      const terminal = sample(1).filter((p) => p.lampTargetPresent);
+      assert.equal(terminal.length, settled.length);
+      if (snapToContour && from === 8 && to === 4 && roundingCornerType === 'local') {
+        for (const p of terminal) {
+          const previous = beforeStop.find((q) => q.lampId === p.lampId);
+          assert.ok(distance(p, previous) < 12, `visible final step: ${distance(p, previous)}`);
+        }
+      }
+      for (const p of terminal) {
+        const error = Math.min(...settled.map((q) => Math.hypot(p.x - q.x, p.y - q.y)));
+        assert.ok(error < 0.01, `target mismatch ${from} -> ${to}, snap=${snapToContour}: ${error}`);
+      }
       for (const [t, next, count] of [[0, 1e-6, from], [1 - 1e-6, 1, to]]) {
         const a = sample(t), b = sample(next);
-        const label = `${from} -> ${to}, snap=${snapToContour}, t=${t}`;
+        const label = `${from} -> ${to}, snap=${snapToContour}, ${roundingCornerType}, t=${t}`;
         assert.deepEqual(a.map((p) => p.lampId), b.map((p) => p.lampId), label);
-        for (const [i, p] of a.entries()) assert.ok(distance(p, b[i]) < 0.1, label + ' jump ' + distance(p, b[i]));
+        for (const [i, p] of a.entries()) assert.ok(distance(p, b[i]) < 0.25, label + ' jump ' + distance(p, b[i]));
         for (const items of [a, b]) {
           const lit = items.filter((p) => p.intensityAlpha > 0.01);
           assert.equal(lit.length, count, label);

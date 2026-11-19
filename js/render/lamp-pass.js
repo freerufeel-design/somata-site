@@ -87,6 +87,7 @@ function renderLayerLampPass(frameCtx) {
           phase: phase?.id ?? (blue ? runtimeState.morph?.lampCycleSerial ?? null : null),
           phaseProgress: phase ? phase.elapsed / phase.duration : blue ? Number(runtimeState.morph?.progress) : null,
           extinguishIntersections: drawPlan.config.extinguishIntersections === true,
+          singleWinner: drawPlan.config.positionMode !== 'arbitrary',
           // «Произвольное» намеренно ставит лампы густо; в остальных режимах близкие лампы одного узла сливаются.
           merge: (set.config?.positionMode || drawPlan.config?.positionMode) === 'arbitrary' ? 0 : 0.5,
         },

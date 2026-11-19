@@ -87,7 +87,7 @@ function lampAdaptivePointCount(points, cfg = getLampEvaluationConfig(), timing 
     sum += lampPhasePresence(p, cfg, timing);
   return Math.max(0.001, sum);
 }
-function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false) {
+function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false, displayedProgress = null) {
   if (!Array.isArray(points) || !points.length || !runtimeState.morph?.active) return points || [];
   const layer = state.layers?.[layerIndex];
   const layerKey = String(layer?.id ?? layerIndex);
@@ -128,7 +128,8 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false)
   }
   const previousAll = Array.isArray(rt.last) ? rt.last : [];
 
-  const previousVisible = previousAll.filter(
+  const arriving = previousAll.filter(q => q.lampTargetPresent !== false);
+  const previousVisible = arriving.filter(
     (q) => Math.max(0, Math.min(1, q?.lampPresence === undefined ? 1 : Number(q.lampPresence) || 0)) > 0.001,
   );
   const previous = previousVisible.length ? previousVisible : previousAll;
@@ -185,7 +186,8 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false)
     // Сначала резервируем прежние ID для горящих ламп в той же точке.
     // Иначе более ранняя в списке, но сдвинувшаяся лампа может забрать этот ID.
     const order = points.map((_, i) => i);
-    order.sort((a, b) => Number(visible(points[b])) - Number(visible(points[a])) || a - b);
+    order.sort((a, b) => Number(points[a].lampSourcePresent === false) - Number(points[b].lampSourcePresent === false)
+      || Number(visible(points[b])) - Number(visible(points[a])) || a - b);
     const coincident = new Map();
     const samePointEps2 = 1e-8; // Только погрешность координат, не соседние вершины.
     const nearestUnused = (p, maxD = Infinity, onlyVisible = false) => {
@@ -207,7 +209,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false)
       return best;
     };
     for (const i of order) {
-      if (!visible(points[i])) break;
+      if (!visible(points[i]) || points[i].lampSourcePresent === false) continue;
       const j = nearestUnused(points[i], samePointEps2, true);
       if (j < 0) continue;
       used.add(j);
@@ -258,6 +260,13 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false)
           stable.targetBrightnessUnit = lampSeedUnit(Number(p?.lampSeed) || 0, 4);
         }
       }
+      if (Number.isFinite(displayedProgress) && displayedProgress < 0.2 && previous.length) {
+        // The next phase may rebuild its rounded rail with a different seam.
+        // Transfer the previous displayed centre, including its projection.
+        stable.seamDx = stable.fromX - p.x;
+        stable.seamDy = stable.fromY - p.y;
+        stable.seamStart = displayedProgress;
+      }
       nextAssignments.set(rawKey(p, i), stable);
     }
     rt.assignments = nextAssignments;
@@ -300,8 +309,14 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false)
       targetY = Number(p?.y) || 0,
       sx = Number(stable.fromX) || 0,
       sy = Number(stable.fromY) || 0;
-    const x = u < 1 ? sx + (targetX - sx) * ease : targetX,
+    let x = u < 1 ? sx + (targetX - sx) * ease : targetX,
       y = u < 1 ? sy + (targetY - sy) * ease : targetY;
+    if (Number.isFinite(stable.seamStart) && Number.isFinite(displayedProgress)) {
+      const f = Math.max(0, Math.min(1, (displayedProgress - stable.seamStart) / (0.2 - stable.seamStart)));
+      const weight = 1 - f * f * (3 - 2 * f);
+      x += stable.seamDx * weight;
+      y += stable.seamDy * weight;
+    }
     const baseLevel = p?.lampLevel === undefined ? 1 : Math.max(0, Math.min(1, Number(p.lampLevel) || 0));
     // Birth brightness is decided after final contour attachment, in lamp-stability.
     // Do not make a new ID invisible here: it might occupy an already lit point.
@@ -339,6 +354,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false)
     y: Number(p.y) || 0,
     lampLevel: p?.lampLevel === undefined ? 1 : Number(p.lampLevel) || 0,
     lampPresence: lampPhasePresence(p, inertiaCfg),
+    lampTargetPresent: p.lampTargetPresent,
     lampId: p.lampId,
     stableId: p.lampId,
     lampSeed: p.lampSeed,

@@ -205,16 +205,46 @@ const SomataLampStability = (() => {
     }
     return { matched, used };
   }
-  function suppressEndpointOverlaps(items, strength, arcPlaceholders) {
+  // The dimmer lamp is dark inside half the mean diameter and reaches its
+  // authored intensity where the two discs stop touching.
+  function separation(a, b, distance) {
+    const meanRadius = ((a.rad || 0) + (b.rad || 0)) / 2;
+    return meanRadius > 0 ? Math.max(0, Math.min(1, distance / meanRadius - 1)) : Number(distance > 0);
+  }
+  function applyPhaseSeparation(track, items, phase, allCrossings, progress) {
+    if (track.phase !== phase || !track.separated) track.separated = new Set();
+    const survivors = items.filter(v => v.lampSourcePresent && v.lampTargetPresent && isSpatial(v));
+    for (const v of items) {
+      if (!v.lampPhaseTimed || v.lampRank === 1 || v.lampSourcePresent === v.lampTargetPresent || !isSpatial(v)) continue;
+      if ((progress === 0 && !v.lampSourcePresent) || (progress === 1 && !v.lampTargetPresent)) {
+        v.intensityAlpha = 0;
+        continue;
+      }
+      let factor = 1, paired = false;
+      for (const other of survivors) {
+        if (other.pathIndex !== v.pathIndex) continue;
+        paired = true;
+        factor = Math.min(factor, separation(v, other, Math.hypot(v.px - other.px, v.py - other.py)));
+      }
+      if (!paired) continue;
+      const full = Number.isFinite(v.brightness) ? Math.max(0, Math.min(1, v.brightness / 100)) : 1;
+      if (v.lampTargetPresent && factor === 1) track.separated.add(v.lampTraceId);
+      v.intensityAlpha = allCrossings || (v.lampTargetPresent && track.separated.has(v.lampTraceId))
+        ? full : full * factor;
+    }
+  }
+  function suppressEndpointOverlaps(items, strength, arcPlaceholders, lampRadius = false) {
     const lit = items.filter((v) => v.intensityAlpha > 0 && (arcPlaceholders || isSpatial(v)));
     lit.sort((a, b) =>
+      (lampRadius ? Number(!!(b.lampSourcePresent && b.lampTargetPresent)) - Number(!!(a.lampSourcePresent && a.lampTargetPresent)) : 0) ||
       b.intensityAlpha - a.intensityAlpha ||
       (a.lampRank || 0) - (b.lampRank || 0) ||
       String(a.lampTraceId).localeCompare(String(b.lampTraceId)),
     );
     const grid = new Map();
+    const gridSize = lampRadius ? lit.reduce((size, v) => Math.max(size, (v.rad || 0) * 2), cell) : cell;
     for (const v of lit) {
-      const x = Math.floor(v.px / cell), y = Math.floor(v.py / cell);
+      const x = Math.floor(v.px / gridSize), y = Math.floor(v.py / gridSize);
       const key = arcPlaceholders ? arcKey(v) : `${x}:${y}`;
       if (key === null) continue;
       let overlap = 0;
@@ -224,8 +254,11 @@ const SomataLampStability = (() => {
         for (let dx = -1; dx <= 1; dx++)
           for (let dy = -1; dy <= 1; dy++)
             for (const earlier of grid.get(`${x + dx}:${y + dy}`) || []) {
-              const d = Math.min(1, Math.hypot(v.px - earlier.px, v.py - earlier.py) / cell);
-              overlap = Math.max(overlap, 1 - d * d * (3 - 2 * d));
+              const distance = Math.hypot(v.px - earlier.px, v.py - earlier.py);
+              const d = lampRadius
+                ? separation(v, earlier, distance)
+                : Math.min(1, distance / cell);
+              overlap = Math.max(overlap, lampRadius ? 1 - d : 1 - d * d * (3 - 2 * d));
             }
       }
       v.intensityAlpha *= 1 - strength * overlap;
@@ -238,7 +271,7 @@ const SomataLampStability = (() => {
   }
   function apply(scope, items, {
     now, duration, animate, arc = false, arcPlaceholders = false, merge = 0,
-    phase = null, phaseProgress = null, phaseTiming = null, extinguishIntersections = true,
+    phase = null, phaseProgress = null, phaseTiming = null, extinguishIntersections = true, singleWinner = false,
   }) {
     let track = tracks.get(scope);
     if (!track || now < track.now || now - track.now > Math.max(2000, duration * 2)) {
@@ -259,6 +292,7 @@ const SomataLampStability = (() => {
       peak = 0,
       pending = false;
     const spatial = (v) => !arcPlaceholders && isSpatial(v);
+    if (!arcPlaceholders && phase !== null && phaseTiming) applyPhaseSeparation(track, items, phase, extinguishIntersections && singleWinner, phaseProgress);
     const present = new Set();
     for (const v of items) present.add(v.lampTraceId);
     const boundary = track.drawn && (track.phase !== phase || track.arc !== arc);
@@ -300,6 +334,7 @@ const SomataLampStability = (() => {
         ? Math.max(0, Math.min(1, Math.min(phaseProgress, 1 - phaseProgress) / 0.05))
         : 1;
     const endpoint = 1 - fade * fade * (3 - 2 * fade);
+    const radiusOverlap = extinguishIntersections && singleWinner && !arcPlaceholders;
     const outputs = new Map();
     for (const v of items) {
       const a = v.intensityAlpha;
@@ -331,11 +366,11 @@ const SomataLampStability = (() => {
             }
       }
       const normalized = softSum > 0 ? (level * softMax) / softSum : 0;
-      outputs.set(v, extinguishIntersections ? normalized + (level - normalized) * endpoint : level);
+      outputs.set(v, extinguishIntersections && !radiusOverlap ? normalized + (level - normalized) * endpoint : level);
       rawOverlap = Math.max(rawOverlap, sum);
       maxMultiplicity = Math.max(maxMultiplicity, count);
     }
-    if (extinguishIntersections && merge > 0 && !arcPlaceholders && endpoint < 1)
+    if (extinguishIntersections && !radiusOverlap && merge > 0 && !arcPlaceholders && endpoint < 1)
       mergeCloseLamps(items, outputs, merge, 1 - endpoint);
     // Исходные значения нужны «хранителю»: если на старте фазы все лампы разом гаснут, одна остаётся.
     const raw = new Map(),
@@ -421,7 +456,8 @@ const SomataLampStability = (() => {
         litNow = keeper.intensityAlpha;
       }
     } else track.keeperId = null;
-    if (endpoint > 0) suppressEndpointOverlaps(items, endpoint, arcPlaceholders);
+    if (radiusOverlap) suppressEndpointOverlaps(items, 1, false, true);
+    else if (endpoint > 0) suppressEndpointOverlaps(items, endpoint, arcPlaceholders);
     for (const v of items) peak = Math.max(peak, v.intensityAlpha);
     track.hadLit = rawPeak > 0.05 && litNow >= 0.5 * rawPeak;
     if (best && Number.isFinite(best.px)) track.litPos = { x: best.px, y: best.py };

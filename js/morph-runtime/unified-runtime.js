@@ -2,7 +2,7 @@ import '../geometry/spiral-order-builder.js'; // initialisation order: this modu
 import { getRoundingStrength } from '../core/palette.js';
 import { runtimeState, state } from '../core/state.js';
 import { isPreSampledSplineLayer, setPreSampledSplineLayer } from '../core/render-runtime.js';
-import { getEffectiveLayerRadius } from '../effects/motion.js';
+import { getCachedLayerDrawData, getEffectiveLayerRadius } from '../effects/motion.js';
 import { roundSpiralRailJoins } from '../geometry/spiral/bezier-carrier.js';
 import { getEffectiveSpiralOrder } from '../geometry/spiral/order-params.js';
 import { getSpiralTangentialBlend } from '../geometry/spiral/profile-prep.js';
@@ -823,19 +823,26 @@ window.SomataMorphRuntime = (() => {
       const t = distanceToBoundary / boundarySpan;
       return t * t * (3 - 2 * t);
     };
+    // Rounded planar vertices need a longer handoff: a five-percent
+    // window can fit entirely between two presented frames.
+    const polygonRoundingBoundary = 0.25;
+    const polygonBoundaryT = distanceToBoundary / polygonRoundingBoundary;
+    const polygonBoundaryMix = polygonBoundaryT * polygonBoundaryT * (3 - 2 * polygonBoundaryT);
     if (
-      sampled.lampPaths && a.N !== b.N && distanceToBoundary < boundarySpan &&
-      sampled.lampPaths[0]?.points.some((p) => !p[boundary === 0 ? 'lampSourcePresent' : 'lampTargetPresent']) &&
+      sampled.lampPaths && polygonBoundaryT < 1 &&
+      Number(a.K || 1) === 1 && Number(b.K || 1) === 1 &&
       getRoundingStrength(endpoint.rounding) > 0.001 &&
       paths.length === 1 && sampled.lampPaths.length === 1
     ) {
       // Collapsed edges must not change the rounded contour on the first
       // moving frame. Grow that contour from the authored endpoint.
-      const fixed = distanceToBoundary === 0 ? paths : samplePrimary(spec, boundary, frame).paths;
-      if (fixed.length === paths.length) {
+      const fixed = getCachedLayerDrawData(endpoint)?.paths;
+      if (fixed?.length === paths.length && distanceToBoundary === 0) {
+        paths = fixed;
+      } else if (fixed?.length === paths.length) {
         paths = boundary === 0
-          ? blendProfilePaths(fixed, paths, boundaryMix(), a, endpoint, 32) ?? paths
-          : blendProfilePaths(paths, fixed, 1 - boundaryMix(), endpoint, b, 32) ?? paths;
+          ? blendProfilePaths(fixed, paths, polygonBoundaryMix, a, endpoint, 32) ?? paths
+          : blendProfilePaths(paths, fixed, 1 - polygonBoundaryMix, endpoint, b, 32) ?? paths;
       }
     } else if (blendFromBoundary && collapsed?.some(Boolean)) {
       const fixed = samplePrimary(spec, boundary, frame).paths;

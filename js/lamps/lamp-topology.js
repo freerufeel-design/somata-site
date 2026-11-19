@@ -24,6 +24,7 @@ import {
 import { buildOrbitPolylines } from '../geometry/orbit-builder.js';
 import { isSpiralLayer } from '../geometry/spiral/order-params.js';
 import {
+  buildLampCircumferenceAnchors,
   buildLampRenderedAttachmentPaths,
   dedupeLampPoints,
   getLampMorphRenderInfo,
@@ -762,6 +763,8 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260) {
           lampSourcePresent: sourcePresent,
           lampTargetPresent: targetPresent,
           lampAttachFraction: arcFraction,
+          lampAttachSourcePoint: sp,
+          lampAttachTargetPoint: tp,
           lampAttachSourceFraction: sourceFraction,
           lampAttachTargetFraction: targetFraction,
           lampAttachProgress: u,
@@ -1294,7 +1297,7 @@ function collectSkeletonVertexLampPoints(layerIndex, t, maxPoints = 260) {
   if (typeof plan?.evaluate !== 'function') return null;
   // Концы фазы помощник отдаёт как сами фигуры (без носителей): берём носители чуть внутри.
   const u = Math.max(1e-6, Math.min(1 - 1e-6, Number(t) || 0));
-  const carriers = plan.evaluate(u);
+  const carriers = plan.evaluate.lampPaths?.(Math.max(0, Math.min(1, t))) ?? plan.evaluate(u);
   if (!Array.isArray(carriers) || !carriers.length) return null;
   const layerKey = String(state.layers[layerIndex]?.id ?? layerIndex),
     seen = new Set(),
@@ -1316,9 +1319,9 @@ function collectSkeletonVertexLampPoints(layerIndex, t, maxPoints = 260) {
         y: Number(pts[j]?.y) || 0,
         pathIndex: endpointOrbits > 0 ? orbit % endpointOrbits : orbit,
         vertexIndex: j,
-        lampPresence: 1,
-        lampSourcePresent: true,
-        lampTargetPresent: true,
+        lampPresence: lampTopologyPresence(pts[j].lampSourcePresent !== false, pts[j].lampTargetPresent !== false, t),
+        lampSourcePresent: pts[j].lampSourcePresent !== false,
+        lampTargetPresent: pts[j].lampTargetPresent !== false,
         lampId: `skel:${orbit}:${j}`,
         lampSeed: lampHash32(`${layerKey}:skel:${orbit}:${j}`),
       });
@@ -1380,12 +1383,38 @@ function collectMorphLampPoints(
   };
 
   if (mode === 'key') {
-    if (linear) {
-      const exact = collectTrueLinearKeyLampPoints(layerIndex, motionT, maxPoints);
-      if (exact.length) return finalizeMorphLampPoints(exact, { forceNearest: circumferenceMode });
+    const exact = linear ? collectTrueLinearKeyLampPoints(layerIndex, motionT, maxPoints) : null;
+    const vertices = exact?.length ? exact : collectSkeletonVertexLampPoints(layerIndex, motionT, maxPoints);
+    if (vertices?.length) {
+      let displayed = vertices;
+      if (attach) {
+        displayed = projectLampPointsToCurrentPolygon(vertices, attachmentPaths, base, true, circumferenceMode, lampRawPaths);
+        // Both cycles share the authored endpoint, although their moving
+        // rails may have different winding, tessellation and corner counts.
+        const edgeDistance = Math.min(t, 1 - t);
+        if (edgeDistance < 0.15) {
+          const endpoint = (t < 0.5 ? runtimeState.morph.renderSourceLayers : runtimeState.morph.renderTargetLayers)?.[layerIndex];
+          const anchors = endpoint && buildLampCircumferenceAnchors(endpoint, null, maxPoints, true);
+          const u = Math.max(0, edgeDistance / 0.15);
+          const weight = 1 - u * u * (3 - 2 * u);
+          const orbits = new Set(anchors?.map(q => q.pathIndex));
+          if (anchors?.length) displayed = displayed.map((p, i) => {
+            const slot = vertices[i];
+            const v = (t < 0.5 ? slot.lampAttachSourcePoint : slot.lampAttachTargetPoint) || slot;
+            let nearest, best = Infinity;
+            for (const q of anchors) {
+              if (q.pathIndex !== slot.pathIndex && orbits.has(slot.pathIndex)) continue;
+              const d = (q.x - v.x) ** 2 + (q.y - v.y) ** 2;
+              if (d < best) { best = d; nearest = q; }
+            }
+            return nearest ? { ...p, x: p.x + (nearest.x - p.x) * weight,
+              y: p.y + (nearest.y - p.y) * weight } : p;
+          });
+        }
+      }
+      // Carry identity using the visible centre at the end of the trajectory.
+      return preserveBlueMorphLampIdentity(layerIndex, capLampPointList(displayed, maxPoints), true, t);
     }
-    const vertices = collectSkeletonVertexLampPoints(layerIndex, motionT, maxPoints);
-    if (vertices) return finalizeMorphLampPoints(vertices, { forceNearest: circumferenceMode });
   }
   if (getLampEvaluationConfig()?.morphMotionMode === 'ghost' && mode === 'key' && rawPaths?.length) {
     let exact = collectLinearGeometryLampPoints(layerIndex, motionT, maxPoints, rawPaths);
