@@ -3,7 +3,7 @@ import { SomataGeometryPolicy } from './geometry-policy.js';
 import { state } from '../core/state.js';
 import { somataGpuFeatureReady } from '../core/backend-policy.js';
 import { requestMainCanvasRender } from '../core/scheduler.js';
-import { ensureLayerLampState } from '../core/defaults-layers.js';
+import { ensureLayerLampState, getLampEvaluationConfig } from '../core/defaults-layers.js';
 import { lampHash32 } from '../lamps/lamp-anchors.js';
 import { SomataFrameContourService, useTopologyVisualProfileRail } from '../geometry/frame-contour.js';
 import { LampGPURenderer } from '../gpu/lamp-renderer.js';
@@ -306,6 +306,7 @@ function gpuMorphSpecialSpiralLampFrame(frameCtx, maxPoints = 600) {
   const layerKey = String(frameCtx?.layer?.id || frameCtx?.layerIndex || 'layer');
 
   const bends = [];
+  const extinguishIntersections = (frameCtx.layerLampConfig || frameCtx.effectsPlan?.lamps?.baseConfig || getLampEvaluationConfig())?.extinguishIntersections !== false;
   if (mode !== 'corners') lampBendTracks.delete(`arc:${layerKey}`);
   const arbitraryCounts =
     mode === 'arbitrary'
@@ -368,7 +369,7 @@ function gpuMorphSpecialSpiralLampFrame(frameCtx, maxPoints = 600) {
         dst = rec?.target || [];
       const periodic = Boolean(morphRec?.cpuPathPeriodic?.[pi] >>> 0),
         omitSharedSeam = periodic && state?.tunnel?.active === true;
-      const emit = (list, kind, j, f) => {
+      const emit = (list, kind, j, f, topology = {}) => {
         if (omitSharedSeam && f >= 1 - 1e-7) return;
         const id = `spiral:${kind}:${pi}:${j}`;
         list.push({
@@ -380,15 +381,23 @@ function gpuMorphSpecialSpiralLampFrame(frameCtx, maxPoints = 600) {
           lampPresence,
           lampId: id,
           lampSeed: lampHash32(`${layerKey}:${id}`),
+          ...topology,
         });
       };
       keys.forEach((f, j) => emit(points, 'key', j, f));
       for (let j = 0; j < Math.max(src.length, dst.length); j++) {
         const a = src[j],
           b = dst[j];
-        if ((a == null && t < 0.5) || (b == null && t >= 0.5)) continue;
+        if (a == null && b == null) continue;
+        if (extinguishIntersections && ((a == null && t < 0.5) || (b == null && t >= 0.5))) continue;
         const f = a == null ? b : b == null ? a : a + (b - a) * t;
-        if (!keys.some((k) => Math.abs(k - f) < 1e-6)) emit(bends, 'bend', j, f);
+        if (!extinguishIntersections || !keys.some((k) => Math.abs(k - f) < 1e-6))
+          emit(bends, 'bend', j, f, extinguishIntersections ? {} : {
+            lampSourcePresent: a != null,
+            lampTargetPresent: b != null,
+            lampTravelProgress: t,
+            lampPresence: lampPresence * (a == null ? t : 1),
+          });
       }
     }
   }

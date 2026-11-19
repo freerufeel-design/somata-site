@@ -124,3 +124,72 @@ test('совпавшая на стыке фаз горящая лампа сох
     lampMotionRuntime.blueMorph.clear();
   }
 });
+
+test('при отключённом гашении пересечений уходящая лампа гаснет только в конце своего пути', async () => {
+  await loadApp();
+  const { runtimeState } = await importModule('js/core/state.js');
+  const { lampPhasePresence, lampAdaptivePointCount } = await importModule('js/lamps/lamp-motion.js');
+  const prev = runtimeState.morph.active;
+  try {
+    runtimeState.morph.active = true;
+    const point = { lampSourcePresent: true, lampTargetPresent: false, lampPresence: 0.1, lampTravelProgress: 0.5 };
+    const cfg = { extinguishIntersections: false };
+    assert.equal(lampPhasePresence(point, {}), 0.1);
+    assert.equal(lampPhasePresence(point, cfg), 1);
+    assert.equal(lampAdaptivePointCount([point], cfg), 1);
+    point.lampTravelProgress = 0.9;
+    assert.ok(Math.abs(lampPhasePresence(point, cfg) - 0.5) < 1e-9);
+    point.lampTravelProgress = 1;
+    assert.equal(lampPhasePresence(point, cfg), 0);
+  } finally {
+    runtimeState.morph.active = prev;
+  }
+});
+
+test('lamp attack and release take the same time in short and long phases', async () => {
+  await loadApp();
+  const { runtimeState } = await importModule('js/core/state.js');
+  const { lampBendAnimationMs } = await importModule('js/lamps/lamp-attachment.js');
+  const { lampPhaseLightTiming, lampPhasePresence } = await importModule('js/lamps/lamp-motion.js');
+  const morph = runtimeState.morph;
+  const previous = { active: morph.active, cycleStart: morph.cycleStart, transitionMs: morph.transitionMs,
+    pauseStartedAt: morph.pauseStartedAt };
+  try {
+    Object.assign(morph, { active: true, cycleStart: 100, pauseStartedAt: 0 });
+    const birth = { lampSourcePresent: false, lampTargetPresent: true, lampPresence: 0 };
+    const retire = { lampSourcePresent: true, lampTargetPresent: false, lampPresence: 0 };
+    for (const transitionMs of [2000, 12000]) {
+      morph.transitionMs = transitionMs;
+      for (const extinguishIntersections of [false, true]) {
+        const cfg = { cornerInertiaSec: 0.5, cornerInertiaLinked: true, extinguishIntersections };
+        const duration = lampBendAnimationMs(null, cfg);
+        assert.equal(duration, 500);
+        assert.equal(lampPhasePresence(birth, cfg, lampPhaseLightTiming(350, duration)), 0.5);
+        assert.equal(lampPhasePresence(birth, cfg, lampPhaseLightTiming(600, duration)), 1);
+        assert.equal(lampPhasePresence(retire, cfg, lampPhaseLightTiming(100 + transitionMs - 500, duration)), 1);
+        assert.equal(lampPhasePresence(retire, cfg, lampPhaseLightTiming(100 + transitionMs - 250, duration)), 0.5);
+        assert.equal(lampPhasePresence(retire, cfg, lampPhaseLightTiming(100 + transitionMs, duration)), 0);
+      }
+    }
+  } finally {
+    Object.assign(morph, previous);
+  }
+});
+
+test('linear lamp travel uses the eased geometry progress while brightness uses elapsed time', async () => {
+  await loadApp();
+  const { runtimeState } = await importModule('js/core/state.js');
+  const { lampPhaseInertiaProgress } = await importModule('js/lamps/lamp-attachment.js');
+  const { lampPhasePresence } = await importModule('js/lamps/lamp-motion.js');
+  const previous = runtimeState.morph.progress;
+  try {
+    runtimeState.morph.progress = 0.5;
+    const cfg = { morphMotionMode: 'linear', morphInertia: 50 };
+    assert.equal(lampPhaseInertiaProgress(0.125, cfg), 0.125);
+    assert.equal(lampPhaseInertiaProgress(0.875, cfg), 0.875);
+    const birth = { lampSourcePresent: false, lampTargetPresent: true };
+    assert.equal(lampPhasePresence(birth, cfg, { elapsed: 250, duration: 500 }), 0.5);
+  } finally {
+    runtimeState.morph.progress = previous;
+  }
+});

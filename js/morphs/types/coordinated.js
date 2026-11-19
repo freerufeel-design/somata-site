@@ -128,23 +128,28 @@ window.SomataCoordinatedSpine = (() => {
         u1: bi / b.length,
       };
     });
-    return (t) => [
+    return (t, frame) => [
       {
         orbitIndex: 0,
         closed,
         spiralConnected: closed,
         coordinatedSpine: true,
-        points: slots.map(({ p, q, theta, phase, r0, r1, u0, u1 }, i) => {
+        points: slots.flatMap(({ p, q, theta, phase, r0, r1, u0, u1 }, i) => {
+          // At a phase endpoint a repeated slot has zero length. Leaving
+          // it in the path interrupts the fillet between real neighbors.
+          if (frame?.compactRoundedEndpoint && i > 0 &&
+              ((t === 0 && p === slots[i - 1].p) || (t === 1 && q === slots[i - 1].q)))
+            return [];
           const r = mix(r0, r1, t),
             phi = theta + t * phase;
           const xy = t === 0 ? p : t === 1 ? q : { x: r * Math.cos(phi), y: r * Math.sin(phi) };
-          return {
+          return [{
             x: xy.x,
             y: xy.y,
             id: `coordinated:${i}`,
             polygonIndex: (t < 0.5 ? p : q).polygonIndex,
             windingU: mix(u0, u1, t),
-          };
+          }];
         }),
       },
     ];

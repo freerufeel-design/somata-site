@@ -219,7 +219,7 @@ assert.ok(lampsDense.every((l) => l.intensityAlpha > 0.4));
   assert.equal(pair.filter((l) => l.intensityAlpha >= 0.99).length, 1, 'ровно одна унаследовала');
   assert.equal(pair.filter((l) => l.intensityAlpha === 0).length, 1, 'вторая родилась тёмной');
 
-  // Режим GPU-дуг (`arc`) положения не использует: наследования нет (остаётся только «хранитель»).
+  // Режим GPU-дуг также сохраняет яркость совпавших ламп.
   const scope4 = 'inherit4';
   const arcLamp = (id, fraction) => ({
     lampTraceId: id,
@@ -237,7 +237,7 @@ assert.ok(lampsDense.every((l) => l.intensityAlpha > 0.4));
     apply(scope4, arcSet('x0', 'x1'), { now: t, duration: 200, animate: true, arc: true });
   const reborn = arcSet('y0', 'y1');
   apply(scope4, reborn, { now: 416, duration: 200, animate: true, arc: true });
-  assert.equal(reborn.filter((l) => l.intensityAlpha >= 0.99).length, 1, 'в режиме дуг только хранитель');
+  assert.equal(reborn.filter((l) => l.intensityAlpha >= 0.99).length, 2, 'в режиме дуг обе лампы сохранили яркость');
 }
 
 // --- Тени: перескок и смена идентификаторов — перекрёстное затухание без провала света ---------------
@@ -295,3 +295,96 @@ assert.ok(lampsDense.every((l) => l.intensityAlpha > 0.4));
 console.log(
   'PASS: new lamps start dark, overlapping lights share intensity, separation ramps, and GPU arc placeholders do not collapse unrelated paths',
 );
+
+const test = require('node:test');
+test('phase handoff transfers existing light by position even when IDs are reassigned', () => {
+  apply('phase-cpu', [lamp('a', 0), lamp('b', 100), lamp('c', 200)], {
+    now: 0, duration: 100, animate: false, phase: 1,
+  });
+  const items = [lamp('b', 0), lamp('c', 100), lamp('new-c', 200), lamp('new', 300)];
+  apply('phase-cpu', items, { now: 16, duration: 100, animate: true, phase: 2 });
+  assert.deepEqual(items.map((v) => v.intensityAlpha), [1, 1, 1, 0]);
+});
+
+test('retained GPU arcs transfer light using attachment, not placeholder position', () => {
+  const make = (id, i, frac = 0.5) => ({
+    ...arcLamp(id, i), lampAttachFraction: frac, lampHasAttachFraction: true,
+  });
+  const cfg = { duration: 100, arc: true, arcPlaceholders: true };
+  apply('phase-arc', [make('a', 0), make('b', 1), make('c', 1, 0.75)], {
+    ...cfg, now: 0, animate: false, phase: 1,
+  });
+  const items = [make('x', 0), make('y', 1), make('z', 1, 0.75), make('new', 1, 0.9)];
+  apply('phase-arc', items, { ...cfg, now: 16, animate: true, phase: 2 });
+  assert.deepEqual(items.map((v) => v.intensityAlpha), [1, 1, 1, 0]);
+  const cpu = [make('xx', 0), make('yy', 1), make('zz', 1, 0.75)];
+  cpu.forEach((v, i) => { v.px = 100 * i; });
+  apply('phase-arc', cpu, { now: 32, duration: 100, animate: true, phase: 2 });
+  assert.deepEqual(cpu.map((v) => v.intensityAlpha), [1, 1, 1]);
+});
+
+test('intersection toggle preserves two fully lit lamps even at the same point when off', () => {
+  for (const arc of [false, true]) {
+    for (const enabled of [true, false]) {
+      const items = arc ? [arcLamp('a', 0), arcLamp('b', 0)] : [sized('a', 0), sized('b', 0)];
+      apply(`toggle-${arc}-${enabled}`, items, {
+        now: 0, duration: 100, animate: false, arc, arcPlaceholders: arc, merge: 0.5,
+        extinguishIntersections: enabled,
+      });
+      if (enabled) assert.ok(items.every((v) => v.intensityAlpha < 1));
+      else assert.deepEqual(items.map((v) => v.intensityAlpha), [1, 1]);
+    }
+  }
+});
+
+test('coincident lamps fade smoothly into one at both phase endpoints', () => {
+  for (const arc of [false, true]) {
+    for (const enabled of [false, true]) {
+      const levelsAt = (t) => {
+        const items = arc ? [arcLamp('a', 0), arcLamp('b', 0)] : [lamp('a'), lamp('b')];
+        apply(`endpoint-${arc}-${enabled}`, items, {
+          now: 0, duration: 100, animate: false, phase: 1, phaseProgress: t,
+          arc, arcPlaceholders: arc, extinguishIntersections: enabled,
+        });
+        return items.map((v) => v.intensityAlpha);
+      };
+      for (const t of [0, 1]) assert.deepEqual(levelsAt(t), [1, 0]);
+      assert.deepEqual(levelsAt(0.5), enabled ? [0.5, 0.5] : [1, 1]);
+      for (const t of [0.001, 0.999]) {
+        const [first, second] = levelsAt(t);
+        assert.ok(first > 0.999 && second > 0 && second < 0.002);
+      }
+    }
+  }
+});
+
+test('contour lamps stay at the attached positions and ease brightness on release', () => {
+  const cfg = { duration: 100, phase: 1, phaseProgress: 0.5, extinguishIntersections: true };
+  const bound = (id, x, intensityAlpha = 1) => ({
+    ...lamp(id, x), intensityAlpha, lampContourBound: true, lampPresence: 1, lampTargetPresent: true,
+  });
+  apply('attached-hop', [bound('a', 0)], { ...cfg, now: 0, animate: false });
+  const moved = [bound('a', 30, 0.3)];
+  apply('attached-hop', moved, { ...cfg, now: 16, animate: true });
+  assert.equal(moved.length, 1);
+  assert.equal(moved[0].px, 30);
+  assert.ok(Math.abs(moved[0].intensityAlpha - 0.84) < 1e-8);
+  const next = [bound('new', 30.2, 0.3), bound('extra', 30.2, 0.3)];
+  apply('attached-hop', next, { ...cfg, now: 32, animate: true, phase: 2, phaseProgress: 0 });
+  assert.equal(next.filter((p) => p.intensityAlpha > 0).length, 1);
+  assert.equal(next[0].intensityAlpha, moved[0].intensityAlpha);
+});
+
+test('authored source vertices are already lit after a phase changes their IDs and samples', () => {
+  const cfg = { duration: 100, arc: false, extinguishIntersections: false };
+  apply('source-vertices', [lamp('old-a', 0), lamp('old-b', 40)], {
+    ...cfg, now: 0, phase: 1, phaseProgress: 1, animate: false,
+  });
+  const vertices = [
+    { ...lamp('new-a', 3), lampSourcePresent: true, lampContourBound: true },
+    { ...lamp('new-b', 43), lampSourcePresent: true, lampContourBound: true },
+    { ...lamp('birth', 70), lampSourcePresent: false, lampContourBound: true },
+  ];
+  apply('source-vertices', vertices, { ...cfg, now: 16, phase: 2, phaseProgress: .001, animate: true });
+  assert.deepEqual(vertices.map((p) => p.intensityAlpha), [1, 1, 0]);
+});

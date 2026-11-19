@@ -591,7 +591,9 @@ function layerGeometrySignature(layer) {
   const lineJoinType = layer.lineJoinType || '';
   const roundingMode = layer.roundingMode === 'monoradius' ? 'monoradius' : 'standard';
   const roundingShape = 'spline-plus';
-  const roundingCornerType = layer.roundingCornerType === 'local' ? 'local' : 'classic';
+  const roundingCornerType = ['local', 'simple'].includes(layer.roundingCornerType)
+    ? layer.roundingCornerType
+    : 'classic';
   const roundingMaxRadiusDrop = Number(layer.roundingMaxRadiusDrop ?? 30);
   const roundingSmoothSplines = layer.roundingSmoothSplines === true;
   const radius = getEffectiveLayerRadius(layer, 0);

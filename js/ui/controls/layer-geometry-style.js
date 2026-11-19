@@ -780,7 +780,7 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
   document.getElementById('paramRoundingCornerType')?.addEventListener('change', (e) => {
     const layer = getActiveLayer();
     if (!layer) return;
-    const next = ['local', 'classic', 'fourier'].includes(e.target.value) ? e.target.value : 'classic';
+    const next = ['local', 'classic', 'fourier', 'simple'].includes(e.target.value) ? e.target.value : 'classic';
     const targets =
       state.masterLayerEdit === true || hasMultiLayerSelection() ? getLayerEditTargets() : [layer];
     // Only the renderer changes when an already-standard polygon switches
@@ -820,7 +820,7 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
       });
     for (const target of targets) {
       if (next === 'fourier' && target.roundingCornerType !== 'fourier')
-        target.roundingPreviousCornerType = target.roundingCornerType === 'local' ? 'local' : 'classic';
+        target.roundingPreviousCornerType = ['local', 'simple'].includes(target.roundingCornerType) ? target.roundingCornerType : 'classic';
       target.roundingCornerType = next;
       invalidateLayerGeometry(target, 'rounding-corner-type');
     }

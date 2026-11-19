@@ -2359,7 +2359,10 @@ console.log(
   load('js/render/lamp-plan.js');
   // Load the real per-rail nearest point evaluator; stub only its table
   // construction and the renderer/cache configuration in this Node harness.
-  run(declarations('nearestLampFractionOnPath'), 'lamp projection');
+  run(declarations(
+    'lampVertexArcFractions', 'lampPointAtFraction', 'pointAtPathDistance',
+    'nearestLampFractionOnPath', 'nearestLampFractionOnPathSegmentBound',
+  ), 'lamp projection');
   run(
     `
         const lampContourAttachmentEnabledForFrame=f=>f.layerLampConfig.snapToContour!==false;
@@ -2655,3 +2658,165 @@ console.log('PASS: key-only markers, added bend markers, interrupted 1 s attack/
 console.log(
   'PASS: mixed-profile endpoints and neighboring frames on Corridor stroke commands; continuous logical lamp attachment',
 );
+
+
+// The same target must produce the same rounded seam when the next phase
+// starts with a larger slot table. A zero-length extra slot used to block it.
+for (const mode of ['coordinated', 'coordinatedFromCenter', 'phaseCircle']) {
+  const middle = winding({
+    N: 6,
+    spiralTwist: true,
+    rounding: 1.6,
+    profileNodes: [
+      { x: 0, y: 0 }, { x: 0.24, y: 0.3 }, { x: 0.55, y: -0.3 },
+      { x: 0.8, y: 0.15 }, { x: 1, y: 0 },
+    ],
+  });
+  const previous = spec(mode, { ...middle, N: 5 }, middle, 'blue');
+  const next = spec(mode, middle, { ...middle, N: 7 }, 'blue');
+  const terminal = rt.samplePrimary(previous, 1);
+  const initial = rt.samplePrimary(next, 0);
+  assert.equal(terminal.paths.length, initial.paths.length);
+  terminal.paths.forEach((path, i) => {
+    const a = path._bezierSegments, b = initial.paths[i]._bezierSegments;
+    assert.equal(a.length, b.length, mode);
+    a.forEach((q, j) => {
+      for (const key of ['p0', 'c1', 'c2', 'p3']) assert(dist(q[key], b[j][key]) < 1e-7, mode);
+    });
+  });
+  const contour = (frame) => frame.paths.filter((path) => (path._alpha ?? 1) > 0.99).flatMap((path) =>
+    path._bezierSegments.flatMap((q, i) => Array.from(
+      { length: 33 - Number(i > 0) },
+      (_, step) => phaseCubicAt(q, (step + Number(i > 0)) / 32),
+    )),
+  );
+  const separation = (a, b) => Math.max(...a.map((p) => {
+    let distance = Infinity;
+    for (let i = 1; i < b.length; i++) {
+      const x = b[i].x - b[i - 1].x, y = b[i].y - b[i - 1].y;
+      const u = Math.max(0, Math.min(1, ((p.x - b[i - 1].x) * x + (p.y - b[i - 1].y) * y) / (x * x + y * y || 1)));
+      distance = Math.min(distance, Math.hypot(p.x - b[i - 1].x - u * x, p.y - b[i - 1].y - u * y));
+    }
+    return distance;
+  }));
+  const fixed = contour(terminal);
+  for (const frame of [rt.samplePrimary(previous, 0.99999), rt.samplePrimary(next, 0.00001)]) {
+    const nearby = contour(frame);
+    const delta = Math.max(separation(fixed, nearby), separation(nearby, fixed));
+    assert(delta < 0.01, `${mode}: super-rounding near boundary jumps by ${delta}`);
+  }
+  if (mode === 'phaseCircle') {
+    const twist = spec(mode, { ...middle, spiralTwist: false }, middle, 'blue');
+    for (const [edge, inside] of [[0, 0.00001], [1, 0.99999]]) {
+      const a = contour(rt.samplePrimary(twist, edge));
+      const b = contour(rt.samplePrimary(twist, inside));
+      const delta = Math.max(separation(a, b), separation(b, a));
+      assert(delta < 0.01, `${mode}: twist handoff jumps by ${delta}`);
+    }
+  }
+}
+
+
+// A new correspondence slot must not move the existing rounded rails or
+// draw a full-width dot at the old sharp corner when the slot is born.
+for (const mode of ['topology', 'circleSlide']) {
+  const source = winding({
+    N: 6,
+    spiralTwist: true,
+    rounding: 1.65,
+    profileNodes: [
+      { x: 0, y: 0 }, { x: 0.24, y: 0.3 }, { x: 0.55, y: -0.3 },
+      { x: 0.8, y: 0.15 }, { x: 1, y: 0 },
+    ],
+  });
+  const phase = spec(mode, source, { ...source, N: 7, rounding: 1.9 }, 'blue');
+  const fixed = rt.samplePrimary(phase, 0).paths;
+  const nearby = rt.samplePrimary(phase, 0.000001).paths;
+  const growing = nearby.filter((p) => p._alpha < 0.99);
+  const visible = nearby.filter((p) => p._alpha >= 0.99);
+  assert.equal(growing.length, 1, mode);
+  assert(growing[0]._alpha < 0.00001, mode);
+  assert.equal(visible.length, fixed.length, mode);
+  fixed.forEach((path, i) => {
+    const a = path._bezierSegments, b = visible[i]._bezierSegments;
+    assert.equal(a.length, b.length, mode);
+    a.forEach((q, j) => {
+      for (const key of ['p0', 'c1', 'c2', 'p3']) assert(dist(q[key], b[j][key]) < 0.001, mode);
+      for (const key of ['widthScale0', 'widthScale1']) assert(Math.abs(q[key] - b[j][key]) < 0.001, mode);
+    });
+  });
+}
+
+
+// Rounded order-zero Blue frames must reach the 13.2 anchor renderer,
+// which applies the Spline+ correction against the static phase endpoints.
+{
+  const priorMode = state.morph.unifiedMode;
+  const priorLayers = state.layers;
+  for (const [mode, kind] of [['topology', 'blue-anchor-linear'], ['circleSlide', 'blue-circle-slide']]) {
+    state.morph.unifiedMode = mode;
+    for (const rounding of [0.65, 1.65]) {
+      const source = layer({
+        id: `legacy-spline-plus-${mode}-${rounding}`,
+        N: 7, K: 2, spiralOrder: 0, spiralEnabled: false, spiralZeroTransitionMode: 'layerwise',
+        rounding, roundingCornerType: 'classic', testMorph: { enabled: false },
+      });
+      const target = { ...source, N: 8 };
+      state.layers = [source];
+      runtimeState.morph.renderSourceLayers = [source];
+      runtimeState.morph.renderTargetLayers = [target];
+      for (const t of [0, 0.00001, 0.99999, 1]) {
+        const provider = {
+          kind, mode, active: true, geometryActive: true, geometryT: t, sourceLayer: source, targetLayer: target,
+        };
+        const frame = {
+          layer: { ...source }, sourceLayer: source, layerIndex: 0,
+          blueMorphProvider: provider, geometryProvider: provider,
+        };
+        SomataTestMorph.applyFrame(frame, 250);
+        assert.equal(frame.geometryProvider, provider, `${mode} ${rounding} ${t}`);
+      }
+    }
+  }
+  state.morph.unifiedMode = priorMode;
+  state.layers = priorLayers;
+}
+
+
+{
+  const line = (a, b) => ({
+    p0: { x: a, y: 0 }, c1: { x: a + (b - a) / 3, y: 0 },
+    c2: { x: a + (b - a) * 2 / 3, y: 0 }, p3: { x: b, y: 0 },
+  });
+  const sharedStation = 0.500000004;
+  const pieces = profileCubicPartition(
+    [line(0, 1), line(1, 2)],
+    [0, sharedStation, 1],
+    [0, 0.5, sharedStation, 1],
+  );
+  assert(pieces && pieces.length === 3);
+  assert(pieces[1].p3.x > pieces[1].p0.x, 'neighboring knots retain the tiny interval');
+  near(pieces[1].p3.x, pieces[2].p0.x);
+}
+
+{
+  load('js/geometry/spline-corner-mode.js');
+  const outline = [{ x: 80, y: 0 }, { x: 0, y: 90 }, { x: -70, y: 0 }, { x: 0, y: -95 }];
+  const flags = outline.map(() => true);
+  const record = (draw) => {
+    const commands = [];
+    const sink = new Proxy({}, { get: (_, type) => (...args) => commands.push([type, ...args]) });
+    draw(sink);
+    return commands;
+  };
+  const layer = { roundingCornerType: 'simple' };
+  for (const strength of [0.65, 1.65]) {
+    const simple = record((ctx) => roundPolylineForDraw(ctx, outline, true, strength, flags, null, false, null, layer));
+    const reference = record((ctx) => roundPolylineForDraw(ctx, outline, true, strength, flags, outline.map(() => 1)));
+    assert.deepEqual(simple, reference);
+    assert(simple.some(([key]) => key === 'quadraticCurveTo'));
+    assert.deepEqual(record((ctx) => somataDrawSplineCornerMode(ctx, outline, true, strength, {
+      layer, cornerFlags: flags,
+    })), simple);
+  }
+}

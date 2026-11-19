@@ -9,7 +9,7 @@ import { lampHash32 } from './lamp-anchors.js';
 import { wrapLampColorPhase } from '../render/lamp-color.js';
 import { lampContourAttachmentEnabledForFrame } from '../render/lamp-morph-bridge.js';
 import { mainCanvas } from '../ui/profile-presets.js';
-import { lampVisualNow } from './lamp-motion.js';
+import { lampPhasePresence, lampVisualNow } from './lamp-motion.js';
 import { lampMorphWave, lampSeedUnit } from './lamp-topology.js';
 import {
   createLampAutoExponentState,
@@ -266,7 +266,7 @@ function prepareLampDrawStyle(
   style.type = cfg.type || 'whiteCore';
   return style;
 }
-function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out = null) {
+function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out = null, timing = null) {
   const plan = out || {},
     items = Array.isArray(plan.items) ? plan.items : (plan.items = []);
   let write = 0,
@@ -293,7 +293,7 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
   for (let i = 0; i < total; i++) {
     const p = points[i],
       level = Math.max(0, Math.min(1, p?.lampLevel === undefined ? 1 : Number(p.lampLevel) || 0)),
-      presence = Math.max(0, Math.min(1, p?.lampPresence === undefined ? 1 : Number(p.lampPresence) || 0));
+      presence = lampPhasePresence(p, cfg, timing);
     if (level <= 0.002 || presence <= 0.002) continue;
     const seed = Number.isFinite(Number(p?.lampSeed))
         ? Number(p.lampSeed) >>> 0
@@ -335,6 +335,12 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
     if (!item)
       item = items[write] = { px: 0, py: 0, rad: 0, color: '#ffffff', brightness: 0, intensityAlpha: 0 };
     item.lampTraceId = p?.lampId ?? `slot:${p?.pathIndex ?? 0}:${p?.vertexIndex ?? i}`;
+    item.lampSourcePresent = p?.lampSourcePresent;
+    item.lampTargetPresent = p?.lampTargetPresent;
+    item.lampContourBound = snapped;
+    item.lampPresence = presence;
+    item.lampPhaseTimed = timing !== null && typeof p?.lampSourcePresent === 'boolean' &&
+      typeof p?.lampTargetPresent === 'boolean';
     item.lampRank = p?.lampRank === 1 ? 1 : 0;
     item.px = px;
     item.py = py;
@@ -343,6 +349,7 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
     item.brightness = effectiveBrightness;
     item.intensityAlpha = Math.max(0, Math.min(1, effectiveBrightness / 100)) * presence;
     item.pathIndex = Number.isFinite(Number(p?.pathIndex)) ? Math.max(0, Math.floor(Number(p.pathIndex))) : 0;
+    item.lampHasAttachFraction = Number.isFinite(p?.lampAttachFraction);
     item.lampAttachFraction = Number.isFinite(Number(p?.lampAttachFraction))
       ? Math.max(0, Math.min(1, Number(p.lampAttachFraction)))
       : 0;

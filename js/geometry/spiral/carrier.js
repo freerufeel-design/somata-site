@@ -191,7 +191,10 @@ function mapProfileOntoSpiralEdge(
     }
     const nx = -ty / len,
       ny = tx / len;
-    const orbitU = (edgeIndex + u) / Math.max(1, carrierGraph.edgeSamples.length);
+    const stations = carrierGraph.windingStations;
+    const orbitU = stations
+      ? stations[edgeIndex] + ((stations[edgeIndex + 1] ?? 1) - stations[edgeIndex]) * u
+      : (edgeIndex + u) / Math.max(1, carrierGraph.edgeSamples.length);
     const chainScale = Math.pow(targetScale, Math.max(-2, Math.min(3, orbitU)));
     const referenceU = Math.max(-2, Math.min(3, u));
     const referenceScale = reference ? Math.pow(reference.targetScale, referenceU) : 1;

@@ -262,7 +262,8 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
     // of profile height, which is always measured in edge units.
     const seamWeight = (i, len) => {
       const reference = carrier?.profileReferenceLengths?.[i];
-      const terminal = i === graph?.edges.length - 1 ? (graph.terminalWeight ?? 1) : 1;
+      const terminal = (i === graph?.edges.length - 1 ? (graph.terminalWeight ?? 1) : 1) *
+        (carrier?.spiralEdgeLife?.[i] ?? 1);
       if (reference > 0) return (len / reference) * terminal;
       const full = i === graph?.edges.length - 1 ? graph.terminalReferenceLength : 0;
       return full > 0 ? len / full : terminal;
@@ -514,6 +515,9 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
             : spiralEdgeIndex,
           orbitIndex: sIdx,
           ...profileMeta,
+          ...((carrier?.spiralEdgeLife?.[spiralEdgeIndex] ?? 1) < 1
+            ? { _alpha: (carrier.alpha ?? 1) * carrier.spiralEdgeLife[spiralEdgeIndex] }
+            : {}),
           topoCircleCarrier: false,
           ...(carrier
             ? { strokeGrowth: carrier.strokeGrowth ?? graph?.referenceEdges?.[spiralEdgeIndex]?.profileLife }

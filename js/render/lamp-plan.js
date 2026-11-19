@@ -6,7 +6,8 @@ import { ensureLayerLampState, getLayerLampsEnabled, withLampConfig } from '../c
 import { buildExactSpiralEffectPaths } from '../geometry/spiral/effect-rails.js';
 import { isSpiralLayer } from '../geometry/spiral/order-params.js';
 import { audioApplyNumeric } from '../audio/audio-routing.js';
-import { lampHash32 } from '../lamps/lamp-anchors.js';
+import { buildLampRenderedAttachmentPaths, lampHash32, lampVertexArcFractions } from '../lamps/lamp-anchors.js';
+import { mapLampSemanticPathsToVisible } from '../lamps/lamp-points.js';
 import { SomataFrameContourService } from '../geometry/frame-contour.js';
 import {
   collectArbitraryContourLampPoints,
@@ -17,7 +18,8 @@ import { lampVisualNow } from '../lamps/lamp-motion.js';
 import {
   lampBendAnimationMs,
   lampBendTracks,
-  nearestLampFractionOnPath,
+  lampPointAtFraction,
+  nearestLampFractionOnPathSegmentBound,
   trackLampBends,
 } from '../lamps/lamp-attachment.js';
 import { collectMorphLampPoints } from '../lamps/lamp-topology.js';
@@ -119,25 +121,30 @@ function pushGpuLampEffectSet(plan, layer, prepared, alphaBase, config) {
 function collectPreparedSpiralLampPoints(layer, paths, config, maxPoints = 260, frameCtx = null) {
   const mode = config?.positionMode || 'key',
     snap = lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
-  const raw = paths.filter(
-    (p) => p?.points?.length > 1 && (p._alpha ?? 1) > 0.002 && (p.strokeGrowth ?? 1) > 0,
+  const slots = paths.flatMap((p, i) =>
+    p?.points?.length > 1 && (p._alpha ?? 1) > 0.002 && (p.strokeGrowth ?? 1) > 0 ? [i] : [],
   );
+  const raw = slots.map((i) => paths[i]);
   // The retained cubics include rounded corners; their polyline is only a
   // sampling aid for lamp anchors. Line and lamps still render on the GPU.
   const spiralLayer = isSpiralLayer(layer) ? layer : { ...layer, spiralEnabled: true, spiralOrder: 1 };
   const visible = snap ? buildExactSpiralEffectPaths(raw, spiralLayer) : raw;
-  if (mode === 'arbitrary')
-    return collectArbitraryContourLampPoints(layer, visible, Math.max(600, maxPoints)).map((p) => ({
+  if (mode === 'arbitrary') {
+    const rails = new Array(paths.length);
+    slots.forEach((slot, i) => { rails[slot] = visible[i]; });
+    return collectArbitraryContourLampPoints(layer, rails, Math.max(600, maxPoints)).map((p) => ({
       ...p,
-      lampPresence: raw[p.pathIndex]?._alpha ?? 1,
+      lampPresence: paths[p.pathIndex]?._alpha ?? 1,
     }));
+  }
   const layerKey = String(layer?.id || 'layer');
   const bends = [];
   const groups = raw
     .map((path, pi) => {
       const rail = visible[pi],
         points = path.points;
-      const railKey = `${path.skeletonOrbitId ?? path.orbitIndex ?? 0}:${path.spiralEdgeIndex ?? pi}:${path.phaseFollower ?? ''}`;
+      const stations = snap ? lampVertexArcFractions(path) : null;
+      const railKey = `${path.skeletonOrbitId ?? path.orbitIndex ?? 0}:${path.spiralEdgeIndex ?? slots[pi]}:${path.phaseFollower ?? ''}`;
       const out = [];
       for (let j = 0; j < points.length; j++) {
         const p = points[j],
@@ -158,7 +165,12 @@ function collectPreparedSpiralLampPoints(layer, paths, config, maxPoints = 260, 
             (len > 1e-12 && (ax * bx + ay * by) / len < Math.cos(Math.PI / 20));
         }
         if (!key && !bend) continue;
-        const hit = snap && rail?.points?.length > 1 ? nearestLampFractionOnPath(p, rail) : null;
+        const fraction = stations?.[j];
+        const hit = !snap || !rail?.points?.length
+          ? null
+          : end
+            ? { fraction }
+            : nearestLampFractionOnPathSegmentBound(p, rail, fraction, 0.09);
         const attachmentId = end
           ? j === 0
             ? 'start'
@@ -167,7 +179,7 @@ function collectPreparedSpiralLampPoints(layer, paths, config, maxPoints = 260, 
         const lampId = `spiral:${railKey}:${attachmentId}`;
         const point = {
           ...p,
-          ...hit?.point,
+          ...(hit && lampPointAtFraction(rail, hit.fraction)),
           pathIndex: pi,
           vertexIndex: j,
           lampContourFraction: hit?.fraction,
@@ -225,6 +237,74 @@ function distributeSpiralLampGroups(groups, maxPoints) {
   return out;
 }
 
+// Runtime Animation publishes exactly the same moving polygon paths used by Line.
+function collectPreparedPolygonLampPoints(layer, paths, config, maxPoints, frameCtx) {
+  const mode = config?.positionMode || 'key';
+  const snap = lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
+  let contour = null;
+  if (snap) {
+    try {
+      contour = SomataFrameContourService.paths(frameCtx);
+    } catch (error) {
+      noteSuppressedError('render/lamp-plan#animation-polygon-contour', error);
+    }
+  }
+  const correspondence = contour?.length ? mapLampSemanticPathsToVisible(paths, contour) : null;
+  const fallback = snap && !correspondence ? buildLampRenderedAttachmentPaths(paths, layer) : paths;
+  const rails = paths.map((path, i) => {
+    if ((path?._alpha ?? 1) <= 0.002) return null;
+    return correspondence ? contour[correspondence[i]] : fallback[i];
+  });
+  if (mode === 'arbitrary')
+    return collectArbitraryContourLampPoints(layer, rails, Math.max(600, maxPoints)).map((p) => ({
+      ...p, lampPresence: paths[p.pathIndex]?._alpha ?? 1,
+    }));
+
+  const layerKey = String(layer?.id || 'layer');
+  const usesPhaseSlots = mode === 'key' && frameCtx.geometryProvider?.lampPaths?.length > 0;
+  const anchors = usesPhaseSlots ? frameCtx.geometryProvider.lampPaths : paths;
+  const railMapping = usesPhaseSlots ? mapLampSemanticPathsToVisible(anchors, paths) : null;
+  const groups = [];
+  for (const [anchorIndex, path] of anchors.entries()) {
+    const pathIndex = railMapping?.[anchorIndex] ?? anchorIndex;
+    const points = path?.points;
+    const rail = rails[pathIndex];
+    if (!points?.length || (snap && !(rail?.points?.length >= 2))) continue;
+    const flags = path.lampCornerFlags || path.cornerFlags;
+    const stations = snap ? lampVertexArcFractions(path, true) : null;
+    const group = [];
+    for (const [vertexIndex, point] of points.entries()) {
+      const endpoint = !path.closed && (vertexIndex === 0 || vertexIndex === points.length - 1);
+      const key = endpoint || point.__profileKeyCorner === true ||
+        (flags?.length ? flags[vertexIndex] === true : !path.profileCurveBaked);
+      let bend = false;
+      if (!key && mode === 'corners' && (path.closed || (vertexIndex > 0 && vertexIndex < points.length - 1))) {
+        const prev = points[(vertexIndex + points.length - 1) % points.length];
+        const next = points[(vertexIndex + 1) % points.length];
+        const ax = point.x - prev.x, ay = point.y - prev.y;
+        const bx = next.x - point.x, by = next.y - point.y;
+        const span = Math.hypot(ax, ay) * Math.hypot(bx, by);
+        bend = span > 1e-12 && ax * bx + ay * by < Math.cos(Math.PI / 20) * span;
+      }
+      if (usesPhaseSlots ? !point.lampSourcePresent && !point.lampTargetPresent : !key && !bend) continue;
+      const hit = snap ? nearestLampFractionOnPathSegmentBound(point, rail, stations[vertexIndex]) : null;
+      const id = `animation:${path.orbitIndex ?? pathIndex}:${path.closed ? 'closed' : 'open'}:${usesPhaseSlots ? point.id : point.__profileLampKey ?? vertexIndex}`;
+      group.push({
+        ...point,
+        ...(hit && lampPointAtFraction(rail, hit.fraction)),
+        pathIndex,
+        vertexIndex,
+        lampId: id,
+        lampSeed: lampHash32(`${layerKey}:${id}`),
+        lampPresence: (path.alpha ?? path._alpha ?? 1) * (point.__profileLampPresence ?? 1),
+        lampRank: bend ? 1 : 0,
+      });
+    }
+    if (group.length) groups.push(group);
+  }
+  return distributeSpiralLampGroups(groups, maxPoints);
+}
+
 function resolveLayerLampEffectProvider(frameCtx, plan) {
   const layer = frameCtx.layer,
     effectLayer = frameCtx.effectLayer || liveEffectOwnerForFrameLayer(layer),
@@ -236,9 +316,11 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
   if (!plan.enabled) return plan;
   const { viewportOuterRadius } = frameCtx.frame;
   const tunnelCopies = frameCtx.tunnelCopies || frameCtx.frame.tunnelCopies;
-  const prepared =
-    frameCtx.geometryProvider?.primarySkeleton === true ? frameCtx.geometryProvider.framePaths : null;
-  const preparedSpiral = prepared?.some((p) => Math.abs(p?.spiralOrder || 0) > 1e-8) === true;
+  const provider = frameCtx.geometryProvider;
+  const animation = provider?.origin === 'manual' && provider.geometryActive === true;
+  const prepared = animation || provider?.primarySkeleton === true ? provider.framePaths : null;
+  const preparedSpiral = prepared?.some((p) => Math.abs(p?.spiralOrder || 0) > 1e-8) === true ||
+    (animation && prepared?.length > 0 && isSpiralLayer(layer));
   const spiralCopies = preparedSpiral || isSpiralLayer(layer) || SomataGeometryPolicy.isStrict(frameCtx);
   // Spiral lamps share the line's visibility/phase and exact copy transforms.
   // An independent radius/extent cull can drop all but one visible winding.
@@ -286,7 +368,7 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
       pushLampEffectSet(plan, dst, pts, opacity * 0.95 * mt, dstLampConfig);
     }
   } else {
-    const lampT = frameCtx.blueMorphProvider?.geometryT || 0;
+    const lampT = frameCtx.geometryProvider?.progress ?? frameCtx.blueMorphProvider?.geometryT ?? 0;
     const followsMorph = Boolean(
       !frameCtx.greenMorphEnabled && frameCtx.morphFrameActive && frameCtx.blueMorphProvider?.mode !== 'fade',
     );
@@ -294,18 +376,22 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
       frameCtx.forcedLampMorph || frameCtx.greenLampDisplay || getLayerLampsEnabled(effectLayer);
     const alpha = frameCtx.baseAlpha * (frameCtx.forcedLampMorph || followsMorph ? 1 : 0.95);
 
-    if (preparedSpiral && allowed && !frameCtx.greenMorphEnabled) {
+    if ((preparedSpiral || (animation && prepared?.length)) && allowed && !frameCtx.greenMorphEnabled) {
       const points = withLampConfig(plan.baseConfig, () =>
-        collectPreparedSpiralLampPoints(layer, prepared, plan.baseConfig, 260, frameCtx),
+        preparedSpiral
+          ? collectPreparedSpiralLampPoints(layer, prepared, plan.baseConfig, 260, frameCtx)
+          : collectPreparedPolygonLampPoints(layer, prepared, plan.baseConfig, 260, frameCtx),
       );
-      pushLampEffectSet(plan, layer, points, alpha, plan.baseConfig);
+      pushLampEffectSet(plan, layer, points, animation ? frameCtx.baseAlpha : alpha, plan.baseConfig);
       plan.enabled = plan.sets.length > 0;
       return plan;
     }
     const strictSpiralGpuBefore = SomataGeometryPolicy.isStrict(frameCtx),
+      snappedMorph = followsMorph && lampContourAttachmentEnabledForFrame(frameCtx) === true,
       gpuLampPrepared =
-        (followsMorph || strictSpiralGpuBefore) && allowed && typeof prepareGpuMorphLampFrame === 'function'
-          ? prepareGpuMorphLampFrame(frameCtx)
+        (strictSpiralGpuBefore || (followsMorph && !snappedMorph)) &&
+        allowed && typeof prepareGpuMorphLampFrame === 'function'
+          ? withLampConfig(plan.baseConfig, () => prepareGpuMorphLampFrame(frameCtx))
           : null;
     if (gpuLampPrepared) {
       pushGpuLampEffectSet(plan, layer, gpuLampPrepared, alpha, plan.baseConfig);
@@ -406,3 +492,4 @@ SomataFeatureHost?.provide?.('lamps', 'graphPass', (frameCtx, plans) => {
   };
 });
 SomataFeatureHost?.provide?.('lamps', 'resetEffectPlan', (plans) => resetLampEffectPlan(plans?.lamps));
+

@@ -22,6 +22,11 @@ const spiralUnifiedRoundingStats = {
   lastBridgeLength: 0,
   lastAngles: [],
 };
+const SPIRAL_FILLET_MIN_TURN = 0.75;
+function spiralFilletCutScale(total, length) {
+  const cap = length * 0.9995;
+  return total > cap ? cap / Math.max(1e-12, total) : 1;
+}
 function spiralOrdinaryFilletCut(inSpan, outSpan, roundingStrength) {
   const a = Math.max(0, Number(inSpan) || 0),
     b = Math.max(0, Number(outSpan) || 0);
@@ -186,12 +191,9 @@ function applySpiralPeriodicEndpointFillet(points, roundingFrac, spans, tag = 'p
 
   let cutStart = spiralOrdinaryFilletCut(spans?.startIncoming, spans?.startOutgoing, roundingFrac);
   let cutEnd = spiralOrdinaryFilletCut(spans?.endIncoming, spans?.endOutgoing, roundingFrac);
-  const total = cutStart + cutEnd;
-  if (total > cm.total * 0.9995) {
-    const k = (cm.total * 0.9995) / Math.max(1e-12, total);
-    cutStart *= k;
-    cutEnd *= k;
-  }
+  const fit = spiralFilletCutScale(cutStart + cutEnd, cm.total);
+  cutStart *= fit;
+  cutEnd *= fit;
   if (cutStart <= 1e-7 && cutEnd <= 1e-7) return src;
 
   const a0 = spiralPolylinePointAt(prev, pm, Math.max(0, pm.total - cutStart));
@@ -317,7 +319,7 @@ function buildClosedSpiralAutoCloseGeometry(
       : seamAngle;
   spiralUnifiedRoundingStats.lastAngles = [seamAngle, bridgeAngle, nextStartAngle];
 
-  const kinkThreshold = 0.75;
+  const kinkThreshold = SPIRAL_FILLET_MIN_TURN;
   if (hasBridge && bridgeAngle > kinkThreshold) {
     spiralUnifiedRoundingStats.detectedKinks++;
     period = applySpiralInteriorFillet(period, bridgeCornerIndex, amount, 'bridge-start');
@@ -351,4 +353,7 @@ function buildClosedSpiralAutoCloseGeometry(
   return period;
 }
 
-export { buildClosedSpiralAutoCloseGeometry, copySpiralMeta, spiralDistance, spiralOrdinaryFilletCut };
+export {
+  buildClosedSpiralAutoCloseGeometry, copySpiralMeta, SPIRAL_FILLET_MIN_TURN, spiralDistance,
+  spiralFilletCutScale, spiralOrdinaryFilletCut, spiralVectorTurnAngleDeg,
+};

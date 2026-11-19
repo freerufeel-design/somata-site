@@ -129,3 +129,57 @@ test('скругление 0–200% меняется без рывков: уго
   });
   assertSmooth(jumps, 'угол между рёбрами');
 });
+
+test('super-rounding seam stays continuous as the cut passes a carrier corner', async () => {
+  const { roundJoinedSpiralRails } = await importModule('js/geometry/spiral/bezier-carrier.js');
+  const start = { x: 100, y: 0 },
+    corner = { x: 0, y: 5 },
+    end = { x: 0, y: 80 };
+  const edge = (p0, p3) => ({ p0, c1: lerp(p0, p3, 1 / 3), c2: lerp(p0, p3, 2 / 3), p3 });
+  const strength = 2 * 75 / (0.8 * (Math.hypot(100, 5) + 75));
+  const seam = (value) => {
+    const rail = { points: [], _bezierSegments: [edge(start, corner), edge(corner, end)] };
+    assert.ok(roundJoinedSpiralRails(rail, rail, value, { scale: 0.8, delta: Math.PI / 2 }));
+    return rail._bezierSegments.at(-1).p3;
+  };
+  const a = seam(strength - 1e-7), b = seam(strength + 1e-7);
+  assert.ok(Math.hypot(a.x - b.x, a.y - b.y) < 1e-4);
+});
+
+test('periodic super-rounding reproduces the 13.2 fillet samples', async () => {
+  const { roundJoinedSpiralRails } = await importModule('js/geometry/spiral/bezier-carrier.js');
+  const { buildClosedSpiralAutoCloseGeometry } = await importModule('js/geometry/spiral/fillets.js');
+  const edge = (p0, p3) => ({ p0, c1: lerp(p0, p3, 1 / 3), c2: lerp(p0, p3, 2 / 3), p3 });
+  for (const strength of [1, 1.25, 1.6, 2]) {
+    for (const delta of [0.9, -0.9]) {
+      for (const scale of [0.8, 1.25]) {
+        const start = { x: 100, y: 0 };
+        const end = { x: 100 * scale * Math.cos(delta), y: 100 * scale * Math.sin(delta) };
+        const bend = { x: (start.x + end.x) / 2 + 8, y: (start.y + end.y) / 2 - 12 };
+        const points = [start, bend, end].map((p) => ({
+          ...p, __spiralClosed: true, __spiralDelta: delta, __spiralTargetScale: scale,
+        }));
+        const reference = buildClosedSpiralAutoCloseGeometry(points, strength, true);
+        const rail = { points, _bezierSegments: [edge(start, bend), edge(bend, end)] };
+        assert.ok(roundJoinedSpiralRails(rail, rail, strength, { scale, delta }));
+        const head = bezierPoints(rail._bezierSegments[0], 576);
+        const tail = bezierPoints(rail._bezierSegments.at(-1), 576);
+        const expectClose = (a, b) => assert.ok(Math.hypot(a.x - b.x, a.y - b.y) < 1e-6);
+        for (let i = 0; i <= 24; i++) expectClose(head[i * i], reference[i]);
+        for (let i = 1; i <= 24; i++) expectClose(tail[576 - (24 - i) ** 2], reference.at(i - 25));
+      }
+    }
+  }
+});
+
+test('joined rails continue growing above 100% until their shared cut budget is used', async () => {
+  const { roundSpiralRailJoins } = await importModule('js/geometry/spiral/bezier-carrier.js');
+  const edge = (p0, p3) => ({
+    points: [], _bezierSegments: [{ p0, c1: lerp(p0, p3, 1 / 3), c2: lerp(p0, p3, 2 / 3), p3 }],
+  });
+  const first = edge({ x: 0, y: 0 }, { x: 100, y: 0 });
+  const second = edge({ x: 100, y: 0 }, { x: 100, y: 100 });
+  assert.ok(roundSpiralRailJoins([[first, second]], 1.6));
+  assert.ok(Math.abs(first._bezierSegments.at(-1).p0.x - 20) < 1e-8);
+  assert.ok(Math.abs(second._bezierSegments[0].p3.y - 80) < 1e-8);
+});

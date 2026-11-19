@@ -1,6 +1,6 @@
 import './lamp-topology-resource.js'; // initialisation order: this module runs after it
 import { runtimeState, state } from '../core/state.js';
-import { ensureLayerLampState } from '../core/defaults-layers.js';
+import { ensureLayerLampState, getLampEvaluationConfig } from '../core/defaults-layers.js';
 import { WebGPUDeviceHub } from './device-hub.js';
 import { dedupeLampPoints, lampHash32 } from '../lamps/lamp-anchors.js';
 import { lampEndpointTravelProgress, preserveBlueMorphLampIdentity } from '../lamps/lamp-motion.js';
@@ -457,7 +457,7 @@ function prepareGpuMorphGhostLampFrame(frameCtx, maxPoints = GPU_LAMP_GHOST_MAX)
   const t = Math.max(0, Math.min(1, Number(frameCtx.blueMorphProvider?.geometryT) || 0));
   let points = evaluateGpuLampGhostResource(rec, t);
 
-  points = dedupeLampPoints(points, maxPoints);
+  if (getLampEvaluationConfig()?.extinguishIntersections !== false) points = dedupeLampPoints(points, maxPoints);
   points = preserveBlueMorphLampIdentity(frameCtx.layerIndex, points);
   if (!points.length) return null;
   gpuLampGhostRuntime.stats.cpuPathBuildsAvoided++;

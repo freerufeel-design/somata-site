@@ -1,10 +1,10 @@
 // Лампы: таблицы длин путей, привязка по доле длины, инерция, лампы на изломах.
 import './lamp-motion.js'; // initialisation order: this module runs after it
-import { getTapMorphIntervalSec } from '../audio/tap-tempo.js';
 import { getLampEvaluationConfig } from '../core/defaults-layers.js';
 import { requestMainCanvasRender } from '../core/scheduler.js';
 import { runtimeState, state } from '../core/state.js';
 import { buildPathLengthTable, pointAtPathDistance } from '../geometry/frame-paths.js';
+import { splineCubicPoint } from '../geometry/spline-rounding.js';
 import { lampMotionRuntime, lampVisualNow } from './lamp-motion.js';
 import { capLampPointList } from './lamp-points.js';
 import { lampAdaptiveFrame } from './lamp-visual.js';
@@ -32,7 +32,27 @@ function lampPointAtFraction(path, fraction) {
   if (path?.closed) {
     f = ((f % 1) + 1) % 1;
   } else f = Math.max(0, Math.min(1, f));
-  return pointAtPathDistance(table, Math.min(table.total - 1e-9, Math.max(0, f * table.total)));
+  const distance = f * table.total;
+  if (path?._bezierSegments?.length && path.points[0]?.__webExactCubicIndex === 0) {
+    let lo = 0, hi = table.segs.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      const segment = table.segs[mid];
+      if (segment.start + segment.len < distance) lo = mid + 1;
+      else hi = mid;
+    }
+    const { a, b, start, len } = table.segs[lo];
+    const source = path.points;
+    // Length tables retain the sampled points, including their cubic station.
+    const index = b.__webExactCubicIndex;
+    const cubic = path._bezierSegments[index];
+    if (cubic && b !== source[0]) {
+      const from = a.__webExactCubicIndex === index ? a.__webExactCubicT : 0;
+      const mix = Math.max(0, Math.min(1, (distance - start) / len));
+      return splineCubicPoint(cubic, from + (b.__webExactCubicT - from) * mix);
+    }
+  }
+  return pointAtPathDistance(table, distance);
 }
 function nearestLampFractionOnPath(anchor, path) {
   const pts = path?.points || [];
@@ -300,7 +320,7 @@ function nearestLampFractionOnPathSegmentBound(anchor, path, referenceFraction, 
       bestPoint = { x, y };
     }
   }
-  if (!bestPoint) return nearestLampFractionOnPathStable(anchor, path, ref);
+  if (!bestPoint) return { fraction: ref, point: lampPointAtFraction(path, ref) };
   return { fraction: Math.max(0, Math.min(1, bestDistance / table.total)), point: bestPoint };
 }
 function advanceLampPathFraction(current, target, closed, dtMs, responseMs = 190) {
@@ -338,7 +358,7 @@ function advanceLampPathFractionLinear(current, target, path, dtMs) {
 function lampPhaseInertiaProgress(t, cfg = getLampEvaluationConfig()) {
   const u = Math.max(0, Math.min(1, Number(t) || 0));
   const pct = Math.max(-100, Math.min(100, Number(cfg?.morphInertia) || 0));
-  if (pct === 0) return u;
+  if (cfg?.morphMotionMode === 'linear' || pct === 0) return u;
   if (pct <= -100) return 1; // endpoint follows moving target contour
   if (pct >= 100) return u >= 1 ? 1 : 0;
   // Ease along the same owned arc interval: positive = accelerating
@@ -364,20 +384,9 @@ function advanceLampAttachmentFraction(current, target, path, dtMs, responseMs =
       : responseMs;
   return advanceLampPathFraction(current, target, Boolean(path?.closed), dtMs, dynamicMs);
 }
-function lampCornerCycleSec(cfg = getLampEvaluationConfig()) {
-  const fallback = Math.max(0.05, Number(state.morph?.intervalSec) || 5);
-  try {
-    return Math.max(0.05, Number(getTapMorphIntervalSec(fallback, 'full')) || fallback);
-  } catch (_) {
-    return fallback;
-  }
-}
 function lampCornerInertiaMs(cfg = getLampEvaluationConfig()) {
-  if (cfg?.cornerInertiaLinked !== false) {
-    const pct = Math.max(0, Math.min(100, Number(cfg?.cornerInertiaPercent ?? 10)));
-    return lampCornerCycleSec(cfg) * 1000 * (pct / 100);
-  }
-  return Math.max(0, Math.min(15, Number(cfg?.cornerInertiaSec ?? 0.5))) * 1000;
+  const seconds = Number(cfg?.cornerInertiaSec ?? 0.5);
+  return Math.max(0, Math.min(15, Number.isFinite(seconds) ? seconds : 0.5)) * 1000;
 }
 function moveLampLevel(current, target, dtMs, durationMs = 330) {
   const c = Math.max(0, Math.min(1, Number(current) || 0));
@@ -387,10 +396,9 @@ function moveLampLevel(current, target, dtMs, durationMs = 330) {
   const step = Math.max(0, dtMs) / duration;
   return t > c ? Math.min(t, c + step) : Math.max(t, c - step);
 }
-function lampBendAnimationMs(frameCtx) {
-  const blue = runtimeState.morph;
-  const actual = frameCtx?.lampAnimationMs ?? (blue?.active ? blue.transitionMs : null);
-  return Number(actual) > 0 ? Number(actual) : lampCornerCycleSec() * 1000;
+function lampBendAnimationMs(frameCtx, cfg) {
+  const actual = frameCtx?.lampAnimationMs;
+  return Number.isFinite(actual) && actual > 0 ? actual : lampCornerInertiaMs(cfg);
 }
 function updateLampBendLevel(entry, target, now, duration) {
   if (entry.bendTarget !== target) {
@@ -399,7 +407,7 @@ function updateLampBendLevel(entry, target, now, duration) {
     entry.bendDuration = duration;
     entry.bendTarget = target;
   }
-  const t = Math.max(0, Math.min(1, (now - entry.bendSince) / Math.max(1, entry.bendDuration)));
+  const t = entry.bendDuration <= 0 ? 1 : Math.max(0, Math.min(1, (now - entry.bendSince) / entry.bendDuration));
   entry.level = entry.bendFrom + (target - entry.bendFrom) * t;
   if (t < 1 && Math.abs(entry.level - target) > 0.002) {
     lampAdaptiveFrame.needsSettle = true;
@@ -407,7 +415,7 @@ function updateLampBendLevel(entry, target, now, duration) {
   }
   return entry.level;
 }
-function mergeLampKeysAndBends(keys, bends, maxPoints) {
+function mergeLampKeysAndBends(keys, bends, maxPoints, extinguishIntersections = true) {
   const pos = (p) => `${p.pathIndex ?? 0}:${Math.round(p.x * 10)}:${Math.round(p.y * 10)}`;
   const seen = new Set(keys.map(pos));
   return capLampPointList(
@@ -415,6 +423,7 @@ function mergeLampKeysAndBends(keys, bends, maxPoints) {
       ...keys,
       ...bends
         .filter((p) => {
+          if (!extinguishIntersections) return true;
           const k = pos(p);
           if (seen.has(k)) return false;
           seen.add(k);
@@ -477,7 +486,6 @@ export {
   interpolateLampSegmentRefs,
   lampBendAnimationMs,
   lampBendTracks,
-  lampCornerCycleSec,
   lampCornerInertiaMs,
   lampPhaseInertiaProgress,
   lampPointAtFraction,

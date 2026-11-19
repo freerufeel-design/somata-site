@@ -639,8 +639,22 @@ window.SomataMorphMath = (() => {
         pp.sourcePathPresent = i < src.length;
         pp.targetPathPresent = i < dst.length;
         if (from.length !== to.length) {
+          const targetAngles = pp.from.map((a, i) => a + pp.delta[i]);
           pp.birthEdgeSlots = morphDuplicateEdgeSlots(pp.from);
-          pp.deathEdgeSlots = morphDuplicateEdgeSlots(pp.from.map((a, i) => a + pp.delta[i]));
+          pp.deathEdgeSlots = morphDuplicateEdgeSlots(targetAngles);
+          if (ctx.anchorPlan && ctx.spiralMorph && !lockSeam) {
+            const windingStations = (angles, count) => {
+              let station = 0;
+              return angles.map((angle, i) => {
+                if (i > 0 && Math.abs(signedAngleDelta(angles[i - 1], angle)) > 1e-8) station++;
+                return station / count;
+              });
+            };
+            // Repeated vertices share one winding station. Otherwise changing
+            // the correspondence size changes the whole spiral at t=0 or t=1.
+            pp.turnFrom = windingStations(pp.from, from.length);
+            pp.turnTo = windingStations(targetAngles, to.length);
+          }
         }
         pathPlans.push(pp);
       }

@@ -48,3 +48,128 @@ test('лампа вершины в морфе встаёт на ближайшу
     lampMotionRuntime.profileAttach.clear();
   }
 });
+
+test('a phase-owned lamp follows the arclength of its rounded rail through a crossing', async () => {
+  await loadApp();
+  const { runtimeState } = await importModule('js/core/state.js');
+  const { projectLampPointsToCurrentPolygon } = await importModule('js/lamps/lamp-points.js');
+  const { setLampContourAttachmentEnabled } = await importModule('js/lamps/lamp-anchors.js');
+  const { lampMotionRuntime } = await importModule('js/lamps/lamp-motion.js');
+  const old = { active: runtimeState.morph.active, lampCycleSerial: runtimeState.morph.lampCycleSerial };
+  try {
+    runtimeState.morph.active = true;
+    runtimeState.morph.lampCycleSerial = 73;
+    setLampContourAttachmentEnabled(true);
+    const own = { points: [{ x: 0, y: 0 }, { x: 60, y: 0 }, { x: 60, y: 180 }] };
+    const crossing = { points: [{ x: 0, y: 61 }, { x: 120, y: 61 }] };
+    const visible = [own, crossing];
+    visible.__somataFrameContour = true;
+    const raw = {
+      x: 0, y: 0, pathIndex: 0, vertexIndex: 0, lampId: 'bound-test', lampAttachFraction: 0,
+    };
+    const sample = (lamp, semantic) =>
+      projectLampPointsToCurrentPolygon([lamp], visible, { id: 'bound-test' }, true, false, semantic)[0];
+    assert.equal(sample(raw, visible).pathIndex, 0);
+    const second = sample({ ...raw, x: 60, y: 61, lampAttachFraction: 0.5 }, [crossing, own]);
+    assert.equal(second.pathIndex, 0);
+    assert.ok(Math.hypot(second.x - 60, second.y - 60) < 1e-6);
+    const third = sample({ ...raw, lampAttachFraction: 0.75 }, visible);
+    assert.ok(Math.hypot(third.x - 60, third.y - 120) < 1e-6);
+  } finally {
+    Object.assign(runtimeState.morph, old);
+    lampMotionRuntime.profileAttach.clear();
+  }
+});
+
+test('the lamp effect plan follows Runtime Animation polygon frames with Blue Morph off', async () => {
+  await loadApp();
+  const { state, runtimeState } = await importModule('js/core/state.js');
+  const { createLayer } = await importModule('js/core/defaults-layers.js');
+  const { SomataFeatureHost } = await importModule('js/render/feature-host.js');
+  await importModule('js/render/lamp-plan.js');
+  const oldActive = runtimeState.morph.active;
+  const oldTunnel = state.tunnel.active;
+  try {
+    runtimeState.morph.active = false;
+    state.tunnel.active = false;
+    const layer = { ...createLayer(), id: 'animation-lamp-test', showLamps: true };
+    Object.assign(layer.lamps, { positionMode: 'key', snapToContour: false });
+    const runt = window.SomataMorphRuntime;
+    const start = { ...layer, N: 4, radius: 80, radiusMultiplier: 1, spiralEnabled: false, spiralOrder: 0 };
+    const end = { ...start, radius: 180 };
+    const spec = runt.describe({ sourceLayer: start, targetLayer: end, mode: 'topology', origin: 'manual' });
+    const draw = (progress) => {
+      const frame = {
+        layer: { ...layer }, effectLayer: layer, layerIndex: 0, baseAlpha: 1, lampAnimationMs: 600,
+        frame: { viewportOuterRadius: 500, tunnelCopies: [] }, visibleInstances: { copies: [{}] },
+      };
+      assert.equal(runt.publish(frame, runt.samplePrimary(spec, progress)), true);
+      const plan = SomataFeatureHost.query('lamps', 'effectPlan', frame, {});
+      assert.equal(plan.enabled, true);
+      const points = plan.sets[0].points;
+      assert.equal(points.length, 4);
+      assert.equal(points[0].x, frame.geometryProvider.framePaths[0].points[0].x);
+      assert.equal(points[0].y, frame.geometryProvider.framePaths[0].points[0].y);
+      return points;
+    };
+    const before = draw(0.2), after = draw(0.8);
+    assert.deepEqual(before.map((p) => p.lampId), after.map((p) => p.lampId));
+    assert.ok(Math.hypot(after[0].x - before[0].x, after[0].y - before[0].y) > 30);
+  } finally {
+    runtimeState.morph.active = oldActive;
+    state.tunnel.active = oldTunnel;
+  }
+});
+test('animation preserves lamp positions and single lit vertices at topology endpoints', async () => {
+  await loadApp();
+  const { createLayer } = await importModule('js/core/defaults-layers.js');
+  const { SomataFeatureHost } = await importModule('js/render/feature-host.js');
+  await importModule('js/render/lamp-plan.js');
+  const { lampPhasePresence } = await importModule('js/lamps/lamp-motion.js');
+  const { SomataLampStability } = await importModule('js/render/lamp-stability.js');
+  const runtime = window.SomataMorphRuntime;
+  for (const snapToContour of [false, true]) {
+    for (const [from, to] of [[4, 8], [8, 4], [7, 6]]) {
+      const layer = {
+        ...createLayer(), N: from, K: 1, rotation: 0, radius: 100, radiusMultiplier: 1,
+        spiralEnabled: false, spiralOrder: 0, closedLoop: true, rounding: snapToContour ? 65 : 0,
+      };
+      const spec = runtime.describe({
+        sourceLayer: layer, targetLayer: { ...layer, N: to }, mode: 'topology', origin: 'manual',
+      });
+      layer.showLamps = true;
+      const cfg = Object.assign(layer.lamps, { positionMode: 'key', snapToContour, extinguishIntersections: false });
+      const sample = (t) => {
+        const frame = {
+          layer: { ...layer }, effectLayer: layer, layerIndex: 0, baseAlpha: 1,
+          frame: { viewportOuterRadius: 500, tunnelCopies: [] }, visibleInstances: { copies: [{}] },
+        };
+        assert.ok(runtime.publish(frame, runtime.samplePrimary(spec, t)));
+        const points = SomataFeatureHost.query('lamps', 'effectPlan', frame, {}).sets[0].points;
+        const timing = { elapsed: 200 * t, remaining: 200 * (1 - t), duration: 500 };
+        const items = points.map((p) => ({
+          ...p, px: p.x, py: p.y, rad: 8, lampTraceId: p.lampId, lampPhaseTimed: true,
+          intensityAlpha: lampPhasePresence(p, cfg, timing),
+        }));
+        SomataLampStability.apply(`phase:${snapToContour}:${from}:${to}`, items, {
+          now: timing.elapsed, phase: 1, phaseProgress: t, phaseTiming: timing,
+          duration: 500, extinguishIntersections: false, animate: true,
+        });
+        return items;
+      };
+      const distance = (a, b) => Math.hypot(a.px - b.px, a.py - b.py);
+      for (const [t, next, count] of [[0, 1e-6, from], [1 - 1e-6, 1, to]]) {
+        const a = sample(t), b = sample(next);
+        const label = `${from} -> ${to}, snap=${snapToContour}, t=${t}`;
+        assert.deepEqual(a.map((p) => p.lampId), b.map((p) => p.lampId), label);
+        for (const [i, p] of a.entries()) assert.ok(distance(p, b[i]) < 0.1, label + ' jump ' + distance(p, b[i]));
+        for (const items of [a, b]) {
+          const lit = items.filter((p) => p.intensityAlpha > 0.01);
+          assert.equal(lit.length, count, label);
+          assert.ok(lit.every((p) => p.intensityAlpha > 0.99), label);
+          assert.ok(lit.every((p, i) => lit.slice(i + 1).every((q) => distance(p, q) >= 1)), label);
+        }
+      }
+    }
+  }
+});

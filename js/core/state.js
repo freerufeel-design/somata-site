@@ -242,6 +242,7 @@ const state = {
     brightnessVariation: 0,
     brightnessVariationMultiplier: 1,
     adaptiveBrightness: true,
+    extinguishIntersections: false,
     adaptiveAdjustBrightness: false,
     adaptiveStrength: 100,
     adaptiveStrengthMultiplier: 1,
@@ -686,10 +687,10 @@ Object.defineProperties(state, {
       if (!layer) return;
       if (enabled === true) {
         if (layer.roundingCornerType !== 'fourier')
-          layer.roundingPreviousCornerType = layer.roundingCornerType === 'local' ? 'local' : 'classic';
+          layer.roundingPreviousCornerType = ['local', 'simple'].includes(layer.roundingCornerType) ? layer.roundingCornerType : 'classic';
         layer.roundingCornerType = 'fourier';
       } else if (layer.roundingCornerType === 'fourier') {
-        layer.roundingCornerType = layer.roundingPreviousCornerType === 'local' ? 'local' : 'classic';
+        layer.roundingCornerType = ['local', 'simple'].includes(layer.roundingPreviousCornerType) ? layer.roundingPreviousCornerType : 'classic';
       }
     },
   },

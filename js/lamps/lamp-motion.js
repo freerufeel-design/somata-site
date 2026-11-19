@@ -50,15 +50,44 @@ function lampTopologyPresence(sourcePresent, targetPresent, travelProgress = 0) 
   if (targetPresent) return u;
   return 0;
 }
-function lampAdaptivePointCount(points, cfg = getLampEvaluationConfig()) {
+function lampPhaseLightTiming(now, duration) {
+  const morph = runtimeState.morph;
+  if (!morph?.active || !(morph.cycleStart > 0) || !(morph.transitionMs > 0)) return null;
+  const clock = morph.pauseStartedAt > 0 ? Math.min(now, morph.pauseStartedAt) : now;
+  const elapsed = Math.max(0, Math.min(morph.transitionMs, clock - morph.cycleStart));
+  return { elapsed, remaining: morph.transitionMs - elapsed, duration };
+}
+function lampPhasePresence(point, cfg, timing = null) {
+  if (timing && typeof point?.lampSourcePresent === 'boolean' && typeof point?.lampTargetPresent === 'boolean') {
+    const { lampSourcePresent: source, lampTargetPresent: target } = point;
+    if (source === target) return source ? 1 : 0;
+    const time = source ? timing.remaining : timing.elapsed;
+    if (timing.duration <= 0) return source ? Number(time > 0) : 1;
+    const phaseMs = timing.elapsed + timing.remaining;
+    const window = Number.isFinite(phaseMs) ? Math.min(timing.duration, phaseMs) : timing.duration;
+    const t = window > 0 ? Math.max(0, Math.min(1, time / window)) : Number(target);
+    return t * t * (3 - 2 * t);
+  }
+  const presence = Math.max(0, Math.min(1, point?.lampPresence === undefined ? 1 : Number(point.lampPresence) || 0));
+  if (cfg?.extinguishIntersections !== false || !runtimeState.morph?.active || point?.lampTargetPresent !== false)
+    return presence;
+  if (point.lampSourcePresent === false) return 0;
+  const progress = Number.isFinite(point.lampTravelProgress)
+    ? point.lampTravelProgress
+    : lampLinearMorphProgress(0);
+  // Retiring lamps remain lit through crossings. Release only in the final fifth of their own travel.
+  const u = Math.max(0, Math.min(1, (1 - progress) / 0.2));
+  return u * u * (3 - 2 * u);
+}
+function lampAdaptivePointCount(points, cfg = getLampEvaluationConfig(), timing = null) {
   if (!Array.isArray(points) || !points.length) return 0;
   if (!runtimeState.morph?.active) return points.length;
   let sum = 0;
   for (const p of points)
-    sum += Math.max(0, Math.min(1, p?.lampPresence === undefined ? 1 : Number(p.lampPresence) || 0));
+    sum += lampPhasePresence(p, cfg, timing);
   return Math.max(0.001, sum);
 }
-function preserveBlueMorphLampIdentity(layerIndex, points) {
+function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false) {
   if (!Array.isArray(points) || !points.length || !runtimeState.morph?.active) return points || [];
   const layer = state.layers?.[layerIndex];
   const layerKey = String(layer?.id ?? layerIndex);
@@ -104,7 +133,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
   );
   const previous = previousVisible.length ? previousVisible : previousAll;
   const visible = (p) =>
-    (p?.lampPresence === undefined || Number(p.lampPresence) > 0.002) &&
+    lampPhasePresence(p, inertiaCfg) > 0.002 &&
     (p?.lampLevel === undefined || Number(p.lampLevel) > 0.002);
   const nearestPrevious = (p) => {
     const px = Number(p?.x) || 0,
@@ -122,7 +151,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
     }
     return best;
   };
-  const makeNewStable = (p, entering = true, targetPhaseHint = 0, fromPhaseHint = targetPhaseHint) => {
+  const makeNewStable = (p, targetPhaseHint = 0, fromPhaseHint = targetPhaseHint) => {
     const stableIndex = rt.nextStable++;
     return {
       id: `blue:${layerKey}:${stableIndex}`,
@@ -133,7 +162,6 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
       fromX: Number(p?.x) || 0,
       fromY: Number(p?.y) || 0,
       handoffAt: now,
-      entering,
       fromColorPhase: wrapLampColorPhase(fromPhaseHint),
       colorPhase: wrapLampColorPhase(targetPhaseHint),
       fromBrightnessUnit: lampSeedUnit(
@@ -212,16 +240,17 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
           fromX: Number(q.x) || 0,
           fromY: Number(q.y) || 0,
           handoffAt: now,
-          entering: false,
           fromColorPhase: wrapLampColorPhase(previousPhase),
           colorPhase: wrapLampColorPhase(desiredTarget),
           fromBrightnessUnit: Number.isFinite(Number(q.brightnessUnit))
             ? Number(q.brightnessUnit)
             : lampSeedUnit(Number(q.lampSeed) || 0, 4),
-          targetBrightnessUnit: lampSeedUnit(Number(p?.lampSeed) || 0, 4),
+          targetBrightnessUnit: Number.isFinite(Number(q.brightnessUnit))
+            ? Number(q.brightnessUnit)
+            : lampSeedUnit(Number(q.lampSeed) || 0, 4),
         };
       } else {
-        stable = makeNewStable(p, true, desiredTarget, fallbackFrom);
+        stable = makeNewStable(p, desiredTarget, fallbackFrom);
         if (nearest) {
           stable.fromBrightnessUnit = Number.isFinite(Number(nearest.brightnessUnit))
             ? Number(nearest.brightnessUnit)
@@ -249,7 +278,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
           ? sourcePhase[i]
           : 0;
       const to = Number.isFinite(targetPhase[i]) ? targetPhase[i] : from;
-      stable = makeNewStable(p, true, to, from);
+      stable = makeNewStable(p, to, from);
       if (near) {
         stable.fromBrightnessUnit = Number.isFinite(Number(near.brightnessUnit))
           ? Number(near.brightnessUnit)
@@ -261,7 +290,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
     const age = Math.max(0, now - (Number(stable.handoffAt) || 0));
     const profileArcAttached = p?.__lampVisualProfileAttached === true;
     const u =
-      instantTarget || linearMode || profileArcAttached
+      instantTarget || linearMode || profileArcAttached || contourBound
         ? 1
         : stable.handoffAt
           ? Math.max(0, Math.min(1, age / HANDOFF_MS))
@@ -274,7 +303,8 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
     const x = u < 1 ? sx + (targetX - sx) * ease : targetX,
       y = u < 1 ? sy + (targetY - sy) * ease : targetY;
     const baseLevel = p?.lampLevel === undefined ? 1 : Math.max(0, Math.min(1, Number(p.lampLevel) || 0));
-    const lampLevel = !linearMode && stable.entering && u < 1 ? baseLevel * ease : baseLevel;
+    // Birth brightness is decided after final contour attachment, in lamp-stability.
+    // Do not make a new ID invisible here: it might occupy an already lit point.
     const travelT =
       linearMode && Number.isFinite(Number(p?.lampTravelProgress))
         ? Math.max(0, Math.min(1, Number(p.lampTravelProgress)))
@@ -291,7 +321,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
       ...p,
       x,
       y,
-      lampLevel,
+      lampLevel: baseLevel,
       lampId: stable.id,
       lampSeed: stable.seed,
       lampStableIndex: stable.index,
@@ -300,7 +330,6 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
     };
     if (u >= 1) {
       stable.handoffAt = 0;
-      stable.entering = false;
       stable.fromX = x;
       stable.fromY = y;
     }
@@ -309,7 +338,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
     x: Number(p.x) || 0,
     y: Number(p.y) || 0,
     lampLevel: p?.lampLevel === undefined ? 1 : Number(p.lampLevel) || 0,
-    lampPresence: p?.lampPresence === undefined ? 1 : Math.max(0, Math.min(1, Number(p.lampPresence) || 0)),
+    lampPresence: lampPhasePresence(p, inertiaCfg),
     lampId: p.lampId,
     stableId: p.lampId,
     lampSeed: p.lampSeed,
@@ -326,6 +355,8 @@ export {
   lampAdaptivePointCount,
   lampEndpointTravelProgress,
   lampMotionRuntime,
+  lampPhaseLightTiming,
+  lampPhasePresence,
   lampTopologyPresence,
   lampVisualNow,
   preserveBlueMorphLampIdentity,

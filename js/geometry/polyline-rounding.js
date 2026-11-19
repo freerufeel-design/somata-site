@@ -23,8 +23,9 @@ function roundPolylineForDraw(
   filletLayer = null,
 ) {
   if (!points || points.length < 2) return;
+  const simple = filletLayer?.roundingCornerType === 'simple';
   if (
-    !state.fourierMode &&
+    !simple && !state.fourierMode &&
     filletLayer &&
     !cornerFactors &&
     typeof somataDrawSplineCornerMode === 'function' &&
@@ -35,7 +36,7 @@ function roundPolylineForDraw(
   )
     return;
   if (
-    !state.fourierMode &&
+    !simple && !state.fourierMode &&
     typeof ctx.bezierCurveTo === 'function' &&
     typeof drawUnifiedFilletPath === 'function' &&
     !cornerFactors &&
@@ -59,6 +60,7 @@ function roundPolylineForDraw(
       cornerFactors,
       independentMorphCuts,
       points,
+      simple ? filletLayer : null,
     );
   }
 

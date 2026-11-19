@@ -176,7 +176,7 @@ function buildLampRenderedAttachmentPaths(paths, layer, morphInfo = null) {
 function buildLampRenderedAttachmentPathsUncached(source, layer, morphInfo, round) {
   const out = source.map((path) => {
     const pts = path?.points || [];
-    if (pts.length < 2) return path;
+    if (pts.length < 2 || path.profileCurveBaked) return path;
     const sampler = createLampRenderedPathSampler();
     const effectiveRound = isSpiralLayer(layer) && path?.spiralProfileRoundingBaked === true ? 0 : round;
     if (morphInfo) {
@@ -342,7 +342,7 @@ function dedupeSpiralLampPoints(points, maxPoints = 260) {
   for (let i = 0; i < maxPoints; i++) out.push(kept[Math.min(kept.length - 1, Math.floor(i * step))]);
   return out;
 }
-function lampVertexArcFractions(path) {
+function lampVertexArcFractions(path, includeClosing = false) {
   const pts = path?.points || [],
     n = pts.length,
     out = new Float64Array(n);
@@ -356,6 +356,8 @@ function lampVertexArcFractions(path) {
     total += Math.hypot(dx, dy);
     out[i] = total;
   }
+  if (includeClosing && path.closed)
+    total += Math.hypot(pts[0].x - pts[n - 1].x, pts[0].y - pts[n - 1].y);
   if (total > 1e-9) for (let i = 1; i < n; i++) out[i] /= total;
   return out;
 }

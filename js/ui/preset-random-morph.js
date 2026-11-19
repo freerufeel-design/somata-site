@@ -15,7 +15,6 @@ import { WebGPUProfileMarkerRenderer } from '../gpu/profile-marker-renderer.js';
 import { ensureAudioRoutingState } from '../audio/audio-routing.js';
 import { lampAnchorCache, setLampContourAttachmentEnabled } from '../lamps/lamp-anchors.js';
 import { lampMotionRuntime } from '../lamps/lamp-motion.js';
-import { lampCornerCycleSec } from '../lamps/lamp-attachment.js';
 import { normalizeGlintPrecisionValue } from '../effects/sweep-glint.js';
 import {
   normalizeLightningBehaviorValue,
@@ -3136,6 +3135,7 @@ function bindPresetRandomMorphControls(bindingContext) {
         Number(document.getElementById('lampBrightnessVariationMultiplier')?.value) || 0,
       ),
       adaptiveBrightness: document.getElementById('lampAdaptiveBrightness')?.checked !== false,
+      extinguishIntersections: document.getElementById('lampExtinguishIntersections')?.checked === true,
       adaptiveAdjustBrightness: document.getElementById('lampAdaptiveAdjustBrightness')?.checked === true,
       adaptiveStrength: Math.max(
         0,
@@ -3151,7 +3151,6 @@ function bindPresetRandomMorphControls(bindingContext) {
       morphEnabled: false,
       morphSize: 0,
       morphBrightness: 0,
-      cornerInertiaLinked: document.getElementById('lampCornerInertiaLinked')?.checked !== false,
       calmMode: false,
     };
     const contour = document.getElementById('lampSnapToContour')?.checked !== false;
@@ -3188,6 +3187,7 @@ function bindPresetRandomMorphControls(bindingContext) {
   ].forEach((id) => document.getElementById(id)?.addEventListener('input', updateLampStateFromUI));
   [
     'lampAdaptiveBrightness',
+    'lampExtinguishIntersections',
     'lampAdaptiveAdjustBrightness',
     'lampAdaptiveAutoExponent',
     'lampMorphEnabled',
@@ -3362,27 +3362,8 @@ function bindPresetRandomMorphControls(bindingContext) {
     requestMainCanvasRender();
   });
   document.getElementById('lampCornerInertia')?.addEventListener('input', (e) => {
-    for (const cfg of getLampConfigTargets()) {
-      if (cfg.cornerInertiaLinked !== false)
-        cfg.cornerInertiaPercent = Math.max(0, Math.min(100, Number(e.target.value) || 0));
-      else cfg.cornerInertiaSec = Math.max(0, Math.min(15, Number(e.target.value) || 0));
-    }
-    syncLampSettingsUI();
-    requestMainCanvasRender();
-  });
-  document.getElementById('lampCornerInertiaLinked')?.addEventListener('change', (e) => {
-    const linked = e.target.checked === true;
-    for (const cfg of getLampConfigTargets()) {
-      const cycle = Math.max(0.05, lampCornerCycleSec(cfg));
-      if (linked) {
-        const sec = Math.max(0, Math.min(15, Number(cfg.cornerInertiaSec ?? 0.5)));
-        cfg.cornerInertiaPercent = Math.max(0, Math.min(100, (sec / cycle) * 100));
-      } else {
-        const pct = Math.max(0, Math.min(100, Number(cfg.cornerInertiaPercent ?? 10)));
-        cfg.cornerInertiaSec = Math.max(0, Math.min(15, (cycle * pct) / 100));
-      }
-      cfg.cornerInertiaLinked = linked;
-    }
+    for (const cfg of getLampConfigTargets())
+      cfg.cornerInertiaSec = Math.max(0, Math.min(15, Number(e.target.value) || 0));
     syncLampSettingsUI();
     requestMainCanvasRender();
   });

@@ -277,6 +277,8 @@ function lampLinearSplitMergePresence(
 ) {
   if (getLampEvaluationConfig()?.morphMotionMode !== 'linear' || !runtimeState.morph?.active) return 1;
   const fallback = Math.max(0, Math.min(1, Number(travelProgress) || 0));
+  if (fallback <= 1e-6) return sourcePresent ? 1 : 0;
+  if (fallback >= 1 - 1e-6) return targetPresent ? 1 : 0;
   if (sourcePresent && targetPresent) return 1;
   const gates = lampLinearGateStore(layerKey);
   const kind = !sourcePresent && targetPresent ? 'split' : sourcePresent && !targetPresent ? 'merge' : 'none';
@@ -705,8 +707,11 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260) {
         delta = pp.delta || [];
       if (!from.length) continue;
       const to = from.map((a, i) => a + (Number(delta[i]) || 0));
-      const srcAngles = pp.lampSourceAngles || [],
-        dstAngles = pp.lampTargetAngles || [];
+      const distinct = (angles) => angles.filter((a, i) =>
+        angles.findIndex((b) => angularDistance(a, b) < 1e-8) === i,
+      );
+      const srcAngles = pp.lampSourceAngles?.length ? pp.lampSourceAngles : distinct(from),
+        dstAngles = pp.lampTargetAngles?.length ? pp.lampTargetAngles : distinct(to);
       const srcMap = markMappedAnglePopulation(from, srcAngles),
         dstMap = markMappedAnglePopulation(to, dstAngles);
       const sourceKeys = srcAngles.map((a, i) =>
@@ -1327,6 +1332,7 @@ function collectMorphLampPoints(
   preparedPaths = null,
   preparedRoundedPaths = null,
 ) {
+  const linear = getLampEvaluationConfig()?.morphMotionMode === 'linear';
   const motionT = lampPhaseInertiaProgress(t);
   let mode = getLampEvaluationConfig()?.positionMode || 'key';
   if (mode === 'circumference') mode = 'key'; // legacy project migration
@@ -1366,29 +1372,28 @@ function collectMorphLampPoints(
     // stabilised BEFORE profile attachment.  Otherwise a new raw topology
     // slot at the next Morph cycle creates a fresh arc state and appears as
     // a teleport before blue identity handoff catches up.
-    if (authoritativeAttachment) {
-      out = preserveBlueMorphLampIdentity(layerIndex, out);
-      return attach
-        ? projectLampPointsToCurrentPolygon(out, attachmentPaths, base, true, forceNearest, lampRawPaths)
-        : out;
+    if (attach) {
+      out = preserveBlueMorphLampIdentity(layerIndex, out, true);
+      return projectLampPointsToCurrentPolygon(out, attachmentPaths, base, true, forceNearest, lampRawPaths);
     }
-    if (attach)
-      out = projectLampPointsToCurrentPolygon(out, attachmentPaths, base, true, forceNearest, lampRawPaths);
     return preserveBlueMorphLampIdentity(layerIndex, out);
   };
 
   if (mode === 'key') {
+    if (linear) {
+      const exact = collectTrueLinearKeyLampPoints(layerIndex, motionT, maxPoints);
+      if (exact.length) return finalizeMorphLampPoints(exact, { forceNearest: circumferenceMode });
+    }
     const vertices = collectSkeletonVertexLampPoints(layerIndex, motionT, maxPoints);
     if (vertices) return finalizeMorphLampPoints(vertices, { forceNearest: circumferenceMode });
-  }
-  if (getLampEvaluationConfig()?.morphMotionMode === 'linear' && mode === 'key') {
-    let exact = collectTrueLinearKeyLampPoints(layerIndex, motionT, maxPoints);
-    if (exact.length) return finalizeMorphLampPoints(exact, { forceNearest: circumferenceMode });
   }
   if (getLampEvaluationConfig()?.morphMotionMode === 'ghost' && mode === 'key' && rawPaths?.length) {
     let exact = collectLinearGeometryLampPoints(layerIndex, motionT, maxPoints, rawPaths);
     if (exact.length)
-      return finalizeMorphLampPoints(dedupeLampPoints(exact, maxPoints), { forceNearest: circumferenceMode });
+      return finalizeMorphLampPoints(
+        getLampEvaluationConfig()?.extinguishIntersections === false ? exact : dedupeLampPoints(exact, maxPoints),
+        { forceNearest: circumferenceMode },
+      );
   }
   if (mode === 'arbitrary')
     return collectArbitraryMorphLampPoints(layerIndex, t, Math.max(600, maxPoints), attachmentPaths); // v308: IDs/fractions are already contour-stable; no straight-line handoff
@@ -1418,7 +1423,12 @@ function collectMorphLampPoints(
         if (pts.length > 1 && !spiralSeamShared)
           all.push({ ...pts[pts.length - 1], pathIndex, vertexIndex: pts.length - 1 });
       }
-      const points = capLampPointList(dedupeLampPoints(all, Math.max(maxPoints, all.length)), maxPoints);
+      const points = capLampPointList(
+        getLampEvaluationConfig()?.extinguishIntersections === false
+          ? all
+          : dedupeLampPoints(all, Math.max(maxPoints, all.length)),
+        maxPoints,
+      );
       return preserveBlueMorphLampIdentity(
         layerIndex,
         attach
@@ -1452,7 +1462,7 @@ function collectMorphLampPoints(
     const projected = attach
       ? projectLampPointsToCurrentPolygon(bends, attachmentPaths, base, true, false, lampRawPaths)
       : bends;
-    return mergeLampKeysAndBends(keys, projected, maxPoints);
+    return mergeLampKeysAndBends(keys, projected, maxPoints, getLampEvaluationConfig()?.extinguishIntersections !== false);
   }
   return [];
 }

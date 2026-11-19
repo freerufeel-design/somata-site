@@ -176,6 +176,17 @@ const SomataTestMorph = (() => {
     )
       return false;
     const spec = SomataMorphRuntime.fromBlue(idx);
+    // The original polygon providers correct their Spline+ contours against the
+    // static endpoints. Publishing raw skeleton paths would bypass that step.
+    if (
+      !explicitOrder && !state.fourierMode &&
+      (blue.kind === 'blue-anchor-linear' || blue.kind === 'blue-circle-slide') &&
+      (spec?.mode === 'topology' || spec?.mode === 'circleSlide') &&
+      getEffectiveSpiralOrder(spec.sourceLayer) === 0 &&
+      getEffectiveSpiralOrder(spec.targetLayer) === 0 &&
+      Math.max(Number(spec.sourceLayer.rounding) || 0, Number(spec.targetLayer.rounding) || 0) > 0
+    )
+      return false;
     const layer = blue.renderLayer || frameCtx.layer;
     const squashY = normalizeSpiralSquashY(frameCtx.layer?.spiralSquashY ?? layer?.spiralSquashY);
     const lightPhase = runtimeState.morph.lightGeometryBucket;
@@ -1693,7 +1704,10 @@ const SomataTestMorph = (() => {
     if (primary) {
       for (const key of observedKeys) if (key in visual) layer[key] = copy(visual[key]);
       cpuEditDrawn = SomataMorphRuntime.publish(frameCtx, primary, { structural });
-      if (cpuEditDrawn) frameCtx.lampAnimationMs = r.duration;
+      if (cpuEditDrawn) {
+        frameCtx.lampAnimationMs = r.duration;
+        frameCtx.geometryProvider.lampPhase = { elapsed: t * r.duration, duration: r.duration, id: r };
+      }
       if (zeroPlan) {
         applyZeroCorridorSignals(
           layer,
@@ -1736,6 +1750,7 @@ const SomataTestMorph = (() => {
           kind: 'blue-prepared',
           active: true,
           geometryActive: true,
+          origin: 'manual',
           progress: phase,
           framePaths: prepared,
           sourceLayer: r.fromEndpoint,
@@ -1743,6 +1758,7 @@ const SomataTestMorph = (() => {
           sourceProfileMode: r.fromEndpoint.profileMode,
           targetProfileMode: r.toEndpoint.profileMode,
         };
+        frameCtx.lampAnimationMs = r.duration;
         frameCtx.geometryMorphEnabled = true;
         frameCtx.topologyMorphEnabled = true;
       }

@@ -1,5 +1,8 @@
 // Спираль: кубические Безье-несущие — построение, периодическая сшивка, починка стыков, смешивание.
 import './fillets.js'; // initialisation order: this module runs after it
+import {
+  SPIRAL_FILLET_MIN_TURN, spiralFilletCutScale, spiralOrdinaryFilletCut, spiralVectorTurnAngleDeg,
+} from './fillets.js';
 import { roundPolylineForDraw } from '../polyline-rounding.js';
 import { isPreSampledSplineLayer } from '../../core/render-runtime.js';
 import { runtimeState, state } from '../../core/state.js';
@@ -627,82 +630,79 @@ function blendSpiralCarrierCubics(authored, rounded, mix) {
   return out;
 }
 window.__spiroBlendCarrierCubics = blendSpiralCarrierCubics;
-// Adjacent carrier rails are separate draw records (width and orbit
-// identity), so per-rail rounding cannot see the shared corner.
-function roundJoinedSpiralRails(left, right, strength, period = null) {
-  const a = left?._bezierSegments,
-    b = right?._bezierSegments;
-  if (!a?.length || !b?.length || strength <= 0.001 || (!period && a === b)) return false;
-  const scale = period?.scale ?? 1,
-    angle = period?.delta ?? 0;
-  if (!(scale > 0) || !Number.isFinite(scale) || !Number.isFinite(angle)) return false;
-  const c = Math.cos(angle),
-    s = Math.sin(angle);
-  const map = ({ x, y }) => ({ x: scale * (c * x - s * y), y: scale * (s * x + c * y) });
-  const inv = ({ x, y }) => ({ x: (c * x + s * y) / scale, y: (c * y - s * x) / scale });
+// Resolve all cuts against the original rails before writing any fillets.
+// A corner that has already been trimmed must not shorten its neighbor's budget.
+function roundSpiralRailJoins(joins, strength) {
+  if (!(strength > 0.001)) return false;
+  const rails = new Map();
   const len = (p, q) => Math.hypot(p.x - q.x, p.y - q.y);
-  const prev = a.at(-1),
-    next = b[0],
-    k = prev.p3,
-    o = map(next.p0),
-    h = map(next.c1);
-  const ti = len(prev.c2, k),
-    to = len(o, h);
-  if (Math.min(ti, to) <= 1e-9 || len(k, o) > Math.max(1e-7, Math.hypot(k.x, k.y) * 1e-8)) return false;
-  const dot = ((k.x - prev.c2.x) * (h.x - o.x) + (k.y - prev.c2.y) * (h.y - o.y)) / (ti * to);
-  if (dot > 0.99999 || dot < -0.99999) return false;
-  // Budget against the whole side, not the final tessellation span.
-  // Spline+ subdivides that span heavily, making old fillets invisible.
-  const measure = (rail) =>
-    rail.map((q) => {
-      const marks = [0];
+  const read = (rail) => {
+    if (rails.has(rail)) return rails.get(rail);
+    const cubics = rail._bezierSegments;
+    const marks = cubics.map((q) => {
+      const stations = [0];
       let p = q.p0;
       for (let i = 1; i <= 6; i++) {
-        const n = splineCubicPoint(q, i / 6);
-        marks.push(marks.at(-1) + len(p, n));
-        p = n;
+        const next = splineCubicPoint(q, i / 6);
+        stations.push(stations.at(-1) + len(p, next));
+        p = next;
       }
-      return marks;
+      return stations;
     });
-  const ma = measure(a),
-    mb = a === b ? ma : measure(b);
-  const total = (m) => m.reduce((v, row) => v + row.at(-1), 0);
-  // 13.2 `spiralOrdinaryFilletCut`: the arm is half of the shorter side per
-  // unit of rounding strength. The 100-200% "super" range lets the fillets
-  // consume their sides (smooth, nearly circular arms). A self-join (one
-  // periodic rail) spends `cut` at its end and `cut / scale` at its start and
-  // 13.2 limited that sum to 0.9995 of the rail, scaling both arms together;
-  // two different rails also keep each arm below half of its own rail.
-  const side = Math.min(total(ma), total(mb) * scale);
-  let cut = side * 0.5 * Math.min(2, strength);
-  if (a === b) {
-    const used = cut + cut / scale,
-      cap = total(ma) * 0.9995;
-    if (used > cap) cut *= cap / used;
-  } else {
-    cut = Math.min(cut, total(ma) * 0.49975, total(mb) * scale * 0.49975);
+    const record = { rail, cubics, marks, length: marks.reduce((sum, row) => sum + row.at(-1), 0) };
+    rails.set(rail, record);
+    return record;
+  };
+  const corners = [];
+  for (const [left, right, period] of joins) {
+    if (!left?._bezierSegments?.length || !right?._bezierSegments?.length || (!period && left === right)) continue;
+    const scale = period?.scale ?? 1, angle = period?.delta ?? 0;
+    if (!(scale > 0) || !Number.isFinite(scale) || !Number.isFinite(angle)) continue;
+    const c = Math.cos(angle), s = Math.sin(angle);
+    const map = ({ x, y }) => ({ x: scale * (c * x - s * y), y: scale * (s * x + c * y) });
+    const inv = ({ x, y }) => ({ x: (c * x + s * y) / scale, y: (c * y - s * x) / scale });
+    const prev = left._bezierSegments.at(-1), next = right._bezierSegments[0];
+    const vertex = prev.p3, origin = map(next.p0), handle = map(next.c1);
+    if (len(vertex, origin) > Math.max(1e-7, Math.hypot(vertex.x, vertex.y) * 1e-8)) continue;
+    const turn = spiralVectorTurnAngleDeg(
+      vertex.x - prev.c2.x, vertex.y - prev.c2.y, handle.x - origin.x, handle.y - origin.y,
+    );
+    if (!(turn > SPIRAL_FILLET_MIN_TURN)) continue;
+    const a = read(left), b = read(right);
+    const distance = spiralOrdinaryFilletCut(a.length, b.length * scale, strength);
+    if (distance <= 1e-7) continue;
+    const corner = { a, b, scale, map, inv, vertex, distance };
+    a.end = corner;
+    b.start = corner;
+    corners.push(corner);
   }
-  if (cut <= 1e-7) return false;
-  const at = (m, d, reverse) => {
-    for (let i = reverse ? m.length - 1 : 0; i >= 0 && i < m.length; i += reverse ? -1 : 1) {
-      const row = m[i],
-        length = row.at(-1);
-      if (d >= length) {
-        d -= length;
+  for (const rail of rails.values()) {
+    const start = rail.start ? rail.start.distance / rail.start.scale : 0;
+    const end = rail.end?.distance ?? 0;
+    const fit = spiralFilletCutScale(start + end, rail.length);
+    if (fit === 1) continue;
+    if (rail.start) rail.start.distance *= fit;
+    if (rail.end && rail.end !== rail.start) rail.end.distance *= fit;
+  }
+
+  const at = ({ marks, cubics }, distance, reverse) => {
+    if (distance <= 0) return reverse ? { i: cubics.length - 1, t: 1 } : { i: 0, t: 0 };
+    const step = reverse ? -1 : 1;
+    for (let i = reverse ? marks.length - 1 : 0; i >= 0 && i < marks.length; i += step) {
+      const row = marks[i], length = row.at(-1);
+      if (distance >= length) {
+        distance -= length;
         continue;
       }
-      const target = reverse ? length - d : d;
+      const target = reverse ? length - distance : distance;
       let j = 1;
       while (j < 6 && row[j] < target) j++;
       return { i, t: (j - 1 + (target - row[j - 1]) / Math.max(1e-12, row[j] - row[j - 1])) / 6 };
     }
-    return null;
+    return reverse ? { i: 0, t: 0 } : { i: cubics.length - 1, t: 1 };
   };
-  const u = at(ma, cut, true),
-    v = at(mb, cut / scale, false);
-  if (!u || !v || (a === b && (u.i < v.i || (u.i === v.i && u.t <= v.t)))) return false;
   const w = (q, t) => (q.widthScale0 ?? 1) + ((q.widthScale1 ?? 1) - (q.widthScale0 ?? 1)) * t;
-  const trim = (q, x, y) => ({
+  const trim = (q, x, y) => x === 0 && y === 1 ? q : ({
     ...q,
     ...subSplineCubic(q, x, y),
     widthScale0: w(q, x),
@@ -710,52 +710,44 @@ function roundJoinedSpiralRails(left, right, strength, period = null) {
     __profileCorner0: x === 0 && q.__profileCorner0,
     __profileCorner1: y === 1 && q.__profileCorner1,
   });
-  const pa = trim(a[u.i], 0, u.t),
-    pb = trim(b[v.i], v.t, 1);
-  const head = pa.p3,
-    tail = map(pb.p0),
-    tangent = map(pb.c1);
-  const la = len(head, pa.c2),
-    lb = len(tail, tangent);
-  if (Math.min(la, lb) <= 1e-10) return false;
-  const h1 = (len(head, k) * 2) / 3 / la,
-    h2 = (len(tail, k) * 2) / 3 / lb;
-  const w0 = pa.widthScale1,
-    w1 = pb.widthScale0,
-    wm = (w0 + w1 * scale) * 0.5;
-  const fillet = splitSplineCubic(
-    {
-      p0: head,
-      c1: { x: head.x + (head.x - pa.c2.x) * h1, y: head.y + (head.y - pa.c2.y) * h1 },
-      c2: { x: tail.x - (tangent.x - tail.x) * h2, y: tail.y - (tangent.y - tail.y) * h2 },
-      p3: tail,
-    },
-    0.5,
-  );
-  const l = { ...fillet.left, widthScale0: w0, widthScale1: wm };
-  const r = {
-    p0: inv(fillet.right.p0),
-    c1: inv(fillet.right.c1),
-    c2: inv(fillet.right.c2),
-    p3: pb.p0,
-    widthScale0: wm / scale,
-    widthScale1: w1,
-  };
-  if (a === b) {
-    const body = u.i === v.i ? [trim(a[u.i], v.t, u.t)] : [pb, ...a.slice(v.i + 1, u.i), pa];
-    a.splice(0, a.length, r, ...body, l);
-  } else {
-    a.splice(u.i, a.length - u.i, pa, l);
-    b.splice(0, v.i + 1, r, pb);
+  for (const rail of rails.values()) {
+    rail.first = at(rail, rail.start ? rail.start.distance / rail.start.scale : 0, false);
+    rail.last = at(rail, rail.end?.distance ?? 0, true);
+    rail.body = rail.cubics.slice(rail.first.i, rail.last.i + 1).map((q, j) =>
+      trim(q, j === 0 ? rail.first.t : 0, j + rail.first.i === rail.last.i ? rail.last.t : 1),
+    );
   }
-  for (const rail of [left, right]) {
+  for (const { a, b, scale, map, inv, vertex } of corners) {
+    const left = a.body.at(-1), right = b.body[0];
+    const head = left.p3, tail = map(right.p0);
+    // The 13.2 quadratic through the original corner, stored as two exact cubics.
+    const towardVertex = (p) => ({
+      x: p.x + (vertex.x - p.x) * (2 / 3),
+      y: p.y + (vertex.y - p.y) * (2 / 3),
+    });
+    const fillet = splitSplineCubic({ p0: head, c1: towardVertex(head), c2: towardVertex(tail), p3: tail }, 0.5);
+    const w0 = left.widthScale1 ?? 1, w1 = right.widthScale0 ?? 1;
+    const wm = (w0 + w1 * scale) * 0.5;
+    a.tail = { ...fillet.left, widthScale0: w0, widthScale1: wm };
+    b.head = {
+      p0: inv(fillet.right.p0), c1: inv(fillet.right.c1), c2: inv(fillet.right.c2), p3: right.p0,
+      widthScale0: wm / scale, widthScale1: w1,
+    };
+    b.rail._somataJoinedCorner = true;
+  }
+  for (const { rail, cubics, head, body, tail } of rails.values()) {
+    cubics.splice(0, cubics.length, ...(head ? [head] : []), ...body, ...(tail ? [tail] : []));
     rail.points._somataJoinedFillet = true;
-    rail.points._spiroRetainedCubics = rail._bezierSegments;
+    rail.points._spiroRetainedCubics = cubics;
     rail.spiralRetainedProfileCarrier = true;
   }
-  right._somataJoinedCorner = true;
-  return true;
+  return corners.length > 0;
 }
+
+function roundJoinedSpiralRails(left, right, strength, period = null) {
+  return roundSpiralRailJoins([[left, right, period]], strength);
+}
+
 function buildSpiralBezierSegments(
   points,
   roundingFrac = 0,
@@ -1152,6 +1144,7 @@ export {
   repairRoundedSpiralBezierJoins,
   resolveMorphCommittedSpiralSpline,
   roundJoinedSpiralRails,
+  roundSpiralRailJoins,
   sampleSmoothSpiralSplineForVariableWidth,
   spiralProfileGeometrySignature,
 };

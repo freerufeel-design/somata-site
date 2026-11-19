@@ -16,6 +16,101 @@ import { SomataFrameContourService } from '../geometry/frame-contour.js';
     if (list.length < max) list.push(v);
   };
   const unwrap = (a, b) => Math.atan2(Math.sin(a - b), Math.cos(a - b));
+  const roundingFrames = new Map();
+  const roundingWarnings = new Map();
+  const roundingRails = new Map();
+  const roundingAxes = Array.from({ length: 16 }, (_, i) => {
+    const angle = i * Math.PI / 8;
+    return [Math.cos(angle), Math.sin(angle)];
+  });
+  function logRounding(layer, kind, details) {
+    const now = performance.now();
+    const id = layer.id ?? layer.name ?? '(layer)';
+    const key = `${id}:${kind}:${details.reason || ''}`;
+    if (now - (roundingWarnings.get(key) ?? -Infinity) < 1200) return;
+    if (roundingWarnings.size >= 256) roundingWarnings.delete(roundingWarnings.keys().next().value);
+    roundingWarnings.set(key, now);
+    console.warn('[Somata Spline+] ' + kind, {
+      layer: id,
+      name: layer.name,
+      phaseSerial: window.__somataBlueMorphPhaseClock?.()?.phaseSerial ?? null,
+      rounding: Number(layer.rounding) || 0,
+      policy: layer.roundingCornerType || 'classic',
+      N: layer.N,
+      K: layer.K,
+      order: layer.spiralOrder,
+      ...details,
+    });
+  }
+  function noteRoundingFallback(layer, progress, mode, reason) {
+    logRounding(layer, 'fallback', { reason, progress, mode });
+  }
+  function roundingShape(paths) {
+    const support = roundingAxes.map(() => -Infinity);
+    for (const path of paths) {
+      if ((path.alpha ?? path._alpha ?? 1) < 0.05) continue;
+      for (const { x, y } of path.points || []) {
+        if (!Number.isFinite(x + y)) continue;
+        for (let i = 0; i < support.length; i++) {
+          const [dx, dy] = roundingAxes[i];
+          support[i] = Math.max(support[i], dx * x + dy * y);
+        }
+      }
+    }
+    if (!Number.isFinite(support[0])) return null;
+    // Measure the shape in layer coordinates, independently of camera motion
+    // and the number or starting index of sampled contour points.
+    const cx = (support[0] - support[8]) * 0.5;
+    const cy = (support[4] - support[12]) * 0.5;
+    return support.map((v, i) => v - roundingAxes[i][0] * cx - roundingAxes[i][1] * cy);
+  }
+  function noteRoundingShape(layer, progress, paths) {
+    if (layer.id == null) return;
+    if (roundingRails.size >= 128 && !roundingRails.has(layer.id))
+      roundingRails.delete(roundingRails.keys().next().value);
+    roundingRails.set(layer.id, { progress, paths });
+  }
+  function observeRounding(f) {
+    const layer = f?.layer;
+    if (!layer || !f.morphFrameActive || state.fourierMode || !(Number(layer.rounding) > 0)) return;
+    const contour = SomataFrameContourService.current(f);
+    const id = layer.id ?? f.layerIndex;
+    const rail = roundingRails.get(id);
+    roundingRails.delete(id);
+    const progress = num(f.geometryProvider?.progress, num(f.blueMorphProvider?.geometryT));
+    const paths = contour?.paths ?? (rail && Math.abs(rail.progress - progress) < 1e-7 ? rail.paths : null);
+    if (!paths?.length) return;
+    const previous = roundingFrames.get(id);
+    if (previous?.frame === f.frameId) return;
+    const shape = roundingShape(paths);
+    if (!shape) return;
+    const now = performance.now();
+    const dt = previous ? now - previous.now : 0;
+    const route = f.geometryPlan?.kind;
+    const clock = window.__somataBlueMorphPhaseClock?.();
+    const validStep = previous && dt > 0 && dt <= 80;
+    const delta = validStep ? shape.map((v, i) => v - previous.shape[i]) : null;
+    if (delta && previous.delta) {
+      const ratio = Math.min(2, dt / previous.dt);
+      const transform = mainCtx.getTransform();
+      const scale = (Math.hypot(transform.a, transform.b) * Math.abs(num(f.combinedScale, 1))) /
+        Math.max(1, num(f.frame?.dpr, window.devicePixelRatio || 1));
+      const motion = Math.max(...delta.map(Math.abs)) * scale;
+      const expected = Math.max(...previous.delta.map(Math.abs)) * ratio * scale;
+      const impulse = Math.max(...delta.map((v, i) => Math.abs(v - previous.delta[i] * ratio))) * scale;
+      if (impulse >= 1.75 && motion >= 1.75 && (motion > expected * 2.5 || impulse > motion * 1.25))
+        logRounding(layer, 'contour-jump', {
+          frame: f.frameId, dt: round(dt), progress, previousProgress: previous.progress,
+          mode: f.geometryProvider?.modeOverride ?? f.blueMorphProvider?.mode ?? state.morph?.mode,
+          route, previousRoute: previous.route, previousPhaseSerial: previous.phaseSerial,
+          source: contour?.paths ? 'line-command-contour' : 'spline-plus-cubics',
+          motionPx: round(motion), impulsePx: round(impulse),
+        });
+    }
+    if (roundingFrames.size >= 128 && !roundingFrames.has(id))
+      roundingFrames.delete(roundingFrames.keys().next().value);
+    roundingFrames.set(id, { frame: f.frameId, now, dt, shape, delta, route, progress, phaseSerial: clock?.phaseSerial });
+  }
   function summarize(paths) {
     if (!Array.isArray(paths)) return null;
     let segments = 0,
@@ -387,5 +482,8 @@ import { SomataFrameContourService } from '../geometry/frame-contour.js';
     download,
     sample,
     observeLamps,
+    observeRounding,
+    noteRoundingFallback,
+    noteRoundingShape,
   });
 })();

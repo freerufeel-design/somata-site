@@ -5595,6 +5595,12 @@ header {
 .sweep-settings-group .group-title-toggle input {
   accent-color: #7dd3fc;
 }
+.lamp-adaptive-toggles {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+}
 .lamp-compact-toggle {
   font-size: 10px !important;
   font-weight: 400 !important;
@@ -17618,13 +17624,13 @@ input[type='number'].somata-number-is-scrubbing {
   white-space: nowrap;
 }
 
-.rounding-mode-toggle.rounding-three-types {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+.rounding-mode-toggle.rounding-four-types {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   min-width: 0;
   width: 100%;
   gap: 2px;
 }
-.rounding-three-types .rounding-mode-btn {
+.rounding-four-types .rounding-mode-btn {
   min-width: 0;
   padding-left: 2px;
   padding-right: 2px;

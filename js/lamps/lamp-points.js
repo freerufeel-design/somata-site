@@ -275,6 +275,7 @@ function projectLampPointsToCurrentPolygon(
   cleanupLampRuntime(now);
   const layerKey = String(layer?.id || 'layer');
   const authoritativeVisualRail = attachmentPaths?.__somataFrameContour === true;
+  const phase = runtimeState.morph?.lampCycleSerial ?? 0;
   const semanticMap =
     authoritativeVisualRail && Array.isArray(semanticPaths) && semanticPaths.length
       ? mapLampSemanticPathsToVisible(semanticPaths, attachmentPaths)
@@ -290,15 +291,18 @@ function projectLampPointsToCurrentPolygon(
     // not the canonical topology segment numbering used to preserve lamp identity.
     // Never reuse a frozen canonical render-segment parameter on it. Project the
     // identity point onto the corresponding visible contour (or globally if needed).
-    if (authoritativeVisualRail && runtimeState.morph?.active) {
+    if (pathsPreparedRounded && runtimeState.morph?.active) {
       // Topology identity and visual attachment are separate concerns.  The old
       // nearest-point projection could jump to a different nearby branch of the
       // spline from one frame to the next.  Once a lamp owns a profile path, keep
       // an arc coordinate on that path and move along the rail itself.  Linear
       // topology already publishes a continuous lampAttachFraction, so use it
       // directly rather than solving nearest geometry again.
-      const visualPath = path,
-        visualPathIndex = ownIndex;
+      const identity = String(p?.lampId ?? `${pi}:${p?.vertexIndex ?? index}`);
+      const key = `${layerKey}:profile-arc:${identity}`;
+      let rt = lampMotionRuntime.profileAttach.get(key);
+      const visualPathIndex = rt?.phase === phase && rt.semanticIndex === pi ? rt.pathIndex : ownIndex;
+      const visualPath = attachmentPaths[visualPathIndex];
       // A lamp with a semantic orbit may never jump to a globally
       // nearest *different* line at a crossing.  No false attachment
       // is preferable to snapping to the wrong orbit.
@@ -311,11 +315,6 @@ function projectLampPointsToCurrentPolygon(
           pathIndex: pi,
           vertexIndex: p?.vertexIndex,
         };
-      const identity = String(
-        p?.lampId ?? `${visualPathIndex}:${Number.isInteger(p?.vertexIndex) ? p.vertexIndex : index}`,
-      );
-      const key = `${layerKey}:profile-arc:${identity}`;
-      let rt = lampMotionRuntime.profileAttach.get(key);
       const direct = Number(p?.lampAttachFraction);
       let targetS;
       if (Number.isFinite(direct)) {
@@ -326,7 +325,7 @@ function projectLampPointsToCurrentPolygon(
         // «соскакивала» с вершины скругления. Когда лампа появляется (начало фазы), находим
         // точку видимого контура, ближайшую к самой вершине (как в статике), и дальше ведём
         // лампу с этой поправкой.
-        let offset = rt && rt.pathIndex === visualPathIndex ? Number(rt.directOffset) || 0 : null;
+        let offset = rt?.phase === phase && rt.pathIndex === visualPathIndex ? Number(rt.directOffset) || 0 : null;
         if (offset === null) {
           const near = nearestLampFractionOnPath(p, visualPath);
           let d = Number(near?.fraction) - base;
@@ -337,17 +336,23 @@ function projectLampPointsToCurrentPolygon(
         if (rt) rt.directOffset = offset;
         else rt = { pendingOffset: offset };
       } else {
-        const ref = Number.isFinite(Number(rt?.targetS))
-          ? Number(rt.targetS)
+        const ref = rt?.phase === phase && Number.isFinite(rt.targetS)
+          ? rt.targetS
           : Number.isFinite(Number(p?.lampContourFraction))
             ? Number(p.lampContourFraction)
             : NaN;
-        const near = nearestLampFractionOnPathStable(p, visualPath, ref);
+        const window = Math.min(0.09, 0.45 / Math.max(4, semanticPaths?.[pi]?.points?.length || 0));
+        const near = Number.isFinite(ref)
+          ? nearestLampFractionOnPathSegmentBound(p, visualPath, ref, window)
+          : nearestLampFractionOnPath(p, visualPath);
         targetS = near.fraction;
       }
-      if (!rt || rt.pathIndex !== visualPathIndex) {
+      if (!rt || rt.phase !== phase || rt.pathIndex !== visualPathIndex) {
         const directOffset = rt?.pendingOffset ?? rt?.directOffset;
-        rt = { pathIndex: visualPathIndex, s: targetS, targetS, last: now, lastSeen: now, directOffset };
+        rt = {
+          phase, semanticIndex: pi, pathIndex: visualPathIndex, s: targetS, targetS,
+          last: now, lastSeen: now, directOffset,
+        };
         lampMotionRuntime.profileAttach.set(key, rt);
       }
       const rawDt = Math.max(0, now - (rt.last || now)),
@@ -360,9 +365,7 @@ function projectLampPointsToCurrentPolygon(
       // coordinate.  Corner/fallback points instead chase their target fraction
       // with bounded arc motion so they cannot teleport across a crossing.
       rt.s =
-        Number.isFinite(direct) ||
-        Math.abs(Number(getLampEvaluationConfig()?.morphInertia) || 0) >= 100 ||
-        getLampEvaluationConfig()?.morphMotionMode === 'linear'
+        Number.isFinite(direct)
           ? targetS
           : advanceLampPathFractionLinear(rt.s, targetS, visualPath, dt);
       const q = lampPointAtFraction(visualPath, rt.s);
@@ -597,7 +600,7 @@ function collectArbitraryMorphLampPoints(layerIndex, t, maxPoints = 600, prepare
       const u = Math.max(0, Math.min(1, Number(t) || 0));
       const sourcePresent = !!p,
         targetPresent = !!q;
-      const travel = sourcePresent && targetPresent ? u : targetPresent ? u : 1 - u;
+      const travel = u;
       out.push({
         x: a.x + (b.x - a.x) * u,
         y: a.y + (b.y - a.y) * u,
@@ -627,5 +630,6 @@ export {
   collectArbitraryMorphLampPoints,
   collectSmoothCornerLampPoints,
   drawLightningCentralMorph,
+  mapLampSemanticPathsToVisible,
   projectLampPointsToCurrentPolygon,
 };

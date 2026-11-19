@@ -1,5 +1,6 @@
 import './unified-fillet.js'; // initialisation order: this module runs after it
 import { somataDrawFullRoundingCircle } from './unified-fillet.js';
+import { roundPolylineForDraw } from './polyline-rounding.js';
 
 function somataDrawSplineCornerMode(ctx, raw, closed, rounding, options = {}) {
   if (!ctx || typeof ctx.bezierCurveTo !== 'function' || !Array.isArray(raw) || raw.length < 2) return false;
@@ -23,6 +24,13 @@ function somataDrawSplineCornerMode(ctx, raw, closed, rounding, options = {}) {
     );
   }
 
+  if (options.layer?.roundingCornerType === 'simple') {
+    const flags = options.cornerFlags?.length === pts.length && options.cornerFlags.some(Boolean)
+      ? options.cornerFlags
+      : pts.map((_, i) => closed || (i > 0 && i < pts.length - 1));
+    roundPolylineForDraw(ctx, pts, Boolean(closed), value, flags, null, false, null, options.layer);
+    return true;
+  }
   const draw =
     options.layer?.roundingCornerType === 'local'
       ? somataDrawLocalSplineRounding

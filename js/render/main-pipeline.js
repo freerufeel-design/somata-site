@@ -935,6 +935,7 @@ function prepareMainLayerFrame(renderFrame, layerIndex) {
   frameCtx.frame = renderFrame;
   frameCtx.runtime = renderRuntime;
   frameCtx.now = renderFrame.now;
+  frameCtx.lampAnimationMs = 0;
   if (!SomataMorphProviderService.resolveFrameSource(frameCtx, renderFrame)) return null;
   prepareMainLayerMorphState(frameCtx, renderFrame);
   try {
@@ -1200,6 +1201,7 @@ function renderPreparedMainLayer(frameCtx) {
       }
     }
     runRegisteredStage(SomataRenderPassRegistry.STAGES.POST_BASE);
+    window.SomataJumpTrace?.observeRounding?.(frameCtx);
     window.SomataJumpTrace?.sample(frameCtx);
 
     const strictCarrierExpected =

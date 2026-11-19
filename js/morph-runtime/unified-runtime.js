@@ -3,7 +3,7 @@ import { getRoundingStrength } from '../core/palette.js';
 import { runtimeState, state } from '../core/state.js';
 import { isPreSampledSplineLayer, setPreSampledSplineLayer } from '../core/render-runtime.js';
 import { getEffectiveLayerRadius } from '../effects/motion.js';
-import { roundJoinedSpiralRails } from '../geometry/spiral/bezier-carrier.js';
+import { roundSpiralRailJoins } from '../geometry/spiral/bezier-carrier.js';
 import { getEffectiveSpiralOrder } from '../geometry/spiral/order-params.js';
 import { getSpiralTangentialBlend } from '../geometry/spiral/profile-prep.js';
 import {
@@ -244,7 +244,7 @@ window.SomataMorphRuntime = (() => {
     const anchors = sk.sample(plan, u, frame);
     const connected = (l) =>
       Math.abs(getEffectiveSpiralOrder(l)) > 1e-8 ? l.spiralClosed !== false : l.closedLoop !== false;
-    return wind.build(
+    const geometry = wind.build(
       anchors.map((p) => ({
         ...p,
         fixedOrder: frame?.sharedOrder ? undefined : p.fixedOrder,
@@ -260,6 +260,9 @@ window.SomataMorphRuntime = (() => {
       null,
       unsealed,
     );
+    if (spec.origin === 'manual' && planar && a.N !== b.N && !isWound(a) && !isWound(b))
+      geometry.lampPaths = plan.evaluate.lampPaths?.(u);
+    return geometry;
   }
   // Use one period for the visible rail and its control graph, in the same
   // coordinate space as Corridor copies (including the final Y projection).
@@ -553,7 +556,7 @@ window.SomataMorphRuntime = (() => {
   }
   // Project both authored profile shapes onto the SAME live skeleton.
   // Match cubic spans by subdivision (not by changing the renderer at 50%).
-  function blendProfilePaths(a, b, t, from, to) {
+  function blendProfilePaths(a, b, t, from, to, curveSteps = 8) {
     if (a.length !== b.length || !a.length) return null;
     const out = [];
     for (let i = 0; i < a.length; i++) {
@@ -628,7 +631,7 @@ window.SomataMorphRuntime = (() => {
         const q = cubics[i],
           lo = common[i],
           hi = common[i + 1];
-        const n = bent(cs[i]) || bent(ds[i]) ? 8 : 1;
+        const n = bent(cs[i]) || bent(ds[i]) ? curveSteps : 1;
         const stops = Array.from({ length: n }, (_, j) => ({ u: j / n }));
         while (k < keys.length && keys[k].u < hi) {
           const key = keys[k++];
@@ -703,7 +706,29 @@ window.SomataMorphRuntime = (() => {
     const squash = squashOf(spec, u, frame);
     const seam = framePeriod(sampled, squash);
     const period = sampled.layerwiseDelta ?? seam?.delta ?? reference?.graph?.periodDelta ?? NaN;
-    const paths = skeletonFrame.flatMap((path) => {
+    const boundarySpan = 0.05;
+    const boundary = u < 0.5 ? 0 : 1;
+    const distanceToBoundary = Math.abs(u - boundary);
+    const endpoint = boundary === 0 ? a : b;
+    const phaseCircleSlots = spec.mode === 'phaseCircle' ? skeletonFrame[0]?.spiralEdgeLife : null;
+    const roundedChain = !state.fourierMode && distanceToBoundary < boundarySpan &&
+      skeletonFrame.length === 1 &&
+      (skeletonFrame[0].coordinatedSpine || phaseCircleSlots?.some((life) => life < 0.5)) &&
+      skeletonFrame[0].periodicChain &&
+      !skeletonFrame[0].graph?.referenceEdges &&
+      getRoundingStrength(endpoint.rounding) > 0.001 &&
+      endpoint.spiralRoundSeams !== false;
+    const boundarySkeleton = roundedChain && !phaseCircleSlots
+      ? (distanceToBoundary === 0 ? sampled : skeletonAt(spec, boundary, frame))
+      : null;
+    const boundaryEdges = boundarySkeleton?.paths[0]?.graph?.edgeSamples;
+    const collapsed = roundedChain && phaseCircleSlots
+      ? phaseCircleSlots.map((life) => life < 0.5)
+      : boundaryEdges?.map(([p, q]) => Math.hypot(p.x - q.x, p.y - q.y) < 1e-8);
+    const roundedEndpoint = distanceToBoundary === 0 && collapsed?.some(Boolean)
+      ? skeletonAt(spec, u, { ...frame, compactRoundedEndpoint: true })
+      : null;
+    let paths = (roundedEndpoint?.paths ?? skeletonFrame).flatMap((path) => {
       const { profileA, profileB, layer, from, to } = profilesFor(path);
       const mixed =
         (from.profileMode === 'segments' && to.profileMode === 'spline') ||
@@ -737,20 +762,22 @@ window.SomataMorphRuntime = (() => {
         ) {
           const strength = getRoundingStrength(style.rounding) * Math.min(1, Math.abs(path.order));
           const circular = lock && !path.unfoldUntwisted && !path.unfoldSpine;
+          const joins = [];
           if (path.graph.referenceEdges) {
-            if (circular) for (const rail of geometry) roundJoinedSpiralRails(rail, rail, strength, lock);
+            if (circular) for (const rail of geometry) joins.push([rail, rail, lock]);
           } else {
             for (let i = 1; i < geometry.length; i++)
               if (geometry[i].spiralEdgeIndex === geometry[i - 1].spiralEdgeIndex + 1)
-                roundJoinedSpiralRails(geometry[i - 1], geometry[i], strength);
+                joins.push([geometry[i - 1], geometry[i]]);
             if (
               circular &&
               geometry.length &&
               geometry[0].spiralEdgeIndex === 0 &&
               geometry.at(-1).spiralEdgeIndex === path.graph.edgeSamples.length - 1
             )
-              roundJoinedSpiralRails(geometry.at(-1), geometry[0], strength, lock);
+              joins.push([geometry.at(-1), geometry[0], lock]);
           }
+          roundSpiralRailJoins(joins, strength);
         }
         return geometry;
       };
@@ -791,11 +818,79 @@ window.SomataMorphRuntime = (() => {
       finish(geometry, display);
       return geometry;
     });
+    const blendFromBoundary = distanceToBoundary > 0 && distanceToBoundary < boundarySpan;
+    const boundaryMix = () => {
+      const t = distanceToBoundary / boundarySpan;
+      return t * t * (3 - 2 * t);
+    };
+    if (
+      sampled.lampPaths && a.N !== b.N && distanceToBoundary < boundarySpan &&
+      sampled.lampPaths[0]?.points.some((p) => !p[boundary === 0 ? 'lampSourcePresent' : 'lampTargetPresent']) &&
+      getRoundingStrength(endpoint.rounding) > 0.001 &&
+      paths.length === 1 && sampled.lampPaths.length === 1
+    ) {
+      // Collapsed edges must not change the rounded contour on the first
+      // moving frame. Grow that contour from the authored endpoint.
+      const fixed = distanceToBoundary === 0 ? paths : samplePrimary(spec, boundary, frame).paths;
+      if (fixed.length === paths.length) {
+        paths = boundary === 0
+          ? blendProfilePaths(fixed, paths, boundaryMix(), a, endpoint, 32) ?? paths
+          : blendProfilePaths(paths, fixed, 1 - boundaryMix(), endpoint, b, 32) ?? paths;
+      }
+    } else if (blendFromBoundary && collapsed?.some(Boolean)) {
+      const fixed = samplePrimary(spec, boundary, frame).paths;
+      if (fixed.length === collapsed.filter((missing) => !missing).length) {
+        // Insert each zero-length branch at the seam of its surviving neighbors.
+        // Both sides of that seam then move from the same endpoint geometry.
+        let cursor = 0;
+        const byEdge = collapsed.map((missing) => {
+          if (!missing) return fixed[cursor++];
+          const previous = fixed[cursor - 1]?._bezierSegments?.at(-1);
+          const next = fixed[cursor]?._bezierSegments?.[0];
+          const p = previous?.p3 ?? next?.p0;
+          return p ? { point: p, width: previous?.widthScale1 ?? next?.widthScale0 ?? 1 } : null;
+        });
+        const boundaryPaths = paths.map((path) => {
+          const fixedPath = byEdge[path.spiralEdgeIndex];
+          if (!fixedPath?.point) return fixedPath;
+          const { point, width } = fixedPath;
+          return {
+            ...path,
+            points: [point, point],
+            lampCornerFlags: [],
+            _bezierSegments: [{ p0: point, c1: point, c2: point, p3: point, widthScale0: width, widthScale1: width }],
+          };
+        });
+        if (boundaryPaths.every(Boolean)) {
+          paths = blendProfilePaths(boundaryPaths, paths, boundaryMix(), endpoint, endpoint) ?? paths;
+        }
+      }
+    } else if (
+      blendFromBoundary && spec.mode === 'phaseCircle' &&
+      (a.spiralTwist === true) !== (b.spiralTwist === true) &&
+      !frame?.explicitOrder && !state.fourierMode &&
+      getRoundingStrength(endpoint.rounding) > 0.001 &&
+      endpoint.spiralRoundSeams !== false &&
+      paths.every((path) => path._bezierSegments?.length && Math.abs(path.spiralOrder) > 1e-8)
+    ) {
+      // A change of twist switches between independent periods and a joined
+      // chain. Begin with the already rounded endpoint before blending them.
+      const fixed = samplePrimary(spec, boundary, frame).paths;
+      paths = blendProfilePaths(fixed, paths, boundaryMix(), endpoint, endpoint) ?? paths;
+    }
+    if (roundedEndpoint) {
+      for (const path of skeletonFrame) {
+        if (!path.graph) continue;
+        applySpiralSquashY(null, [path.graph], spiralSquashYFactor(squash, path.order));
+        sealSkeleton(path, path.periodic ? seam : null);
+      }
+    }
     frames++;
     return {
       spec,
       paths,
       progress: u,
+      lampPaths: sampled.lampPaths,
       period,
       periodScale: seam?.scale,
       skeletonFrame,
@@ -844,10 +939,12 @@ window.SomataMorphRuntime = (() => {
     frameCtx.__somataSkeletonFrame = Array.isArray(skeletonFrame) ? skeletonFrame : null;
     frameCtx.geometryProvider = {
       kind: 'blue-prepared',
+      origin: spec.origin,
       active: true,
       geometryActive: true,
       progress,
       framePaths: paths,
+      lampPaths: sampled.lampPaths,
       sourceLayer: spec.sourceLayer,
       targetLayer: spec.targetLayer,
       sourceProfileMode: spec.sourceLayer.profileMode,

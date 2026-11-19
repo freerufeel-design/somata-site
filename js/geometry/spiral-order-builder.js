@@ -242,6 +242,7 @@ window.SomataSpiralOrderBuilder = (() => {
           ? graphFor(path.points, { windingWeight: path.reveal ?? 1, preserveIds: true })
           : null;
         if (wound && !graph) return null;
+        if (graph && path.spiralEdgeLife) graph.windingStations = path.points.map((point) => point.windingU);
         // The morph declares which edges grow or shrink and supplies their
         // full-size anchors. Measure the corresponding chord with the same
         // order transform; the profile never derives a new trajectory.

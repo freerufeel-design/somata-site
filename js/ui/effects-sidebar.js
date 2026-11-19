@@ -680,6 +680,7 @@ function syncLampSettingsUI() {
     lampBrightnessVariation: c.brightnessVariation ?? 0,
     lampBrightnessVariationMultiplier: c.brightnessVariationMultiplier ?? 1,
     lampAdaptiveBrightness: c.adaptiveBrightness !== false,
+    lampExtinguishIntersections: c.extinguishIntersections === true,
     lampAdaptiveAdjustBrightness: c.adaptiveAdjustBrightness === true,
     lampAdaptiveStrength: c.adaptiveStrength ?? 100,
     lampAdaptiveStrengthMultiplier: c.adaptiveStrengthMultiplier ?? 1,
@@ -690,7 +691,6 @@ function syncLampSettingsUI() {
     lampMorphSize: c.morphSize ?? 20,
     lampMorphBrightness: c.morphBrightness ?? 25,
     lampMorphInertia: c.morphInertia ?? 0,
-    lampCornerInertiaLinked: c.cornerInertiaLinked !== false,
     lampSnapToContour: withLampConfig(c, () => isLampContourAttachmentEnabled()),
   };
   for (const [id, v] of Object.entries(vals)) {
@@ -824,28 +824,11 @@ function syncLampSettingsUI() {
   document.getElementById('lampMorphInertiaRow')?.classList.remove('hidden');
   document.getElementById('lampMorphSettings')?.classList.toggle('hidden', c.morphEnabled !== true);
   document.getElementById('lampDensityRow')?.classList.toggle('hidden', positionMode !== 'arbitrary');
-  const cornerRow = document.getElementById('lampCornerInertiaRow');
-  cornerRow?.classList.add('hidden');
   document.getElementById('lampBendAnimationNote')?.classList.toggle('hidden', positionMode !== 'corners');
   const cornerSlider = document.getElementById('lampCornerInertia');
-  const cornerLinked = c.cornerInertiaLinked !== false;
-  if (cornerSlider) {
-    cornerSlider.min = '0';
-    cornerSlider.max = cornerLinked ? '100' : '15';
-    cornerSlider.step = cornerLinked ? '1' : '0.1';
-    cornerSlider.value = String(
-      cornerLinked
-        ? Math.max(0, Math.min(100, Number(c.cornerInertiaPercent ?? 10)))
-        : Math.max(0, Math.min(15, Number(c.cornerInertiaSec ?? 0.5))),
-    );
-  }
   const cornerSec = lampCornerInertiaMs(c) / 1000;
-  set(
-    'lampCornerInertiaText',
-    cornerLinked
-      ? `${Math.round(Number(c.cornerInertiaPercent ?? 10))}% · ${formatTimeSeconds(cornerSec)} с`
-      : `${formatTimeSeconds(cornerSec)} с`,
-  );
+  if (cornerSlider) cornerSlider.value = String(cornerSec);
+  set('lampCornerInertiaText', `${formatTimeSeconds(cornerSec)} с`);
   const selected = mode === 'selected';
   const color = document.getElementById('lampColor');
   if (color) color.disabled = !selected;

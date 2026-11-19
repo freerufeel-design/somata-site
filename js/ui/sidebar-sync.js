@@ -518,7 +518,7 @@ function syncSidebarInputs() {
   // Classic Spline+ and local fillets are independent; Fourier is scene-wide.
   // Normalize old imported layers without changing radius policy.
   layer.roundingShape = 'hybrid';
-  const cornerType = ['local', 'classic', 'fourier'].includes(layer.roundingCornerType)
+  const cornerType = ['local', 'classic', 'fourier', 'simple'].includes(layer.roundingCornerType)
     ? layer.roundingCornerType
     : 'classic';
   document.getElementById('roundingFourierControls')?.classList.toggle('hidden', cornerType !== 'fourier');

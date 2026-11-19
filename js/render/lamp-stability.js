@@ -12,19 +12,18 @@ const SomataLampStability = (() => {
   // in at the new place. GPU Arc lamps are placed by attachment + offset, so the offset
   // carries the same correction.
   const HOP_MIN_PX = 4,
-    HOP_RATIO = 5,
-    HOP_GLIDE_MS = 240;
-  function glideHops(track, items, now, animate, arc, hopGhosts) {
+    HOP_RATIO = 5;
+  function glideHops(track, items, now, duration, animate, arc, hopGhosts, continuity) {
     const prev = track.pos || new Map(),
       pos = new Map(),
       seen = new Map();
     for (const v of items) seen.set(v.lampTraceId, (seen.get(v.lampTraceId) || 0) + 1);
     for (const v of items) {
       const id = v.lampTraceId;
-      if (seen.get(id) !== 1 || !Number.isFinite(v.px) || !Number.isFinite(v.py)) continue;
+      if (v.lampPhaseTimed || v.lampContourBound || seen.get(id) !== 1 || !Number.isFinite(v.px) || !Number.isFinite(v.py)) continue;
       const p = prev.get(id),
         s = { x: v.px, y: v.py, at: now, speed: 0, glideAt: 0, gx: 0, gy: 0 };
-      if (p) {
+      if (p && !continuity.has(v)) {
         Object.assign(s, { speed: p.speed, glideAt: p.glideAt, gx: p.gx, gy: p.gy });
         if (animate && now > p.at) {
           const step = Math.hypot(v.px - p.x, v.py - p.y);
@@ -36,7 +35,7 @@ const SomataLampStability = (() => {
       if (s.glideAt && !arc) {
         // Перекрёстное затухание: на новом месте лампа разгорается, а её тень гаснет на старом.
         // Сумма света не проваливается, поэтому «мигания» нет.
-        const g = Math.max(0, Math.min(1, (now - s.glideAt) / HOP_GLIDE_MS)),
+        const g = Math.max(0, Math.min(1, (now - s.glideAt) / duration)),
           e = g * g * (3 - 2 * g);
         hopGhosts.push({ v, x: s.gx, y: s.gy, base: v.intensityAlpha, weight: 1 - e });
         v.intensityAlpha *= e;
@@ -44,7 +43,7 @@ const SomataLampStability = (() => {
         s.y = v.py;
         if (g >= 1) s.glideAt = 0;
       } else if (s.glideAt) {
-        const g = Math.max(0, Math.min(1, (now - s.glideAt) / HOP_GLIDE_MS)),
+        const g = Math.max(0, Math.min(1, (now - s.glideAt) / duration)),
           fadeOut = g < 0.5,
           f = fadeOut ? g * 2 : g * 2 - 1,
           e = f * f * (3 - 2 * f),
@@ -68,7 +67,7 @@ const SomataLampStability = (() => {
   // близких ламп остаётся одна (первая по идентификатору); остальные гаснут плавно по мере
   // сближения (вес — сглаженная функция расстояния), поэтому рывков нет. Порог — доля радиуса
   // меньшей лампы: мелкие лампы не сливаются.
-  function mergeCloseLamps(items, outputs, factor) {
+  function mergeCloseLamps(items, outputs, factor, strength) {
     const live = items.filter((v) => Number.isFinite(v.px) && Number.isFinite(v.py) && v.rad > 0);
     if (live.length < 2) return;
     // Главнее ключевые точки (lampRank 0), затем изломы (1); внутри ранга — по идентификатору.
@@ -98,7 +97,7 @@ const SomataLampStability = (() => {
               near = 1 - t * t * (3 - 2 * t),
               wLevel = merged.get(w) || 0,
               dominance = Math.min(1, wLevel / Math.max(base, 1e-3));
-            keep *= 1 - near * dominance;
+            keep *= 1 - near * dominance * strength;
           }
       merged.set(v, base * keep);
       const k = `${bx}:${by}`;
@@ -109,12 +108,12 @@ const SomataLampStability = (() => {
     for (const [v, value] of merged) outputs.set(v, value);
   }
   // Лампы, которые были в прошлом кадре, а в этом пропали по идентификатору.
-  function findOrphans(track, present) {
+  function findOrphans(track, present, transferred) {
     const orphans = [];
     if (!track.birthPos) return orphans;
     for (const [id, level] of track.levels) {
       const p = track.birthPos.get(id);
-      if (level > 0.001 && p && !present.has(id)) orphans.push({ id, x: p[0], y: p[1], level, used: false });
+      if (level > 0.001 && p && !present.has(id) && !transferred.has(id)) orphans.push({ id, x: p[0], y: p[1], level, used: false });
     }
     return orphans;
   }
@@ -147,7 +146,100 @@ const SomataLampStability = (() => {
     }
     return result.size ? result : null;
   }
-  function apply(scope, items, { now, duration, animate, arc = false, merge = 0 }) {
+  const SAME_POINT_EPS = 1e-4;
+  const isSpatial = (v) => Number.isFinite(v.px) && Number.isFinite(v.py);
+  function arcKey(v) {
+    if (!Number.isFinite(v.pathIndex) || !Number.isFinite(v.lampAttachFraction)) return null;
+    return `${v.pathIndex}:${Math.round(v.lampAttachFraction * 1e7)}:${Math.round((v.gpuLampOffsetX || 0) * 1e4)}:${Math.round((v.gpuLampOffsetY || 0) * 1e4)}`;
+  }
+  // Match coincident lights one-to-one before any ID-based birth or hop. Retained GPU arcs
+  // supply attachment references instead of CPU centres; their (0,0) placeholders are not positions.
+  function matchContinuity(track, items, present, boundary, arc, arcPlaceholders) {
+    const matched = new Map(), used = new Set();
+    if (!track.drawn?.length || (!boundary && items.every((v) => track.levels.has(v.lampTraceId))))
+      return { matched, used };
+    const grid = new Map(), attachments = new Map();
+    const precision = boundary && items.some((v) => v.lampContourBound) ? 0.75 : SAME_POINT_EPS;
+    const add = (map, key, old) => {
+      let list = map.get(key);
+      if (!list) map.set(key, (list = []));
+      list.push(old);
+    };
+    for (const old of track.drawn || []) {
+      if (old.level <= 0.001 || old.drawn <= 0.001 || (!boundary && present.has(old.id))) continue;
+      if (old.arcKey !== null) add(attachments, old.arcKey, old);
+      if (Number.isFinite(old.x))
+        add(grid, `${Math.floor(old.x / precision)}:${Math.floor(old.y / precision)}`, old);
+    }
+    const candidates = boundary && precision > SAME_POINT_EPS
+      ? items.slice().sort((a, b) => Number(a.lampTargetPresent === false) - Number(b.lampTargetPresent === false))
+      : items;
+    for (const v of candidates) {
+      if (!(v.intensityAlpha > 0.001) || (!boundary && track.levels.has(v.lampTraceId))) continue;
+      let best = null, bestD = Infinity;
+      const offer = (old, d) => {
+        if (used.has(old.id)) return;
+        if (d < bestD || (d === bestD && (old.drawn > best.drawn ||
+          (old.drawn === best.drawn && old.id === v.lampTraceId)))) {
+          best = old;
+          bestD = d;
+        }
+      };
+      if (!arcPlaceholders && isSpatial(v)) {
+        const bx = Math.floor(v.px / precision), by = Math.floor(v.py / precision);
+        for (let dx = -1; dx <= 1; dx++)
+          for (let dy = -1; dy <= 1; dy++)
+            for (const old of grid.get(`${bx + dx}:${by + dy}`) || []) {
+              const d = Math.hypot(v.px - old.x, v.py - old.y);
+              if (d <= (v.lampContourBound ? precision : SAME_POINT_EPS)) offer(old, d);
+            }
+      }
+      // Attachment equality is only a proxy if one side does not have actual centres.
+      if (!best && (arc || v.lampHasAttachFraction === true))
+        for (const old of attachments.get(arcKey(v)) || [])
+          if (arcPlaceholders || !Number.isFinite(old.x)) offer(old, 0);
+      if (best) {
+        used.add(best.id);
+        matched.set(v, boundary && v.lampContourBound ? best.drawn : best.level);
+      }
+    }
+    return { matched, used };
+  }
+  function suppressEndpointOverlaps(items, strength, arcPlaceholders) {
+    const lit = items.filter((v) => v.intensityAlpha > 0 && (arcPlaceholders || isSpatial(v)));
+    lit.sort((a, b) =>
+      b.intensityAlpha - a.intensityAlpha ||
+      (a.lampRank || 0) - (b.lampRank || 0) ||
+      String(a.lampTraceId).localeCompare(String(b.lampTraceId)),
+    );
+    const grid = new Map();
+    for (const v of lit) {
+      const x = Math.floor(v.px / cell), y = Math.floor(v.py / cell);
+      const key = arcPlaceholders ? arcKey(v) : `${x}:${y}`;
+      if (key === null) continue;
+      let overlap = 0;
+      if (arcPlaceholders) {
+        overlap = grid.has(key) ? 1 : 0;
+      } else {
+        for (let dx = -1; dx <= 1; dx++)
+          for (let dy = -1; dy <= 1; dy++)
+            for (const earlier of grid.get(`${x + dx}:${y + dy}`) || []) {
+              const d = Math.min(1, Math.hypot(v.px - earlier.px, v.py - earlier.py) / cell);
+              overlap = Math.max(overlap, 1 - d * d * (3 - 2 * d));
+            }
+      }
+      v.intensityAlpha *= 1 - strength * overlap;
+      if (v.intensityAlpha > 0) {
+        let list = grid.get(key);
+        if (!list) grid.set(key, (list = []));
+        list.push(v);
+      }
+    }
+  }
+  function apply(scope, items, {
+    now, duration, animate, arc = false, arcPlaceholders = false, merge = 0,
+    phase = null, phaseProgress = null, phaseTiming = null, extinguishIntersections = true,
+  }) {
     let track = tracks.get(scope);
     if (!track || now < track.now || now - track.now > Math.max(2000, duration * 2)) {
       track = { now, levels: new Map(), pending: false, ghosts: [], snaps: new Map() };
@@ -155,7 +247,7 @@ const SomataLampStability = (() => {
       for (const [k, v] of tracks) if (now - v.now > 120000) tracks.delete(k);
     }
     const dt = now - track.now,
-      limit = Math.min(50, Math.max(0, dt)) / Math.max(1, duration),
+      limit = duration > 0 ? Math.max(0, dt) / duration : 1,
       active = animate || track.pending;
     const next = new Map(),
       bins = new Map(),
@@ -166,21 +258,31 @@ const SomataLampStability = (() => {
       maxMultiplicity = 0,
       peak = 0,
       pending = false;
-    const spatial = (v) => Number.isFinite(v.px) && Number.isFinite(v.py);
+    const spatial = (v) => !arcPlaceholders && isSpatial(v);
     const present = new Set();
     for (const v of items) present.add(v.lampTraceId);
-    const orphans = arc ? [] : findOrphans(track, present);
-    const inherited = arc ? null : inheritLevels(track, items, orphans, spatial);
+    const boundary = track.drawn && (track.phase !== phase || track.arc !== arc);
+    const { matched, used } = matchContinuity(track, items, present, boundary, arc, arcPlaceholders);
+    const orphans = arc ? [] : findOrphans(track, present, used);
+    const inherited = arc || boundary ? null : inheritLevels(track, items, orphans, spatial);
     for (const v of items) {
-      const key = arc
-        ? `${v.pathIndex}:${Math.round(v.lampAttachFraction * 1e7)}:${Math.round(v.gpuLampOffsetX * 10)}:${Math.round(v.gpuLampOffsetY * 10)}`
-        : null;
+      const key = arc ? arcKey(v) : null;
       keys.set(v, key);
       const id = v.lampTraceId,
         target = v.intensityAlpha,
-        previous = track.levels.get(id) ?? inherited?.get(v);
-      const level = active ? Math.min(target, previous === undefined ? 0 : previous + limit) : target;
-      if (level + 1e-5 < target) pending = true;
+        previous = matched.get(v) ?? (used.has(id) ? undefined : track.levels.get(id)) ?? inherited?.get(v);
+      const sourceAtStart = phase !== null && Number.isFinite(phaseProgress) && phaseProgress <= 0.05 &&
+        v.lampSourcePresent === true;
+      // An authored source vertex is already lit at the phase boundary, even
+      // if correspondence or rounding changed its ID and sampled position.
+      const ceiling = previous === undefined ? (sourceAtStart ? target : 0) : previous + limit;
+      const meterLevel = active && duration > 0 && !v.lampPhaseTimed;
+      let level = meterLevel ? Math.min(target, ceiling) : target;
+      if (meterLevel && v.lampContourBound && v.lampTargetPresent !== false && v.lampPresence >= 0.999 &&
+          previous !== undefined) {
+        level = boundary && matched.has(v) ? previous : Math.max(level, previous - limit);
+      }
+      if (Math.abs(level - target) > 1e-5) pending = true;
       levels.set(v, level);
       next.set(id, Math.max(level, next.get(id) || 0));
       const k = arc ? key : spatial(v) ? `${Math.floor(v.px / cell)}:${Math.floor(v.py / cell)}` : null;
@@ -192,6 +294,12 @@ const SomataLampStability = (() => {
     }
     // Measure unsmoothed overlaps separately. Divide the actual light only
     // after the birth envelope, so a dark newborn cannot dim a lit lamp.
+    const fade = phaseTiming
+      ? Math.max(0, Math.min(1, Math.min(phaseTiming.elapsed, phaseTiming.remaining) / Math.max(1, phaseTiming.duration ?? duration)))
+      : phase !== null && Number.isFinite(phaseProgress)
+        ? Math.max(0, Math.min(1, Math.min(phaseProgress, 1 - phaseProgress) / 0.05))
+        : 1;
+    const endpoint = 1 - fade * fade * (3 - 2 * fade);
     const outputs = new Map();
     for (const v of items) {
       const a = v.intensityAlpha;
@@ -222,11 +330,13 @@ const SomataLampStability = (() => {
               visit(w, 1 - d * d * (3 - 2 * d));
             }
       }
-      outputs.set(v, softSum > 0 ? (level * softMax) / softSum : 0);
+      const normalized = softSum > 0 ? (level * softMax) / softSum : 0;
+      outputs.set(v, extinguishIntersections ? normalized + (level - normalized) * endpoint : level);
       rawOverlap = Math.max(rawOverlap, sum);
       maxMultiplicity = Math.max(maxMultiplicity, count);
     }
-    if (merge > 0) mergeCloseLamps(items, outputs, merge);
+    if (extinguishIntersections && merge > 0 && !arcPlaceholders && endpoint < 1)
+      mergeCloseLamps(items, outputs, merge, 1 - endpoint);
     // Исходные значения нужны «хранителю»: если на старте фазы все лампы разом гаснут, одна остаётся.
     const raw = new Map(),
       origin = new Map();
@@ -236,7 +346,12 @@ const SomataLampStability = (() => {
       v.intensityAlpha = outputs.get(v);
     }
     const hopGhosts = [];
-    glideHops(track, items, now, animate, arc, hopGhosts);
+    if (extinguishIntersections && !arcPlaceholders) {
+      for (const id of used) track.pos?.delete(id);
+      if (duration > 0)
+        glideHops(track, items, now, duration, animate && track.arc === arc, arc, hopGhosts, matched);
+      else track.pos = new Map();
+    } else track.pos = new Map();
     // Тени: перескочившие лампы гаснут на старом месте, пропавшие по идентификатору (никому не
     // отданные) досвечивают и гаснут за то же время — вместе с разгорающимися новыми это
     // перекрёстное затухание без провала света.
@@ -247,22 +362,23 @@ const SomataLampStability = (() => {
       ghostItems.add(ghost);
       items.push(ghost);
     };
-    if (!arc) {
+    if (!arc && extinguishIntersections) {
       for (const g of hopGhosts) addGhost(g.v, g.v.lampTraceId, g.x, g.y, g.base * g.weight);
       if (active) {
         for (const o of orphans) {
           const snap = !o.used && track.snaps?.get(o.id);
-          if (snap && snap.intensityAlpha > 0.002) track.ghosts.push({ id: o.id, snap, at: now });
+          if (snap && !snap.lampPhaseTimed && !snap.lampContourBound && snap.intensityAlpha > 0.002)
+            track.ghosts.push({ id: o.id, snap, at: now });
         }
       }
       track.ghosts = track.ghosts.filter((g) => {
-        if (present.has(g.id) || now - g.at >= HOP_GLIDE_MS || now < g.at) return false;
-        const f = (now - g.at) / HOP_GLIDE_MS;
+        if (present.has(g.id) || now - g.at >= duration || now < g.at) return false;
+        const f = (now - g.at) / duration;
         addGhost(g.snap, g.id, g.snap.px, g.snap.py, g.snap.intensityAlpha * (1 - f * f * (3 - 2 * f)));
         return true;
       });
       if (track.ghosts.length > 400) track.ghosts.length = 400;
-    }
+    } else track.ghosts = [];
     // Хранитель: ни один кадр не должен остаться совсем без света, если в предыдущем он был.
     // Смена фазы меняет идентификаторы ламп (старые исчезают, новые рождаются тёмными), а перескоки
     // гасят лампы на старом месте — вместе это давало «все лампы погасли разом». Тогда одна лампа
@@ -275,8 +391,10 @@ const SomataLampStability = (() => {
         best = v;
       }
     }
-    if (items.length && rawPeak > 0.05 && track.hadLit === true && litNow < 0.5 * rawPeak) {
-      const eligible = items.filter((v) => raw.get(v) >= 0.5 * rawPeak);
+    const carriedLight = boundary && items.some((v) => v.lampContourBound && matched.has(v));
+    if (!carriedLight && items.length && rawPeak > 0.05 && track.hadLit === true && litNow < 0.5 * rawPeak) {
+      const eligible = items.filter((v) =>
+        raw.get(v) >= 0.5 * rawPeak && (extinguishIntersections || v.lampTargetPresent !== false));
       let keeper = eligible.find((v) => v.lampTraceId === track.keeperId) || null;
       if (!keeper) {
         const from = track.litPos;
@@ -303,14 +421,24 @@ const SomataLampStability = (() => {
         litNow = keeper.intensityAlpha;
       }
     } else track.keeperId = null;
+    if (endpoint > 0) suppressEndpointOverlaps(items, endpoint, arcPlaceholders);
     for (const v of items) peak = Math.max(peak, v.intensityAlpha);
     track.hadLit = rawPeak > 0.05 && litNow >= 0.5 * rawPeak;
     if (best && Number.isFinite(best.px)) track.litPos = { x: best.px, y: best.py };
     track.birthPos = new Map();
     const snaps = new Map();
+    const drawn = [];
     for (const v of items) {
       if (ghostItems.has(v)) continue;
       const o = origin.get(v);
+      drawn.push({
+        id: v.lampTraceId,
+        level: next.get(v.lampTraceId),
+        drawn: v.intensityAlpha,
+        x: spatial(v) ? v.px : NaN,
+        y: spatial(v) ? v.py : NaN,
+        arcKey: arc || v.lampHasAttachFraction === true ? arcKey(v) : null,
+      });
       if (spatial(v) && o && Number.isFinite(o[0]) && Number.isFinite(o[1]))
         track.birthPos.set(v.lampTraceId, o);
       if (!arc && v.intensityAlpha > 0.002) {
@@ -319,6 +447,9 @@ const SomataLampStability = (() => {
       }
     }
     track.snaps = snaps;
+    track.drawn = drawn;
+    track.arc = arc;
+    track.phase = phase;
     track.levels = next;
     track.now = now;
     track.pending = pending;

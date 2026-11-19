@@ -150,7 +150,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
     ...defaults,
     ...l,
     roundingShape: 'hybrid', // migrate retired contour/spline projects
-    roundingCornerType: ['local', 'classic', 'fourier'].includes(l.roundingCornerType)
+    roundingCornerType: ['local', 'classic', 'fourier', 'simple'].includes(l.roundingCornerType)
       ? l.roundingCornerType
       : 'classic',
     fourierStrength: Number.isFinite(Number(l.fourierStrength))
@@ -442,7 +442,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
   // scene setting. New saves carry per-layer modes and explicit marker.
   if (settings.fourierPerLayer !== true && settings.fourierMode === true) {
     for (const layer of state.layers) {
-      layer.roundingPreviousCornerType = layer.roundingCornerType === 'local' ? 'local' : 'classic';
+      layer.roundingPreviousCornerType = ['local', 'simple'].includes(layer.roundingCornerType) ? layer.roundingCornerType : 'classic';
       layer.roundingCornerType = 'fourier';
       const v = Number(settings.fourierStrength);
       layer.fourierStrength = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 50;
@@ -722,7 +722,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
     if (layer.fillMatchStroke !== false) syncLayerFillColorToStroke(layer, true);
     if (raw.lamps && typeof raw.lamps === 'object' && !Number.isFinite(Number(raw.lamps.softnessMultiplier)))
       layer.lamps.softnessMultiplier = 1;
-    if (!['local', 'classic', 'fourier'].includes(layer.roundingCornerType))
+    if (!['local', 'classic', 'fourier', 'simple'].includes(layer.roundingCornerType))
       layer.roundingCornerType = 'classic';
     ensureLayerEffectState(layer);
   }
@@ -896,6 +896,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
       ),
     );
     if (typeof settings.lamps.adaptiveBrightness !== 'boolean') state.lamps.adaptiveBrightness = true;
+    state.lamps.extinguishIntersections = settings.lamps.extinguishIntersections === true;
     if (typeof settings.lamps.adaptiveAdjustBrightness !== 'boolean')
       state.lamps.adaptiveAdjustBrightness = false;
     state.lamps.adaptiveStrength = Math.max(0, Math.min(100, Number(state.lamps.adaptiveStrength ?? 100)));

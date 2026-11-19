@@ -105,3 +105,31 @@ assert.ok(
 console.log(
   'PASS: frame gaps, line and skeleton jumps, Corridor transforms, phase metadata, missing CPU route and opt-in capture; Glint scratch uses max coverage',
 );
+
+
+{
+  const warnings = [];
+  ctx.console = { warn: (...args) => warnings.push(args) };
+  const width = (x, offset = 0) => [{ points: [{ x: offset - x, y: 0 }, { x: offset + x, y: 0 }] }];
+  const snap = (id, paths) => trace.observeRounding({
+    frameId: id,
+    layer: { id: 'diagnostic-layer', rounding: 65, roundingCornerType: 'classic', N: 6, K: 1 },
+    morphFrameActive: true,
+    geometryProvider: { progress: .5 },
+    geometryPlan: { kind: 'blue-anchor-linear' },
+    contour: { paths },
+  });
+  now = 300;
+  snap(100, width(10));
+  now += 16;
+  snap(101, width(10, 10));
+  assert.equal(warnings.length, 0, 'moving the whole layer is not a rounding jump');
+  now += 16;
+  snap(102, width(15, 20));
+  assert.equal(warnings[0][0], '[Somata Spline+] contour-jump');
+  assert.equal(warnings[0][1].impulsePx, 5);
+  trace.noteRoundingFallback({ id: 'diagnostic-layer', rounding: 65 }, .5, 'topology', 'bezier-partition');
+  trace.noteRoundingFallback({ id: 'diagnostic-layer', rounding: 65 }, .5, 'topology', 'bezier-partition');
+  assert.equal(warnings[1][1].reason, 'bezier-partition');
+  assert.equal(warnings.length, 2, 'throttle repeated warnings');
+}

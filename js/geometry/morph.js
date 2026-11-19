@@ -1578,12 +1578,12 @@ function profileCubicPartition(cubics, knots, common) {
   for (let k = 0; k < common.length - 1; k++) {
     const a = common[k],
       b = common[k + 1];
-    while (i < cubics.length - 1 && a >= knots[i + 1] - 1e-8) i++;
-    if (b > knots[i + 1] + 1e-8) return null;
-    const span = Math.max(1e-9, knots[i + 1] - knots[i]);
-    result.push(
-      profileCubicSlice(cubics[i], Math.max(0, (a - knots[i]) / span), Math.min(1, (b - knots[i]) / span)),
-    );
+    const middle = (a + b) * 0.5;
+    while (i < cubics.length - 1 && middle >= knots[i + 1]) i++;
+    if (a < knots[i] - 1e-8 || b > knots[i + 1] + 1e-8) return null;
+    const span = Math.max(1e-12, knots[i + 1] - knots[i]);
+    const at = (u) => Math.max(0, Math.min(1, (u - knots[i]) / span));
+    result.push(profileCubicSlice(cubics[i], at(a), at(b)));
   }
   return result;
 }
@@ -2205,7 +2205,19 @@ let legacyFilletCorrectionGuard = false;
 const legacyFilletCorrectionCache = new Map();
 const LEGACY_FILLET_CACHE_LIMIT = 48;
 const legacyFilletCacheStats = { hits: 0, misses: 0, builds: 0, evictions: 0 };
-function legacyFilletCacheKey(layer, src, dst, slideType, movementMode) {
+function legacyFilletEndpointLayer(layer, endpoint) {
+  return {
+    ...layer,
+    N: endpoint.N,
+    K: endpoint.K,
+    radius: endpoint.radius,
+    radiusMultiplier: endpoint.radiusMultiplier,
+    rotation: endpoint.rotation,
+    rounding: endpoint.rounding,
+    profileNodes: endpoint.profileNodes,
+  };
+}
+function legacyFilletCacheKey(startLayer, endLayer, src, dst, slideType, movementMode, mode) {
   // layerGeometrySignature also covers orbit count, custom suborbits,
   // profile subdivision, rounding policy, radius and node values.
   // polygonSplineContourSignature adds the original exact profile
@@ -2213,10 +2225,12 @@ function legacyFilletCacheKey(layer, src, dst, slideType, movementMode) {
   const signature = (p) => layerGeometrySignature(p) + '@' + polygonSplineContourSignature(p);
   return [
     Number(runtimeState?.morph?.phaseSerial) || 0,
-    state.morph.mode,
+    Number(runtimeState?.morph?.lampCycleSerial) || 0,
+    mode,
     slideType,
     movementMode,
-    signature(layer),
+    signature(startLayer),
+    signature(endLayer),
     signature(src),
     signature(dst),
   ].join('|');
@@ -2361,8 +2375,9 @@ function createLegacyFilletPathRecorder() {
   };
   return ctx;
 }
-function legacyFilletCapture(draw) {
+function legacyFilletCapture(draw, mode) {
   const rec = createLegacyFilletPathRecorder();
+  rec.__somataActiveMorphMode = mode;
   draw(rec);
   rec.stroke();
   if (
@@ -2529,7 +2544,25 @@ function legacyFilletDrawCorrected(ctx, layer, src, dst, t, alpha, slideType, mo
     Math.max(Number(src.rounding) || 0, Number(dst.rounding) || 0) < 0.001
   )
     return false;
-  const cacheKey = legacyFilletCacheKey(layer, src, dst, slideType, movementMode);
+  const u = Math.max(0, Math.min(1, Number(t) || 0));
+  if (u === 0 || u === 1) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    try {
+      renderLayerOrbitPaths(ctx, resolveExactPolygonMorphEndpoint(u === 0 ? src : dst));
+    } finally {
+      ctx.restore();
+    }
+    return true;
+  }
+  const mode = ctx.__somataActiveMorphMode || state.morph.mode;
+  const startLayer = legacyFilletEndpointLayer(layer, src);
+  const endLayer = legacyFilletEndpointLayer(layer, dst);
+  const cacheKey = legacyFilletCacheKey(startLayer, endLayer, src, dst, slideType, movementMode, mode);
+  const failed = (reason) => {
+    window.SomataJumpTrace?.noteRoundingFallback?.(layer, u, mode, reason);
+    return false;
+  };
   let cached = legacyFilletCacheGet(cacheKey);
   try {
     legacyFilletCorrectionGuard = true;
@@ -2541,10 +2574,12 @@ function legacyFilletDrawCorrected(ctx, layer, src, dst, t, alpha, slideType, mo
         drawExactPolygonMorphEndpoint(c, resolveExactPolygonMorphEndpoint(dst), 1),
       );
       const startLive = legacyFilletCapture((c) =>
-        drawAngularAnchorMorph(c, layer, src, dst, 0, 1, slideType, movementMode),
+        drawAngularAnchorMorph(c, startLayer, src, dst, 0, 1, slideType, movementMode),
+        mode,
       );
       const endLive = legacyFilletCapture((c) =>
-        drawAngularAnchorMorph(c, layer, src, dst, 1, 1, slideType, movementMode),
+        drawAngularAnchorMorph(c, endLayer, src, dst, 1, 1, slideType, movementMode),
+        mode,
       );
       const alignedStart = phaseStaticSuborbitMatches(startStatic, startLive);
       const alignedEnd = phaseStaticSuborbitMatches(endStatic, endLive);
@@ -2576,34 +2611,24 @@ function legacyFilletDrawCorrected(ctx, layer, src, dst, t, alpha, slideType, mo
       !endLive ||
       [startStatic, endStatic, endLive].some((p) => p.length !== startLive.length)
     )
-      return false;
+      return failed('endpoint-capture');
     // Capture t last, so the Morph plan's reused vertexPts scratch
     // retains the original moving anchor positions for this frame.
     const live = legacyFilletCapture((c) =>
       drawAngularAnchorMorph(c, layer, src, dst, t, 1, slideType, movementMode),
+      mode,
     );
-    if (!live || live.length !== startLive.length) return false;
+    if (!live || live.length !== startLive.length) return failed('live-rail-count');
     const result = [];
     for (let pi = 0; pi < live.length; pi++) {
       const rows = [live[pi], startLive[pi], endLive[pi], startStatic[pi], endStatic[pi]];
-      if (rows.some((p) => p.closed !== rows[0].closed)) return false;
+      if (rows.some((p) => p.closed !== rows[0].closed)) return failed('closure-mismatch');
       const sub = legacyFilletCommonPartition(
         rows.map((p) => p.cubics),
         cached.staticPartitions?.[pi],
       );
-      if (!sub) return false;
+      if (!sub) return failed('bezier-partition');
       result.push({ closed: rows[0].closed, cubics: sub });
-    }
-    const u = Math.max(0, Math.min(1, Number(t) || 0));
-    // Preserve the exact authored Bézier segmentation at precisely
-    // t=0 and t=1. This is one mathematical instant, not a held
-    // animation window: neighboring times use the moving rail.
-    if (u === 0 || u === 1) {
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      renderLayerOrbitPaths(ctx, resolveExactPolygonMorphEndpoint(u === 0 ? src : dst));
-      ctx.restore();
-      return true;
     }
     // Interpolate endpoint *residuals* against the same live cubic
     // at t=0 or 1, not against the current live cubic. This is the
@@ -2627,6 +2652,8 @@ function legacyFilletDrawCorrected(ctx, layer, src, dst, t, alpha, slideType, mo
     if (useFastPhaseSampling)
       ctx.__somataPhaseSplineFastSampling =
         Math.max(Number(src.rounding) || 0, Number(dst.rounding) || 0) > 145 ? 8 : 6;
+    const trace = window.SomataJumpTrace?.noteRoundingShape;
+    const tracedPaths = trace ? [] : null;
     try {
       for (const row of result) {
         const [liveC, ls, le, ss, se] = row.cubics;
@@ -2636,6 +2663,7 @@ function legacyFilletDrawCorrected(ctx, layer, src, dst, t, alpha, slideType, mo
         ctx.beginPath();
         const p = morphPoint(liveC[0].p0, ls[0].p0, le[0].p0, ss[0].p0, se[0].p0);
         ctx.moveTo(p.x, p.y);
+        const tracedPoints = tracedPaths ? [p] : null;
         for (let i = 0; i < liveC.length; i++) {
           const q = liveC[i],
             a = ls[i],
@@ -2646,7 +2674,11 @@ function legacyFilletDrawCorrected(ctx, layer, src, dst, t, alpha, slideType, mo
             c2 = morphPoint(q.c2, a.c2, b.c2, c.c2, d.c2),
             p3 = morphPoint(q.p3, a.p3, b.p3, c.p3, d.p3);
           ctx.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, p3.x, p3.y);
+          if (tracedPoints) {
+            tracedPoints.push(phaseCubicAt({ p0: tracedPoints.at(-1), c1, c2, p3 }, 0.5), p3);
+          }
         }
+        if (tracedPoints) tracedPaths.push({ points: tracedPoints });
         if (row.closed) ctx.closePath();
         if (!ctx.__suppressFill && layer.fill && row.closed) fillCanvasGeometry(ctx, layer);
         if (!ctx.__suppressStroke) ctx.stroke();
@@ -2655,6 +2687,7 @@ function legacyFilletDrawCorrected(ctx, layer, src, dst, t, alpha, slideType, mo
     } finally {
       if (useFastPhaseSampling) ctx.__somataPhaseSplineFastSampling = previousSampling;
     }
+    if (tracedPaths?.length) trace(layer, u, tracedPaths);
     return true;
   } finally {
     legacyFilletCorrectionGuard = false;
@@ -3282,6 +3315,7 @@ function drawMorphPathQuality(
       somataDrawSplineCornerMode(ctx, points, Boolean(closed), round, {
         baseSplineBlend: baseBlend,
         layer: filletLayer,
+        cornerFlags,
         duplicateStable: true,
       })
     )

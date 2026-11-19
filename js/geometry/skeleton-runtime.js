@@ -540,15 +540,27 @@ window.SomataSkeletonRuntime = (() => {
     if (!a || !b || a.chaosStar || b.chaosStar || !plan) return null;
     const r0 = getEffectiveLayerRadius(a, 220),
       r1 = getEffectiveLayerRadius(b, r0);
-    return (t) => {
-      if (t === 0) return source;
-      if (t === 1) return target;
+    const evaluate = (t, lampSlots = false) => {
+      if (!lampSlots && t === 0) return source;
+      if (!lampSlots && t === 1) return target;
       const r = lerp(r0, r1, t);
       return plan.pathPlans.flatMap((pp, orbitIndex) => {
-        const points = pp.from.map((_, i) => ({ id: `m:${orbitIndex}:${i}`, ...vertex(pp, i, t, r, a, b) }));
+        const points = pp.from.map((_, i) => ({
+          ...(lampSlots ? pp.lampSlots[i] : {}),
+          id: `m:${orbitIndex}:${i}`,
+          ...vertex(pp, i, t, r, a, b),
+          windingU: pp.turnFrom && pp.turnTo ? lerp(pp.turnFrom[i], pp.turnTo[i], t) : undefined,
+        }));
         // The carrier may run opposite to an endpoint's authored vertex order
         // (Minimal slide). Its contour profile must then be mirrored.
         const reversed = {
+          ...(pp.turnFrom && pp.turnTo ? {
+            spiralEdgeLife: pp.turnFrom.map((from, i) => {
+              const sourceSpan = (pp.turnFrom[i + 1] ?? 1) - from;
+              const targetSpan = (pp.turnTo[i + 1] ?? 1) - pp.turnTo[i];
+              return lerp(Number(sourceSpan > 1e-8), Number(targetSpan > 1e-8), t);
+            }),
+          } : {}),
           srcReversed: pp.srcReversed === true,
           dstReversed: pp.dstReversed === true,
           // Для заливки: путь-дубль слияния/разделения орбит (см. fillGhostWeight).
@@ -563,6 +575,30 @@ window.SomataSkeletonRuntime = (() => {
             ];
       });
     };
+    if (ctx.anchorPlan && !ctx.spiralMorph) {
+      // Geometry compacts its endpoint paths. Lamps retain the same slots throughout the phase.
+      for (const pp of plan.pathPlans) {
+        const representatives = (angles, present) => {
+          const seen = new Set();
+          return angles.map((angle) => {
+            const key = Math.round(Math.cos(angle) * 1e7) + ':' + Math.round(Math.sin(angle) * 1e7);
+            const first = !seen.has(key);
+            seen.add(key);
+            return present && first;
+          });
+        };
+        const source = representatives(pp.from, pp.sourcePathPresent !== false);
+        const target = representatives(pp.from.map((a, i) => a + pp.delta[i]), pp.targetPathPresent !== false);
+        pp.lampSlots = pp.from.map((_, i) => ({
+          lampSourcePresent: source[i],
+          lampTargetPresent: target[i],
+        }));
+      }
+      evaluate.lampPaths = (t) => evaluate(t, true);
+    }
+    const sample = (t) => evaluate(t);
+    sample.lampPaths = evaluate.lampPaths;
+    return sample;
   }
   const helpers = Object.freeze({ cart, anchors, polygon });
   function anchors(layer) {

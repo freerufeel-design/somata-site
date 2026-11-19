@@ -1,6 +1,6 @@
 import './lamp-stability.js'; // initialisation order: this module runs after it
 import { SomataGeometryPolicy } from './geometry-policy.js';
-import { state } from '../core/state.js';
+import { runtimeState, state } from '../core/state.js';
 import { mainCtx } from '../core/render-runtime.js';
 import { requestMainCanvasRender } from '../core/scheduler.js';
 import { applyMotionTunnelLag } from '../effects/motion.js';
@@ -9,8 +9,8 @@ import { renderBackendTelemetry } from './backend-telemetry.js';
 import { SomataFrameContourService } from '../geometry/frame-contour.js';
 import { LampGPURenderer } from '../gpu/lamp-renderer.js';
 import { applyLayerFrameEffectTransform, getLayerFrameAuxiliaryPaths } from '../geometry/frame-paths.js';
-import { lampAdaptivePointCount, lampVisualNow } from '../lamps/lamp-motion.js';
-import { lampBendAnimationMs } from '../lamps/lamp-attachment.js';
+import { lampAdaptivePointCount, lampPhaseLightTiming, lampVisualNow } from '../lamps/lamp-motion.js';
+import { lampBendAnimationMs, lampCornerInertiaMs } from '../lamps/lamp-attachment.js';
 import { collectMorphLampPoints } from '../lamps/lamp-topology.js';
 import { lampAdaptiveFrame, prepareLampDrawStyle, prepareLampVisualPlan } from '../lamps/lamp-visual.js';
 import { SomataFeatureHost } from './feature-host.js';
@@ -42,10 +42,18 @@ function renderLayerLampPass(frameCtx) {
       cssTransformScale: 1,
     };
     const prepareVisual = () => {
+      const now = frameCtx.frame?.now ?? frameCtx.now ?? lampVisualNow();
+      const duration = lampBendAnimationMs(frameCtx, drawPlan.config);
+      const manual = frameCtx.geometryProvider?.origin === 'manual';
+      const blue = !manual && (frameCtx.blueMorphProvider?.active || frameCtx.morphFrameActive);
+      const phase = manual ? frameCtx.geometryProvider.lampPhase : null;
+      const timing = phase
+        ? { elapsed: phase.elapsed, remaining: phase.duration - phase.elapsed, duration: lampCornerInertiaMs(drawPlan.config) }
+        : blue ? lampPhaseLightTiming(now, duration) : null;
       prepareLampDrawStyle(
         drawPlan.config,
         drawPlan.audioLayerIndex,
-        lampAdaptivePointCount(set.points, drawPlan.config),
+        lampAdaptivePointCount(set.points, drawPlan.config, timing),
         effect.adaptiveCount,
         drawPlan.zoom,
         drawPlan.preparedStyle,
@@ -57,22 +65,28 @@ function renderLayerLampPass(frameCtx) {
         drawPlan.preparedStyle,
         drawPlan.audioLayerIndex,
         set.visualPlan || (set.visualPlan = { items: [] }),
+        timing,
       );
       const arc = set.gpuLampNative === true && (set.gpuPrepared?.gpuLampNativeKind || 'arc') === 'arc';
-      const now = frameCtx.frame?.now ?? frameCtx.now ?? lampVisualNow();
       const animating =
         frameCtx.morphFrameActive === true ||
         frameCtx.blueMorphProvider?.active === true ||
         frameCtx.minimalFadeEnabled === true ||
+        manual ||
         Number(frameCtx.lampAnimationMs) > 0;
       const stats = SomataLampStability.apply(
-        `${frameCtx.layer?.id ?? frameCtx.layerIndex}:${set.layer?.id ?? ''}:${setIndex}:${arc ? 'arc' : 'visual'}`,
+        `${frameCtx.layer?.id ?? frameCtx.layerIndex}:${set.layer?.id ?? ''}:${setIndex}`,
         plan.items,
         {
           now,
-          duration: lampBendAnimationMs(frameCtx),
+          duration,
+          phaseTiming: timing,
           animate: animating,
           arc,
+          arcPlaceholders: arc, // retained GPU Arc publishes fractions, not real CPU centres
+          phase: phase?.id ?? (blue ? runtimeState.morph?.lampCycleSerial ?? null : null),
+          phaseProgress: phase ? phase.elapsed / phase.duration : blue ? Number(runtimeState.morph?.progress) : null,
+          extinguishIntersections: drawPlan.config.extinguishIntersections === true,
           // «Произвольное» намеренно ставит лампы густо; в остальных режимах близкие лампы одного узла сливаются.
           merge: (set.config?.positionMode || drawPlan.config?.positionMode) === 'arbitrary' ? 0 : 0.5,
         },

@@ -971,6 +971,7 @@ function ensureLayerLampState(layer) {
     ),
   );
   if (typeof owner.lamps.adaptiveBrightness !== 'boolean') owner.lamps.adaptiveBrightness = true;
+  if (typeof owner.lamps.extinguishIntersections !== 'boolean') owner.lamps.extinguishIntersections = false;
   if (typeof owner.lamps.adaptiveAdjustBrightness !== 'boolean') owner.lamps.adaptiveAdjustBrightness = false;
   if (!Number.isFinite(Number(owner.lamps.adaptiveStrength))) owner.lamps.adaptiveStrength = 100;
   if (!Number.isFinite(Number(owner.lamps.adaptiveStrengthMultiplier)))
