@@ -57,9 +57,11 @@
 #interfaceGuide .ig-card {
   position: absolute;
   top: var(--ig-card-top, 135px);
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(680px, calc(100% - 24px));
+  left: var(--ig-card-left, 12px);
+  right: 12px;
+  width: auto;
+  max-width: 680px;
+  margin-inline: auto;
   max-height: calc(100% - var(--ig-card-top, 135px) - max(12px, env(safe-area-inset-bottom)));
   overflow: auto;
   overscroll-behavior: contain;
@@ -123,3 +125,21 @@
 }
 #interfaceGuide button.ig-number:hover { background: #fff; }
 #interfaceGuide [hidden] { display: none !important; }
+
+#interfaceGuide .ig-scopes { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+#interfaceGuide .ig-scopes button { padding: 6px 10px; min-height: 34px; font: 700 13px/1.2 system-ui, sans-serif; }
+#interfaceGuide .ig-scopes button[aria-pressed='true'] { color: #0a1627; border-color: #d8e8ff; background: #d8e8ff; }
+
+/* Preview the mobile tool icons without opening editor panels. */
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  body:has(#interfaceGuide[open][data-rail-preview='true']) #sidebarToolRail.sidebar-tool-rail {
+    visibility: visible !important;
+    opacity: 1 !important;
+    transform: none !important;
+    transition: none !important;
+  }
+  body:has(#interfaceGuide[open][data-rail-preview='true']) #sidebarToolRail > .sidebar-tool-btn {
+    visibility: visible !important;
+    transition: none !important;
+  }
+}

@@ -1,6 +1,6 @@
-// Standalone toolbar guide: the application keeps rendering behind a native modal dialog.
+// Standalone interface guide: the application keeps rendering behind a native modal dialog.
 (() => {
-  const groups = [
+  const topGroups = [
     ['Синий морф', '#8fbeff', [
       ['btnMorph', '◇ Синий морф', 'Запускает морфинг параметров. Повторное нажатие возвращает к началу текущей фазы и останавливает морф.'],
       ['btnMorphSettings', '⚙ Настройки', 'Открывает профили, список изменяемых параметров и настройки переходов.'],
@@ -48,10 +48,46 @@
     ]],
   ];
 
+  const sideGroups = [
+    ['Форма и линия', '#8fbeff', [
+      ['btnMobileControls', '☰ Инструменты', 'Показывает или скрывает ряд кнопок боковой панели.'],
+      ['btnCollapseSidebar', '☰ Свернуть настройки', 'Сворачивает или разворачивает панель настроек.'],
+      ['btnSidebarShape', '☆ Построение формы', 'Открывает параметры геометрии. Правый клик переключает видимость линии.'],
+      ['btnSidebarLines', 'Линия', 'Открывает настройки контура. Правый клик переключает Graffiti и «Точка».'],
+    ]],
+    ['Свет и паутина', '#ffd893', [
+      ['btnSidebarLamps', 'Лампочки', 'Открывает настройки лампочек. Правый клик переключает их видимость.'],
+      ['btnSidebarWeb', 'Паутина', 'Открывает настройки паутины. Правый клик переключает её видимость.'],
+      ['btnSidebarSweep', 'Проблеск', 'Открывает настройки проблеска. Правый клик включает или выключает эффект.'],
+      ['btnSidebarLightning', 'Молния', 'Открывает настройки молнии. Правый клик включает или выключает её независимо от проблеска.'],
+    ]],
+    ['Движение и эффекты', '#a4e9e1', [
+      ['btnSidebarParticles', 'Частицы', 'Открывает настройки подвижных частиц на контуре.'],
+      ['btnSidebarMotion', '➜ Движение', 'Открывает линейные преобразования и настройки движения. Правый клик переключает движения.'],
+      ['btnSidebarAmbient', 'Амбиенты', 'Открывает настройки амбиентов. Правый клик включает или выключает набор.'],
+    ]],
+    ['Фигуры, цвет и зеркало', '#e6b9ff', [
+      ['btnSidebarPrism', '2D и 3D фигуры', 'Открывает настройки независимой фигуры: 2D Sprite или 3D-оптики. Правый клик включает или выключает фигуру.'],
+      ['btnSidebarPalette', 'Палитры', 'Открывает палитры плейлиста. Правый клик переключает заливку, Shift + правый клик открывает быстрое меню.'],
+      ['btnSidebarMirror', '◈ Зеркало', 'Открывает настройки калейдоскопа: отражения по рёбрам профиля.'],
+    ]],
+    ['Слои', '#a9e7a9', [
+      ['btnMasterLayer', 'Мастер', 'Позволяет менять выбранный параметр сразу у всех слоёв.'],
+      ['layerCountBadge', 'Число слоёв', 'Показывает, сколько слоёв в проекте.'],
+      ['btnAddLayer', '＋ Добавить', 'Создаёт новый слой.'],
+      ['btnDuplicateLayer', 'Дублировать', 'Копирует выбранный слой.'],
+      ['btnDeleteLayer', 'Удалить', 'Удаляет выбранный слой.'],
+      ['btnToggleLayerList', '⌄ Список слоёв', 'На мобильном экране раскрывает или сворачивает список слоёв.'],
+    ]],
+  ];
+
   const trigger = document.getElementById('btnInterfaceGuide');
   const dialog = document.getElementById('interfaceGuide');
   const header = trigger.closest('header');
   const toolbar = header.querySelector('.header-actions');
+  const rail = document.getElementById('sidebarToolRail');
+  const settings = document.getElementById('settingsSidebar');
+  const scopeButtons = [...dialog.querySelectorAll('.ig-scopes button')];
   const card = dialog.querySelector('.ig-card');
   const close = dialog.querySelector('.ig-close');
   const nav = dialog.querySelector('.ig-groups');
@@ -61,7 +97,9 @@
   const extra = dialog.querySelector('.ig-extra');
   const cutouts = dialog.querySelector('.ig-cutouts');
   const pointers = dialog.querySelector('.ig-pointers');
+  let groups = topGroups;
   let selected = 0;
+  let railScroll = 0;
   let originalScroll = 0;
   let frame = 0;
   let entries = [];
@@ -77,16 +115,15 @@
     return Boolean(target?.getClientRects().length && getComputedStyle(target).visibility === 'visible');
   }
 
-  function revealControls() {
-    const bounds = toolbar.getBoundingClientRect();
-    if (toolbar.scrollWidth <= toolbar.clientWidth) return;
-    const rects = entries.filter(({ target }) => toolbar.contains(target)).map(({ target }) => target.getBoundingClientRect());
-    if (!rects.length) return;
+  function revealControls(container, targets) {
+    const bounds = container.getBoundingClientRect();
+    const rects = targets.filter((target) => container.contains(target)).map((target) => target.getBoundingClientRect());
+    if (!rects.length || container.scrollWidth <= container.clientWidth) return;
     const left = Math.min(...rects.map((r) => r.left));
     const right = Math.max(...rects.map((r) => r.right));
     const center = right - left <= bounds.width - 12 ? (left + right) / 2 : (rects[0].left + rects[0].right) / 2;
     if (left < bounds.left + 4 || right > bounds.right - 4) {
-      toolbar.scrollTo({ left: toolbar.scrollLeft + center - (bounds.left + bounds.right) / 2, behavior: 'instant' });
+      container.scrollTo({ left: container.scrollLeft + center - (bounds.left + bounds.right) / 2, behavior: 'instant' });
     }
   }
 
@@ -97,33 +134,57 @@
     pointers.replaceChildren();
     const viewport = dialog.getBoundingClientRect();
     const headerRect = header.getBoundingClientRect();
-    const toolbarRect = toolbar.getBoundingClientRect();
+    const sidebar = groups === sideGroups;
+    const layers = sidebar && selected === sideGroups.length - 1;
+    const railRect = rail.getBoundingClientRect();
+    const sideEdge = layers ? settings.getBoundingClientRect().right : railRect.right;
+    const beside = sidebar && getComputedStyle(rail).flexDirection !== 'row' && viewport.width - sideEdge >= 340;
     const spacing = viewport.height < 480 ? 42 : 64;
-    const top = Math.min(Math.max(14, headerRect.bottom + spacing), Math.max(14, viewport.height - 160));
+    let top = Math.max(14, headerRect.bottom + spacing);
+    const lateral = beside && !layers;
+    if (sidebar && !lateral) {
+      const bottom = Math.max(0, ...entries.filter(({ target }) => controlIsRendered(target)).map(({ target }) => target.getBoundingClientRect().bottom));
+      top = Math.max(top, bottom + 36);
+    }
+    top = Math.min(top, Math.max(14, viewport.height - 170));
     dialog.style.setProperty('--ig-card-top', `${top}px`);
+    dialog.style.setProperty('--ig-card-left', `${beside ? Math.max(12, sideEdge + 58) : 12}px`);
     const cardRect = card.getBoundingClientRect();
     const targets = [];
     entries.forEach(({ target }, i) => {
+      if (!controlIsRendered(target)) return;
       const rect = target.getBoundingClientRect();
-      if (!rect.width || !rect.height || getComputedStyle(target).visibility !== 'visible') return;
-      const clip = toolbar.contains(target) ? toolbarRect : viewport;
+      const clip = toolbar.contains(target) ? toolbar.getBoundingClientRect() : rail.contains(target) ? railRect : viewport;
       const x = Math.max(2, clip.left, rect.left - 2);
       const right = Math.min(viewport.width - 2, clip.right, rect.right + 2);
-      const y = Math.max(1, rect.top - 2);
-      const bottom = rect.bottom + 2;
-      if (right - x < Math.min(14, rect.width / 2) || bottom + 29 > cardRect.top) return;
+      const y = Math.max(1, clip.top, rect.top - 2);
+      const bottom = Math.min(viewport.height - 1, clip.bottom, rect.bottom + 2);
+      if (right - x < Math.min(14, rect.width / 2) || bottom - y < Math.min(14, rect.height / 2)) return;
+      if (lateral ? right + 29 > cardRect.left : bottom + 29 > cardRect.top) return;
       const box = { x, y, width: right - x, height: bottom - y, rx: 5 };
       svg('rect', box, cutouts);
       svg('rect', { ...box, class: 'ig-outline' }, pointers);
-      targets.push({ number: i + 1, x: (x + right) / 2, bottom });
+      targets.push({ number: i + 1, x: (x + right) / 2, y: (y + bottom) / 2, right, bottom });
     });
-    targets.sort((a, b) => a.x - b.x).forEach(({ number, x, bottom }, i) => {
-      const start = cardRect.left + cardRect.width * ((i + 1) / (targets.length + 1));
-      const badgeY = bottom + 23;
-      const curveY = (badgeY + cardRect.top) / 2;
-      svg('path', { d: `M${start} ${cardRect.top + 1} C${start} ${curveY} ${x} ${curveY} ${x} ${bottom + 3}`, class: 'ig-leader', 'marker-end': 'url(#igArrow)' }, pointers);
-      svg('circle', { cx: x, cy: badgeY, r: 9, class: 'ig-index-disc' }, pointers);
-      svg('text', { x, y: badgeY, 'text-anchor': 'middle', 'dominant-baseline': 'central', class: 'ig-index-text' }, pointers).textContent = number;
+    targets.sort((a, b) => lateral ? a.y - b.y || a.x - b.x : a.x - b.x).forEach(({ number, x, y, right, bottom }, i) => {
+      const fraction = (i + 1) / (targets.length + 1);
+      let d, bx, by;
+      if (lateral) {
+        const start = cardRect.top + cardRect.height * fraction;
+        bx = right + 21;
+        by = y;
+        const curve = (bx + cardRect.left) / 2;
+        d = `M${cardRect.left + 1} ${start} C${curve} ${start} ${curve} ${y} ${right + 3} ${y}`;
+      } else {
+        const start = cardRect.left + cardRect.width * fraction;
+        bx = x;
+        by = bottom + 22;
+        const curve = (by + cardRect.top) / 2;
+        d = `M${start} ${cardRect.top + 1} C${start} ${curve} ${x} ${curve} ${x} ${bottom + 3}`;
+      }
+      svg('path', { d, class: 'ig-leader', 'marker-end': 'url(#igArrow)' }, pointers);
+      svg('circle', { cx: bx, cy: by, r: 9, class: 'ig-index-disc' }, pointers);
+      svg('text', { x: bx, y: by, 'text-anchor': 'middle', 'dominant-baseline': 'central', class: 'ig-index-text' }, pointers).textContent = number;
     });
   }
 
@@ -132,13 +193,17 @@
   }
 
   function showGroup(index) {
+    const sidebar = groups === sideGroups;
+    const layers = sidebar && index === sideGroups.length - 1;
+    dialog.dataset.railPreview = String(sidebar && !layers);
     nav.querySelectorAll('button').forEach((button, i) => {
-      button.hidden = !groups[i][2].some(([id]) => controlIsRendered(document.getElementById(id)));
+      button.hidden = !sidebar && !groups[i][2].some(([id]) => controlIsRendered(document.getElementById(id)));
     });
     if (nav.children[index].hidden) index = 0;
     selected = index;
     const [label, color, items] = groups[index];
-    const scrollable = toolbar.scrollWidth > toolbar.clientWidth;
+    const panel = sidebar ? rail : toolbar;
+    const scrollable = !layers && panel.scrollWidth > panel.clientWidth;
     intro.textContent = scrollable
       ? 'Выберите группу. Нажмите на номер в сноске, чтобы показать кнопку на панели.'
       : 'Выберите группу. Номера и стрелки связывают подсказки с кнопками.';
@@ -146,26 +211,34 @@
     title.textContent = label;
     nav.querySelectorAll('button').forEach((button, i) => button.setAttribute('aria-pressed', String(i === index)));
     entries = items.map(([id, name, description]) => ({ target: document.getElementById(id), name, description }))
-      .filter(({ target }) => controlIsRendered(target));
+      .filter(({ target }) => controlIsRendered(target) || (layers && target && target.id !== 'btnToggleLayerList'));
+    const hiddenLayers = layers && !entries.some(({ target }) => controlIsRendered(target));
+    if (hiddenLayers) {
+      const toggle = document.getElementById('btnMobileControls');
+      const mobile = controlIsRendered(toggle);
+      const target = mobile ? toggle : document.getElementById('btnCollapseSidebar');
+      if (controlIsRendered(target)) entries.unshift({
+        target,
+        name: mobile ? '☰ Инструменты' : '☰ Развернуть настройки',
+        description: mobile ? 'Чтобы увидеть слои, закройте справку, откройте инструменты и выберите раздел настроек.' : 'Чтобы увидеть слои, закройте справку и разверните панель настроек.',
+      });
+    }
     notes.replaceChildren(...entries.map(({ target, name, description }, i) => {
       const row = document.createElement('div');
       row.className = 'ig-entry';
       row.setAttribute('role', 'listitem');
-      const canReveal = scrollable && toolbar.contains(target);
+      const canReveal = scrollable && panel.contains(target);
       const number = document.createElement(canReveal ? 'button' : 'span');
       if (canReveal) {
         number.type = 'button';
         number.setAttribute('aria-label', `Показать на панели: ${name}`);
         number.addEventListener('click', () => {
-          const bounds = toolbar.getBoundingClientRect();
-          const rect = target.getBoundingClientRect();
-          const delta = (rect.left + rect.right - bounds.left - bounds.right) / 2;
-          toolbar.scrollTo({ left: toolbar.scrollLeft + delta, behavior: 'instant' });
+          revealControls(panel, [target]);
           schedulePaint();
         });
       }
       number.className = 'ig-number';
-      number.textContent = i + 1;
+      number.textContent = controlIsRendered(target) ? i + 1 : '–';
       const text = document.createElement('span');
       const label = document.createElement('strong');
       label.textContent = name;
@@ -173,28 +246,37 @@
       row.append(number, text);
       return row;
     }));
-    extra.hidden = index !== 0 && entries.length !== 0;
+    extra.hidden = (sidebar || index !== 0) && entries.length !== 0;
     extra.textContent = entries.length ? 'Выбор типа перехода находится в настройках синего морфа.' : 'Эта группа недоступна в текущем виде панели.';
     card.scrollTop = 0;
-    revealControls();
+    revealControls(panel, entries.map(({ target }) => target));
     paintGuide();
   }
 
-  groups.forEach(([label], index) => {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = label;
-    button.setAttribute('aria-pressed', 'false');
-    button.addEventListener('click', () => showGroup(index));
-    nav.append(button);
-  });
+  function showScope(index, group = 0) {
+    groups = index ? sideGroups : topGroups;
+    scopeButtons.forEach((button, i) => button.setAttribute('aria-pressed', String(i === index)));
+    nav.replaceChildren(...groups.map(([label], i) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.addEventListener('click', () => showGroup(i));
+      return button;
+    }));
+    if (!index) rail.scrollTo({ left: railScroll, behavior: 'instant' });
+    showGroup(group);
+  }
+  scopeButtons.forEach((button, i) => button.addEventListener('click', () => {
+    if ((groups === sideGroups) !== Boolean(i)) showScope(i);
+  }));
   trigger.addEventListener('click', (event) => {
     event.stopPropagation();
     if (dialog.open) return;
     originalScroll = toolbar.scrollLeft;
+    railScroll = rail.scrollLeft;
     dialog.showModal();
     trigger.setAttribute('aria-expanded', 'true');
-    showGroup(selected);
+    showScope(Number(groups === sideGroups), selected);
   });
   close.addEventListener('click', () => dialog.close());
   dialog.addEventListener('click', (event) => {
@@ -205,6 +287,7 @@
     trigger.setAttribute('aria-expanded', 'false');
     trigger.focus({ preventScroll: true });
     toolbar.scrollTo({ left: originalScroll, behavior: 'instant' });
+    rail.scrollTo({ left: railScroll, behavior: 'instant' });
   });
   // Existing global shortcuts (Space, Escape, etc.) must not reach the editor while open.
   window.addEventListener('keydown', (event) => {
@@ -219,4 +302,5 @@
     if (dialog.open) showGroup(selected);
   });
   toolbar.addEventListener('scroll', schedulePaint, { passive: true });
+  rail.addEventListener('scroll', schedulePaint, { passive: true });
 })();
