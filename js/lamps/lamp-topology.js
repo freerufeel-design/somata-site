@@ -1445,10 +1445,6 @@ function collectMorphLampPoints(
           pts = path?.points || [];
         if (!pts.length) continue;
         all.push({ ...pts[0], pathIndex, vertexIndex: 0 });
-        const flags = path.lampCornerFlags || [];
-        for (let i = 1; i < pts.length - 1; i++)
-          if (flags[i] || pts[i].__profileKeyCorner === true)
-            all.push({ ...pts[i], pathIndex, vertexIndex: i });
         if (pts.length > 1 && !spiralSeamShared)
           all.push({ ...pts[pts.length - 1], pathIndex, vertexIndex: pts.length - 1 });
       }

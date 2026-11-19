@@ -1136,7 +1136,7 @@ function collectStaticLampPoints(layer, prepared = null, maxPoints = 240) {
       const visiblePaths = buildLampRenderedAttachmentPaths(rawPaths, layer);
       bendPoints = projectLampPointsToCurrentPolygon(bendPoints, visiblePaths, layer, true);
     }
-    const keys = buildLampCircumferenceAnchors(layer, prepared, maxPoints);
+    const keys = buildLampCircumferenceAnchors(layer, prepared, maxPoints, false, true);
     return mergeLampKeysAndBends(keys, bendPoints, maxPoints, getLampEvaluationConfig()?.extinguishIntersections === true);
   }
   return buildLampCircumferenceAnchors(layer, prepared, maxPoints);

@@ -361,7 +361,7 @@ function lampVertexArcFractions(path, includeClosing = false) {
   if (total > 1e-9) for (let i = 1; i < n; i++) out[i] /= total;
   return out;
 }
-function buildLampCircumferenceAnchors(layer, prepared = null, maxPoints = 260, forceAttach = false) {
+function buildLampCircumferenceAnchors(layer, prepared = null, maxPoints = 260, forceAttach = false, includeProfileCorners = false) {
   if (!layer) return [];
   const drawData = prepared || getCachedLayerDrawData(layer);
   const geometryKey = drawData?.geometryKey || layerGeometrySignature(layer);
@@ -371,7 +371,7 @@ function buildLampCircumferenceAnchors(layer, prepared = null, maxPoints = 260, 
 
   const spiralSeamShared =
     isSpiralLayer(layer) && state.tunnel?.active === true && layer.spiralClosed !== false;
-  const cacheKey = `key|${geometryKey}|attach:${attach ? 1 : 0}|round:${roundingKey}|seam:${spiralSeamShared ? 1 : 0}|max:${maxPoints}`;
+  const cacheKey = `key|${geometryKey}|attach:${attach ? 1 : 0}|round:${roundingKey}|corners:${includeProfileCorners}|seam:${spiralSeamShared ? 1 : 0}|max:${maxPoints}`;
   const cached = lampAnchorCache.get(layer);
   if (cached?.key === cacheKey) return cached.points;
 
@@ -407,16 +407,11 @@ function buildLampCircumferenceAnchors(layer, prepared = null, maxPoints = 260, 
         });
       };
 
-      // Key lamps belong to EVERY logical spiral vertex, not just
-      // the two branch endpoints. Otherwise multi-turn spirals
-      // leave all intermediate turns dark even when the Line has
-      // those vertices. Keep the original path index and arc
-      // fraction so snapping cannot pull a lamp onto a different
-      // physical branch.
       pushPoint(pts[0], 0, 'start');
-      for (let vertexIndex = 1; vertexIndex < pts.length - 1; vertexIndex++) {
-        const p = pts[vertexIndex];
-        if (path.lampCornerFlags?.[vertexIndex] || p.__profileKeyCorner === true) pushPoint(p, vertexIndex);
+      if (includeProfileCorners) {
+        for (let i = 1; i < pts.length - 1; i++) {
+          if (path.lampCornerFlags?.[i] || pts[i].__profileKeyCorner === true) pushPoint(pts[i], i);
+        }
       }
       if (pts.length > 1 && !spiralSeamShared) pushPoint(pts[pts.length - 1], pts.length - 1, 'end');
     }

@@ -150,7 +150,7 @@ function collectPreparedSpiralLampPoints(layer, paths, config, maxPoints = 260, 
       for (let j = 0; j < points.length; j++) {
         const p = points[j],
           end = j === 0 || j === points.length - 1;
-        const key = end || path.lampCornerFlags?.[j] === true || p.__profileKeyCorner === true;
+        const key = end || (mode === 'corners' && (path.lampCornerFlags?.[j] === true || p.__profileKeyCorner === true));
         let bend = false;
         if (!key && mode === 'corners') {
           const a = points[j - 1],

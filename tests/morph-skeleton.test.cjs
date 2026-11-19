@@ -2537,7 +2537,7 @@ console.log(
     });
   assert.deepEqual(
     collect('key', 0, true).map((p) => p.vertexIndex),
-    [0, 1, 4],
+    [0, 4],
   );
   assert.deepEqual(
     collect('corners', 0, false).map((p) => p.vertexIndex),
@@ -2641,7 +2641,7 @@ console.log('PASS: key-only markers, added bend markers, interrupted 1 s attack/
           collectPreparedSpiralLampPoints(
             a,
             rt.samplePrimary(phase, t).paths,
-            { positionMode: 'key', snapToContour: false },
+            { positionMode: 'corners', snapToContour: false },
             260,
           ).filter((p) => p.pathIndex === 0 && p.__profileLampKey);
         const first = lights(0.49999),

@@ -457,7 +457,9 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
                 )),
         );
         const lampCornerFlags = e.map((p, idx) =>
-          Boolean(spiralLampCornerFlags?.[Number.isFinite(Number(p?.ptIdx)) ? Number(p.ptIdx) : idx]),
+          p.__spiralProfileFillet
+        ? Boolean(spiralLampCornerFlags?.[p.__profileLampAnchorIndex])
+        : Boolean(spiralLampCornerFlags?.[Number.isFinite(Number(p?.ptIdx)) ? Number(p.ptIdx) : idx]),
         );
 
         const retainedPoints = e.map((srcPoint) => ({

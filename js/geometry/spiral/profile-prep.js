@@ -355,6 +355,7 @@ function appendSpiralProfileFillet(out, a, corner, b, steps, cornerIndex, cut, m
     q.__spiralProfileFinalRound = true;
     q.__spiralProfileFillet = true;
     q.__spiralProfileCornerIndex = cornerIndex;
+    if (i === Math.round(n / 2)) q.__profileLampAnchorIndex = corner.ptIdx ?? cornerIndex;
     q.__spiralProfileCut = cut;
     out.push(q);
   }

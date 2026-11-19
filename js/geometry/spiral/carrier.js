@@ -581,7 +581,9 @@ function buildSpiralCarrierPath(layer, anchor, carrierSpec = {}) {
   );
   const lampFlags = profileData?.keyFlags || profilePts.map(() => false);
   const lampCornerFlags = retainedPoints.map((p, idx) =>
-    Boolean(lampFlags[Number.isFinite(Number(p?.ptIdx)) ? Number(p.ptIdx) : idx]),
+    p.__spiralProfileFillet
+        ? Boolean(lampFlags?.[p.__profileLampAnchorIndex])
+        : Boolean(lampFlags[Number.isFinite(Number(p?.ptIdx)) ? Number(p.ptIdx) : idx]),
   );
   let retainedCubics =
     state.fourierMode === true

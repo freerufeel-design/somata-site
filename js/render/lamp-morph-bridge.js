@@ -342,8 +342,7 @@ function gpuMorphSpecialSpiralLampFrame(frameCtx, maxPoints = 600) {
         });
       }
     } else if (mode === 'key') {
-      const records = morphRec?.cpuPathLampKeyFractions;
-      fractions = spiralMorphFractionIdentityAtT(records, pi, t, { forceEndpoints: true });
+      fractions = [0, 1];
       const periodic = Boolean(morphRec?.cpuPathPeriodic?.[pi] >>> 0),
         omitSharedSeam = periodic && state?.tunnel?.active === true;
       for (let j = 0; j < fractions.length; j++) {
