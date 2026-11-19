@@ -70,3 +70,57 @@ test('на стыке фаз видимые лампы забирают преж
     lampMotionRuntime.blueMorph.clear();
   }
 });
+
+test('совпавшая на стыке фаз горящая лампа сохраняет ID и не проходит через затухание', async () => {
+  await loadApp();
+  const { runtimeState } = await importModule('js/core/state.js');
+  const { preserveBlueMorphLampIdentity, lampMotionRuntime } = await importModule('js/lamps/lamp-motion.js');
+  const { SomataLampStability } = await importModule('js/render/lamp-stability.js');
+  const { withLampConfig } = await importModule('js/core/defaults-layers.js');
+  const prevActive = runtimeState.morph.active,
+    prevSerial = runtimeState.morph.lampCycleSerial;
+  try {
+    runtimeState.morph.active = true;
+    lampMotionRuntime.blueMorph.clear();
+    withLampConfig({ morphMotionMode: 'linear' }, () => {
+      const resolve = (serial, points) => {
+        runtimeState.morph.lampCycleSerial = serial;
+        return preserveBlueMorphLampIdentity(0, points);
+      };
+      const draw = (now, points) => {
+        const items = points.map((p) => ({
+          lampTraceId: p.lampId,
+          px: p.x,
+          py: p.y,
+          rad: 10,
+          intensityAlpha: p.lampLevel,
+        }));
+        SomataLampStability.apply('coincident-phase-boundary', items, { now, duration: 100, animate: now > 0 });
+        return items;
+      };
+      const end = resolve(1, [
+        { x: 0, y: 0, lampId: 'old:0' },
+        { x: 100, y: 0, lampId: 'old:1' },
+      ]);
+      draw(0, end);
+      draw(16, end);
+      const next = [
+        { x: 25, y: 0, lampId: 'next:0' },
+        { x: 0.000001, y: 0, lampId: 'next:1' },
+        { x: 200, y: 0, lampId: 'next:2' },
+      ];
+      for (const now of [32, 48, 96, 160, 288]) {
+        const start = resolve(2, next);
+        const lamps = draw(now, start);
+        assert.equal(start[1].lampId, end[0].lampId, 'совпадение важнее порядка обхода');
+        assert.equal(lamps[1].intensityAlpha, 1, 'яркость совпавшей лампы не падает');
+        assert.equal(lamps[1].px, next[1].x);
+        if (now === 32) assert.equal(lamps[2].intensityAlpha, 0, 'новая лампа ещё не разгорелась');
+      }
+    });
+  } finally {
+    runtimeState.morph.active = prevActive;
+    runtimeState.morph.lampCycleSerial = prevSerial;
+    lampMotionRuntime.blueMorph.clear();
+  }
+});

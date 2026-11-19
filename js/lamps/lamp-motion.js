@@ -103,6 +103,9 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
     (q) => Math.max(0, Math.min(1, q?.lampPresence === undefined ? 1 : Number(q.lampPresence) || 0)) > 0.001,
   );
   const previous = previousVisible.length ? previousVisible : previousAll;
+  const visible = (p) =>
+    (p?.lampPresence === undefined || Number(p.lampPresence) > 0.002) &&
+    (p?.lampLevel === undefined || Number(p.lampLevel) > 0.002);
   const nearestPrevious = (p) => {
     const px = Number(p?.x) || 0,
       py = Number(p?.y) || 0;
@@ -151,21 +154,20 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
   if (rt.serial !== serial) {
     const used = new Set();
     const nextAssignments = new Map();
-    // Видимые лампы выбирают прошлых соседей первыми: иначе невидимая лампа будущей вершины
-    // (присутствие 0 в начале фазы) забирает идентификатор горевшей лампы, а настоящая лампа
-    // получает новый и разгорается с нуля — провал света в первом кадре фазы.
-    const presenceOf = (p) => (p?.lampPresence === undefined ? 1 : Number(p.lampPresence) || 0);
+    // Сначала резервируем прежние ID для горящих ламп в той же точке.
+    // Иначе более ранняя в списке, но сдвинувшаяся лампа может забрать этот ID.
     const order = points.map((_, i) => i);
-    order.sort((a, b) => (presenceOf(points[b]) > 0.001) - (presenceOf(points[a]) > 0.001) || a - b);
-    for (const i of order) {
-      const p = points[i];
+    order.sort((a, b) => Number(visible(points[b])) - Number(visible(points[a])) || a - b);
+    const coincident = new Map();
+    const samePointEps2 = 1e-8; // Только погрешность координат, не соседние вершины.
+    const nearestUnused = (p, maxD = Infinity, onlyVisible = false) => {
       const px = Number(p?.x) || 0,
         py = Number(p?.y) || 0;
       let best = -1,
-        bestD = Infinity;
+        bestD = maxD;
       for (let j = 0; j < previous.length; j++) {
-        if (used.has(j)) continue;
         const q = previous[j];
+        if (used.has(j) || (onlyVisible && !visible(q))) continue;
         const dx = px - (Number(q?.x) || 0),
           dy = py - (Number(q?.y) || 0),
           d = dx * dx + dy * dy;
@@ -174,6 +176,18 @@ function preserveBlueMorphLampIdentity(layerIndex, points) {
           best = j;
         }
       }
+      return best;
+    };
+    for (const i of order) {
+      if (!visible(points[i])) break;
+      const j = nearestUnused(points[i], samePointEps2, true);
+      if (j < 0) continue;
+      used.add(j);
+      coincident.set(i, j);
+    }
+    for (const i of order) {
+      const p = points[i];
+      const best = coincident.get(i) ?? nearestUnused(p);
       const nearest = nearestPrevious(p);
       const fallbackFrom = Number.isFinite(Number(nearest?.colorPhase))
         ? Number(nearest.colorPhase)

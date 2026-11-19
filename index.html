@@ -16,6 +16,8 @@
     <link rel="stylesheet" href="styles/app.css?v=15-profile-continuity">
     <link rel="stylesheet" href="styles/ui-system.css?v=15.5">
     <link rel="stylesheet" href="styles/mobile.css?v=15.5">
+    <link rel="stylesheet" href="styles/interface-guide.css?v=1">
+    <script defer src="js/ui/interface-guide.js?v=1"></script>
     <script defer src="js/bootstrap/boot-guard.js?v=14.2-open-spine-v1-r15"></script>
     <script defer src="js/bootstrap/error-overlay.js?v=14.2-open-spine-v1-r15"></script>
     <!-- Application entry (ES modules). Browsers refuse modules opened from disk (file://) or served as
@@ -32,6 +34,7 @@
             <button id="desktopBrandLogoButton" class="desktop-brand-logo-button" type="button" title="Вывести Somata на холст и открыть отдельное окно вывода" aria-label="Открыть логотип Somata и отдельное окно вывода" aria-pressed="false">
                 <img id="desktopBrandLogo" class="desktop-brand-logo" src="assets/somata-logo.webp?v=20261015-v78302-13.3-morph-audit1-r15" alt="Somata" draggable="false">
             </button>
+            <button id="btnInterfaceGuide" type="button" aria-label="Подсказки по верхней панели" title="Подсказки по верхней панели" aria-haspopup="dialog" aria-controls="interfaceGuide" aria-expanded="false">?</button>
         </div>
         <div class="header-actions">
             <span class="header-audio-entry" aria-label="Аудио">
@@ -2299,5 +2302,28 @@
         </main>
     </div>
 
+    <dialog id="interfaceGuide" aria-labelledby="interfaceGuideTitle" aria-describedby="interfaceGuideIntro">
+        <svg class="ig-diagram" aria-hidden="true" focusable="false">
+            <defs>
+                <mask id="igSpotlightMask"><rect width="100%" height="100%" fill="white"/><g class="ig-cutouts" fill="black"/></mask>
+                <marker id="igArrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z" fill="context-stroke"/></marker>
+            </defs>
+            <rect class="ig-dim" width="100%" height="100%" mask="url(#igSpotlightMask)"/>
+            <g class="ig-pointers"/>
+        </svg>
+        <section class="ig-card">
+            <div class="ig-heading">
+                <div><p class="ig-kicker">SOMATA / СПРАВКА</p><h2 id="interfaceGuideTitle">Верхняя панель</h2></div>
+                <button class="ig-close" type="button" aria-label="Закрыть подсказки" title="Закрыть (Esc)" autofocus>×</button>
+            </div>
+            <p id="interfaceGuideIntro">Выберите группу. Номера и стрелки связывают подсказки с кнопками.</p>
+            <nav class="ig-groups" aria-label="Группы кнопок"></nav>
+            <div class="ig-details" aria-live="polite" aria-atomic="true">
+                <h3 class="ig-group-title"></h3>
+                <div class="ig-footnotes" role="list"></div>
+                <p class="ig-extra" hidden></p>
+            </div>
+        </section>
+    </dialog>
 </body>
 </html>
