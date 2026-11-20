@@ -3401,7 +3401,7 @@ function bindPresetRandomMorphControls(bindingContext) {
   );
   document.querySelectorAll('[data-lamp-motion]').forEach((btn) =>
     btn.addEventListener('click', () => {
-      const m = ['linear', 'ghost', 'dynamic', 'smooth'].includes(btn.dataset.lampMotion)
+      const m = ['linear', 'key'].includes(btn.dataset.lampMotion)
         ? btn.dataset.lampMotion
         : 'linear';
       for (const cfg of getLampConfigTargets()) cfg.morphMotionMode = m;
@@ -3420,6 +3420,25 @@ function bindPresetRandomMorphControls(bindingContext) {
     syncLampSettingsUI();
     requestMainCanvasRender();
   });
+  document.getElementById('lampOuterHaloBrightness').addEventListener('input', (event) => {
+    const value = event.target.valueAsNumber;
+    for (const cfg of getLampConfigTargets()) cfg.outerHaloBrightness = value;
+    document.getElementById('lampOuterHaloValue').textContent = value + '%';
+    requestMainCanvasRender();
+  });
+  document.getElementById('lampOuterHaloSize').addEventListener('input', (event) => {
+    const value = event.target.valueAsNumber;
+    for (const cfg of getLampConfigTargets()) cfg.outerHaloSize = value;
+    document.getElementById('lampOuterHaloSizeValue').textContent = value + '%';
+    requestMainCanvasRender();
+  });
+  document.querySelectorAll('[data-lamp-appearance]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      for (const cfg of getLampConfigTargets()) cfg.appearance = btn.dataset.lampAppearance;
+      syncLampSettingsUI();
+      requestMainCanvasRender();
+    }),
+  );
   document.querySelectorAll('[data-lamp-color-mode]').forEach((btn) =>
     btn.addEventListener('click', () => {
       for (const cfg of getLampConfigTargets()) {

@@ -406,6 +406,8 @@ function createMorphUIModule(deps) {
     }
     state.morph.orbitPercentMin = minPct;
     state.morph.orbitPercentMax = maxPct;
+    delete state.morph.orbitCountMin;
+    delete state.morph.orbitCountMax;
     const minEl = document.getElementById('morphOrbitPercentMin');
     const maxEl = document.getElementById('morphOrbitPercentMax');
     if (minEl) minEl.value = String(minPct);

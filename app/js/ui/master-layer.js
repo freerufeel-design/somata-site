@@ -445,7 +445,7 @@ function setLayerK(val) {
 
   invalidateLayerGeometry(layer, 'set-K');
   syncSidebarInputs();
-  if (runtimeState.morph.active) activeRebaseMorphing();
+  if (runtimeState.morph.active) activeRebaseMorphing({ preservePaths: ['K', 'customSuborbits', 'spiralStepLinked', 'spiralStep'] });
   requestMainCanvasRender();
 }
 function setLayerSuborbits(targetS) {

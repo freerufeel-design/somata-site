@@ -121,7 +121,7 @@ assert.ok(!SPIRAL_MORPH_MODE_KEYS.includes('light') && !SPIRAL_MORPH_MODE_KEYS.i
 `);
 
 // 6. Интерфейс: три пары селекторов, у спирали нет Fade и Слайдшоу.
-const html = read('index.html');
+const html = read('../index.html');
 const optionsOf = (id) => {
   const m = html.match(new RegExp('<select[^>]*id="' + id + '"[^>]*>([\\s\\S]*?)</select>'));
   assert(m, id);

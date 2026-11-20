@@ -263,6 +263,7 @@ function prepareLampDrawStyle(
   );
   style.blendMode = cfg.blendMode || 'lighter';
   style.colorMode = cfg.colorMode || (cfg.rainbow ? 'rainbow' : cfg.matchLineColor ? 'line' : 'selected');
+  style.appearance = cfg.appearance === 'modern' ? 'modern' : 'classic';
   style.type = cfg.type || 'whiteCore';
   return style;
 }
@@ -279,7 +280,7 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
   const snapped = lampContourAttachmentEnabledForFrame({ layerLampConfig: cfg }) === true;
   const baseR = style.baseR,
     baseBrightnessPercent = style.baseBrightnessPercent,
-    scatter = snapped ? 0 : style.scatter,
+    scatter = snapped && cfg.morphMotionMode !== 'key' ? 0 : style.scatter,
     sizeVar = style.sizeVar,
     brightVar = style.brightVar,
     morphSize = style.morphSize,
@@ -342,6 +343,7 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
     item.lampTraceId = p?.lampId ?? `slot:${p?.pathIndex ?? 0}:${p?.vertexIndex ?? i}`;
     item.lampSourcePresent = p?.lampSourcePresent;
     item.lampTargetPresent = p?.lampTargetPresent;
+    item.lampKeyAnchor = cfg.morphMotionMode === 'key' && p.lampRank !== 1;
     item.lampContourBound = snapped;
     item.lampPresence = presence;
     item.lampPhaseTimed = timing !== null && typeof p?.lampSourcePresent === 'boolean' &&

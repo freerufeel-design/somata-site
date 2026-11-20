@@ -8,21 +8,21 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Somata">
     <meta name="theme-color" content="#090d16">
-    <link rel="manifest" href="manifest.webmanifest?v=14.2-open-spine-v1-r15">
+    <link rel="manifest" href="app/manifest.webmanifest?v=14.2-open-spine-v1-r15">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Somata 15.5</title>
-    <link rel="stylesheet" href="styles/app.css?v=15-profile-continuity">
-    <link rel="stylesheet" href="styles/ui-system.css?v=15.5">
-    <link rel="stylesheet" href="styles/mobile.css?v=15.5">
-    <link rel="stylesheet" href="styles/interface-guide.css?v=2">
-    <script defer src="js/ui/interface-guide.js?v=2"></script>
-    <script defer src="js/bootstrap/boot-guard.js?v=14.2-open-spine-v1-r15"></script>
-    <script defer src="js/bootstrap/error-overlay.js?v=14.2-open-spine-v1-r15"></script>
+    <title>Somata 16.1</title>
+    <link rel="stylesheet" href="app/styles/app.css?v=15-profile-continuity">
+    <link rel="stylesheet" href="app/styles/ui-system.css?v=16.1">
+    <link rel="stylesheet" href="app/styles/mobile.css?v=16.1">
+    <link rel="stylesheet" href="app/styles/interface-guide.css?v=2">
+    <script defer src="app/js/ui/interface-guide.js?v=2"></script>
+    <script defer src="app/js/bootstrap/boot-guard.js?v=14.2-open-spine-v1-r15"></script>
+    <script defer src="app/js/bootstrap/error-overlay.js?v=14.2-open-spine-v1-r15"></script>
     <!-- Application entry (ES modules). Browsers refuse modules opened from disk (file://) or served as
          text/plain (python -m http.server on Windows); start.bat (serve.ps1) / start.command (serve.py) serve them correctly. -->
-    <script type="module" src="js/main.js?v=15.5" data-launch-hint
+    <script type="module" src="app/js/main.js?v=16.1" data-launch-hint
         onerror="var d=document.createElement('div');d.id='somataLaunchHint';d.style.cssText='position:fixed;inset:auto 0 0 0;margin:auto;top:0;width:min(560px,90vw);height:fit-content;padding:22px 26px;background:#111827;color:#e5e7eb;border:1px solid #f59e0b;border-radius:12px;font:15px/1.5 system-ui,sans-serif;z-index:2147483647;box-shadow:0 20px 60px rgba(0,0,0,.6)';d.innerHTML='<b style=&quot;color:#fbbf24&quot;>Somata не запустилась: браузер отказался загружать модули.</b><br><br>Так бывает, если открыть index.html прямо с диска или через <code>python -m http.server</code> на Windows (он отдаёт .js с неверным типом).<br><br>Для локального запуска откройте <b>start.bat</b> (Windows) или <b>start.command</b> (macOS) в папке Somata: он запустит маленький сервер и откроет эту страницу. На хостинге ничего делать не нужно.';document.body.appendChild(d);"></script>
 
 </head>
@@ -32,7 +32,7 @@
     <header>
         <div class="header-brand-zone">
             <button id="desktopBrandLogoButton" class="desktop-brand-logo-button" type="button" title="Вывести Somata на холст и открыть отдельное окно вывода" aria-label="Открыть логотип Somata и отдельное окно вывода" aria-pressed="false">
-                <img id="desktopBrandLogo" class="desktop-brand-logo" src="assets/somata-logo.webp?v=20261015-v78302-13.3-morph-audit1-r15" alt="Somata" draggable="false">
+                <img id="desktopBrandLogo" class="desktop-brand-logo" src="app/assets/somata-logo.webp?v=20261015-v78302-13.3-morph-audit1-r15" alt="Somata" draggable="false">
             </button>
             <button id="btnInterfaceGuide" type="button" aria-label="Подсказки по интерфейсу" title="Подсказки по интерфейсу" aria-haspopup="dialog" aria-controls="interfaceGuide" aria-expanded="false">?</button>
         </div>
@@ -186,6 +186,11 @@
                             <input id="tunnelSpacingStrength" type="range" min="20" max="2000" step="1" value="300" aria-label="Дистанция между окружностями и многоугольниками в коридоре">
                             <input id="tunnelSpacingMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель дистанции коридора" title="Множитель дистанции: ползунок умножается на это значение" data-log-multiplier="1">
                         </div>
+                    </div>
+                    <div class="tunnel-setting">
+                        <div class="tunnel-setting-head"><label for="tunnelDensity">Плотность коридора</label><span id="tunnelDensityText" class="text-mono">75%</span></div>
+                        <input id="tunnelDensity" type="range" min="0" max="100" step="1" value="75" aria-describedby="tunnelDensityHint" style="width:100%">
+                        <div id="tunnelDensityHint" class="hint-text">0% — копии скрыты · 25% — внешний слой полностью видим · 75% — обычное затухание · 100% — максимальная яркость всех копий. Дистанция между копиями не меняется.</div>
                     </div>
                     <div class="tunnel-setting" data-reset-scope="tunnel-depth-curve">
                         <div class="tunnel-setting-head"><span title="Возрастное изменение скорости роста фигур: 0% — старый коридор, −100% — узкий, +100% — широкий; в середине глубины масштабы совпадают">Ширина коридора по глубине</span><span id="tunnelDepthCurveText" class="text-mono">0% × 1</span></div>
@@ -882,6 +887,11 @@
                 <div class="control-group lamp-settings-group">
                     <div class="control-group-title"><label class="group-title-toggle"><input id="showLamps" type="checkbox"><span>Лампочки</span></label><span class="badge">GPU</span></div>
                 <div class="ui-block">
+                    <div class="control-row"><span class="hint-text">Тип лампочки</span><div class="lamp-position-mode" role="group" aria-label="Тип лампочки"><button type="button" class="active" data-lamp-appearance="classic" aria-pressed="true">Старые</button><button type="button" data-lamp-appearance="modern" aria-pressed="false">Новые</button></div></div>
+                    <div class="control-row" id="lampOuterHaloRow"><div class="row-label"><label for="lampOuterHaloBrightness">Яркость внешнего ореола</label><span id="lampOuterHaloValue" class="text-mono">100%</span></div><input id="lampOuterHaloBrightness" type="range" min="0" max="200" step="1" value="100"></div>
+                    <div class="control-row" id="lampOuterHaloSizeRow"><div class="row-label"><label for="lampOuterHaloSize">Размер внешнего ореола</label><span id="lampOuterHaloSizeValue" class="text-mono">90%</span></div><input id="lampOuterHaloSize" type="range" min="10" max="200" step="1" value="90"></div>
+                </div>
+                <div class="ui-block">
                     <div class="ui-block-title"><span>Положение</span></div>
                     <div class="control-row"><span class="hint-text">Положение лампочек</span><div class="lamp-position-mode" role="group" aria-label="Положение лампочек"><button type="button" class="active" data-lamp-position="key">Ключевое</button><button type="button" data-lamp-position="corners">На изломах</button><button type="button" data-lamp-position="arbitrary">Произвольное</button></div></div>
                     <div id="lampBendAnimationNote" class="hint-text hidden">На изломах: ключевые точки и изломы. Дополнительные лампочки плавно загораются и гаснут за длительность анимации.</div>
@@ -931,7 +941,7 @@
                             <div class="row-label"><span>Мягкость</span><span id="lampSoftnessText" class="text-mono">100% × 1</span></div>
                             <div class="lamp-slider-mult"><input id="lampSoftness" type="range" min="0" max="150" step="1" value="100"><span class="lamp-mult-label">×</span><input id="lampSoftnessMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель мягкости лампочек" data-log-multiplier="1"></div>
                         </div>
-                        <div class="control-row"><span class="hint-text">Смешение</span><select id="lampBlendMode"><option value="lighter" selected>Add / Lighter</option><option value="screen">Screen</option><option value="source-over">Normal</option><option value="color-dodge">Color Dodge</option><option value="difference">Inverted / Difference</option><option value="color">По цветности / Color</option></select></div>
+                        <div class="control-row"><span class="hint-text">Смешение</span><select id="lampBlendMode"><option value="gentle">Нежный</option><option value="lighter" selected>Add / Lighter</option><option value="screen">Screen</option><option value="source-over">Normal</option><option value="color-dodge">Color Dodge</option><option value="difference">Inverted / Difference</option><option value="color">По цветности / Color</option></select></div>
                     </div>
                     <div class="control-row">
                         <span class="hint-text">Тип лампочки</span>
@@ -1033,9 +1043,7 @@
                         <span class="hint-text">Перемещение в Morphing</span>
                         <div class="lamp-position-mode lamp-morph-motion-mode" role="group" aria-label="Режим перемещения лампочек в морфинге">
                             <button type="button" class="active" data-lamp-motion="linear" title="Новая лампа плавно и линейно набирает яркость по более быстрому из двух процессов: приближение к своей целевой ключевой точке или выход центра к границе радиуса родительской лампы. При слиянии процесс зеркальный.">Линейный</button>
-                            <button type="button" data-lamp-motion="ghost" title="Прежняя логика v250: новые и исчезающие лампы меняют яркость по расстоянию до ближайшей ключевой точки.">Призрачный</button>
-                            <button type="button" data-lamp-motion="smooth" title="Постоянная физическая скорость вдоль контура без экспоненциального хвоста у цели">Плавный</button>
-                            <button type="button" data-lamp-motion="dynamic" title="Догоняющее движение с регулируемой инерцией">Динамический</button>
+                            <button type="button" data-lamp-motion="key" title="Следовать за опорой профиля на своём участке контура">Ключевой</button>
                         </div>
                         <div id="lampMorphInertiaRow" class="control-row" style="margin-top:6px;" title="−100% — сразу на целевую долю своего контура; 0% — равномерный ход; положительные значения — ускорение к концу фазы, отрицательные — замедление у цели."><div class="row-label"><span>Инерция лампочек</span><span id="lampMorphInertiaText" class="text-mono">0%</span></div><input id="lampMorphInertia" type="range" min="-100" max="100" step="5" value="0"></div>
                         <div class="lamp-morph-motion-note">«Линейный» использует только реальные ключевые лампы: новые рождаются в родительской точке и плавно проявляются до своей целевой точки/границы радиуса. «Призрачный» сохраняет прежнюю логику v250 по ближайшей ключевой точке. «Плавный» двигается с постоянной скоростью вдоль контура. «Динамический» использует догоняющее движение. Общая инерция действует во всех четырёх режимах: −100% — сразу к цели, 0% — движение по фазе, +100% — задержка до конца.</div>
@@ -1938,12 +1946,12 @@
                             <div class="control-row rounding-amount-row">
                                 <div class="row-label">
                                     <span>Скругление вершин:</span>
-                                    <span id="valRounding" class="text-mono editable-number-value">0%</span>
+                                    <label><input id="numRounding" type="number" aria-label="Скругление вершин, проценты" min="0" max="200" step="1" value="0" style="width:5em">%</label><span id="valRounding" hidden></span>
                                 </div>
-                                <input type="range" id="paramRounding" min="0" max="200" value="0" style="width:100%;" title="0–100% — плечо скругления до половины базового ребра; 100–200% — плавное приближение к окружности">
+                                <input type="range" id="paramRounding" step="1" min="0" max="200" value="0" style="width:100%;" title="0–100% — плечо скругления до половины базового ребра; 100–200% — плавное приближение к окружности">
                             </div>
                             <div class="hint-text" style="margin:5px 0 3px;">Spline+ · скругление</div>
-                            <div class="rounding-mode-row"><span class="hint-text">Тип скругления</span><div class="rounding-mode-toggle rounding-four-types" role="group" aria-label="Тип скругления углов"><button type="button" class="rounding-mode-btn rounding-corner-type-btn active" data-rounding-corner-type="local" aria-pressed="true" title="Прямые стороны и отдельные дуги у углов">Локальное</button><button type="button" class="rounding-mode-btn rounding-corner-type-btn" data-rounding-corner-type="classic" aria-pressed="false" title="Исходный Spline+ из эталонной сборки">Классическое</button><button type="button" class="rounding-mode-btn rounding-corner-type-btn" data-rounding-corner-type="fourier" aria-pressed="false" title="Режим Фурье — применяет преобразование ко всей сцене">Фурье</button><button type="button" class="rounding-mode-btn rounding-corner-type-btn" data-rounding-corner-type="simple" aria-pressed="false" title="Старое скругление ломаной из Somata 15">Простой</button></div><select id="paramRoundingCornerType" class="hidden" tabindex="-1" aria-label="Тип скругления"><option value="local">Локальное</option><option value="classic">Классическое</option><option value="fourier">Фурье</option><option value="simple">Простой</option></select></div>
+                            <div class="rounding-mode-row"><span class="hint-text">Тип скругления</span><div class="rounding-mode-toggle rounding-four-types" role="group" aria-label="Тип скругления углов"><button type="button" class="rounding-mode-btn rounding-corner-type-btn active" data-rounding-corner-type="local" aria-pressed="true" title="Прямые стороны и отдельные дуги у углов">Локальное</button><button type="button" class="rounding-mode-btn rounding-corner-type-btn" data-rounding-corner-type="classic" aria-pressed="false" title="Исходный Spline+ из эталонной сборки">Классическое</button><button type="button" class="rounding-mode-btn rounding-corner-type-btn" data-rounding-corner-type="fourier" aria-pressed="false" title="Режим Фурье — применяет преобразование ко всей сцене">Фурье</button><button type="button" class="rounding-mode-btn rounding-corner-type-btn" data-rounding-corner-type="simple" aria-pressed="false" title="Скругление профиля по методу Somata 6.7">Простой</button></div><select id="paramRoundingCornerType" class="hidden" tabindex="-1" aria-label="Тип скругления"><option value="local">Локальное</option><option value="classic">Классическое</option><option value="fourier">Фурье</option><option value="simple">Простой</option></select></div>
                             <div id="roundingFourierControls" class="rounding-fourier-controls hidden"><div class="control-row fourier-strength-row"><div class="row-label"><span>Сила Фурье</span><span id="fourierStrengthText" class="text-mono">50%</span></div><div class="lamp-slider-mult"><input id="fourierStrength" type="range" min="0" max="100" step="1" value="50" aria-label="Сила режима Фурье"></div><div class="hint-text">0 — окружность · больше — угловатее. Фурье действует на выбранный слой; Мастер — на все слои.</div></div></div>
                             <div class="rounding-mode-row"><span class="hint-text">Политика радиуса</span><div class="rounding-mode-toggle" role="group" aria-label="Режим скругления"><button type="button" class="rounding-mode-btn active" data-rounding-mode="standard" aria-pressed="true">Обычный</button><button type="button" class="rounding-mode-btn" data-rounding-mode="monoradius" aria-pressed="false">Монорадиус</button></div><select id="paramRoundingMode" class="hidden" tabindex="-1" aria-hidden="true"><option value="standard">Обычный</option><option value="monoradius">Монорадиус</option></select></div>
                             <label class="rounding-extension-guide" title="Показывать продолжение линий вне скруглённых вершин (без изменения рендера)">
@@ -2072,7 +2080,7 @@
 
         <main id="mainContainer">
             <div id="desktopBrandStage" class="desktop-brand-stage" aria-hidden="true">
-                <img class="desktop-brand-stage-logo" src="assets/somata-logo.webp?v=20261015-v78302-13.3-morph-audit1-r15" alt="" draggable="false">
+                <img class="desktop-brand-stage-logo" src="app/assets/somata-logo.webp?v=20261015-v78302-13.3-morph-audit1-r15" alt="" draggable="false">
             </div>
             <div class="grid-pattern" id="gridPattern"></div>
             <div id="projectMorphBackgroundSource" class="project-morph-background-layer" aria-hidden="true"></div>

@@ -323,6 +323,30 @@ function nearestLampFractionOnPathSegmentBound(anchor, path, referenceFraction, 
   if (!bestPoint) return { fraction: ref, point: lampPointAtFraction(path, ref) };
   return { fraction: Math.max(0, Math.min(1, bestDistance / table.total)), point: bestPoint };
 }
+// Clip each candidate segment to this vertex's interval in contour order.
+function projectKeyLamp(anchor, path, stations, i) {
+  const table = lampPathTable(path);
+  if (!table.total) return anchor;
+  const ref = stations[i], last = stations.length - 1;
+  const prev = i ? stations[i - 1] : path.closed ? stations[last] - 1 : ref;
+  const next = i < last ? stations[i + 1] : path.closed ? stations[0] + 1 : ref;
+  const lo = (prev + ref) * table.total / 2, hi = (next + ref) * table.total / 2;
+  let best = Infinity, fraction = ref;
+  for (const seg of table.segs) {
+    if (!(seg.len > 0)) continue;
+    const dx = seg.b.x - seg.a.x, dy = seg.b.y - seg.a.y;
+    const u = ((anchor.x - seg.a.x) * dx + (anchor.y - seg.a.y) * dy) / (seg.len * seg.len);
+    for (const shift of (lo < 0 ? [-table.total, 0] : hi > table.total ? [0, table.total] : [0])) {
+      const start = seg.start + shift;
+      const left = Math.max(0, (lo - start) / seg.len), right = Math.min(1, (hi - start) / seg.len);
+      if (left > right) continue;
+      const t = Math.max(left, Math.min(right, u));
+      const d = (seg.a.x + t * dx - anchor.x) ** 2 + (seg.a.y + t * dy - anchor.y) ** 2;
+      if (d < best) { best = d; fraction = (seg.start + t * seg.len) / table.total; }
+    }
+  }
+  return lampPointAtFraction(path, fraction) || anchor;
+}
 function advanceLampPathFraction(current, target, closed, dtMs, responseMs = 190) {
   let c = Number(current) || 0,
     t = Number(target) || 0;
@@ -496,6 +520,7 @@ export {
   mergeLampKeysAndBends,
   nearestLampFractionOnPath,
   nearestLampFractionOnPathSegmentBound,
+  projectKeyLamp,
   nearestLampFractionOnPathStable,
   nearestLampSegmentRefOnPath,
   trackLampBends,

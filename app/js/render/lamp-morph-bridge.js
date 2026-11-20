@@ -53,6 +53,7 @@ function gpuMorphLampPositionMode(frameCtx) {
     ensureLayerLampState(frameCtx?.layer) ||
     state?.lamps ||
     {};
+  if (cfg.morphMotionMode === 'key') return 'key';
   const mode = cfg?.positionMode || state?.lamps?.positionMode || 'key';
   return mode === 'circumference' ? 'key' : mode;
 }
@@ -63,6 +64,7 @@ function lampContourAttachmentEnabledForFrame(frameCtx) {
     ensureLayerLampState(frameCtx?.effectLayer || frameCtx?.layer) ||
     state?.lamps ||
     {};
+  if (cfg.morphMotionMode === 'key') return true;
   if (typeof cfg.snapToContour === 'boolean') return cfg.snapToContour;
   if (typeof cfg.snapToPolygon === 'boolean' && typeof cfg.stickToRounding === 'boolean')
     return cfg.snapToPolygon || cfg.stickToRounding;

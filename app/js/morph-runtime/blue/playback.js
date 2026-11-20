@@ -252,7 +252,6 @@ function createMorphPlaybackModule(deps) {
     createMorphProfileVariant,
     getProfileKeyForLayer,
     pickMorphPalette,
-    randomIntExcept,
     sameProfileVariant,
     chooseMorphVertexTarget,
     getActiveOrbitCount,
@@ -279,31 +278,14 @@ function createMorphPlaybackModule(deps) {
       Math.min(Math.floor(n / 2), Math.round(Number(visual?.K ?? fallbackLayer?.K) || 1)),
     );
     const total = Math.max(1, gcd(n, k));
-    const custom = visual?.customSuborbits ?? fallbackLayer?.customSuborbits;
+    const custom = visual?.customSuborbits === undefined ? fallbackLayer?.customSuborbits : visual.customSuborbits;
     if (custom === null || custom === undefined) return total;
     return Math.max(1, Math.min(total, Math.round(Number(custom) || 1)));
   };
-  const chooseVirtualOrbitTargetCount = (sourceVisual, targetVisual, sourceCount) => {
-    if (state.morph.monoOrbitTransforms !== true) return Math.max(1, sourceCount);
-    const sn = Math.max(2, Math.round(Number(sourceVisual?.N) || 4));
-    const sk = Math.max(1, Math.min(Math.floor(sn / 2), Math.round(Number(sourceVisual?.K) || 1)));
-    const tn = Math.max(2, Math.round(Number(targetVisual?.N) || sn));
-    const tk = Math.max(1, Math.min(Math.floor(tn / 2), Math.round(Number(targetVisual?.K) || sk)));
-
-    const capacity = Math.max(1, gcd(sn, sk), gcd(tn, tk), Math.round(sourceCount) || 1);
-    const loPct = Math.max(0, Math.min(100, Math.round(Number(state.morph.orbitPercentMin) || 0)));
-    const hiPct = Math.max(loPct, Math.min(100, Math.round(Number(state.morph.orbitPercentMax) || 0)));
-    const lo = Math.max(1, Math.min(capacity, 1 + Math.round((loPct / 100) * (capacity - 1))));
-    const hi = Math.max(lo, Math.min(capacity, 1 + Math.round((hiPct / 100) * (capacity - 1))));
-    const current = Math.max(lo, Math.min(hi, Math.round(sourceCount) || 1));
-    let count;
-    if (state.morph.diversity === true && hi > lo) {
-      count = randomIntExcept(lo, hi, current);
-    } else {
-      count = lo + Math.floor(Math.random() * (hi - lo + 1));
-    }
-    return Math.max(1, Math.min(capacity, Math.round(count) || 1));
-  };
+  const orbitCopiesForTarget = (target, sourceCount) =>
+    state.morph.monoOrbitTransforms
+      ? getActiveOrbitCount(target.N, target.K, target.customSuborbits)
+      : Math.max(1, sourceCount);
   const rotateMorphGeometryPathCopy = (path, angle) => {
     const c = Math.cos(angle),
       ss = Math.sin(angle);
@@ -931,7 +913,7 @@ function createMorphPlaybackModule(deps) {
         planned.N === tv.N &&
         planned.K === tv.K &&
         JSON.stringify(planned.customSuborbits ?? null) === JSON.stringify(tv.customSuborbits ?? null);
-      const targetCount = plannedValid ? planned.copies : chooseVirtualOrbitTargetCount(sv, tv, sourceCount);
+      const targetCount = plannedValid ? planned.copies : orbitCopiesForTarget(tv, sourceCount);
       const sn = Math.max(2, Math.round(Number(sv.N) || 4));
       const sk = Math.max(1, Math.min(Math.floor(sn / 2), Math.round(Number(sv.K) || 1)));
       const tn = Math.max(2, Math.round(Number(tv.N) || sn));
@@ -954,7 +936,7 @@ function createMorphPlaybackModule(deps) {
         hooks: {
           blocked: topologyPlanBlocked,
           topology: (layer, i) => chooseMorphTopologyTarget(layer, i),
-          copies: (src, dst, count) => chooseVirtualOrbitTargetCount(src, dst, count),
+          copies: (_src, dst, count) => orbitCopiesForTarget(dst, count),
           orbits: (visual, layer) => getMorphVisualOrbitCount(visual, layer),
         },
       });

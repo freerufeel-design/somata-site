@@ -633,3 +633,32 @@ export {
   mapLampSemanticPathsToVisible,
   projectLampPointsToCurrentPolygon,
 };
+
+// The 6.7 linear motion owns a render segment in a topological morph.
+// In circle slide it projects the moving angular key onto its own contour.
+export function projectReferenceLampPoints(points, rails, layer) {
+  if (!rails?.length) return points;
+  const topology = ['topology', 'calm'].includes(state.morph.mode);
+  const now = lampVisualNow();
+  cleanupLampRuntime(now);
+  return points.map((p) => {
+    const path = rails[p.pathIndex];
+    if (!path) return p;
+    if (topology && p.lampFixedSegmentBound) {
+      const q = lampPointAtRenderSegmentParam(path, p.lampAttachRenderSegmentParam);
+      return q ? { ...p, ...q } : p;
+    }
+    if (topology && Number.isFinite(p.lampAttachFraction)) {
+      const u = p.lampAttachProgress;
+      if (u <= 1e-8 && p.lampAttachSourcePoint) return { ...p, ...p.lampAttachSourcePoint };
+      if (u >= 1 - 1e-8 && p.lampAttachTargetPoint) return { ...p, ...p.lampAttachTargetPoint };
+      const q = nearestLampFractionOnPathSegmentBound(p, path, p.lampAttachFraction, p.lampAttachSegmentWindow);
+      return q?.point ? { ...p, ...q.point } : p;
+    }
+    const key = [layer.id, 'key', runtimeState.morph.lampCycleSerial, p.lampId].join(':');
+    const prev = lampMotionRuntime.snap.get(key);
+    const near = prev ? nearestLampFractionOnPathStable(p, path, prev.s) : nearestLampFractionOnPath(p, path);
+    lampMotionRuntime.snap.set(key, { s: near.fraction, lastSeen: now });
+    return { ...p, ...near.point };
+  });
+}

@@ -22,10 +22,11 @@ window.__somataDebugApi = Object.freeze({
   stopProjectMorphing,
 });
 
-import defaults from '../project-defaults.js';
+import defaults from '../../project-defaults.js';
 import { applyLoadedProject } from './project/project-loader.js';
 function applyStartupDefaults() {
   applyLoadedProject(structuredClone(defaults), { applyProjectDefaultModes: false });
 }
 
 document.getElementById('btnNew').addEventListener('click', applyStartupDefaults);
+import './ui/select-arrows.js';

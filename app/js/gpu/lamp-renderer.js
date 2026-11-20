@@ -16,6 +16,7 @@ import { spiroGpuEnsureArcPrerequisite } from '../render/gpu-command-scheduler.j
 import { noteSuppressedError } from '../core/suppressed-errors.js';
 
 const SOMATA_LAMP_BLEND_MODES = Object.freeze([
+  'gentle',
   'lighter',
   'screen',
   'source-over',
@@ -30,9 +31,16 @@ function normalizeLampBlendMode(value) {
   if (v === 'inverted' || v === 'invert') return 'difference';
   return SOMATA_LAMP_BLEND_MODES.includes(v) ? v : 'lighter';
 }
+// The low three bits identify the shape. Zero in the upper bits preserves the
+// original shader response; other values encode a classic halo percentage + 1.
+function lampShapeAndHalo(shape, style, cfg) {
+  const value = Number(cfg.outerHaloBrightness ?? 100);
+  if (style.appearance !== 'classic' || !Number.isFinite(value) || value === 100) return shape;
+  return shape + 8 * (1 + Math.round(Math.max(0, Math.min(200, value))));
+}
 function lampCanvasCompositeOperation(value) {
   const v = normalizeLampBlendMode(value);
-  return v === 'source-over' ? 'source-over' : v;
+  return v === 'gentle' ? 'screen' : v;
 }
 
 const LampWebGLRenderer = (() => {
@@ -64,7 +72,7 @@ const LampWebGLRenderer = (() => {
     frameBlendMixed = false;
   let lampUniformViewport = null,
     toneUniformHdr = null,
-    toneUniformExposure = null;
+    toneUniformGentle = null;
   let lastError = '';
   const clamp01 = (v) => Math.max(0, Math.min(1, Number(v) || 0));
 
@@ -153,6 +161,8 @@ layout(location=0) out vec4 outColor;
 float sat(float x){return clamp(x,0.0,1.0);}
 float seg(float x,float a,float b){return sat((x-a)/max(0.000001,b-a));}
 void main(){
+    float packedHalo=floor(vType/8.0);
+    float kind=mod(vType,8.0);
     float d=length(vQ);
     if(d>=1.0)discard;
 
@@ -162,8 +172,8 @@ void main(){
     float haloFade=1.0-over;
     float body=clamp(vBody,0.03,0.93);
     float edgeAlpha=0.08+0.92*over;
-    float coreHardness=(vType<1.5)?(1.0-soft):0.0;
-    float haloVisibility=haloFade*((vType<1.5)?soft:1.0);
+    float coreHardness=(kind<1.5)?(1.0-soft):0.0;
+    float haloVisibility=haloFade*((kind<1.5)?soft:1.0);
     float plateauFrac=body*over;
     float justOutside=min(0.997,body+0.012);
     float aa=max(fwidth(d)*1.15,0.00035);
@@ -173,13 +183,13 @@ void main(){
     float solidUntil=0.0;
     float bodyCoverage=1.0;
 
-    if(vType>=0.5 && vType<1.5){
+    if(kind>=0.5 && kind<1.5){
         float hard=max(over,coreHardness);
         solidUntil=body*hard;
         bodyEdge=max(edgeAlpha,hard);
         bodyCoverage=(d<=solidUntil)?1.0:mix(1.0,bodyEdge,seg(d,solidUntil,body));
 
-    }else if(vType>=1.5 && vType<2.5){
+    }else if(kind>=1.5 && kind<2.5){
         float darkCore=max(0.06,body*(0.18+0.22*(1.0-soft)));
         float darkA0=0.96-soft*0.16;
         float darkA1=0.76-soft*0.22;
@@ -198,7 +208,7 @@ void main(){
         }
         bodyEdge=edgeAlpha;
 
-    }else if(vType>=2.5 && vType<3.5){
+    }else if(kind>=2.5 && kind<3.5){
         float inner=body*(0.35-0.12*over);
         float ringStart=max(inner+0.01,body*(0.67-0.18*over));
         float a0=0.02+0.12*over;
@@ -210,7 +220,7 @@ void main(){
         rgb=mix(vColor,vec3(1.0),whiteRing*0.75);
         bodyEdge=edgeAlpha;
 
-    }else if(vType<0.5){
+    }else if(kind<0.5){
         float whiteCoreFade=(softRaw<=1.0)?1.0:sat(1.0-(softRaw-1.0)/0.5);
         float whiteExtent;
         float whiteHold;
@@ -245,7 +255,7 @@ void main(){
     float coverage;
     if(d<=body){
         coverage=bodyCoverage;
-    }else if(over>=0.999 || ((vType<1.5) && soft<=0.001)){
+    }else if(over>=0.999 || ((kind<1.5) && soft<=0.001)){
         coverage=mix(bodyEdge,0.0,seg(d,body,justOutside));
     }else{
         float haloA=min(0.30,edgeAlpha*0.85)*haloVisibility;
@@ -257,7 +267,7 @@ void main(){
         else coverage=mix(haloMidA,0.0,seg(d,h1,1.0));
     }
 
-    if(vType>=3.5){
+    if(kind>=3.5){
         float rayFall=1.0-smoothstep(0.18,1.0,d);
         float ax=exp(-pow(abs(vQ.x)*34.0,2.0))+exp(-pow(abs(vQ.y)*34.0,2.0));
         float d1=abs(vQ.x-vQ.y)*0.70710678;
@@ -268,6 +278,7 @@ void main(){
         rgb=mix(rgb,vec3(1.0),sat(rays));
     }
 
+    if(packedHalo>0.0 && d>body){coverage*=mix(1.0,(packedHalo-1.0)/100.0,smoothstep(body,body+aa,d));}
     coverage*=1.0-smoothstep(1.0-aa,1.0,d);
     coverage=max(0.0,coverage)*clamp(vAlpha,0.0,1.0);
     if(coverage<=0.000002)discard;
@@ -286,13 +297,13 @@ void main(){
   const toneFS = `#version 300 es
 precision highp float;
 uniform sampler2D uHdr;
-uniform float uExposure;
+uniform float uGentle;
 in vec2 vUv;
 layout(location=0) out vec4 outColor;
 void main(){
     vec3 hdr=max(texture(uHdr,vUv).rgb,vec3(0.0));
 
-    vec3 shown=clamp(hdr,0.0,1.0);
+    vec3 shown=uGentle>0.5 ? vec3(1.0)-exp(-hdr) : clamp(hdr,0.0,1.0);
     float a=max(max(shown.r,shown.g),shown.b);
     if(a<0.00001){outColor=vec4(0.0);return;}
     outColor=vec4(clamp(shown/a,0.0,1.0),a);
@@ -324,7 +335,7 @@ void main(){
       toneProgram = link(toneVS, toneFS);
       lampUniformViewport = gl.getUniformLocation(lampProgram, 'uViewport');
       toneUniformHdr = gl.getUniformLocation(toneProgram, 'uHdr');
-      toneUniformExposure = gl.getUniformLocation(toneProgram, 'uExposure');
+      toneUniformGentle = gl.getUniformLocation(toneProgram, 'uGentle');
 
       lampVao = gl.createVertexArray();
       gl.bindVertexArray(lampVao);
@@ -510,7 +521,7 @@ void main(){
     const style = drawPlan?.preparedStyle || visualPlan?.style || {};
     const softness = Math.max(0, Math.min(150, Number(style.effectiveSoftness) || 0));
     const type = style.type || 'whiteCore',
-      typeCode = TYPE_CODE[type] ?? 0;
+      typeCode = lampShapeAndHalo(TYPE_CODE[type] ?? 0, style, cfg);
     ensureCapacity(instanceCount + items.length);
     for (let i = 0; i < items.length; i++) {
       const v = items[i],
@@ -524,7 +535,7 @@ void main(){
       const py = (Number(tr.b) || 0) * x + (Number(tr.d) || 0) * y + (Number(tr.f) || 0);
 
       const vb = Math.max(0, Math.min(200, Number(v.brightness) || 0));
-      let outerLocal = lampGradientOuterRadius(rad, softness, type, vb);
+      let outerLocal = lampGradientOuterRadius(rad, softness, type, vb, style.appearance, cfg.outerHaloSize);
       if (type === 'star')
         outerLocal = Math.max(outerLocal, rad * (2.15 + 0.25 * (1 - Math.min(100, softness) / 100)) + 6);
       const outer = Math.max(1, outerLocal * scale);
@@ -579,7 +590,7 @@ void main(){
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, hdrTexture);
     gl.uniform1i(toneUniformHdr, 0);
-    gl.uniform1f(toneUniformExposure, 1.0);
+    gl.uniform1f(toneUniformGentle, frameBlendMode === 'gentle' ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
     gl.bindTexture(gl.TEXTURE_2D, null);
@@ -1010,6 +1021,8 @@ fn topologyLampOut(corner:vec2<f32>,li:u32,copyIndex:u32,useCopy:bool)->VSOut{
 fn sat(x:f32)->f32{return clamp(x,0.0,1.0);}
 fn seg(x:f32,a:f32,b:f32)->f32{return sat((x-a)/max(0.000001,b-a));}
 @fragment fn fsMain(v:VSOut)->@location(0) vec4<f32>{
+    let packedHalo=floor(v.lampType/8.0);
+    let kind=v.lampType-8.0*packedHalo;
     let d=length(v.q);let aa=max(fwidth(d)*1.15,0.00035);if(d>=1.0){discard;}
     let softRaw=clamp(v.soft,0.0,1.5);
     let soft=min(softRaw,1.0);
@@ -1017,18 +1030,18 @@ fn seg(x:f32,a:f32,b:f32)->f32{return sat((x-a)/max(0.000001,b-a));}
     let haloFade=1.0-over;
     let body=clamp(v.body,0.03,0.93);
     let edgeAlpha=0.08+0.92*over;
-    let coreHardness=select(0.0,1.0-soft,v.lampType<1.5);
-    let haloVisibility=haloFade*select(1.0,soft,v.lampType<1.5);
+    let coreHardness=select(0.0,1.0-soft,kind<1.5);
+    let haloVisibility=haloFade*select(1.0,soft,kind<1.5);
     let plateauFrac=body*over;
     let justOutside=min(0.997,body+0.012);
     var rgb=v.color;
     var bodyEdge=edgeAlpha;
     var solidUntil=0.0;
     var bodyCoverage=1.0;
-    if(v.lampType>=0.5 && v.lampType<1.5){
+    if(kind>=0.5 && kind<1.5){
         let hard=max(over,coreHardness);solidUntil=body*hard;bodyEdge=max(edgeAlpha,hard);
         bodyCoverage=select(mix(1.0,bodyEdge,seg(d,solidUntil,body)),1.0,d<=solidUntil);
-    }else if(v.lampType>=1.5 && v.lampType<2.5){
+    }else if(kind>=1.5 && kind<2.5){
         let darkCore=max(0.06,body*(0.18+0.22*(1.0-soft)));
         let darkA0=0.96-soft*0.16;let darkA1=0.76-soft*0.22;
         if(d<darkCore){bodyCoverage=mix(darkA0,darkA1,seg(d,0.0,darkCore));rgb=vec3<f32>(0.0);}
@@ -1038,14 +1051,14 @@ fn seg(x:f32,a:f32,b:f32)->f32{return sat((x-a)/max(0.000001,b-a));}
             else{let start=select(darkCore,p,over>0.001);let startA=select(darkA1,1.0,over>0.001);bodyCoverage=mix(startA,edgeAlpha,seg(d,start,body));}
         }
         bodyEdge=edgeAlpha;
-    }else if(v.lampType>=2.5 && v.lampType<3.5){
+    }else if(kind>=2.5 && kind<3.5){
         let inner=body*(0.35-0.12*over);let ringStart=max(inner+0.01,body*(0.67-0.18*over));
         let a0=0.02+0.12*over;let a1=0.08+0.25*over;
         if(d<inner){bodyCoverage=mix(a0,a1,seg(d,0.0,inner));}
         else if(d<ringStart){bodyCoverage=mix(a1,1.0,seg(d,inner,ringStart));}
         else{bodyCoverage=mix(1.0,edgeAlpha,seg(d,ringStart,body));}
         let whiteRing=1.0-sat(abs(d-ringStart)/max(0.008,body*0.09));rgb=mix(v.color,vec3<f32>(1.0),whiteRing*0.75);bodyEdge=edgeAlpha;
-    }else if(v.lampType<0.5){
+    }else if(kind<0.5){
         let whiteCoreFade=select(sat(1.0-(softRaw-1.0)/0.5),1.0,softRaw<=1.0);
         var whiteExtent:f32;var whiteHold:f32;var wt:f32;
         if(softRaw<=1.0){whiteExtent=body*(1.0-0.90*soft);whiteHold=max(0.004,whiteExtent*select(0.58,1.0,soft<0.01));wt=min(body-0.004,max(whiteHold+0.004,whiteExtent));bodyEdge=max(edgeAlpha,coreHardness);}
@@ -1060,7 +1073,7 @@ fn seg(x:f32,a:f32,b:f32)->f32{return sat((x-a)/max(0.000001,b-a));}
     }
     var coverage:f32;
     if(d<=body){coverage=bodyCoverage;}
-    else if(over>=0.999 || ((v.lampType<1.5)&&soft<=0.001)){coverage=mix(bodyEdge,0.0,seg(d,body,justOutside));}
+    else if(over>=0.999 || ((kind<1.5)&&soft<=0.001)){coverage=mix(bodyEdge,0.0,seg(d,body,justOutside));}
     else{
         let haloA=min(0.30,edgeAlpha*0.85)*haloVisibility;let haloMidA=haloA*0.28;
         let h0=min(0.993,body+(1.0-body)*0.10);let h1=min(0.995,body+(1.0-body)*(0.34+0.20*soft));
@@ -1068,13 +1081,14 @@ fn seg(x:f32,a:f32,b:f32)->f32{return sat((x-a)/max(0.000001,b-a));}
         else if(d<=h1){coverage=mix(haloA,haloMidA,seg(d,h0,h1));}
         else{coverage=mix(haloMidA,0.0,seg(d,h1,1.0));}
     }
-    if(v.lampType>=3.5){
+    if(kind>=3.5){
         let rayFall=1.0-smoothstep(0.18,1.0,d);
         let ax=exp(-pow(abs(v.q.x)*34.0,2.0))+exp(-pow(abs(v.q.y)*34.0,2.0));
         let d1=abs(v.q.x-v.q.y)*0.70710678;let d2=abs(v.q.x+v.q.y)*0.70710678;
         let diag=(exp(-pow(d1*38.0,2.0))+exp(-pow(d2*38.0,2.0)))*0.52;
         let rays=(ax+diag)*rayFall;coverage=max(coverage,rays*0.66);rgb=mix(rgb,vec3<f32>(1.0),sat(rays));
     }
+    if(packedHalo>0.0 && d>body){coverage*=mix(1.0,(packedHalo-1.0)/100.0,smoothstep(body,body+aa,d));}
     coverage*=1.0-smoothstep(1.0-aa,1.0,d);coverage=max(0.0,coverage)*clamp(v.alpha,0.0,1.0);
     if(coverage<=0.000002){discard;}
     return vec4<f32>(max(rgb,vec3<f32>(0.0))*coverage,coverage);
@@ -1107,6 +1121,7 @@ fn peakAt(pos:vec2<i32>,dims:vec2<i32>)->f32{
     let xy=clamp(vec2<i32>(p.xy),vec2<i32>(0),dims-vec2<i32>(1));
     let hdr=sampleLamp(xy);
     var shown=clamp(hdr,vec3<f32>(0.0),vec3<f32>(1.0));
+    if(toneFx.p1.w>0.5){shown=vec3<f32>(1.0)-exp(-hdr);}
     if(toneFx.p0.x>0.5){
         let r=max(1,i32(toneFx.p0.y+0.5));let center=max(max(shown.r,shown.g),shown.b);
         var around=0.0;around=max(around,peakAt(xy+vec2<i32>(r,0),dims));around=max(around,peakAt(xy+vec2<i32>(-r,0),dims));around=max(around,peakAt(xy+vec2<i32>(0,r),dims));around=max(around,peakAt(xy+vec2<i32>(0,-r),dims));
@@ -2289,7 +2304,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       style = drawPlan?.preparedStyle || visualPlan?.style || {};
     const softness = Math.max(0, Math.min(150, Number(style.effectiveSoftness) || 0)),
       type = style.type || 'whiteCore',
-      typeCode = TYPE_CODE[type] ?? 0;
+      typeCode = lampShapeAndHalo(TYPE_CODE[type] ?? 0, style, cfg);
     let lk = 0,
       lampHash = 2166136261 >>> 0;
     for (let i = 0; i < items.length; i++) {
@@ -2299,7 +2314,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       const lampAlpha = Math.max(0, Math.min(1, alpha * (Number(v.intensityAlpha) || 0)));
       if (lampAlpha <= 0.00001) continue;
       const vb = Math.max(0, Math.min(200, Number(v.brightness) || 0));
-      let outerLocal = lampGradientOuterRadius(rad, softness, type, vb);
+      let outerLocal = lampGradientOuterRadius(rad, softness, type, vb, style.appearance, cfg.outerHaloSize);
       if (type === 'star')
         outerLocal = Math.max(outerLocal, rad * (2.15 + 0.25 * (1 - Math.min(100, softness) / 100)) + 6);
       const body = Math.max(0.03, Math.min(0.93, rad / Math.max(0.000001, outerLocal))),
@@ -2562,7 +2577,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       style = drawPlan?.preparedStyle || visualPlan?.style || {};
     const softness = Math.max(0, Math.min(150, Number(style.effectiveSoftness) || 0)),
       type = style.type || 'whiteCore',
-      typeCode = TYPE_CODE[type] ?? 0;
+      typeCode = lampShapeAndHalo(TYPE_CODE[type] ?? 0, style, cfg);
     let lk = 0,
       lampMotionHash = 2166136261 >>> 0;
     for (let i = 0; i < items.length; i++) {
@@ -2572,7 +2587,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       const lampAlpha = Math.max(0, Math.min(1, alpha * (Number(v.intensityAlpha) || 0)));
       if (lampAlpha <= 0.00001) continue;
       const vb = Math.max(0, Math.min(200, Number(v.brightness) || 0));
-      let outerLocal = lampGradientOuterRadius(rad, softness, type, vb);
+      let outerLocal = lampGradientOuterRadius(rad, softness, type, vb, style.appearance, cfg.outerHaloSize);
       if (type === 'star')
         outerLocal = Math.max(outerLocal, rad * (2.15 + 0.25 * (1 - Math.min(100, softness) / 100)) + 6);
       const body = Math.max(0.03, Math.min(0.93, rad / Math.max(0.000001, outerLocal))),
@@ -2755,7 +2770,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       style = drawPlan?.preparedStyle || visualPlan?.style || {};
     const softness = Math.max(0, Math.min(150, Number(style.effectiveSoftness) || 0)),
       type = style.type || 'whiteCore',
-      typeCode = TYPE_CODE[type] ?? 0;
+      typeCode = lampShapeAndHalo(TYPE_CODE[type] ?? 0, style, cfg);
     let lk = 0,
       lampMotionHash = 2166136261 >>> 0;
     for (let i = 0; i < items.length; i++) {
@@ -2765,7 +2780,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       const lampAlpha = Math.max(0, Math.min(1, alpha * (Number(v.intensityAlpha) || 0)));
       if (lampAlpha <= 0.00001) continue;
       const vb = Math.max(0, Math.min(200, Number(v.brightness) || 0));
-      let outerLocal = lampGradientOuterRadius(rad, softness, type, vb);
+      let outerLocal = lampGradientOuterRadius(rad, softness, type, vb, style.appearance, cfg.outerHaloSize);
       if (type === 'star')
         outerLocal = Math.max(outerLocal, rad * (2.15 + 0.25 * (1 - Math.min(100, softness) / 100)) + 6);
       const body = Math.max(0.03, Math.min(0.93, rad / Math.max(0.000001, outerLocal))),
@@ -2899,7 +2914,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
     const style = drawPlan?.preparedStyle || visualPlan?.style || {};
     const softness = Math.max(0, Math.min(150, Number(style.effectiveSoftness) || 0));
     const type = style.type || 'whiteCore',
-      typeCode = TYPE_CODE[type] ?? 0;
+      typeCode = lampShapeAndHalo(TYPE_CODE[type] ?? 0, style, cfg);
     ensureCapacity(instanceCount + items.length);
     const freezeStartCount = instanceCount;
     for (let i = 0; i < items.length; i++) {
@@ -2913,7 +2928,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       const px = (Number(tr.a) || 0) * x + (Number(tr.c) || 0) * y + (Number(tr.e) || 0),
         py = (Number(tr.b) || 0) * x + (Number(tr.d) || 0) * y + (Number(tr.f) || 0);
       const vb = Math.max(0, Math.min(200, Number(v.brightness) || 0));
-      let outerLocal = lampGradientOuterRadius(rad, softness, type, vb);
+      let outerLocal = lampGradientOuterRadius(rad, softness, type, vb, style.appearance, cfg.outerHaloSize);
       if (type === 'star')
         outerLocal = Math.max(outerLocal, rad * (2.15 + 0.25 * (1 - Math.min(100, softness) / 100)) + 6);
       const outer = Math.max(1, outerLocal * scale),
@@ -3226,6 +3241,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       toneUniformData[4] = ac[0];
       toneUniformData[5] = ac[1];
       toneUniformData[6] = ac[2];
+      toneUniformData[7] = frameBlendMode === 'gentle' ? 1 : 0;
       device.queue.writeBuffer(toneUniformBuffer, 0, toneUniformData);
       const tonePass = encoder.beginRenderPass({
         label: 'Spiro lamp tone',
@@ -3311,7 +3327,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
           width,
           height,
           generation: hubGeneration,
-          blendMode: frameBlendMode,
+          blendMode: lampCanvasCompositeOperation(frameBlendMode),
           blendMixed: frameBlendMixed,
         }
       : null;

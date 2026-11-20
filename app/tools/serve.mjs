@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const port = Number(process.env.PORT) || 8000;
 // For testing the fallback path: SOMATA_JS_MIME=text/plain imitates python's http.server on Windows.
 const jsMime = process.env.SOMATA_JS_MIME;
@@ -27,7 +27,7 @@ http
   .createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost');
     let file = path.normalize(path.join(root, decodeURIComponent(url.pathname)));
-    if (!file.startsWith(root)) {
+    if (file !== root && !file.startsWith(root + path.sep)) {
       res.writeHead(403).end();
       return;
     }

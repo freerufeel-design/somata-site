@@ -147,6 +147,7 @@ const SomataMasterBroadcastCore = (() => {
     graffitiNib: ['graffitiNibShape'],
     lineMainMode: ['lineProfileApplication', 'lineProfile', 'lineProfileStroke', 'sprite.enabled'],
     lineSpriteType: ['sprite.type'],
+    lampAppearance: ['lamps.appearance'],
     lampPosition: ['lamps.positionMode'],
     lampMotion: ['lamps.morphMotionMode'],
     lampColorMode: ['lamps.colorMode', 'lamps.matchLineColor', 'lamps.rainbow'],

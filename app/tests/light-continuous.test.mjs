@@ -13,10 +13,10 @@ test('light morph is continuous and obsolete controls are gone', async () => {
   await loadApp();
   assert.equal(globalThis.SomataMorphRegistry.get('light').frameChange, undefined);
 
-  const sources = ['index.html', ...listModules()].map(read);
+  const sources = ['../index.html', ...listModules()].map(read);
   for (const source of sources) assert.doesNotMatch(source, /lightFrameChange|SomataMorphTimeSampling/i);
 
-  const html = read('index.html');
+  const html = read('../index.html');
   assert.match(html, /id="morphFadePercent" type="range"/);
   assert.match(html, /id="testMorphFadePercent" type="range"/);
 

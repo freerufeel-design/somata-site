@@ -24,7 +24,7 @@ import {
   useSmoothSplinePath,
 } from './profile-model.js';
 import { buildFourierWavePoints } from './fourier.js';
-import { splinePathForDraw, transformSplineKnotsForRounding } from './spline-rounding.js';
+import { drawSimpleSpline, splinePathForDraw, transformSplineKnotsForRounding } from './spline-rounding.js';
 import { buildClosedSpiralAutoCloseGeometry } from './spiral/fillets.js';
 import {
   renderLayerOrbitPaths,
@@ -42,7 +42,7 @@ import { buildChaosVertexIndices } from './chaos-star.js';
 import { buildOrbitPolylines } from './orbit-builder.js';
 import { buildCurrentMorphPaths } from './frame-paths.js';
 import { buildCurrentCircleMorphPaths } from '../effects/aux-paths.js';
-import { roundPolylineForDraw } from './polyline-rounding.js';
+import { drawSimplePolyline, roundPolylineForDraw } from './polyline-rounding.js';
 import { buildCircleSlideAnglePlan } from '../slides/planner.js';
 import {
   createMonoradiusMorphExtentProbe,
@@ -154,7 +154,7 @@ function adaptiveMorphRoundingSamples(pts, isClosed, amount) {
   return Math.max(72, Math.min(720, tier));
 }
 
-function buildRoundedMorphPolylinePoints(rawPoints, closed, roundingFrac, output = null) {
+function buildRoundedMorphPolylinePoints(rawPoints, closed, roundingFrac, output = null, simple = false) {
   const raw = rawPoints || [];
   let src = raw;
   let validCount = 0;
@@ -184,7 +184,7 @@ function buildRoundedMorphPolylinePoints(rawPoints, closed, roundingFrac, output
     return out;
   }
 
-  const M = adaptiveMorphRoundingSamples(src, closed, 1);
+  const M = adaptiveMorphRoundingSamples(src, closed, simple ? frac : 1);
   const grid = resamplePolylineForMorph(src, M, closed);
   const n = grid.length;
   if (n < 3) {
@@ -199,9 +199,9 @@ function buildRoundedMorphPolylinePoints(rawPoints, closed, roundingFrac, output
 
   const maxHalf = closed ? Math.floor(n / 2) - 1 : Math.floor((n - 1) / 2);
   const exactHalf = Math.max(0, Math.min(maxHalf, frac * n * 0.06));
-  const low = Math.floor(exactHalf),
-    high = Math.min(maxHalf, low + 1);
-  const mix = exactHalf - low;
+  const low = simple ? Math.max(1, Math.round(exactHalf)) : Math.floor(exactHalf);
+  const high = simple ? low : Math.min(maxHalf, low + 1);
+  const mix = simple ? 0 : exactHalf - low;
 
   const H = high,
     extLen = n + H * 2,
@@ -262,7 +262,7 @@ function buildRoundedMorphPolylinePoints(rawPoints, closed, roundingFrac, output
   return out;
 }
 
-function roundMorphPolyline(ctx, rawPoints, closed, roundingFrac) {
+function roundMorphPolyline(ctx, rawPoints, closed, roundingFrac, simple = false) {
   const raw = rawPoints || [];
   let src = raw;
   let validCount = 0;
@@ -278,7 +278,7 @@ function roundMorphPolyline(ctx, rawPoints, closed, roundingFrac) {
   const frac = Math.min(1, strength);
   let drawable = src;
   if (frac > 0.001 && src.length >= 3)
-    drawable = buildRoundedMorphPolylinePoints(src, closed, frac, morphRoundWorkspace.rounded);
+    drawable = buildRoundedMorphPolylinePoints(src, closed, frac, morphRoundWorkspace.rounded, simple);
   if (state.fourierMode && drawable?._fourierPrepared !== true)
     drawable = buildFourierWavePoints(drawable, Boolean(closed), `morph:${frac.toFixed(4)}`);
   if (drawable.length < 2) return;
@@ -3268,6 +3268,78 @@ function blendMorphFilletPaths(ctx, drawAuthored, drawRecovered, mix, closed) {
   }
   if (closed) ctx.closePath();
 }
+function drawSimpleMorphPath(
+  ctx,
+  points,
+  closed,
+  roundingFrac,
+  profileMode,
+  splineBlend = null,
+  continuousProfileBlend = false,
+  splineRenderMode = 'smooth',
+  cornerFlags = [],
+  bridgeRoundFlags = [],
+) {
+  const round = Math.max(0, Math.min(2, Number(roundingFrac) || 0));
+  const hasExplicitBlend = splineBlend != null;
+  const blend = hasExplicitBlend
+    ? Math.max(0, Math.min(1, Number(splineBlend) || 0))
+    : profileMode === 'spline'
+      ? 1
+      : 0;
+  const renderMode = normalizeSplineRenderMode(splineRenderMode);
+  const splineInvolved =
+    continuousProfileBlend || (hasExplicitBlend ? blend > 1e-7 : profileMode === 'spline');
+  const bridgePolicy = Array.isArray(bridgeRoundFlags) && bridgeRoundFlags.length === points.length;
+  const flatProfileSmoothRounding =
+    renderMode === 'smooth' && round > 0 && isFlatProfileConstructionPath(points, cornerFlags);
+
+  if (!splineInvolved && flatProfileSmoothRounding) {
+    // Straight-profile special case: Smooth means spline rounding, not the
+    // legacy v220 polyline rounding. This also covers exact morph boundaries
+    // where the semantic target preset is stored as `segments`.
+    drawSimpleSpline(ctx, points, Boolean(closed), round, cornerFlags || [], bridgeRoundFlags || []);
+    return;
+  }
+
+  if (!splineInvolved) {
+    if (bridgePolicy) {
+      // v247: a broken profile has an explicit bridge policy.  Use the
+      // v220 corner fillet renderer so `Прямой` and `Скругление` are not
+      // collapsed into the same globally-smoothed Morph path.
+      drawSimplePolyline(ctx, points, Boolean(closed), round, cornerFlags || []);
+    } else {
+      roundMorphPolyline(ctx, points, Boolean(closed), round, true);
+    }
+    return;
+  }
+
+  if (renderMode === 'discrete') {
+    // Ordinary Discrete Morphing keeps the established v220 whole-path
+    // smoothing. Broken profiles are the exception: their bridge endpoints
+    // are semantic corners controlled by the left-panel join switch.
+    if (bridgePolicy) drawSimplePolyline(ctx, points, Boolean(closed), round, cornerFlags || []);
+    else roundMorphPolyline(ctx, points, Boolean(closed), round, true);
+    return;
+  }
+
+  if (round > 0) {
+    // Smooth mode: one continuous spline. Rounding changes the spline knots
+    // themselves (same count) instead of adding a rounded polyline layer.
+    drawSimpleSpline(ctx, points, Boolean(closed), round, cornerFlags || [], bridgeRoundFlags || []);
+    return;
+  }
+
+  if (continuousProfileBlend) {
+    // With rounding off, spline <-> hard segments changes curvature continuously
+    // all the way to exact zero by moving cubic handles onto the straight chord.
+    drawMorphSplineBlendPath(ctx, points, Boolean(closed), blend, cornerFlags || []);
+    return;
+  }
+
+  drawSimpleSpline(ctx, points, Boolean(closed), 0, cornerFlags || [], bridgeRoundFlags || []);
+}
+
 function drawMorphPathQuality(
   ctx,
   points,
@@ -3284,6 +3356,9 @@ function drawMorphPathQuality(
   recoverLiveJoints = false,
   filletLayer = null,
 ) {
+  if (filletLayer?.roundingCornerType === 'simple' && !state.fourierMode)
+    return drawSimpleMorphPath(ctx, points, closed, roundingFrac, profileMode, splineBlend,
+      continuousProfileBlend, splineRenderMode, cornerFlags, bridgeRoundFlags);
   // Preserve the 10.4.19.4 path builder for the two original
   // algorithms. Later discrete-spline and whole-curve alterations
   // must not change their authored topology or movement.

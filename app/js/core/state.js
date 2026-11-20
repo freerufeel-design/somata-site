@@ -1,3 +1,4 @@
+import { TUNNEL_DENSITY_DEFAULT } from '../corridor/corridor-density.js';
 import './palette.js'; // initialisation order: this module runs after it
 import { invalidateLayerGeometry } from './render-runtime.js';
 
@@ -204,6 +205,9 @@ const state = {
     auraSpanMultiplier: 1,
   },
   lamps: {
+    appearance: 'classic',
+    outerHaloBrightness: 100,
+    outerHaloSize: 90,
     positionMode: 'key',
     colorMode: 'line',
     matchLineColor: true,
@@ -226,8 +230,8 @@ const state = {
     freezeRainSpeed: 50,
     freezeRainTailSec: 1.5,
     freezeRainHardness: 50,
-    brightness: 100,
-    radius: 30,
+    brightness: 75,
+    radius: 25,
     radiusMultiplier: 2,
     softness: 100,
     softnessMultiplier: 1,
@@ -268,7 +272,7 @@ const state = {
   library: { shapes: [], morphs: [], defaultMorphId: null },
   projectFileHandle: null,
   projectFileName: '',
-  draftProjectName: 'Проект один',
+  draftProjectName: 'РџСЂРѕРµРєС‚ РѕРґРёРЅ',
   playlistFileHandle: null,
   playlistFileName: '',
   playlistProjects: [],
@@ -318,6 +322,7 @@ const state = {
     spacingMultiplier: 1,
     depthCurve: 0,
     depthCurveMultiplier: 1,
+    density: TUNNEL_DENSITY_DEFAULT,
     centerHiddenCopies: 0,
     spiralOuterCopies: 4,
     colorShiftEnabled: false,

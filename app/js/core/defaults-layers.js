@@ -906,7 +906,7 @@ function ensureLayerLampState(layer) {
     );
   delete owner.lamps.brightnessMultiplier;
   owner.lamps.webgl = true;
-  owner.lamps.blendMode = ['lighter', 'screen', 'source-over', 'color-dodge', 'difference', 'color'].includes(
+  owner.lamps.blendMode = ['gentle', 'lighter', 'screen', 'source-over', 'color-dodge', 'difference', 'color'].includes(
     String(owner.lamps.blendMode || '').toLowerCase(),
   )
     ? String(owner.lamps.blendMode).toLowerCase()
@@ -986,8 +986,7 @@ function ensureLayerLampState(layer) {
   if (!['key', 'corners', 'arbitrary'].includes(owner.lamps.positionMode)) owner.lamps.positionMode = 'key';
 
   owner.lamps.morphEnabled = false;
-  if (owner.lamps.morphMotionMode === 'current') owner.lamps.morphMotionMode = 'dynamic';
-  if (!['linear', 'ghost', 'dynamic', 'smooth'].includes(owner.lamps.morphMotionMode))
+  if (!['linear', 'key'].includes(owner.lamps.morphMotionMode))
     owner.lamps.morphMotionMode = 'linear';
   owner.lamps.calmMode = false;
   owner.lamps.morphInertia = Math.max(

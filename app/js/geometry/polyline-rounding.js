@@ -11,6 +11,198 @@ import {
 } from './spline-rounding.js';
 import { drawUnifiedFilletPath } from './unified-fillet.js';
 
+export function drawSimplePolyline(ctx, points, closed, roundingFrac, cornerFlags, cornerFactors = null) {
+  if (!points || points.length < 2) return;
+  const strength = Math.max(0, Math.min(2, Number(roundingFrac) || 0));
+  // v341: 100..200% is a continuous second stage. Preserve topology by moving
+  // knots first, then reuse the proven 100% local fillet without consuming more edge.
+  if (strength > 1.000001 && points.length >= 3) {
+    const pre = transformSplineKnotsForRounding(points, Boolean(closed), strength - 1, cornerFlags || []);
+    return drawSimplePolyline(ctx, pre, closed, 1, cornerFlags, cornerFactors);
+  }
+
+  if (state.fourierMode && points?._fourierPrepared !== true) {
+    const amount = Math.min(1, strength);
+    let source = points;
+    if (amount > 0.001 && Array.isArray(cornerFlags) && cornerFlags.some(Boolean))
+      source = smoothMorphPath(points, Boolean(closed), amount, cornerFlags);
+    const wave = buildFourierWavePoints(source, Boolean(closed), `poly:${amount.toFixed(4)}`);
+    if (wave.length < 2) return;
+    ctx.moveTo(wave[0].x, wave[0].y);
+    for (let i = 1; i < wave.length; i++) ctx.lineTo(wave[i].x, wave[i].y);
+    if (closed) ctx.closePath();
+    return;
+  }
+
+  const n = points.length;
+  const rawPath = () => {
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < n; i++) ctx.lineTo(points[i].x, points[i].y);
+    if (closed) ctx.closePath();
+  };
+
+  const amount = Math.min(1, strength);
+  if (amount <= 0.001) {
+    rawPath();
+    return;
+  }
+
+  // Only active corners participate. During topology morphing a
+  // corner with factor 0 must behave exactly like an ordinary sample.
+  let corners = [];
+  for (let i = 0; i < n; i++) {
+    if (!cornerFlags?.[i]) continue;
+    if (cornerFactors && Number(cornerFactors[i]) <= 0.001) continue;
+    if (!closed && (i === 0 || i === n - 1)) continue; // open ends are not fillets
+    corners.push(i);
+  }
+  if (!corners.length) {
+    rawPath();
+    return;
+  }
+
+  const pointOnSegment = (a, b, f) => ({
+    x: a.x + (b.x - a.x) * f,
+    y: a.y + (b.y - a.y) * f,
+  });
+
+  const distanceForward = (from, to) => {
+    if (from < 0 || to < 0 || from === to) return 0;
+    let d = 0;
+    let i = from;
+    let guard = 0;
+    while (i !== to && guard++ <= n) {
+      const j = i + 1 < n ? i + 1 : closed ? 0 : n - 1;
+      if (j === i) break;
+      d += Math.hypot(points[j].x - points[i].x, points[j].y - points[i].y);
+      i = j;
+    }
+    return d;
+  };
+
+  const pointAlongPath = (from, to, distance) => {
+    if (from === to) return { ...points[from] };
+    let remain = Math.max(0, distance);
+    let i = from;
+    let guard = 0;
+    while (i !== to && guard++ <= n) {
+      const j = i + 1 < n ? i + 1 : closed ? 0 : n - 1;
+      if (j === i) break;
+      const len = Math.hypot(points[j].x - points[i].x, points[j].y - points[i].y);
+      if (len > 1e-9 && remain <= len) return pointOnSegment(points[i], points[j], remain / len);
+      remain -= len;
+      i = j;
+    }
+    return { ...points[to] };
+  };
+
+  // Emit only the untrimmed part of an original sampled path arc.
+  // This is the important bit for spline profiles: samples between a
+  // fillet cut point and the polygon vertex are NOT drawn at all,
+  // which removes the short protruding/backtracking "tips".
+  const emitPathSlice = (from, to, startDistance, endDistance) => {
+    const total = distanceForward(from, to);
+    const a = Math.max(0, Math.min(total, startDistance));
+    const b = Math.max(a, Math.min(total, endDistance));
+    if (b <= a + 1e-9) return;
+
+    let travelled = 0;
+    let i = from;
+    let guard = 0;
+    while (i !== to && guard++ <= n) {
+      const j = i + 1 < n ? i + 1 : closed ? 0 : n - 1;
+      if (j === i) break;
+      const len = Math.hypot(points[j].x - points[i].x, points[j].y - points[i].y);
+      const nextTravelled = travelled + len;
+
+      // Keep an original sample only when it lies strictly inside
+      // the retained interval. Boundary points are emitted from
+      // pointAlongPath so there is no overshoot/backtracking.
+      if (nextTravelled > a + 1e-9 && nextTravelled < b - 1e-9) {
+        ctx.lineTo(points[j].x, points[j].y);
+      }
+      if (nextTravelled >= b - 1e-9) break;
+      travelled = nextTravelled;
+      i = j;
+    }
+
+    const endPt = pointAlongPath(from, to, b);
+    ctx.lineTo(endPt.x, endPt.y);
+  };
+
+  // Calculate a symmetric trim distance for every filleted corner.
+  // The maximum is half of the shorter neighbouring corner-to-corner
+  // arc, so adjacent fillets can meet but never cross each other.
+  const data = new Map();
+  const m = corners.length;
+  for (let q = 0; q < m; q++) {
+    const i = corners[q];
+    let prevBoundary;
+    let nextBoundary;
+
+    if (closed) {
+      if (m === 1) {
+        // A single marked corner on a closed dense path has no
+        // meaningful corner-to-corner span. Fall back to the
+        // immediately adjacent samples, without drawing them
+        // again after the cut.
+        prevBoundary = (i - 1 + n) % n;
+        nextBoundary = (i + 1) % n;
+      } else {
+        prevBoundary = corners[(q - 1 + m) % m];
+        nextBoundary = corners[(q + 1) % m];
+      }
+    } else {
+      prevBoundary = q > 0 ? corners[q - 1] : 0;
+      nextBoundary = q + 1 < m ? corners[q + 1] : n - 1;
+    }
+
+    const inSpan = distanceForward(prevBoundary, i);
+    const outSpan = distanceForward(i, nextBoundary);
+    const factor = cornerFactors ? Math.max(0, Math.min(1, Number(cornerFactors[i]) || 0)) : 1;
+    const cut = 0.5 * Math.min(inSpan, outSpan) * amount * factor;
+
+    const inPt = pointAlongPath(prevBoundary, i, Math.max(0, inSpan - cut));
+    const outPt = pointAlongPath(i, nextBoundary, cut);
+    data.set(i, { prevBoundary, nextBoundary, inSpan, outSpan, cut, inPt, outPt });
+  }
+
+  if (closed) {
+    const first = corners[0];
+    const firstData = data.get(first);
+    ctx.moveTo(firstData.outPt.x, firstData.outPt.y);
+
+    for (let q = 0; q < m; q++) {
+      const from = corners[q];
+      const to = corners[(q + 1) % m];
+      const fromData = data.get(from);
+      const toData = data.get(to);
+      const span = distanceForward(from, to);
+
+      // Original spline only between the two cut points.
+      emitPathSlice(from, to, fromData.cut, Math.max(0, span - toData.cut));
+      // Replace the removed vertex neighbourhood with the fillet.
+      ctx.quadraticCurveTo(points[to].x, points[to].y, toData.outPt.x, toData.outPt.y);
+    }
+    ctx.closePath();
+    return;
+  }
+
+  // Open path: endpoint -> first fillet -> ... -> last fillet -> endpoint.
+  ctx.moveTo(points[0].x, points[0].y);
+  let from = 0;
+  let startTrim = 0;
+  for (const corner of corners) {
+    const d = data.get(corner);
+    const span = distanceForward(from, corner);
+    emitPathSlice(from, corner, startTrim, Math.max(0, span - d.cut));
+    ctx.quadraticCurveTo(points[corner].x, points[corner].y, d.outPt.x, d.outPt.y);
+    from = corner;
+    startTrim = d.cut;
+  }
+  emitPathSlice(from, n - 1, startTrim, distanceForward(from, n - 1));
+}
+
 function roundPolylineForDraw(
   ctx,
   points,
@@ -23,9 +215,10 @@ function roundPolylineForDraw(
   filletLayer = null,
 ) {
   if (!points || points.length < 2) return;
-  const simple = filletLayer?.roundingCornerType === 'simple';
+  if (filletLayer?.roundingCornerType === 'simple' && !state.fourierMode)
+    return drawSimplePolyline(ctx, points, closed, roundingFrac, cornerFlags, cornerFactors);
   if (
-    !simple && !state.fourierMode &&
+    !state.fourierMode &&
     filletLayer &&
     !cornerFactors &&
     typeof somataDrawSplineCornerMode === 'function' &&
@@ -36,7 +229,7 @@ function roundPolylineForDraw(
   )
     return;
   if (
-    !simple && !state.fourierMode &&
+    !state.fourierMode &&
     typeof ctx.bezierCurveTo === 'function' &&
     typeof drawUnifiedFilletPath === 'function' &&
     !cornerFactors &&
@@ -60,7 +253,7 @@ function roundPolylineForDraw(
       cornerFactors,
       independentMorphCuts,
       points,
-      simple ? filletLayer : null,
+      null,
     );
   }
 

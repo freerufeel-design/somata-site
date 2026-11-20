@@ -58,7 +58,7 @@ run(
   `assert.equal(getUnifiedMorphMode(),'circleSlide');assert.equal(getSpiralMorphMode(),'coordinated');setUnifiedMorphMode(undefined);assert.equal(getUnifiedMorphMode(),'circleSlide');assert.equal(state.morph.spiralMorphType,'coordinated');setUnifiedMorphMode('circleSlide');assert.equal(getUnifiedMorphMode(),'circleSlide');`,
 );
 
-const html = read('index.html');
+const html = read('../index.html');
 for (const id of ['morphMode', 'morphModeTop', 'testMorphMode']) {
   const select = html.match(new RegExp('<select[^>]*id="' + id + '"[^>]*>([\\s\\S]*?)</select>'));
   assert(select, id);

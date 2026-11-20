@@ -21,6 +21,7 @@ import {
   lampPointAtFraction,
   nearestLampFractionOnPath,
   nearestLampFractionOnPathSegmentBound,
+  projectKeyLamp,
   trackLampBends,
 } from '../lamps/lamp-attachment.js';
 import { collectMorphLampPoints } from '../lamps/lamp-topology.js';
@@ -120,8 +121,9 @@ function pushGpuLampEffectSet(plan, layer, prepared, alphaBase, config) {
 // when the endpoint polygon matcher reports just one orbit. Attach on the
 // physical rails, never on the endpoint polygon's nearest winding.
 function collectPreparedSpiralLampPoints(layer, paths, config, maxPoints = 260, frameCtx = null) {
-  const mode = config?.positionMode || 'key',
-    snap = lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
+  const locked = config?.morphMotionMode === 'key';
+  const mode = locked ? 'key' : config?.positionMode || 'key',
+    snap = locked ? Number(layer.rounding) > 0 : lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
   const slots = paths.flatMap((p, i) =>
     p?.points?.length > 1 && (p._alpha ?? 1) > 0.002 && (p.strokeGrowth ?? 1) > 0 ? [i] : [],
   );
@@ -180,7 +182,7 @@ function collectPreparedSpiralLampPoints(layer, paths, config, maxPoints = 260, 
         const lampId = `spiral:${railKey}:${attachmentId}`;
         const point = {
           ...p,
-          ...(hit && lampPointAtFraction(rail, hit.fraction)),
+          ...(locked && snap ? projectKeyLamp(p, rail, stations, j) : hit && lampPointAtFraction(rail, hit.fraction)),
           pathIndex: pi,
           vertexIndex: j,
           lampSpiralEndpoint: end,
@@ -240,11 +242,12 @@ function distributeSpiralLampGroups(groups, maxPoints) {
 }
 
 // Runtime Animation publishes exactly the same moving polygon paths used by Line.
-function collectPreparedPolygonLampPoints(layer, paths, config, maxPoints, frameCtx) {
-  const mode = config?.positionMode || 'key';
-  const snap = lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
+function collectPreparedPolygonLampPoints(layer, paths, config, maxPoints, frameCtx, endpoint = false) {
+  const locked = config?.morphMotionMode === 'key';
+  const mode = locked ? 'key' : config?.positionMode || 'key';
+  const snap = locked ? Number(layer.rounding) > 0 : lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
   let contour = null;
-  if (snap) {
+  if (snap && !endpoint) {
     try {
       contour = SomataFrameContourService.paths(frameCtx);
     } catch (error) {
@@ -263,7 +266,7 @@ function collectPreparedPolygonLampPoints(layer, paths, config, maxPoints, frame
     }));
 
   const layerKey = String(layer?.id || 'layer');
-  const usesPhaseSlots = mode === 'key' && frameCtx.geometryProvider?.lampPaths?.length > 0;
+  const usesPhaseSlots = !locked && mode === 'key' && frameCtx.geometryProvider?.lampPaths?.length > 0;
   const anchors = usesPhaseSlots ? frameCtx.geometryProvider.lampPaths : paths;
   const railMapping = usesPhaseSlots ? mapLampSemanticPathsToVisible(anchors, paths) : null;
   const groups = [];
@@ -277,7 +280,7 @@ function collectPreparedPolygonLampPoints(layer, paths, config, maxPoints, frame
     const group = [];
     for (const [vertexIndex, point] of points.entries()) {
       const endpoint = !path.closed && (vertexIndex === 0 || vertexIndex === points.length - 1);
-      const key = endpoint || point.__profileKeyCorner === true ||
+      const key = locked && path.lampSupportFlags ? endpoint || path.lampSupportFlags[vertexIndex] : endpoint || point.__profileKeyCorner === true ||
         (flags?.length ? flags[vertexIndex] === true : !path.profileCurveBaked);
       let bend = false;
       if (!key && mode === 'corners' && (path.closed || (vertexIndex > 0 && vertexIndex < points.length - 1))) {
@@ -292,12 +295,13 @@ function collectPreparedPolygonLampPoints(layer, paths, config, maxPoints, frame
       // A reordered closed correspondence can start at a different vertex
       // from the rendered rail. On a simple polygon, project by position as
       // the static key lamps do, without a window tied to that arbitrary seam.
-      const hit = !snap ? null : usesPhaseSlots && Number(layer.K || 1) === 1
+      const hit = !snap || locked ? null : usesPhaseSlots && Number(layer.K || 1) === 1
         ? nearestLampFractionOnPath(point, rail)
         : nearestLampFractionOnPathSegmentBound(point, rail, stations[vertexIndex]);
       const id = `animation:${path.orbitIndex ?? pathIndex}:${path.closed ? 'closed' : 'open'}:${usesPhaseSlots ? point.id : point.__profileLampKey ?? vertexIndex}`;
       group.push({
         ...point,
+        ...(locked && snap && projectKeyLamp(point, rail, stations, vertexIndex)),
         ...(hit && lampPointAtFraction(rail, hit.fraction)),
         pathIndex,
         vertexIndex,
@@ -310,6 +314,11 @@ function collectPreparedPolygonLampPoints(layer, paths, config, maxPoints, frame
     if (group.length) groups.push(group);
   }
   return distributeSpiralLampGroups(groups, maxPoints);
+}
+
+function collectEndpointKeys(layer, paths, config, frameCtx) {
+  if (isSpiralLayer(layer)) return collectPreparedSpiralLampPoints(layer, paths, config, 260);
+  return collectPreparedPolygonLampPoints(layer, paths, config, 260, frameCtx, true);
 }
 
 function resolveLayerLampEffectProvider(frameCtx, plan) {
@@ -325,9 +334,12 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
   const tunnelCopies = frameCtx.tunnelCopies || frameCtx.frame.tunnelCopies;
   const provider = frameCtx.geometryProvider;
   const animation = provider?.origin === 'manual' && provider.geometryActive === true;
-  const prepared = animation || provider?.primarySkeleton === true ? provider.framePaths : null;
+  const locked = plan.baseConfig.morphMotionMode === 'key';
+  const prepared = locked && !SomataGeometryPolicy.isStrict(frameCtx)
+    ? (provider?.framePaths?.length ? provider.framePaths : getLayerFrameAuxiliaryPaths(frameCtx))
+    : animation || provider?.primarySkeleton === true ? provider.framePaths : null;
   const preparedSpiral = prepared?.some((p) => Math.abs(p?.spiralOrder || 0) > 1e-8) === true ||
-    (animation && prepared?.length > 0 && isSpiralLayer(layer));
+    ((animation || locked) && prepared?.length > 0 && isSpiralLayer(layer));
   const spiralCopies = preparedSpiral || isSpiralLayer(layer) || SomataGeometryPolicy.isStrict(frameCtx);
   // Spiral lamps share the line's visibility/phase and exact copy transforms.
   // An independent radius/extent cull can drop all but one visible winding.
@@ -355,7 +367,9 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
     if (src && getLayerLampsEnabled(src)) {
       const srcLampConfig = ensureLayerLampState(src) || plan.baseConfig;
       const pts =
-        frameCtx.orangeMorphProvider?.sourceLampPoints ||
+        srcLampConfig.morphMotionMode === 'key' && frameCtx.orangeMorphProvider?.sourceData?.paths?.length
+          ? collectEndpointKeys(src, frameCtx.orangeMorphProvider.sourceData.paths, srcLampConfig, frameCtx)
+          : frameCtx.orangeMorphProvider?.sourceLampPoints ||
         withLampConfig(srcLampConfig, () =>
           collectStaticLampPoints(src, frameCtx.orangeMorphProvider?.sourceData || undefined, 240),
         );
@@ -366,7 +380,9 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
     if (dst && getLayerLampsEnabled(dst)) {
       const dstLampConfig = ensureLayerLampState(dst) || plan.baseConfig;
       const pts =
-        frameCtx.orangeMorphProvider?.targetLampPoints ||
+        dstLampConfig.morphMotionMode === 'key' && frameCtx.orangeMorphProvider?.targetData?.paths?.length
+          ? collectEndpointKeys(dst, frameCtx.orangeMorphProvider.targetData.paths, dstLampConfig, frameCtx)
+          : frameCtx.orangeMorphProvider?.targetLampPoints ||
         withLampConfig(dstLampConfig, () =>
           collectStaticLampPoints(dst, frameCtx.orangeMorphProvider?.targetData || undefined, 240),
         );
@@ -383,7 +399,15 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
       frameCtx.forcedLampMorph || frameCtx.greenLampDisplay || getLayerLampsEnabled(effectLayer);
     const alpha = frameCtx.baseAlpha * (frameCtx.forcedLampMorph || followsMorph ? 1 : 0.95);
 
-    if ((preparedSpiral || (animation && prepared?.length)) && allowed && !frameCtx.greenMorphEnabled) {
+    if (locked && !animation && followsMorph && frameCtx.blueMorphProvider?.active &&
+        !preparedSpiral && !SomataGeometryPolicy.isStrict(frameCtx) && allowed) {
+      const pts = withLampConfig(plan.baseConfig, () => collectMorphLampPoints(layerIndex,
+        frameCtx.blueMorphProvider.geometryT, 260, prepared));
+      pushLampEffectSet(plan, layer, pts, alpha, plan.baseConfig);
+      plan.enabled = plan.sets.length > 0;
+      return plan;
+    }
+    if ((preparedSpiral || ((animation || locked) && prepared?.length)) && allowed && (locked || !frameCtx.greenMorphEnabled)) {
       const points = withLampConfig(plan.baseConfig, () =>
         preparedSpiral
           ? collectPreparedSpiralLampPoints(layer, prepared, plan.baseConfig, 260, frameCtx)

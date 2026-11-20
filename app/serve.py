@@ -16,7 +16,7 @@ import os
 import sys
 import webbrowser
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
@@ -34,12 +34,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         ".webp": "image/webp",
         ".wasm": "application/wasm",
     }
-
-    def translate_path(self, path):
-        file = super().translate_path(path)
-        if file in (os.path.join(ROOT, "project-defaults.js"), os.path.join(ROOT, "default.plist")):
-            return os.path.join(os.path.dirname(ROOT), os.path.basename(file))
-        return file
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")

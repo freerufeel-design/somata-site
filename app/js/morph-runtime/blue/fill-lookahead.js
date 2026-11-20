@@ -167,7 +167,7 @@ export function planNextCycle({ layers, targets, endpoints, morph, hooks }) {
     const next = hooks.topology(sourceLayer, i);
     const copies = Math.max(
       1,
-      Math.round(hooks.copies({ ...target, N: from.N, K: from.K }, { N: next.N, K: next.K }, srcCopies)),
+      Math.round(hooks.copies({ ...target, N: from.N, K: from.K }, next, srcCopies)),
     );
     return {
       fromN: from.N,

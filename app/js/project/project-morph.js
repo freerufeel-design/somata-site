@@ -1,4 +1,5 @@
 // Green (морф проектов): настройки, геометрия, лампы, кадр перехода.
+import { normalizeTunnelDensity } from '../corridor/corridor-density.js';
 import './project-data.js'; // initialisation order: this module runs after it
 import { isSpiralLayer } from '../geometry/spiral/order-params.js';
 import { WebGPUStrokeRenderer } from '../gpu/stroke-renderer.js';
@@ -1160,6 +1161,7 @@ function applyProjectMorphConfigFrame(frame) {
 function applyProjectMorphTunnelFrame(frame) {
   if (!frame || typeof frame !== 'object') return;
   const t = state.tunnel;
+  t.density = normalizeTunnelDensity(frame.density);
   for (const key of [
     'speedStrength',
     'speedMultiplier',
@@ -1282,6 +1284,9 @@ function applyProjectMorphFrame(sourceProject, targetProject, geometryT, paramet
       bb = b.tunnel || a.tunnel || {};
     pmRt.frameTunnelSettings = projectMorphDeepValueInto(pmRt.frameTunnelSettings, aa, bb, configT, 'tunnel');
     const tunnelFrame = pmRt.frameTunnelSettings;
+    const densityA = normalizeTunnelDensity(aa.density);
+    const densityB = normalizeTunnelDensity(bb.density);
+    tunnelFrame.density = densityA + (densityB - densityA) * configT;
     const av = tunnelVignettePixelsFromSettings(aa, state.tunnel.vignetteAmount),
       bv = tunnelVignettePixelsFromSettings(bb, av);
     tunnelFrame.vignetteAmount = av + (bv - av) * configT;

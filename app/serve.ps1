@@ -5,7 +5,7 @@
 param([int]$Port = 8000, [switch]$NoBrowser)
 
 $ErrorActionPreference = 'Stop'
-$root = [System.IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.MyCommand.Path))
+$root = Split-Path -Parent $PSScriptRoot
 $types = @{
   '.html' = 'text/html; charset=utf-8'; '.js' = 'text/javascript; charset=utf-8'; '.mjs' = 'text/javascript; charset=utf-8'
   '.css' = 'text/css; charset=utf-8'; '.json' = 'application/json; charset=utf-8'; '.plist' = 'application/json; charset=utf-8'
@@ -16,9 +16,8 @@ $types = @{
 
 function Resolve-LocalFile([string]$urlPath) {
   $rel = [System.Uri]::UnescapeDataString($urlPath).TrimStart('/').Replace('/', [System.IO.Path]::DirectorySeparatorChar)
-  if ($rel -in @('project-defaults.js', 'default.plist')) { return [IO.Path]::Combine((Split-Path -Parent $root), $rel) }
   $full = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine($root, $rel))
-  if (-not $full.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
+  if ($full -ne $root -and -not $full.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
   if ([System.IO.Directory]::Exists($full)) { $full = [System.IO.Path]::Combine($full, 'index.html') }
   if ([System.IO.File]::Exists($full)) { return $full }
   return $null

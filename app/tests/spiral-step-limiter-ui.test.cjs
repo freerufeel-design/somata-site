@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { read, declarations } = require('./helpers/source.cjs');
 
-const html = read('index.html');
+const html = read('../index.html');
 const start = html.indexOf('id="testMorphControls"');
 const selector = html.indexOf('id="testMorphMode"');
 const limiter = html.indexOf('id="spiralStepLimiterRow"');

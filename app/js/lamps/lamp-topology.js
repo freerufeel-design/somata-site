@@ -52,6 +52,7 @@ import {
   collectArbitraryMorphLampPoints,
   collectSmoothCornerLampPoints,
   projectLampPointsToCurrentPolygon,
+  projectReferenceLampPoints,
 } from './lamp-points.js';
 import { lampEffectiveBokeh } from './lamp-visual.js';
 import {
@@ -276,7 +277,7 @@ function lampLinearSplitMergePresence(
   layerKey = 'layer',
   gateKey = '',
 ) {
-  if (getLampEvaluationConfig()?.morphMotionMode !== 'linear' || !runtimeState.morph?.active) return 1;
+  if (!['key', 'linear'].includes(getLampEvaluationConfig()?.morphMotionMode) || !runtimeState.morph?.active) return 1;
   const fallback = Math.max(0, Math.min(1, Number(travelProgress) || 0));
   if (fallback <= 1e-6) return sourcePresent ? 1 : 0;
   if (fallback >= 1 - 1e-6) return targetPresent ? 1 : 0;
@@ -670,7 +671,7 @@ function markMappedAnglePopulation(mappedAngles, originalAngles) {
     }
   return { present, keyIndex };
 }
-function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260) {
+function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach = isLampContourAttachmentEnabled()) {
   const base = state.layers[layerIndex];
   const src = runtimeState.morph.renderSourceLayers?.[layerIndex] || {
     ...base,
@@ -826,7 +827,7 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260) {
       if (!sourcePoint || !targetPoint) continue;
       const mt = alignedMorph[ti] || alignedFinal[ti] || targetPoint;
       let x, y;
-      const fixedSegmentPoint = isLampContourAttachmentEnabled()
+      const fixedSegmentPoint = attach
         ? interpolateLampSegmentRefs(
             sourceAttachSegmentRefs?.[si],
             targetAttachSegmentRefs?.[ti],
@@ -836,7 +837,7 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260) {
           )
         : null;
 
-      const renderSegmentParam = isLampContourAttachmentEnabled()
+      const renderSegmentParam = attach
         ? interpolateLampRenderSegmentParam(
             sourceAttachRenderParams?.[si],
             targetAttachRenderParams?.[ti],
@@ -1335,6 +1336,22 @@ function collectMorphLampPoints(
   preparedPaths = null,
   preparedRoundedPaths = null,
 ) {
+  if (getLampEvaluationConfig()?.morphMotionMode === 'key') {
+    const base = state.layers[layerIndex];
+    const info = getLampMorphRenderInfo(layerIndex, t, base);
+    const attach = info.roundingFrac > 0 || isLampContourAttachmentEnabled();
+    let points = collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints, attach);
+    if (points.length) {
+      if (attach) {
+        const raw = ['topology', 'calm'].includes(state.morph.mode)
+          ? buildCurrentMorphPathsForLamps(layerIndex, t)
+          : preparedPaths || getCurrentMorphCpuPaths(layerIndex, t, 'lamp-paths');
+        const rails = buildLampRenderedAttachmentPaths(raw, base, info);
+        points = projectReferenceLampPoints(points, rails, base);
+      }
+      return preserveBlueMorphLampIdentity(layerIndex, points, attach, t);
+    }
+  }
   const linear = getLampEvaluationConfig()?.morphMotionMode === 'linear';
   const motionT = lampPhaseInertiaProgress(t);
   let mode = getLampEvaluationConfig()?.positionMode || 'key';

@@ -96,7 +96,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false,
   const HANDOFF_MS = 140;
   const inertiaCfg = getLampEvaluationConfig();
   const instantTarget = (Number(inertiaCfg?.morphInertia) || 0) <= -100;
-  const linearMode = ['linear', 'ghost'].includes(inertiaCfg?.morphMotionMode);
+  const linearMode = ['linear', 'key', 'ghost'].includes(inertiaCfg?.morphMotionMode);
   let rt = lampMotionRuntime.blueMorph.get(layerKey);
   if (!rt) {
     rt = { serial: -1, assignments: new Map(), last: [], nextStable: 0 };

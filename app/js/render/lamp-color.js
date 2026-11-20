@@ -22,7 +22,7 @@ function lerpLampColorPhase(from, to, t) {
   else if (d < -0.5) d += 1;
   return wrapLampColorPhase(a + d * u);
 }
-function lampGradientOuterRadius(radius, softness, type, brightnessPercent) {
+function lampGradientOuterRadius(radius, softness, type, brightnessPercent, appearance, haloSize = 90) {
   const r = Math.max(1, Number(radius) || 1);
   const soft = Math.max(0, Math.min(150, Number.isFinite(Number(softness)) ? Number(softness) : 75));
   const bright = Math.max(
@@ -35,7 +35,11 @@ function lampGradientOuterRadius(radius, softness, type, brightnessPercent) {
   const whiteToSoftMix = type === 'whiteCore' && soft > 100 ? Math.max(0, Math.min(1, (soft - 100) / 50)) : 0;
   const coreHaloBase = type === 'softCore' ? 1.25 : type === 'whiteCore' ? 1.45 - 0.2 * whiteToSoftMix : 1.45;
   const haloScale = coreHaloBase + (type === 'star' ? 0.55 : softN * 2.8) * haloFade;
-  return Math.max(r + 2, r * haloScale + 3);
+  const outer = Math.max(r + 2, r * haloScale + 3);
+  // Widen the soft skirt without changing the authored body or the overlap radius.
+  if (appearance !== 'classic') return outer;
+  const width = (outer - r) * (1 + softN * haloFade);
+  return r + width * Math.max(10, Math.min(200, haloSize)) / 100;
 }
 
 export { hexToRgbaParts, lampGradientOuterRadius, lerpLampColorPhase, wrapLampColorPhase };

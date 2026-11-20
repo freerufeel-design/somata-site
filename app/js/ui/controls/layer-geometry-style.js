@@ -745,6 +745,16 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
     }
     return true;
   };
+  const roundingField = document.getElementById('numRounding');
+  roundingField.addEventListener('change', () => {
+    const slider = document.getElementById('paramRounding');
+    if (Number.isFinite(roundingField.valueAsNumber)) {
+      slider.value = Math.round(roundingField.valueAsNumber);
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+      slider.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    roundingField.value = slider.value;
+  });
   document.getElementById('paramRounding').addEventListener('input', (e) => {
     const layer = getActiveLayer();
     if (!layer) return;
@@ -767,6 +777,7 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
         needsMonoradiusRebase = true;
     }
     if (needsMonoradiusRebase) scheduleMonoradiusRebase();
+    roundingField.value = Math.round(amount);
     document.getElementById('valRounding').textContent = formatDisplayNumber(amount, 1) + '%';
     requestMainCanvasRender();
   });

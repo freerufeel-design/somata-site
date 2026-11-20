@@ -274,7 +274,7 @@ window.__somataCorridorCopiesForLayer = (copies, layer, now = performance.now())
     // expanded scale/stepRatio with the Outro population. Applying
     // the same population again would flatten the copies twice.
     if (!(outro && corridorOrderIsZero(layer?.spiralOrder))) copy.scale = Math.exp(log * local);
-    copy.alpha = i === anchor ? 1 : local;
+    copy.alpha = i === anchor ? 1 : (copy.alpha ?? 1) * local;
     copy._corridorEntryAnchor = i === anchor;
     if (i === anchor) copy.centerRevealAlpha = 1;
   }

@@ -1,4 +1,5 @@
 // Ввод, события вьюпорта и кнопка «Новый проект».
+import { TUNNEL_DENSITY_DEFAULT } from '../corridor/corridor-density.js';
 import './preset-random-morph.js'; // initialisation order: this module runs after it
 import { renderProfileEditor } from './profile-editor.js';
 import {
@@ -428,6 +429,7 @@ document.getElementById('btnNew').addEventListener('click', () => {
   state.tunnel.spacingMultiplier = 1;
   state.tunnel.depthCurve = 0;
   state.tunnel.depthCurveMultiplier = 1;
+  state.tunnel.density = TUNNEL_DENSITY_DEFAULT;
   state.tunnel.centerHiddenCopies = TUNNEL_CENTER_HIDDEN_DEFAULT;
   state.tunnel.spiralOuterCopies = SPIRAL_OUTER_COPIES_DEFAULT;
   state.tunnel.colorShiftEnabled = false;

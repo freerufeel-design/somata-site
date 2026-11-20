@@ -377,7 +377,7 @@ console.log(
 
 // Mixed profile is drawn as a single baked contour instead of swapping the
 // active profile at the midpoint. Verify the production cubic builders.
-run(declarations('roundPolylineForDraw'), 'polyline renderer');
+run(declarations('roundPolylineForDraw', 'drawSimplePolyline'), 'polyline renderer');
 run(
   declarations(
     'profileCubicPoint',
@@ -455,10 +455,10 @@ assert.equal(zero.normalizeMode(undefined), 'layerwise');
 assert.equal(zero.normalizeMode('invalid'), 'layerwise');
 assert.equal(zero.normalizeMode('__proto__'), 'layerwise');
 assert.equal(zero.normalizeMode('unfold'), 'unfold');
-assert.match(read('index.html'), /<option value="layerwise" selected>Послойный/);
+assert.match(read('../index.html'), /<option value="layerwise" selected>Послойный/);
 assert.deepEqual(
   [
-    ...read('index.html')
+    ...read('../index.html')
       .match(/<select id="paramSpiralZeroTransition"[^>]*>(.*?)<\/select>/s)[1]
       .matchAll(/<option value="([^"]+)"[^>]*>([^<]+)<\/option>/g),
   ].map((m) => m.slice(1)),
@@ -468,7 +468,7 @@ assert.deepEqual(
     ['beautiful', 'Красивый'],
   ],
 );
-const spiralUI = read('index.html');
+const spiralUI = read('../index.html');
 assert.deepEqual(
   [
     ...spiralUI
@@ -611,7 +611,7 @@ console.log(
 
 // «Свинчивание» is an authored per-layer geometry toggle, independent of
 // tangency and the zero-order transition. Only an explicit true enables winding.
-assert.match(read('index.html'), /id="paramSpiralTwist"><span>Свинчивание/);
+assert.match(read('../index.html'), /id="paramSpiralTwist"><span>Свинчивание/);
 assert.ok(listModules().some((f) => /spiralTwist: l\.spiralTwist === true/.test(read(f))));
 for (const order of [-2, -1, 1, 2]) {
   const a = winding({ N: 3, spiralOrder: order, spiralTwist: false });
@@ -1055,7 +1055,7 @@ console.log(
     center = 'coordinatedFromCenter';
   assert.equal(
     [
-      ...read('index.html').matchAll(
+      ...read('../index.html').matchAll(
         /<option value="coordinatedFromCenter">Неразрывный, согласованный из центра<\/option>/g,
       ),
     ].length,
@@ -1063,7 +1063,7 @@ console.log(
   );
   assert.equal(
     [
-      ...read('index.html').matchAll(
+      ...read('../index.html').matchAll(
         /<option value="coordinated"(?: selected)?>Неразрывный, согласованный<\/option>/g,
       ),
     ].length,
@@ -1295,7 +1295,7 @@ console.log(
 
 // Every picker and both runtime dispatchers expose the same surviving modes.
 for (const id of ['morphMode', 'morphModeTop', 'testMorphMode']) {
-  const menu = read('index.html').match(new RegExp(`<select id="${id}"[^>]*>([\\s\\S]*?)<\\/select>`))[1];
+  const menu = read('../index.html').match(new RegExp(`<select id="${id}"[^>]*>([\\s\\S]*?)<\\/select>`))[1];
   assert.deepEqual(
     [...menu.matchAll(/<option value="([^"]+)"/g)].map((x) => x[1]).sort(),
     SomataMorphRegistry.ids().sort(),
@@ -2812,8 +2812,11 @@ for (const mode of ['topology', 'circleSlide']) {
   const layer = { roundingCornerType: 'simple' };
   for (const strength of [0.65, 1.65]) {
     const simple = record((ctx) => roundPolylineForDraw(ctx, outline, true, strength, flags, null, false, null, layer));
-    const reference = record((ctx) => roundPolylineForDraw(ctx, outline, true, strength, flags, outline.map(() => 1)));
-    assert.deepEqual(simple, reference);
+    // Entry point and first fillet recorded in the original 6.7 renderer.
+    const reference = strength === 0.65
+      ? [['moveTo', 54, 29.25], ['quadraticCurveTo', 0, 90, -22.75, 60.75]]
+      : [['moveTo', 26.2890625, 28.08984375], ['quadraticCurveTo', 1.828125, 57.09375, -21.2890625, 28.08984375]];
+    assert.deepEqual([simple[0], simple.find(([key]) => key === 'quadraticCurveTo')], reference);
     assert(simple.some(([key]) => key === 'quadraticCurveTo'));
     assert.deepEqual(record((ctx) => somataDrawSplineCornerMode(ctx, outline, true, strength, {
       layer, cornerFlags: flags,

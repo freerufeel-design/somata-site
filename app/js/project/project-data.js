@@ -1,4 +1,5 @@
 // Проект: сериализация, камера, настройки меню, плейлист.
+import { normalizeTunnelDensity } from '../corridor/corridor-density.js';
 import '../ui/input-viewport-events.js'; // initialisation order: this module runs after it
 import { PROFILE_CONFIG, normalizeSplinePointCount } from '../geometry/profile-model.js';
 import { normalizeSpiralOrder } from '../geometry/spiral/order-params.js';
@@ -228,6 +229,7 @@ function buildProjectData() {
         spacingMultiplier: state.tunnel.spacingMultiplier,
         depthCurve: state.tunnel.depthCurve,
         depthCurveMultiplier: state.tunnel.depthCurveMultiplier,
+        density: normalizeTunnelDensity(state.tunnel.density),
         centerHiddenCopies: normalizeTunnelCenterHiddenCopies(state.tunnel),
         spiralOuterCopies: normalizeSpiralOuterCopies(state.tunnel),
         colorShiftEnabled: state.tunnel.colorShiftEnabled === true,

@@ -549,7 +549,7 @@ function createMorphTargetsModule(deps) {
       let lo = Math.max(0, Math.min(cap, Math.round(Number(state.morph.orbitCountMin) || 0))),
         hi = Math.max(0, Math.min(cap, Math.round(Number(state.morph.orbitCountMax) || 0)));
       if (lo > hi) [lo, hi] = [hi, lo];
-      if (hi === 0) return null;
+      if (hi === 0) return 1;
       const min = Math.min(total, Math.max(1, lo)),
         max = Math.min(total, Math.max(1, hi));
       const current = getActiveOrbitCount(layer.N, layer.K, layer.customSuborbits);
@@ -561,10 +561,8 @@ function createMorphTargetsModule(deps) {
       originalMin,
       Math.min(100, Math.round(Number(state.morph.orbitPercentMax) || 0)),
     );
-    // Historical [0,0] meant do not restrict orbital paths. New authored
-    // values are 1..100%; preserve the old factory scene at full count.
-    const minPct = originalMax === 0 ? 100 : Math.max(1, originalMin);
-    const maxPct = originalMax === 0 ? 100 : Math.max(minPct, originalMax);
+    const minPct = originalMin;
+    const maxPct = originalMax;
 
     // The percentage measures the *available* orbital paths of this
     // particular polygon, rather than an absolute orbit count. Always ceil.
@@ -695,7 +693,7 @@ function createMorphTargetsModule(deps) {
           ? randomIntExcept(kLo, kHi, currentK)
           : randomInt(kLo, kHi)
         : currentK;
-    const customSuborbits = preserveOrbits
+    const customSuborbits = preserveOrbits && !state.morph.monoOrbitTransforms
       ? Array.isArray(layer.customSuborbits)
         ? layer.customSuborbits.map((o) => ({ ...o }))
         : layer.customSuborbits

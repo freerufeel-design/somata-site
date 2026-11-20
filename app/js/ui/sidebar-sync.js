@@ -93,7 +93,8 @@ function updateSidebarFromMorph(t) {
   }
   if (state.morph.options.byRounding) {
     const v = lerp(src.rounding, dst.rounding);
-    setRange('paramRounding', v, 0, MAX_ROUNDING_PERCENT, '0.01');
+    setRange('paramRounding', v, 0, MAX_ROUNDING_PERCENT, '1');
+    if (document.activeElement?.id !== 'numRounding') document.getElementById('numRounding').value = Math.round(v);
     setText('valRounding', v, '%');
   }
   if (state.morph.options.bySize) {
@@ -348,7 +349,7 @@ function syncSidebarInputs() {
 
   const maxK = Math.max(1, Math.floor(layer.N / 2));
   document.getElementById('paramK').max = maxK;
-  document.getElementById('paramK').step = runtimeState.morph.active ? '0.01' : '1';
+  document.getElementById('paramK').step = runtimeState.morph.active && state.morph.options.bySteps ? '0.01' : '1';
   document.getElementById('numK').max = maxK;
   document.getElementById('paramK').value = Math.min(layer.K, maxK);
   document.getElementById('numK').value = Math.min(layer.K, maxK);
@@ -514,6 +515,7 @@ function syncSidebarInputs() {
     btn.classList.toggle('active', btn.dataset.join === currentJoin);
   });
 
+  if (document.activeElement?.id !== 'numRounding') document.getElementById('numRounding').value = Math.round(clampRoundingPercent(layer.rounding));
   document.getElementById('paramRounding').value = clampRoundingPercent(layer.rounding);
   // Classic Spline+ and local fillets are independent; Fourier is scene-wide.
   // Normalize old imported layers without changing radius policy.

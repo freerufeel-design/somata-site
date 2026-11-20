@@ -1,4 +1,5 @@
 // Коридор: включение режима и панель настроек.
+import { densityPercent, densityFromPercent } from '../corridor/corridor-density.js';
 import '../corridor/corridor-instances.js'; // initialisation order: this module runs after it
 import { WebGPUFinalCompositeRenderer } from '../gpu/final-composite-renderer.js';
 import { clearTunnelFadeRuntime } from '../core/render-runtime.js';
@@ -96,6 +97,8 @@ function syncTunnelSettingsUI() {
   const spacingStrength = document.getElementById('tunnelSpacingStrength');
   const spacingMultiplier = document.getElementById('tunnelSpacingMultiplier');
   const spacingText = document.getElementById('tunnelSpacingText');
+  const densitySlider = document.getElementById('tunnelDensity');
+  const densityText = document.getElementById('tunnelDensityText');
   const depthSlider = document.getElementById('tunnelDepthCurve');
   const depthNumber = document.getElementById('tunnelDepthCurveNumber');
   const depthMultiplier = document.getElementById('tunnelDepthCurveMultiplier');
@@ -132,6 +135,9 @@ function syncTunnelSettingsUI() {
   if (spacingMultiplier) spacingMultiplier.value = String(spacingMult);
   if (spacingText)
     spacingText.textContent = `${Math.round(spacingPct)}% × ${formatDisplayNumber(spacingMult, 2)}`;
+  const density = Math.round(densityPercent(tunnel.density));
+  if (densitySlider) densitySlider.value = String(density);
+  if (densityText) densityText.textContent = `${density}%`;
   const depthValue = Math.max(-100, Math.min(100, Number(tunnel.depthCurve) || 0));
   const depthMult = Math.max(
     0,
@@ -182,6 +188,8 @@ function setupTunnelUI() {
   const speedMultiplier = document.getElementById('tunnelSpeedMultiplier');
   const spacingStrength = document.getElementById('tunnelSpacingStrength');
   const spacingMultiplier = document.getElementById('tunnelSpacingMultiplier');
+  const densitySlider = document.getElementById('tunnelDensity');
+  const densityText = document.getElementById('tunnelDensityText');
   const depthSlider = document.getElementById('tunnelDepthCurve');
   const depthNumber = document.getElementById('tunnelDepthCurveNumber');
   const depthMultiplier = document.getElementById('tunnelDepthCurveMultiplier');
@@ -249,6 +257,11 @@ function setupTunnelUI() {
   spacingStrength?.addEventListener('input', syncSpacing);
   spacingMultiplier?.addEventListener('input', syncSpacing);
   spacingMultiplier?.addEventListener('change', syncSpacing);
+  densitySlider?.addEventListener('input', () => {
+    state.tunnel.density = densityFromPercent(densitySlider.valueAsNumber);
+    if (densityText) densityText.textContent = `${densitySlider.value}%`;
+    if (state.tunnel.active) requestMainCanvasRender();
+  });
   const syncDepth = (source) => {
     const v = Math.max(-100, Math.min(100, Math.round(Number(source?.value) || 0)));
     const mult = Number(depthMultiplier?.value);

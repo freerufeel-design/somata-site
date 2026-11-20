@@ -1,4 +1,5 @@
 // Коридор: список копий, временное затухание, экземпляры линий и ламп, виньетка, кадр анимации.
+import { normalizeTunnelDensity, tunnelDensityAlpha } from './corridor-density.js';
 import './corridor-transitions.js'; // initialisation order: this module runs after it
 import { getTunnelStepRatio, getTunnelVirtualCopyCount } from '../geometry/spiral/order-params.js';
 import { renderBackendTelemetry } from '../render/backend-telemetry.js';
@@ -69,6 +70,9 @@ function getTunnelCopies() {
   const virtualCount = getTunnelVirtualCopyCount(distanceFactor);
 
   const count = Math.max(2, Math.min(256, Math.ceil(virtualCount)));
+  const density = normalizeTunnelDensity(tunnel.density);
+  // v6.7 capped the depth-fade denominator at 160, even at very small spacing.
+  const classicCount = Math.min(160, count);
   const minScale = Math.max(0.01, Number(tunnel.minScale) || 0.055);
   const maxScale = Math.max(minScale * 1.1, Number(tunnel.maxScale) || 3.8);
   const travelPhase = Number.isFinite(Number(tunnel.travelPhase))
@@ -121,7 +125,7 @@ function getTunnelCopies() {
     let item = result[write];
     if (!item) item = result[write] = {};
     item.scale = scale;
-    item.alpha = 1;
+    item.alpha = tunnelDensityAlpha(position, classicCount, density);
     item._corridorEntryAnchor = false;
     item.position = position;
     item.copyId = i - phaseCycle;
@@ -153,7 +157,7 @@ function getTunnelCopies() {
         (entrance.population - relative * 0.24) / Math.max(0.01, 1 - relative * 0.24),
       );
       copy.scale = Math.exp(targetLog * local);
-      copy.alpha = j === anchorIndex ? 1 : local;
+      copy.alpha = j === anchorIndex ? tunnelDensityAlpha(classicCount - 1, classicCount, density) : copy.alpha * local;
       copy._corridorEntryAnchor = j === anchorIndex;
       copy.centerRevealAlpha = j === anchorIndex ? 1 : copy.centerRevealAlpha;
     }

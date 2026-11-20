@@ -554,6 +554,7 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
       );
       paths.push({
         points: polyPoints.map(({ x, y }) => ({ x, y })),
+      lampSupportFlags: polyPoints.map(p => p.ptIdx === 0),
         closed: true,
         cornerFlags,
         orbitIndex: sIdx,
@@ -584,6 +585,7 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
     const bridgeRoundFlags = polyPoints.map((p, i) => (bridgeJunction[i] ? roundedJoin : null));
     paths.push({
       points: polyPoints.map(({ x, y }) => ({ x, y })),
+      lampSupportFlags: polyPoints.map(p => p.ptIdx === 0),
       closed: true,
       cornerFlags,
       bridgeRoundFlags,

@@ -708,18 +708,26 @@ function syncLampSettingsUI() {
       state.masterLayerEdit === true
         ? everyLayerMatches((l) => getLayerLampsEnabled(l))
         : getLayerLampsEnabled(getActiveEffectLayer());
+  document.getElementById('lampOuterHaloRow').classList.toggle('hidden', c.appearance === 'modern');
+  const halo = document.getElementById('lampOuterHaloBrightness');
+  halo.value = c.outerHaloBrightness ?? 100;
+  document.getElementById('lampOuterHaloValue').textContent = halo.value + '%';
+  document.getElementById('lampOuterHaloSizeRow').classList.toggle('hidden', c.appearance === 'modern');
+  const haloSize = document.getElementById('lampOuterHaloSize');
+  haloSize.value = c.outerHaloSize ?? 90;
+  document.getElementById('lampOuterHaloSizeValue').textContent = haloSize.value + '%';
+  document.querySelectorAll('[data-lamp-appearance]').forEach((btn) => {
+    const selected = btn.dataset.lampAppearance === (c.appearance === 'modern' ? 'modern' : 'classic');
+    btn.classList.toggle('active', selected);
+    btn.setAttribute('aria-pressed', String(selected));
+  });
   const positionMode = ['key', 'corners', 'arbitrary'].includes(c.positionMode) ? c.positionMode : 'key';
   document.querySelectorAll('[data-lamp-position]').forEach((btn) => {
     const on = btn.dataset.lampPosition === positionMode;
     btn.classList.toggle('active', on);
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
-  const motionMode =
-    c.morphMotionMode === 'current'
-      ? 'dynamic'
-      : ['linear', 'ghost', 'dynamic', 'smooth'].includes(c.morphMotionMode)
-        ? c.morphMotionMode
-        : 'linear';
+  const motionMode = c.morphMotionMode === 'key' ? 'key' : 'linear';
   document.querySelectorAll('[data-lamp-motion]').forEach((btn) => {
     const on = btn.dataset.lampMotion === motionMode;
     btn.classList.toggle('active', on);
@@ -822,7 +830,7 @@ function syncLampSettingsUI() {
   set('lampMorphSizeText', `${Math.round(Number(c.morphSize ?? 20))}%`);
   set('lampMorphBrightnessText', `${Math.round(Number(c.morphBrightness ?? 25))}%`);
   set('lampMorphInertiaText', `${Math.round(Number(c.morphInertia ?? 0))}%`);
-  document.getElementById('lampMorphInertiaRow')?.classList.remove('hidden');
+  document.getElementById('lampMorphInertiaRow')?.classList.add('hidden');
   document.getElementById('lampMorphSettings')?.classList.toggle('hidden', c.morphEnabled !== true);
   document.getElementById('lampDensityRow')?.classList.toggle('hidden', positionMode !== 'arbitrary');
   document.getElementById('lampBendAnimationNote')?.classList.toggle('hidden', positionMode !== 'corners');

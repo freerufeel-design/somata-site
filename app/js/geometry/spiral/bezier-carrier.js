@@ -169,14 +169,14 @@ function sampleSmoothSpiralSplineForVariableWidth(
       Array.isArray(cornerFlags) ? cornerFlags : [],
       [],
     );
-  } else if (splineShape && !(Number(roundingFrac) > 0)) {
+  } else if (splineShape && (!(Number(roundingFrac) > 0) || filletLayer?.roundingCornerType === 'simple')) {
     // Sample the same authored edge-local spline as the visible line;
     // do not substitute Spline+'s zero-rounding straight segments.
     splinePathForDraw(
       sampler,
       src,
       false,
-      0,
+      roundingFrac,
       Array.isArray(cornerFlags) ? cornerFlags : [],
       [],
       filletLayer?.wholeCurveSpline === true,
@@ -304,14 +304,14 @@ function buildSmoothSpiralBezierSegments(
   // Whole-curve spline deliberately softens authored junctions. The
   // default local spline preserves them, just like the static carrier.
   const whole = points?._spiroWholeCurveSpline === true;
-  if (splineShape && !(Number(roundingFrac) > 0))
+  if (splineShape && (!(Number(roundingFrac) > 0) || filletLayer?.roundingCornerType === 'simple'))
     // Build the *same* unrounded authored spline in the retained GPU
     // cubics as in the static canvas and lamp sampling paths.
     splinePathForDraw(
       recorder,
       src,
       false,
-      0,
+      roundingFrac,
       Array.isArray(cornerFlags) ? cornerFlags : [],
       [],
       whole,

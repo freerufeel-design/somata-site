@@ -1,4 +1,5 @@
 // Загрузка проекта, файлы настроек и фигур.
+import { normalizeTunnelDensity } from '../corridor/corridor-density.js';
 import './playlist.js'; // initialisation order: this module runs after it
 import {
   PROFILE_CONFIG,
@@ -779,8 +780,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
       : 1;
     if (state.lamps.positionMode === 'circumference') state.lamps.positionMode = 'key';
     if (!['key', 'corners', 'arbitrary'].includes(state.lamps.positionMode)) state.lamps.positionMode = 'key';
-    if (state.lamps.morphMotionMode === 'current') state.lamps.morphMotionMode = 'dynamic';
-    if (!['linear', 'ghost', 'dynamic', 'smooth'].includes(state.lamps.morphMotionMode))
+    if (!['linear', 'key'].includes(state.lamps.morphMotionMode))
       state.lamps.morphMotionMode = 'linear';
     state.lamps.morphInertia = Math.max(
       -100,
@@ -1042,6 +1042,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
   syncMotionUI();
 
   const tunnelSettings = settings.tunnel || {};
+  state.tunnel.density = normalizeTunnelDensity(tunnelSettings.density);
   if (Number.isFinite(Number(tunnelSettings.speedStrength))) {
     let signed = Math.max(-1, Math.min(1, Number(tunnelSettings.speedStrength)));
     if (Number(tunnelSettings.signedSpeedVersion || 0) < 1 && tunnelSettings.direction === 'away')

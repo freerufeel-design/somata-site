@@ -316,7 +316,9 @@ const SomataLampStability = (() => {
       // An authored source vertex is already lit at the phase boundary, even
       // if correspondence or rounding changed its ID and sampled position.
       const ceiling = previous === undefined ? (sourceAtStart ? target : 0) : previous + limit;
-      const meterLevel = active && duration > 0 && !v.lampPhaseTimed;
+      // A motion provider can change a key ID without introducing a new light.
+      // The key's phase presence and overlap already determine its intensity.
+      const meterLevel = active && duration > 0 && !v.lampPhaseTimed && !v.lampKeyAnchor;
       let level = meterLevel ? Math.min(target, ceiling) : target;
       if (meterLevel && v.lampContourBound && v.lampTargetPresent !== false && v.lampPresence >= 0.999 &&
           previous !== undefined) {

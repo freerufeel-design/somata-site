@@ -1,6 +1,6 @@
 // Запуск приложения: обработчик load, мобильные панели, флаг готовности.
 import '../ui/number-steppers.js'; // initialisation order: this module runs after it
-import defaults from '../../project-defaults.js';
+import defaults from '../../../project-defaults.js';
 import { applyLoadedProject } from '../project/project-loader.js';
 import { renderProfileEditor } from '../ui/profile-editor.js';
 import {

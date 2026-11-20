@@ -56,6 +56,7 @@ function isFlatProfileConstructionPath(pathOrPoints, cornerFlags = null) {
   return true;
 }
 function useSmoothSplinePath(layer, roundingFrac = 0, path = null) {
+  if (layer?.roundingCornerType === 'simple' && normalizeSplineRenderMode(layer.splineRenderMode) !== 'smooth') return false;
   return layer?.profileMode === 'spline';
 }
 function sampleCardinalSplineExact(points, count, tension = 0.5) {

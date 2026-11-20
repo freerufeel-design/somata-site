@@ -1,8 +1,8 @@
 {
-  "name": "Somata 15",
+  "name": "Somata 16.1",
   "short_name": "Somata",
-  "start_url": "./",
-  "scope": "./",
+  "start_url": "../",
+  "scope": "../",
   "display": "fullscreen",
   "background_color": "#090d16",
   "theme_color": "#090d16",

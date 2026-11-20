@@ -933,3 +933,12 @@
   flex-direction: row !important;
   flex-wrap: nowrap !important;
 }
+
+.select-arrows { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; vertical-align: middle; }
+.select-arrows > select { flex: 1 1 auto; min-width: 0; max-width: 100%; }
+.select-arrows > button { flex: 0 0 22px; min-width: 22px; padding: 0; align-self: stretch; line-height: 1; }
+.select-arrows:has(> select:is(.hidden, [hidden], [aria-hidden="true"])) { display: none; }
+.select-arrows:has(> select:disabled) > button { opacity: .45; cursor: default; }
+
+[data-reset-scope='tunnel-depth-curve'] .tunnel-effect-control { display:grid; grid-template-columns:minmax(0,1fr) 50px auto 50px; align-items:center; gap:4px; }
+[data-reset-scope='tunnel-depth-curve'] .tunnel-effect-control input[type='number'] { width:100%; box-sizing:border-box; }

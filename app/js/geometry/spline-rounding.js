@@ -214,7 +214,7 @@ function subSplineCubic(seg, t0, t1) {
   const rel = a / Math.max(1e-9, b);
   return splitSplineCubic(left, rel).right;
 }
-function buildEdgeLocalSplineRun(runPoints, splineBlend = 1) {
+function buildEdgeLocalSplineRun(runPoints, splineBlend = 1, chordMetric = false) {
   const pts = Array.isArray(runPoints) ? runPoints : [];
   const shapeBlend = Math.max(0, Math.min(1, Number(splineBlend) || 0));
   const cubics = [];
@@ -246,6 +246,11 @@ function buildEdgeLocalSplineRun(runPoints, splineBlend = 1) {
     }
     cubics.push({ p0: p1, c1, c2, p3: p2 });
 
+    if (chordMetric) {
+      total += Math.hypot(p2.x - p1.x, p2.y - p1.y);
+      cumulative.push(total);
+      continue;
+    }
     // Measure the actual cubic arc, not just its endpoint chord.
     // A deeply curved profile can be much longer than its chord;
     // rounding is a physical distance along the visible profile.
@@ -310,7 +315,7 @@ function appendTrimmedEdgeLocalSplineRun(ctx, run, startLoc, endLoc) {
     ctx.bezierCurveTo(seg.c1.x, seg.c1.y, seg.c2.x, seg.c2.y, seg.p3.x, seg.p3.y);
   }
 }
-function collectEdgeLocalSplineRuns(points, closed, flags, splineBlend = 1) {
+function collectEdgeLocalSplineRuns(points, closed, flags, splineBlend = 1, chordMetric = false) {
   const n = points.length;
   if (n < 2) return [];
   if (!closed) {
@@ -326,7 +331,7 @@ function collectEdgeLocalSplineRuns(points, closed, flags, splineBlend = 1) {
       runs.push({
         startBoundary: a,
         endBoundary: b,
-        ...buildEdgeLocalSplineRun(points.slice(a, b + 1), splineBlend),
+        ...buildEdgeLocalSplineRun(points.slice(a, b + 1), splineBlend, chordMetric),
       });
     }
     return runs;
@@ -346,7 +351,7 @@ function collectEdgeLocalSplineRuns(points, closed, flags, splineBlend = 1) {
       rp.push(points[i]);
     }
     if (rp.length >= 2)
-      runs.push({ startBoundary: a, endBoundary: b, ...buildEdgeLocalSplineRun(rp, splineBlend) });
+      runs.push({ startBoundary: a, endBoundary: b, ...buildEdgeLocalSplineRun(rp, splineBlend, chordMetric) });
   }
   return runs;
 }
@@ -585,6 +590,130 @@ function clampSplineFilletCutToHalfRadius(run, fromEnd, cut, originalRadius) {
   }
   return cut;
 }
+function appendSimpleSplineFillet(ctx, fromLoc, toLoc, cutDistance) {
+  const a = fromLoc.point,
+    b = toLoc.point;
+  const dx = b.x - a.x,
+    dy = b.y - a.y,
+    d = Math.hypot(dx, dy);
+  if (d <= 1e-8) {
+    ctx.lineTo(b.x, b.y);
+    return;
+  }
+  const chord = { x: dx / d, y: dy / d };
+  const norm = (v) => {
+    const l = Math.hypot(v.x, v.y);
+    return l > 1e-9 ? { x: v.x / l, y: v.y / l } : { ...chord };
+  };
+  // A construction-boundary fillet must move from A toward B on both sides.
+  // A local spline tangent can legitimately point backwards (especially when
+  // samples are uneven), but using that tangent unchanged creates a tiny loop.
+  // Blend such pathological tangents toward the chord while preserving normal
+  // spline tangency whenever it already points into the fillet.
+  const orient = (t) => {
+    t = norm(t);
+    const along = t.x * chord.x + t.y * chord.y;
+    if (along >= 0.18) return t;
+    const w = Math.max(0, Math.min(1, (along + 1) / 1.18));
+    return norm({ x: chord.x * (1 - w) + t.x * w, y: chord.y * (1 - w) + t.y * w });
+  };
+  const ta = orient(fromLoc.tangent),
+    tb = orient(toLoc.tangent);
+  const dot = Math.max(-1, Math.min(1, ta.x * tb.x + ta.y * tb.y));
+  const theta = Math.acos(dot);
+  let h = d / (3 * Math.max(0.28, Math.cos(theta / 4) ** 2));
+  const safeCut = Math.max(1e-9, Number(cutDistance) || 0);
+  // Never let the two handles cross the middle of a local fillet.
+  h = Math.min(h, d * 0.44, safeCut * 0.92);
+  ctx.bezierCurveTo(a.x + ta.x * h, a.y + ta.y * h, b.x - tb.x * h, b.y - tb.y * h, b.x, b.y);
+}
+
+export function drawSimpleSpline(
+  ctx,
+  rawPoints,
+  closed = false,
+  roundingFrac = 0,
+  cornerFlags = [],
+  bridgeRoundFlags = [],
+) {
+  let points = (rawPoints || []).filter(
+    (p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)),
+  );
+  if (points.length < 2) return;
+  const round = Math.max(0, Math.min(2, Number(roundingFrac) || 0));
+  const filletRound = Math.min(1, round);
+  let flags = Array.isArray(cornerFlags) ? cornerFlags.slice(0, points.length) : [];
+  const bridgePolicy = Array.isArray(bridgeRoundFlags) && bridgeRoundFlags.length === points.length;
+  let bridgeFlags = bridgePolicy ? bridgeRoundFlags.slice(0, points.length) : [];
+
+  if (state.fourierMode && rawPoints?._fourierPrepared !== true) {
+    points = buildFourierWavePoints(points, Boolean(closed), `spline:${round.toFixed(4)}`);
+    flags = [];
+    bridgeFlags = [];
+  }
+  if (points.length === 2) {
+    ctx.moveTo(points[0].x, points[0].y);
+    ctx.lineTo(points[1].x, points[1].y);
+    if (closed) ctx.closePath();
+    return;
+  }
+
+  // No construction boundaries: this is an authored/global spline rather than a
+  // ring assembled from scaled profile splines. v310 accidentally bypassed the
+  // rounding control here entirely. Restore spline rounding in the correct order:
+  // smooth the spline KNOTS first, then build one centripetal cubic spline through
+  // those rounded knots. The resulting path stays C1-tangent at every interior knot
+  // instead of cutting/rounding a tessellated curve afterwards.
+  const runs = collectEdgeLocalSplineRuns(points, Boolean(closed), flags, 1, true);
+  if (!runs.length) {
+    const roundedPoints =
+      round > 0.001 ? transformSplineKnotsForRounding(points, Boolean(closed), round, flags) : points;
+    drawWholeCentripetalSpline(ctx, roundedPoints, Boolean(closed));
+    return;
+  }
+
+  // Each junction owns one symmetric trim distance. A straight-profile regular
+  // polygon reaches half of both neighbouring sides at 100%, so no straight side
+  // remains and the local tangent fillets form a near-circle. The scale is linear:
+  // 1% really means 1% of that physical cut distance.
+  const runCount = runs.length;
+  for (let i = closed ? 0 : 1; i < runCount; i++) {
+    const prev = runs[(i - 1 + runCount) % runCount];
+    const next = runs[i];
+    const boundary = next.startBoundary;
+    const roundable = bridgePolicy ? bridgeFlags[boundary] : flags[boundary];
+    const cut = roundable === true ? 0.5 * Math.min(prev.total, next.total) * filletRound : 0;
+    prev.trimEnd = cut;
+    next.trimStart = cut;
+  }
+
+  const locs = runs.map((run) => {
+    const d0 = Math.max(0, Math.min(run.total, run.trimStart || 0));
+    const d1 = Math.max(d0, Math.min(run.total, run.total - (run.trimEnd || 0)));
+    return { start: locateOnEdgeLocalSplineRun(run, d0), end: locateOnEdgeLocalSplineRun(run, d1) };
+  });
+
+  ctx.moveTo(locs[0].start.point.x, locs[0].start.point.y);
+  for (let i = 0; i < runCount; i++) {
+    appendTrimmedEdgeLocalSplineRun(ctx, runs[i], locs[i].start, locs[i].end);
+    const hasNext = closed || i < runCount - 1;
+    if (!hasNext) continue;
+    const ni = (i + 1) % runCount;
+    const boundary = runs[ni].startBoundary;
+    const roundable = bridgePolicy ? bridgeFlags[boundary] === true : flags[boundary] === true;
+    const cut = roundable ? Math.min(runs[i].trimEnd || 0, runs[ni].trimStart || 0) : 0;
+    if (roundable && cut > 1e-9) {
+      appendSimpleSplineFillet(ctx, locs[i].end, locs[ni].start, cut);
+    } else {
+      const b = locs[ni].start.point;
+      // At a hard construction boundary both local splines meet at the same
+      // authored point. lineTo is intentional for broken/straight bridges too.
+      ctx.lineTo(b.x, b.y);
+    }
+  }
+  if (closed) ctx.closePath();
+}
+
 function splinePathForDraw(
   ctx,
   rawPoints,
@@ -597,6 +726,8 @@ function splinePathForDraw(
   liveSeamMix = 0,
   filletLayer = null,
 ) {
+  if (filletLayer?.roundingCornerType === 'simple' && !state.fourierMode)
+    return drawSimpleSpline(ctx, rawPoints, closed, roundingFrac, cornerFlags, bridgeRoundFlags);
   // With rounding disabled, honor the authored Spline profile. Spline+
   // intentionally draws a polygon at 0%, which hid the original
   // edge-local cubic runs and their *unrounded* (sharp) junctions.
