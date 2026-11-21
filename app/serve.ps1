@@ -1,5 +1,5 @@
 # Local server for Somata on Windows - no Python or Node needed (PowerShell is part of Windows).
-# Started by start.bat. Serves this folder at http://localhost:8000/ (or the next free port),
+# Started by Somata_Start. Serves this folder at http://localhost:8000/ (or the next free port),
 # sends .js as JavaScript (required for ES modules) and disables caching.
 # Close the window to stop the server.
 param([int]$Port = 8000, [switch]$NoBrowser)
@@ -28,6 +28,30 @@ function Get-ContentType([string]$file) {
   return 'application/octet-stream'
 }
 
+function Start-SomataBrowser([string]$Url) {
+  $browsers = @(
+    @{ Name = 'Brave'; Path = 'BraveSoftware\Brave-Browser\Application\brave.exe' },
+    @{ Name = 'Chrome'; Path = 'Google\Chrome\Application\chrome.exe' },
+    @{ Name = 'Edge'; Path = 'Microsoft\Edge\Application\msedge.exe' }
+  )
+  $programFiles32 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+  foreach ($browser in $browsers) {
+    foreach ($directory in @($env:ProgramFiles, $programFiles32, $env:LOCALAPPDATA)) {
+      if (-not $directory) { continue }
+      $exe = Join-Path $directory $browser.Path
+      if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { continue }
+      # Chromium reuses existing processes with the same profile, ignoring
+      # GPU flags given to a second process. Use a dedicated Somata profile.
+      $profilePath = Join-Path $env:LOCALAPPDATA ("Somata\GPU\" + $browser.Name)
+      $browserArguments = @('--force-high-performance-gpu', '--no-first-run', ('--user-data-dir="' + $profilePath + '"'), $Url)
+      Start-Process -FilePath $exe -ArgumentList $browserArguments
+      return
+    }
+  }
+  Write-Host 'Brave, Chrome and Edge were not found. Opening the default browser.'
+  Start-Process $Url
+}
+
 # HttpListener on http://localhost:<port>/ works without administrator rights.
 $listener = $null
 for ($p = $Port; $p -lt $Port + 20; $p++) {
@@ -44,7 +68,7 @@ if (-not $listener) {
 $url = "http://localhost:$Port/"
 Write-Host "Somata: $url"
 Write-Host 'Close this window to stop the server.'
-if (-not $NoBrowser) { Start-Process $url }
+if (-not $NoBrowser) { Start-SomataBrowser $url }
 
 while ($listener.IsListening) {
   try { $ctx = $listener.GetContext() } catch { break }

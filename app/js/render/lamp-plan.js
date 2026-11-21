@@ -123,7 +123,7 @@ function pushGpuLampEffectSet(plan, layer, prepared, alphaBase, config) {
 function collectPreparedSpiralLampPoints(layer, paths, config, maxPoints = 260, frameCtx = null) {
   const locked = config?.morphMotionMode === 'key';
   const mode = locked ? 'key' : config?.positionMode || 'key',
-    snap = locked ? Number(layer.rounding) > 0 : lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
+    snap = (locked && Number(layer.rounding) > 0) || lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
   const slots = paths.flatMap((p, i) =>
     p?.points?.length > 1 && (p._alpha ?? 1) > 0.002 && (p.strokeGrowth ?? 1) > 0 ? [i] : [],
   );
@@ -245,7 +245,7 @@ function distributeSpiralLampGroups(groups, maxPoints) {
 function collectPreparedPolygonLampPoints(layer, paths, config, maxPoints, frameCtx, endpoint = false) {
   const locked = config?.morphMotionMode === 'key';
   const mode = locked ? 'key' : config?.positionMode || 'key';
-  const snap = locked ? Number(layer.rounding) > 0 : lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
+  const snap = (locked && Number(layer.rounding) > 0) || lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
   let contour = null;
   if (snap && !endpoint) {
     try {
@@ -401,8 +401,10 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
 
     if (locked && !animation && followsMorph && frameCtx.blueMorphProvider?.active &&
         !preparedSpiral && !SomataGeometryPolicy.isStrict(frameCtx) && allowed) {
-      const pts = withLampConfig(plan.baseConfig, () => collectMorphLampPoints(layerIndex,
-        frameCtx.blueMorphProvider.geometryT, 260, prepared));
+      const ownRails = SomataFrameContourService.paths(frameCtx);
+      const pts = withLampConfig(plan.baseConfig, () =>
+        collectMorphLampPoints(layerIndex, frameCtx.blueMorphProvider.geometryT, 260, prepared, ownRails),
+      );
       pushLampEffectSet(plan, layer, pts, alpha, plan.baseConfig);
       plan.enabled = plan.sets.length > 0;
       return plan;

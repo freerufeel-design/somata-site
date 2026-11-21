@@ -758,67 +758,74 @@ function prepareMainLayerInstances(frameCtx, renderFrame) {
 }
 
 function prepareMainLayerVectorMaster(frameCtx) {
-  let frameVectorMaster = null;
-  let frameVectorMasterScale = 1;
   const tunnelCanUseMaster = state.tunnel.active;
-  const topologyGpuLazy =
-    frameCtx._topologyMorphGpuLazy === true &&
-    SomataGeometryRoleService.backendEligible(frameCtx, 'topology', 'base') === true;
-  const outlineVisible = window.somataOutlineLayerEnabled?.(frameCtx.layerIndex) === true;
-  const greenProjectGpuNative =
-    SomataGeometryRoleService.backendEligible(frameCtx, 'green', 'base') === true && !outlineVisible;
+  let attempted = false;
+  // The WebGPU recorder requests drawLayerInstances with ignoreMaster. Build a
+  // Canvas replay path only if a consumer actually needs it this frame.
+  const prepareReplay = () => {
+    if (attempted) return;
+    attempted = true;
+    const topologyGpuLazy =
+      frameCtx._topologyMorphGpuLazy === true &&
+      SomataGeometryRoleService.backendEligible(frameCtx, 'topology', 'base') === true;
+    const outlineVisible = window.somataOutlineLayerEnabled?.(frameCtx.layerIndex) === true;
+    const greenProjectGpuNative =
+      SomataGeometryRoleService.backendEligible(frameCtx, 'green', 'base') === true && !outlineVisible;
 
-  // Retained Spiral GPURenderer supports both static and Morph frames.  Do
-  // not rebuild the same CPU vector master for Glow if *both* active roles
-  // can consume the retained GPU rail.  Fall back to the existing Canvas
-  // path whenever either role is unsupported.
-  const spiralGpuBase = SomataGeometryRoleService.backendEligible(frameCtx, 'spiral', 'base') === true;
-  // The actual prepared flag is set after vector/effect planning. Probe the
-  // scene route without retaining that temporary state or touching geometry.
-  let spiralGpuCanPresent = false;
-  if (spiralGpuBase && !frameCtx.morphFrameActive) {
-    const preparedBefore = frameCtx.prepared;
-    try {
-      frameCtx.prepared = true;
-      const route = SomataGeometryRoleService.spiralRoute(frameCtx);
-      spiralGpuCanPresent = Boolean(route?.deferLayerScene || route?.deferFrameScene);
-    } finally {
-      frameCtx.prepared = preparedBefore;
+    // Retained Spiral GPURenderer supports both static and Morph frames.  Do
+    // not rebuild the same CPU vector master for Glow if *both* active roles
+    // can consume the retained GPU rail.  Fall back to the existing Canvas
+    // path whenever either role is unsupported.
+    const spiralGpuBase = SomataGeometryRoleService.backendEligible(frameCtx, 'spiral', 'base') === true;
+    // The actual prepared flag is set after vector/effect planning. Probe the
+    // scene route without retaining that temporary state or touching geometry.
+    let spiralGpuCanPresent = false;
+    if (spiralGpuBase && !frameCtx.morphFrameActive) {
+      const preparedBefore = frameCtx.prepared;
+      try {
+        frameCtx.prepared = true;
+        const route = SomataGeometryRoleService.spiralRoute(frameCtx);
+        spiralGpuCanPresent = Boolean(route?.deferLayerScene || route?.deferFrameScene);
+      } finally {
+        frameCtx.prepared = preparedBefore;
+      }
     }
-  }
-  // Preserve the pre-existing fast morph path; add static Spiral only when
-  // its GPU Base AND (if requested) Glow renderer are actually available.
-  const spiralBezierGpuNative =
-    (frameCtx.morphFrameActive && spiralGpuBase) ||
-    (spiralGpuCanPresent &&
-      (frameCtx.glow <= 0 || SomataGeometryRoleService.backendEligible(frameCtx, 'spiral', 'glow') === true));
-  const shouldRecordDynamicVector =
-    topologyGpuLazy || greenProjectGpuNative || spiralBezierGpuNative
-      ? false
-      : shouldPrepareDynamicVectorMaster(frameCtx);
-  if (shouldRecordDynamicVector) {
-    frameVectorMasterScale = state.tunnel.active ? frameCtx.visibleInstances.maxScale : 1;
-    try {
-      const rec = createVectorRecordingContext({
-        globalAlpha: 1,
-        lineWidth: frameCtx.strokeWidth,
-        strokeStyle: frameCtx.layer.strokeColor || '#ffffff',
-        fillStyle: frameCtx.layer.fillColor || 'transparent',
-        lineCap: frameCtx.lineCap,
-        lineJoin: frameCtx.lineJoin,
-        miterLimit: frameCtx.miterLimit,
-      });
-      rec.scale(frameVectorMasterScale, frameVectorMasterScale);
-      if (frameCtx.lineProfileStrokeOnly) rec.__suppressStroke = true;
-      frameCtx.drawLayerGeometry(rec, 1);
-      if (rec.commands.length) frameVectorMaster = rec;
-    } catch (err) {
-      frameVectorMaster = null;
+    // Preserve the pre-existing fast morph path; add static Spiral only when
+    // its GPU Base AND (if requested) Glow renderer are actually available.
+    const spiralBezierGpuNative =
+      (frameCtx.morphFrameActive && spiralGpuBase) ||
+      (spiralGpuCanPresent &&
+        (frameCtx.glow <= 0 || SomataGeometryRoleService.backendEligible(frameCtx, 'spiral', 'glow') === true));
+    const shouldRecordDynamicVector =
+      topologyGpuLazy || greenProjectGpuNative || spiralBezierGpuNative
+        ? false
+        : shouldPrepareDynamicVectorMaster(frameCtx);
+    if (shouldRecordDynamicVector) {
+      const frameVectorMasterScale = state.tunnel.active ? frameCtx.visibleInstances.maxScale : 1;
+      try {
+        const rec = createVectorRecordingContext({
+          globalAlpha: 1,
+          lineWidth: frameCtx.strokeWidth,
+          strokeStyle: frameCtx.layer.strokeColor || '#ffffff',
+          fillStyle: frameCtx.layer.fillColor || 'transparent',
+          lineCap: frameCtx.lineCap,
+          lineJoin: frameCtx.lineJoin,
+          miterLimit: frameCtx.miterLimit,
+        });
+        rec.scale(frameVectorMasterScale, frameVectorMasterScale);
+        if (frameCtx.lineProfileStrokeOnly) rec.__suppressStroke = true;
+        frameCtx.drawLayerGeometry(rec, 1);
+        if (rec.commands.length) {
+          frameCtx.frameVectorMaster = rec;
+          frameCtx.frameVectorMasterScale = frameVectorMasterScale;
+        }
+      } catch (error) {
+        noteSuppressedError('render/main-pipeline#prepareMainLayerVectorMaster', error);
+      }
     }
-  }
 
-  frameCtx.frameVectorMaster = frameVectorMaster;
-  frameCtx.frameVectorMasterScale = frameVectorMasterScale;
+  };
+
   frameCtx.tunnelCanUseMaster = tunnelCanUseMaster;
   frameCtx.drawLayerInstances = (
     targetCtx,
@@ -826,6 +833,7 @@ function prepareMainLayerVectorMaster(frameCtx) {
     instanceWeight = null,
     allowHiddenGraffitiCarrier = false,
   ) => {
+    if (!ignoreMaster) prepareReplay();
     const copies = frameCtx.visibleInstances.copies;
     const alphas = frameCtx.visibleInstances.alphas;
     // Resolve the *same* per-frame Corridor attributes once for this Canvas pass,
@@ -967,9 +975,8 @@ function prepareMainLayerFrame(renderFrame, layerIndex) {
   prepareMainLayerTransformAndStyle(frameCtx, renderFrame);
   prepareMainLayerGeometry(frameCtx);
   prepareMainLayerInstances(frameCtx, renderFrame);
-  // Build the Line execution carrier before effect planning. Ordinary effects now derive
-  // their geometry from the exact Line commands for this frame, so the recorder must exist
-  // before Web/Graffiti/Sweep plans are prepared.
+  // Register the Line draw callbacks before effect planning. Effects can then
+  // request the exact Line commands for this frame.
   prepareMainLayerVectorMaster(frameCtx);
   prepareMainLayerEffects(frameCtx);
   prepareLayerConsumerDemand(frameCtx);

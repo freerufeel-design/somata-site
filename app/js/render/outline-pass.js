@@ -43,8 +43,6 @@ function renderLayerOutlinePass(frameCtx) {
     layer,
     baseAlpha,
     visibleInstances,
-    frameVectorMaster,
-    frameVectorMasterScale,
     drawLayerInstances,
   } = frameCtx;
   const mode = ['outer', 'inner', 'median'].includes(effect.mode) ? effect.mode : 'outer';
@@ -395,5 +393,6 @@ SomataFeatureHost.provide('outline', 'sceneAdmission', (frameCtx, opt = {}) => {
 window.SomataRenderPassRegistry?.register?.('outline', {
   stage: window.SomataRenderPassRegistry.STAGES.POST_BASE,
   order: 10,
+  enabledPlan: 'outline',
   run: renderLayerOutlinePass,
 });

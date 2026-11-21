@@ -3,6 +3,7 @@ import '../geometry/spiral-intersections.js'; // initialisation order: this modu
 import { getLampEvaluationConfig } from '../core/defaults-layers.js';
 import { renderRuntime } from '../core/render-runtime.js';
 import { runtimeState, state } from '../core/state.js';
+import { nearestLampOnPathInterval, lampPointAtFraction } from './lamp-attachment.js';
 import { lampHash32 } from './lamp-anchors.js';
 import { lerpLampColorPhase, wrapLampColorPhase } from '../render/lamp-color.js';
 import { lampSeedUnit } from './lamp-topology.js';
@@ -87,7 +88,7 @@ function lampAdaptivePointCount(points, cfg = getLampEvaluationConfig(), timing 
     sum += lampPhasePresence(p, cfg, timing);
   return Math.max(0.001, sum);
 }
-function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false, displayedProgress = null) {
+function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false, displayedProgress = null, rails = null) {
   if (!Array.isArray(points) || !points.length || !runtimeState.morph?.active) return points || [];
   const layer = state.layers?.[layerIndex];
   const layerKey = String(layer?.id ?? layerIndex);
@@ -189,7 +190,6 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false,
     order.sort((a, b) => Number(points[a].lampSourcePresent === false) - Number(points[b].lampSourcePresent === false)
       || Number(visible(points[b])) - Number(visible(points[a])) || a - b);
     const coincident = new Map();
-    const samePointEps2 = 1e-8; // Только погрешность координат, не соседние вершины.
     const nearestUnused = (p, maxD = Infinity, onlyVisible = false) => {
       const px = Number(p?.x) || 0,
         py = Number(p?.y) || 0;
@@ -208,10 +208,22 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false,
       }
       return best;
     };
+    // Reserve the closest displayed pairs across the entire layer before
+    // assigning more distant slots. Array order can change between phases.
+    const candidates = [];
     for (const i of order) {
-      if (!visible(points[i]) || points[i].lampSourcePresent === false) continue;
-      const j = nearestUnused(points[i], samePointEps2, true);
-      if (j < 0) continue;
+      const p = points[i];
+      if (p.lampSourcePresent === false) continue;
+      for (let j = 0; j < previous.length; j++) {
+        const q = previous[j];
+        if (q.lampTargetPresent === false) continue;
+        const distance = Math.hypot(p.x - q.x, p.y - q.y);
+        candidates.push({ i, j, distance });
+      }
+    }
+    candidates.sort((a, b) => a.distance - b.distance);
+    for (const { i, j } of candidates) {
+      if (coincident.has(i) || used.has(j)) continue;
       used.add(j);
       coincident.set(i, j);
     }
@@ -263,8 +275,19 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false,
       if (Number.isFinite(displayedProgress) && displayedProgress < 0.2 && previous.length) {
         // The next phase may rebuild its rounded rail with a different seam.
         // Transfer the previous displayed centre, including its projection.
-        stable.seamDx = stable.fromX - p.x;
-        stable.seamDy = stable.fromY - p.y;
+        const rail = rails?.[p.pathIndex];
+        const center = p.lampContourFraction;
+        if (rail && Number.isFinite(center)) {
+          const reach = p.lampAttachSegmentWindow ?? 0.5 / Math.max(2, p.lampCircleSlotCount || 4);
+          const hit = nearestLampOnPathInterval({ x: stable.fromX, y: stable.fromY }, rail,
+            center - reach, center + reach, center);
+          let delta = hit.fraction - center;
+          if (rail.closed) delta -= Math.round(delta);
+          stable.seamArc = delta;
+        } else {
+          stable.seamDx = stable.fromX - p.x;
+          stable.seamDy = stable.fromY - p.y;
+        }
         stable.seamStart = displayedProgress;
       }
       nextAssignments.set(rawKey(p, i), stable);
@@ -311,11 +334,25 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false,
       sy = Number(stable.fromY) || 0;
     let x = u < 1 ? sx + (targetX - sx) * ease : targetX,
       y = u < 1 ? sy + (targetY - sy) * ease : targetY;
+    let contourFraction = p.lampContourFraction;
     if (Number.isFinite(stable.seamStart) && Number.isFinite(displayedProgress)) {
-      const f = Math.max(0, Math.min(1, (displayedProgress - stable.seamStart) / (0.2 - stable.seamStart)));
+      const end = Number.isFinite(stable.seamArc) ? 1 : 0.2;
+      const f = Math.max(0, Math.min(1, (displayedProgress - stable.seamStart) / (end - stable.seamStart)));
       const weight = 1 - f * f * (3 - 2 * f);
-      x += stable.seamDx * weight;
-      y += stable.seamDy * weight;
+      if (Number.isFinite(stable.seamArc)) {
+        const rail = rails?.[p.pathIndex];
+        if (rail && weight > 0) {
+          const q = lampPointAtFraction(rail, p.lampContourFraction + stable.seamArc * weight);
+          if (q) {
+            ({ x, y } = q);
+            contourFraction += stable.seamArc * weight;
+            if (rail.closed) contourFraction = ((contourFraction % 1) + 1) % 1;
+          }
+        }
+      } else {
+        x += stable.seamDx * weight;
+        y += stable.seamDy * weight;
+      }
     }
     const baseLevel = p?.lampLevel === undefined ? 1 : Math.max(0, Math.min(1, Number(p.lampLevel) || 0));
     // Birth brightness is decided after final contour attachment, in lamp-stability.
@@ -336,6 +373,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false,
       ...p,
       x,
       y,
+      lampContourFraction: contourFraction,
       lampLevel: baseLevel,
       lampId: stable.id,
       lampSeed: stable.seed,

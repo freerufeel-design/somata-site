@@ -829,6 +829,7 @@ SomataFeatureHost.provide(
 window.SomataRenderPassRegistry?.register?.('profile', {
   stage: window.SomataRenderPassRegistry.STAGES.POST_BASE,
   order: 20,
+  enabledPlan: 'profile',
   run: renderLayerProfilePass,
 });
 

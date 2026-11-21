@@ -190,7 +190,7 @@ function buildCurrentCircleMorphPaths(layerIndex, t) {
   const result = frameGeometryRuntime.active ? getFrameOutputPool(circleFrameOutputPools, layerIndex) : [];
   const resultPathPool = frameGeometryRuntime.active ? result._pathPool || (result._pathPool = []) : null;
   let resultPathWrite = 0;
-  for (const pp of plan.pathPlans) {
+  for (const [orbitIndex, pp] of plan.pathPlans.entries()) {
     let vertices = pp.auxVertexPts;
     if (!vertices || vertices.length !== pp.from.length)
       vertices = pp.auxVertexPts = Array.from({ length: pp.from.length }, () => ({ x: 0, y: 0 }));
@@ -220,6 +220,8 @@ function buildCurrentCircleMorphPaths(layerIndex, t) {
             points: pl.points.map((q) => ({ x: q.x, y: q.y })),
             closed: Boolean(pl.closed),
             cornerFlags: pl.cornerFlags || [],
+            lampCircleOrbitIndex: orbitIndex,
+            lampCircleEdgeIndex: pl.lampCircleEdgeIndex,
           });
           continue;
         }
@@ -238,6 +240,8 @@ function buildCurrentCircleMorphPaths(layerIndex, t) {
         dstPts.length = srcPts.length;
         item.closed = Boolean(pl.closed);
         item.cornerFlags = pl.cornerFlags || [];
+        item.lampCircleOrbitIndex = orbitIndex;
+        item.lampCircleEdgeIndex = pl.lampCircleEdgeIndex;
         result.push(item);
         resultPathWrite++;
       }

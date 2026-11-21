@@ -332,10 +332,12 @@ window.SomataRenderPassRegistry?.registerHook?.('beforeLayer', 'path-fx-prefligh
 window.SomataRenderPassRegistry?.register?.('motion', {
   stage: window.SomataRenderPassRegistry.STAGES.POST_BASE,
   order: 40,
+  enabledPlan: 'motion',
   run: renderLayerMotionFxPass,
 });
 window.SomataRenderPassRegistry?.register?.('sprite', {
   stage: window.SomataRenderPassRegistry.STAGES.POST_BASE,
   order: 60,
+  enabledPlan: 'sprite',
   run: renderLayerSpritePass,
 });

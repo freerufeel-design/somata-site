@@ -213,20 +213,26 @@ const SomataLampStability = (() => {
   }
   function applyPhaseSeparation(track, items, phase, allCrossings, progress) {
     if (track.phase !== phase || !track.separated) track.separated = new Set();
-    const survivors = items.filter(v => v.lampSourcePresent && v.lampTargetPresent && isSpatial(v));
+    const survivors = new Map();
+    for (const v of items) {
+      if (!v.lampSourcePresent || !v.lampTargetPresent || !isSpatial(v)) continue;
+      let path = survivors.get(v.pathIndex);
+      if (!path) survivors.set(v.pathIndex, (path = []));
+      path.push(v);
+    }
     for (const v of items) {
       if (!v.lampPhaseTimed || v.lampRank === 1 || v.lampSourcePresent === v.lampTargetPresent || !isSpatial(v)) continue;
       if ((progress === 0 && !v.lampSourcePresent) || (progress === 1 && !v.lampTargetPresent)) {
         v.intensityAlpha = 0;
         continue;
       }
-      let factor = 1, paired = false;
-      for (const other of survivors) {
-        if (other.pathIndex !== v.pathIndex) continue;
-        paired = true;
+      const path = survivors.get(v.pathIndex);
+      if (!path) continue;
+      let factor = 1;
+      for (const other of path) {
         factor = Math.min(factor, separation(v, other, Math.hypot(v.px - other.px, v.py - other.py)));
+        if (factor === 0) break;
       }
-      if (!paired) continue;
       const full = Number.isFinite(v.brightness) ? Math.max(0, Math.min(1, v.brightness / 100)) : 1;
       if (v.lampTargetPresent && factor === 1) track.separated.add(v.lampTraceId);
       v.intensityAlpha = (v.lampTargetPresent && track.separated.has(v.lampTraceId))
@@ -491,7 +497,8 @@ const SomataLampStability = (() => {
       });
       if (spatial(v) && o && Number.isFinite(o[0]) && Number.isFinite(o[1]))
         track.birthPos.set(v.lampTraceId, o);
-      if (!arc && v.intensityAlpha > 0.002) {
+      // Phase-timed and contour-bound lamps never use a detached fade-out copy.
+      if (!arc && !v.lampPhaseTimed && !v.lampContourBound && v.intensityAlpha > 0.002) {
         const snap = track.snaps.get(v.lampTraceId) || {};
         snaps.set(v.lampTraceId, Object.assign(snap, v));
       }

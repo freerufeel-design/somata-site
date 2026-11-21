@@ -353,6 +353,7 @@ window.SomataLampPassService = SomataLampPassService;
 window.SomataRenderPassRegistry?.register?.('lamps', {
   stage: window.SomataRenderPassRegistry.STAGES.POST_BASE,
   order: 30,
+  enabledPlan: 'lamps',
   run: renderLayerLampPass,
 });
 

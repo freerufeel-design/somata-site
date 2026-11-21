@@ -371,8 +371,9 @@ function buildLampCircumferenceAnchors(layer, prepared = null, maxPoints = 260, 
 
   const spiralSeamShared =
     isSpiralLayer(layer) && state.tunnel?.active === true && layer.spiralClosed !== false;
-  const cacheKey = `key|${geometryKey}|attach:${attach ? 1 : 0}|round:${roundingKey}|corners:${includeProfileCorners}|seam:${spiralSeamShared ? 1 : 0}|max:${maxPoints}`;
-  const cached = lampAnchorCache.get(layer);
+  const cacheOwner = layer.__somataRenderSource || layer;
+  const cacheKey = `key|${layer.id || layer.name || 'layer'}|${geometryKey}|attach:${attach ? 1 : 0}|round:${roundingKey}|corners:${includeProfileCorners}|seam:${spiralSeamShared ? 1 : 0}|max:${maxPoints}`;
+  const cached = lampAnchorCache.get(cacheOwner);
   if (cached?.key === cacheKey) return cached.points;
 
   if (isSpiralLayer(layer)) {
@@ -416,7 +417,7 @@ function buildLampCircumferenceAnchors(layer, prepared = null, maxPoints = 260, 
       if (pts.length > 1 && !spiralSeamShared) pushPoint(pts[pts.length - 1], pts.length - 1, 'end');
     }
     const points = dedupeSpiralLampPoints(all, maxPoints);
-    lampAnchorCache.set(layer, { key: cacheKey, points });
+    lampAnchorCache.set(cacheOwner, { key: cacheKey, points });
     return points;
   }
 
@@ -480,7 +481,7 @@ function buildLampCircumferenceAnchors(layer, prepared = null, maxPoints = 260, 
         };
       });
   const points = dedupeLampPoints(projected, maxPoints);
-  lampAnchorCache.set(layer, { key: cacheKey, points });
+  lampAnchorCache.set(cacheOwner, { key: cacheKey, points });
   return points;
 }
 function lampHash32(str) {

@@ -34,6 +34,7 @@ import {
   nearestLampFractionOnPath,
   nearestLampFractionOnPathSegmentBound,
   nearestLampFractionOnPathStable,
+  nearestLampOnPathInterval,
   updateLampBendLevel,
 } from './lamp-attachment.js';
 import { lampAdaptiveFrame } from './lamp-visual.js';
@@ -327,7 +328,10 @@ function projectLampPointsToCurrentPolygon(
         // лампу с этой поправкой.
         let offset = rt?.phase === phase && rt.pathIndex === visualPathIndex ? Number(rt.directOffset) || 0 : null;
         if (offset === null) {
-          const near = nearestLampFractionOnPath(p, visualPath);
+          const endpoint = p.lampOpenCircleEndpoint;
+          const near = endpoint === undefined
+            ? nearestLampFractionOnPath(p, visualPath)
+            : nearestLampOnPathInterval(p, visualPath, endpoint * 0.5, 0.5 + endpoint * 0.5, endpoint);
           let d = Number(near?.fraction) - base;
           if (visualPath.closed) d -= Math.round(d);
           offset = Number.isFinite(d) && Math.abs(d) < 0.25 ? d : 0;
@@ -634,31 +638,194 @@ export {
   projectLampPointsToCurrentPolygon,
 };
 
-// The 6.7 linear motion owns a render segment in a topological morph.
-// In circle slide it projects the moving angular key onto its own contour.
-export function projectReferenceLampPoints(points, rails, layer) {
-  if (!rails?.length) return points;
-  const topology = ['topology', 'calm'].includes(state.morph.mode);
+// Open profiles can draw one piece per edge. Use a piece incident to the
+// key and retain the chosen edge if its opposite piece appears later.
+export function bindOpenCircleLampEdges(points, paths, layer) {
+  if (!paths?.some((path) => Number.isInteger(path.lampCircleEdgeIndex))) return points;
+  const byOrbit = new Map();
+  for (let i = 0; i < paths.length; i++) {
+    const path = paths[i];
+    if (!Number.isInteger(path.lampCircleEdgeIndex)) continue;
+    let orbit = byOrbit.get(path.lampCircleOrbitIndex);
+    if (!orbit) byOrbit.set(path.lampCircleOrbitIndex, (orbit = new Map()));
+    orbit.set(path.lampCircleEdgeIndex, i);
+  }
+  const now = lampVisualNow();
+  const phase = runtimeState.morph.lampCycleSerial;
+  return points.map((p) => {
+    const orbit = byOrbit.get(p.pathIndex);
+    if (!p.lampCircleSlotCount || !orbit) return p;
+    const outgoing = p.vertexIndex;
+    const incoming = (outgoing + p.lampCircleSlotCount - 1) % p.lampCircleSlotCount;
+    const id = [layer.id, 'open-lamp-edge', phase, p.lampId].join(':');
+    let binding = lampMotionRuntime.snap.get(id);
+    if (!binding) {
+      const edge = orbit.has(outgoing) ? outgoing : incoming;
+      if (!orbit.has(edge)) return { ...p, lampLevel: 0 };
+      binding = { edge, lastSeen: now };
+      lampMotionRuntime.snap.set(id, binding);
+    }
+    binding.lastSeen = now;
+    const pathIndex = orbit.get(binding.edge);
+    if (pathIndex === undefined) return { ...p, lampLevel: 0 };
+    const endpoint = Number(binding.edge === incoming);
+    return {
+      ...p,
+      pathIndex,
+      lampCircleSlotCount: 0,
+      lampAttachFraction: endpoint,
+      lampAttachSegmentWindow: 0.5,
+      lampOpenCircleEndpoint: endpoint,
+    };
+  });
+}
+
+// A key can slide within the two edges meeting at its support. The rail is
+// selected for the entire orbit, so nearby crossings never select a new orbit.
+export function projectMorphKeyLamps(points, semanticPaths, rails, layer, canonicalRails = null) {
+  if (!rails?.length) return points.map((p) => ({ ...p, lampLevel: 0 }));
+  const authoritative = rails.__somataFrameContour === true;
+  const phase = runtimeState.morph.lampCycleSerial;
+  const key = String(layer.id) + ':key-orbits';
   const now = lampVisualNow();
   cleanupLampRuntime(now);
-  return points.map((p) => {
-    const path = rails[p.pathIndex];
-    if (!path) return p;
-    if (topology && p.lampFixedSegmentBound) {
-      const q = lampPointAtRenderSegmentParam(path, p.lampAttachRenderSegmentParam);
-      return q ? { ...p, ...q } : p;
+  let map = null;
+  if (authoritative) {
+    const cached = lampMotionRuntime.snap.get(key);
+    if (cached?.phase === phase && cached.railCount === rails.length && cached.sourceCount === semanticPaths?.length) {
+      cached.lastSeen = now;
+      map = cached.map;
+    } else {
+      map = mapLampSemanticPathsToVisible(semanticPaths, rails);
+      lampMotionRuntime.snap.set(key, { phase, railCount: rails.length, sourceCount: semanticPaths?.length, map, lastSeen: now });
     }
-    if (topology && Number.isFinite(p.lampAttachFraction)) {
-      const u = p.lampAttachProgress;
-      if (u <= 1e-8 && p.lampAttachSourcePoint) return { ...p, ...p.lampAttachSourcePoint };
-      if (u >= 1 - 1e-8 && p.lampAttachTargetPoint) return { ...p, ...p.lampAttachTargetPoint };
-      const q = nearestLampFractionOnPathSegmentBound(p, path, p.lampAttachFraction, p.lampAttachSegmentWindow);
-      return q?.point ? { ...p, ...q.point } : p;
+  }
+
+  const arcStations = new Map();
+  const stationsOf = (path) => {
+    let stations = arcStations.get(path);
+    if (!stations) {
+      stations = lampVertexArcFractions(path, true);
+      arcStations.set(path, stations);
     }
-    const key = [layer.id, 'key', runtimeState.morph.lampCycleSerial, p.lampId].join(':');
-    const prev = lampMotionRuntime.snap.get(key);
-    const near = prev ? nearestLampFractionOnPathStable(p, path, prev.s) : nearestLampFractionOnPath(p, path);
-    lampMotionRuntime.snap.set(key, { s: near.fraction, lastSeen: now });
-    return { ...p, ...near.point };
+    return stations;
+  };
+  // Open profile rails may omit the closing edge and reverse array order at
+  // a phase boundary. Identify an incident edge by BOTH of its supports.
+  const openCircle = layer.closedLoop === false &&
+    points.every(p => p.lampCircleSlotCount > 0);
+  const slots = openCircle ? new Map(points.map(p => [p.pathIndex + ':' + p.vertexIndex, p])) : null;
+  if (slots) return points.map(p => {
+    const n = p.lampCircleSlotCount;
+    const bindingKey = [layer.id, 'open-visible-edge', p.lampId].join(':');
+    let binding = lampMotionRuntime.snap.get(bindingKey);
+    {
+      let best = Infinity, owner, endpoint;
+      for (const side of [1, -1]) {
+        const other = slots.get(p.pathIndex + ':' + ((p.vertexIndex + side + n) % n));
+        if (!other) continue;
+        for (let i = 0; i < rails.length; i++) {
+          const pts = rails[i].points;
+          if (!pts?.length) continue;
+          const first = pts[0], last = pts[pts.length - 1];
+          const start = side === 1 ? first : last, end = side === 1 ? last : first;
+          const anchorGap = Math.hypot(start.x - p.x, start.y - p.y);
+          const cost = anchorGap + 0.15 * Math.hypot(end.x - other.x, end.y - other.y);
+          const preferred = binding?.phase === phase && binding.endpoint === Number(side < 0);
+          const score = cost - (preferred ? Math.hypot(p.x - other.x, p.y - other.y) * 0.2 : 0);
+          if (score < best - 1e-6) { best = score; owner = i; endpoint = Number(side < 0); }
+        }
+      }
+      if (owner === undefined) return { ...p, lampLevel: 0 };
+      binding = { phase, count: rails.length, owner, endpoint, lastSeen: now };
+      lampMotionRuntime.snap.set(bindingKey, binding);
+    }
+    binding.lastSeen = now;
+    const { owner, endpoint } = binding;
+    const owned = rails[owner];
+    const hit = owned.closed ? nearestLampFractionOnPath(p, owned)
+      : nearestLampOnPathInterval(p, owned, endpoint * 0.5, 0.5 + endpoint * 0.5, endpoint);
+    return { ...p, ...hit.point, pathIndex: owner, lampContourFraction: hit.fraction, __lampVisualProfileAttached: true };
+  });
+  return bindOpenCircleLampEdges(points, semanticPaths, layer).map((p) => {
+    const pi = p.pathIndex;
+    const railIndex = map ? map[pi] : pi;
+    const rail = rails[railIndex];
+    if (!rail?.points?.length || p.lampLevel === 0) return { ...p, lampLevel: 0 };
+    let center = p.lampAttachFraction;
+    let left = p.lampAttachSegmentWindow ?? 0.08;
+    let right = left;
+    const slotCount = p.lampCircleSlotCount;
+    if (slotCount) {
+      const raw = semanticPaths?.[pi];
+      const step = raw?.points?.length / slotCount;
+      if (step >= 1 && Number.isInteger(step)) {
+        const stations = stationsOf(raw);
+        const i = p.vertexIndex * step;
+        center = stations[i];
+        const previous = i ? stations[i - step] : raw.closed ? stations[stations.length - step] - 1 : center;
+        const next = i + step < stations.length ? stations[i + step] : raw.closed ? 1 : center;
+        left = (center - previous) / 2;
+        right = (next - center) / 2;
+      } else {
+        center = p.vertexIndex / Math.max(1, slotCount - Number(!rail.closed));
+        left = right = 0.5 / slotCount;
+      }
+    } else if (p.lampFixedSegmentBound) {
+      const canonical = canonicalRails?.[pi] || rail;
+      const stations = stationsOf(canonical);
+      const count = stations.length - Number(!canonical.closed);
+      const position = p.lampAttachRenderSegmentParam * count;
+      const i = Math.floor(position);
+      const from = stations[i] ?? 1;
+      const to = stations[i + 1] ?? 1;
+      center = from + (to - from) * (position - i);
+    }
+    if (!Number.isFinite(center)) return { ...p, lampLevel: 0 };
+    let hit;
+    if ((slotCount || p.lampFixedSegmentBound) && p.lampAttachSourcePoint && p.lampAttachTargetPoint) {
+      // Tessellation and winding can change at either endpoint. Resolve the
+      // support on its owned rail; use its incident interval to break ties.
+      const near = nearestLampFractionOnPath(p, rail);
+      const local = nearestLampOnPathInterval(p, rail, center - left, center + right, center);
+      const gap = Math.hypot(p.x - near.point.x, p.y - near.point.y);
+      const interior = p.lampAttachProgress > 0.15 && p.lampAttachProgress < 0.85;
+      hit = interior || Math.hypot(p.x - local.point.x, p.y - local.point.y) <= gap + 1e-6 ? local : near;
+      const id = [layer.id, 'owned-station', p.lampId ?? p.vertexIndex].join(':');
+      const previous = lampMotionRuntime.snap.get(id);
+      const t = p.lampAttachProgress;
+      if (previous?.phase === phase && previous.railIndex === railIndex && t > previous.t) {
+        // A nearest-point tie at a crossing can move the candidate far around a
+        // closed rail in a single frame. Travel continuously in arc coordinates.
+        // Reserve enough of the remaining phase to reach the endpoint.
+        let start = previous.s;
+        const transported = lampPointAtFraction(rail, start);
+        const travel = Math.hypot(p.x - previous.anchorX, p.y - previous.anchorY);
+        const residual = transported && Math.hypot(transported.x - previous.x, transported.y - previous.y);
+        if (residual > 2 * travel + 1) {
+          // The first moving rail can have a different seam or winding than the
+          // canonical boundary frame. Rebase the station in physical space.
+          const rebased = nearestLampFractionOnPath(previous, rail);
+          if (Math.hypot(rebased.point.x - previous.x, rebased.point.y - previous.y) < residual / 2)
+            start = rebased.fraction;
+        }
+        let delta = hit.fraction - start;
+        if (rail.closed) delta -= Math.round(delta);
+        const dt = t - previous.t;
+        let planned = p.lampAttachTargetFraction - p.lampAttachSourceFraction;
+        if (rail.closed) planned -= Math.round(planned);
+        const arcSpeed = Math.max(Math.abs(planned) || 0, slotCount ? 2 / slotCount : 2 * (left + right));
+        const step = Math.max(arcSpeed * dt, Math.abs(delta) * dt / (1 - previous.t));
+        const s = start + Math.max(-step, Math.min(step, delta));
+        const fraction = rail.closed ? ((s % 1) + 1) % 1 : s;
+        hit = { fraction, point: lampPointAtFraction(rail, fraction) || hit.point };
+      } else if (previous?.phase === phase && previous.railIndex === railIndex && t === previous.t) {
+        hit = { fraction: previous.s, point: lampPointAtFraction(rail, previous.s) || hit.point };
+      }
+      lampMotionRuntime.snap.set(id, { phase, railIndex, t, s: hit.fraction, x: hit.point.x, y: hit.point.y, anchorX: p.x, anchorY: p.y, lastSeen: now });
+    } else {
+      hit = nearestLampOnPathInterval(p, rail, center - left, center + right, center);
+    }
+    return { ...p, ...hit.point, pathIndex: railIndex, lampContourFraction: hit.fraction, __lampVisualProfileAttached: true };
   });
 }

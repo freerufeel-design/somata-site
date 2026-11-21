@@ -9,10 +9,10 @@ test('Blue key lamps hand the same lit IDs and positions to the following phase'
   const { SomataFeatureHost } = await importModule('js/render/feature-host.js');
   await importModule('js/render/lamp-plan.js');
   const runtime = window.SomataMorphRuntime;
-  for (const mode of ['circleSlide','topology']) for (const snap of [true, false]) {
-    const layer = Object.assign(createLayer(), {id: 'seam-'+mode+snap, N:4, K:1, radius:100, rotation:0,
+  for (const mode of ['circleSlide','topology']) for (const snap of [true, false]) for (const motion of ['linear','key']) {
+    const layer = Object.assign(createLayer(), {id: 'seam-'+mode+snap+motion, N:4, K:1, radius:100, rotation:0,
       rounding:65, spiralOrder:0, spiralEnabled:false, showLamps:true});
-    Object.assign(layer.lamps,{positionMode:'key',snapToContour:snap});
+    Object.assign(layer.lamps,{positionMode:'key',snapToContour:snap,morphMotionMode:motion});
     state.layers=[layer]; state.tunnel.active=false;
     Object.assign(state.morph,{mode,unifiedMode:mode});
     let previous;
@@ -60,4 +60,25 @@ test('a rebuilt rail inherits its last displayed centre even if its new projecti
   assert.equal(start.x,end.x);
   assert.equal(start.y,end.y);
   assert.equal(at(100,'next-slot',1).x,100);
+});
+
+test('phase handoff follows a bent rail through the following frames', async () => {
+  await loadApp();
+  const { state, runtimeState } = await importModule('js/core/state.js');
+  const { preserveBlueMorphLampIdentity } = await importModule('js/lamps/lamp-motion.js');
+  const rail = { points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], closed: false };
+  state.layers = [{ id: 'bent-seam' }];
+  Object.assign(runtimeState.morph, { active: true, lampCycleSerial: 1 });
+  const frame = (x, y, fraction, t) => preserveBlueMorphLampIdentity(0, [{
+    x, y, pathIndex: 0, lampId: 'lamp', lampSourcePresent: true, lampTargetPresent: true,
+    lampContourFraction: fraction, lampAttachSegmentWindow: 0.5,
+  }], true, t, [rail])[0];
+  const end = frame(6, 0, 0.3, 1);
+  runtimeState.morph.lampCycleSerial++;
+  for (const t of [0, 0.04, 0.08, 0.12, 0.16, 0.2]) {
+    const point = frame(10, 4, 0.7, t);
+    assert.equal(point.lampId, end.lampId);
+    if (t === 0) assert.ok(Math.hypot(point.x - end.x, point.y - end.y) < 1e-8);
+    assert.ok(Math.abs(point.y) < 1e-8 || Math.abs(point.x - 10) < 1e-8);
+  }
 });

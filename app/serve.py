@@ -8,7 +8,7 @@ Same as `python -m http.server`, with two differences:
   * Cache-Control: no-store, so the browser never keeps an old copy of a module after an update.
 
 Usage:  python serve.py [port] [--no-browser]      (default port 8000; the next free one if busy)
-On Windows you can double-click start.bat, on macOS start.command.
+On Windows open Somata_Start, on macOS app/start.command.
 """
 import functools
 import http.server

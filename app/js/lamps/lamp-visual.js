@@ -280,7 +280,7 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
   const snapped = lampContourAttachmentEnabledForFrame({ layerLampConfig: cfg }) === true;
   const baseR = style.baseR,
     baseBrightnessPercent = style.baseBrightnessPercent,
-    scatter = snapped && cfg.morphMotionMode !== 'key' ? 0 : style.scatter,
+    scatter = snapped ? 0 : style.scatter,
     sizeVar = style.sizeVar,
     brightVar = style.brightVar,
     morphSize = style.morphSize,
@@ -303,29 +303,31 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
     const seed = Number.isFinite(Number(p?.lampSeed))
         ? Number(p.lampSeed) >>> 0
         : (layerSeed ^ Math.imul(i + 1, 2654435761)) >>> 0,
-      angle = lampSeedUnit(seed, 1) * Math.PI * 2,
-      dist = scatter * baseR * 2.4 * Math.sqrt(lampSeedUnit(seed, 2));
-    const px = (Number(p?.x) || 0) + Math.cos(angle) * dist,
-      py = (Number(p?.y) || 0) + Math.sin(angle) * dist,
-      sizeRandom = Math.max(0.12, 1 + (lampSeedUnit(seed, 3) * 2 - 1) * sizeVar * 0.78),
-      brightUnit = Number.isFinite(Number(p?.lampBrightnessUnit))
+      sizeRandom = sizeVar ? Math.max(0.12, 1 + (lampSeedUnit(seed, 3) * 2 - 1) * sizeVar * 0.78) : 1;
+    let px = Number(p?.x) || 0;
+    let py = Number(p?.y) || 0;
+    if (scatter) {
+      const angle = lampSeedUnit(seed, 1) * Math.PI * 2;
+      const dist = scatter * baseR * 2.4 * Math.sqrt(lampSeedUnit(seed, 2));
+      px += Math.cos(angle) * dist;
+      py += Math.sin(angle) * dist;
+    }
+    const brightUnit = !brightVar ? 0.5 : Number.isFinite(Number(p?.lampBrightnessUnit))
         ? Math.max(0, Math.min(1, Number(p.lampBrightnessUnit)))
         : lampSeedUnit(seed, 4),
       brightRandom = Math.max(0.08, 1 + (brightUnit * 2 - 1) * brightVar * 0.9),
       sizeMorph = Math.max(0.12, 1 + lampMorphWave(seed, 5) * morphSize),
       brightMorph = Math.max(0.08, 1 + lampMorphWave(seed, 9) * morphBright);
-    const rainbowIndex = Number.isFinite(Number(p?.lampStableIndex))
+    let color = mode === 'line' ? layer.strokeColor || '#ffffff' : cfg.color || '#ffe600';
+    if (mode === 'rainbow') {
+      const rainbowIndex = Number.isFinite(Number(p?.lampStableIndex))
         ? Math.abs(Math.round(Number(p.lampStableIndex)))
-        : i,
-      rainbowPhase = Number.isFinite(Number(p?.lampColorPhase))
+        : i;
+      const rainbowPhase = Number.isFinite(Number(p?.lampColorPhase))
         ? wrapLampColorPhase(p.lampColorPhase)
-        : wrapLampColorPhase(rainbowIndex / Math.max(1, total)),
-      color =
-        mode === 'rainbow'
-          ? rainbowLampColorPhase(rainbowPhase)
-          : mode === 'line'
-            ? layer.strokeColor || '#ffffff'
-            : cfg.color || '#ffe600';
+        : wrapLampColorPhase(rainbowIndex / Math.max(1, total));
+      color = rainbowLampColorPhase(rainbowPhase);
+    }
     const visualRadiusBase = baseR * sizeRandom * sizeMorph * Math.max(0.06, Math.sqrt(level)),
       rad = Math.max(0, visualRadiusBase * adaptive.radiusFactor + visualRadiusBase * (audioSize - 1)),
       visualBrightnessBase = baseBrightnessPercent * brightRandom * brightMorph * level,

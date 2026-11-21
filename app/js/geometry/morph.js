@@ -1171,6 +1171,7 @@ function applyProfileToVertexRing(vertexPts, profilePts, R, closedLoop, options 
       const p1 = P[i],
         p2 = P[(i + 1) % P.length];
       const path = scratch.openPaths[i];
+      path.lampCircleEdgeIndex = i;
       path.points = ensurePoints(path.points, profLen);
       if (!Array.isArray(path.cornerFlags)) path.cornerFlags = [];
       path.cornerFlags.length = profLen;

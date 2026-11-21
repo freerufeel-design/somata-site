@@ -289,6 +289,7 @@ function renderLayerGlowPass(frameCtx) {
 window.SomataRenderPassRegistry?.register?.('glow', {
   stage: window.SomataRenderPassRegistry.STAGES.GLOW,
   order: 10,
+  enabledPlan: 'glow',
   run: renderLayerGlowPass,
 });
 

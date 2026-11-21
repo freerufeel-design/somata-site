@@ -814,6 +814,10 @@ const WebGPULampRenderer = (() => {
     return true;
   }
 
+  // Pixel bounds of the ordinary packed quads. Retained GPU paths and trail
+  // history have their own positions and therefore use the full tone pass.
+  let lampMinX = Infinity, lampMinY = Infinity, lampMaxX = -Infinity, lampMaxY = -Infinity;
+
   const CORRIDOR_LAMP_FLOATS = 12,
     CORRIDOR_COPY_FLOATS = 8;
   const corridorBatchPool = [];
@@ -1913,6 +1917,8 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
     frameNow = Number(now) || performance.now();
     lampFrameSerial = (lampFrameSerial + 1) >>> 0;
     instanceCount = 0;
+    lampMinX = lampMinY = Infinity;
+    lampMaxX = lampMaxY = -Infinity;
     frameBlendMode = 'lighter';
     frameBlendModeSet = false;
     frameBlendMixed = false;
@@ -2909,7 +2915,10 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
     noteFrameBlend(cfg);
     const tr = ctx.getTransform?.();
     if (!tr) return false;
-    const scale = Math.hypot(Number(tr.a) || 0, Number(tr.b) || 0);
+    const ma = Number(tr.a) || 0, mb = Number(tr.b) || 0,
+      mc = Number(tr.c) || 0, md = Number(tr.d) || 0,
+      mx = Number(tr.e) || 0, my = Number(tr.f) || 0;
+    const scale = Math.hypot(ma, mb);
     if (!(scale > 1e-9)) return true;
     const style = drawPlan?.preparedStyle || visualPlan?.style || {};
     const softness = Math.max(0, Math.min(150, Number(style.effectiveSoftness) || 0));
@@ -2917,6 +2926,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       typeCode = lampShapeAndHalo(TYPE_CODE[type] ?? 0, style, cfg);
     ensureCapacity(instanceCount + items.length);
     const freezeStartCount = instanceCount;
+    const trails = lampTrailEnabled();
     for (let i = 0; i < items.length; i++) {
       const v = items[i],
         rad = Math.max(0, Number(v.rad) || 0);
@@ -2925,14 +2935,17 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       if (a <= 0.00001) continue;
       const x = Number(v.px) || 0,
         y = Number(v.py) || 0;
-      const px = (Number(tr.a) || 0) * x + (Number(tr.c) || 0) * y + (Number(tr.e) || 0),
-        py = (Number(tr.b) || 0) * x + (Number(tr.d) || 0) * y + (Number(tr.f) || 0);
+      const px = ma * x + mc * y + mx, py = mb * x + md * y + my;
       const vb = Math.max(0, Math.min(200, Number(v.brightness) || 0));
       let outerLocal = lampGradientOuterRadius(rad, softness, type, vb, style.appearance, cfg.outerHaloSize);
       if (type === 'star')
         outerLocal = Math.max(outerLocal, rad * (2.15 + 0.25 * (1 - Math.min(100, softness) / 100)) + 6);
       const outer = Math.max(1, outerLocal * scale),
         body = Math.max(0.03, Math.min(0.93, (rad * scale) / outer));
+      lampMinX = Math.min(lampMinX, px - outer);
+      lampMinY = Math.min(lampMinY, py - outer);
+      lampMaxX = Math.max(lampMaxX, px + outer);
+      lampMaxY = Math.max(lampMaxY, py + outer);
       const rgb = GPUColorCache.rgba(v.color || '#ffffff');
       const base = instanceCount * FLOATS_PER_INSTANCE;
       let o = base;
@@ -2951,7 +2964,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
         instanceFrameHash = lampHashMix(instanceFrameHash, instanceData[base + hi]);
       instanceCount++;
     }
-    if (lampTrailEnabled()) {
+    if (trails) {
       freezeFrameHash = lampHashMix(freezeFrameHash, instanceFrameHash);
       rainFrameHash = lampHashMix(rainFrameHash, instanceFrameHash);
       for (const n of [
@@ -3249,6 +3262,15 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
           { view: toneView, clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' },
         ],
       });
+      if (!trailEnabled && corridorBatchCount === 0 && arcBatchCount === 0 &&
+          Number.isFinite(lampMinX) && Number.isFinite(lampMinY) &&
+          Number.isFinite(lampMaxX) && Number.isFinite(lampMaxY)) {
+        const x = Math.max(0, Math.min(width, Math.floor(lampMinX) - 2));
+        const y = Math.max(0, Math.min(height, Math.floor(lampMinY) - 2));
+        const w = Math.max(0, Math.min(width, Math.ceil(lampMaxX) + 2) - x);
+        const h = Math.max(0, Math.min(height, Math.ceil(lampMaxY) + 2) - y);
+        tonePass.setScissorRect(x, y, w, h);
+      }
       tonePass.setPipeline(tonePipeline);
       tonePass.setBindGroup(0, activeToneBindGroup);
       tonePass.draw(3, 1, 0, 0);

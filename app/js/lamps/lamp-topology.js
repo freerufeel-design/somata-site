@@ -24,7 +24,6 @@ import {
 import { buildOrbitPolylines } from '../geometry/orbit-builder.js';
 import { isSpiralLayer } from '../geometry/spiral/order-params.js';
 import {
-  buildLampCircumferenceAnchors,
   buildLampRenderedAttachmentPaths,
   dedupeLampPoints,
   getLampMorphRenderInfo,
@@ -48,11 +47,12 @@ import {
   nearestLampSegmentRefOnPath,
 } from './lamp-attachment.js';
 import {
+  bindOpenCircleLampEdges,
   capLampPointList,
   collectArbitraryMorphLampPoints,
   collectSmoothCornerLampPoints,
   projectLampPointsToCurrentPolygon,
-  projectReferenceLampPoints,
+  projectMorphKeyLamps,
 } from './lamp-points.js';
 import { lampEffectiveBokeh } from './lamp-visual.js';
 import {
@@ -671,7 +671,33 @@ function markMappedAnglePopulation(mappedAngles, originalAngles) {
     }
   return { present, keyIndex };
 }
-function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach = isLampContourAttachmentEnabled()) {
+// Circle plans live for a morph phase. The angle correspondence is fixed even
+// while the lamps' positions and brightness change on every frame.
+const circleLampCorrespondence = new WeakMap();
+function getCircleLampCorrespondence(pathPlan) {
+  let entry = circleLampCorrespondence.get(pathPlan);
+  if (entry) return entry;
+  const from = pathPlan.from || [];
+  const to = from.map((angle, i) => angle + (Number(pathPlan.delta?.[i]) || 0));
+  const distinct = (angles) => angles.filter((angle, i) =>
+    angles.findIndex((other) => angularDistance(angle, other) < 1e-8) === i,
+  );
+  const srcAngles = pathPlan.lampSourceAngles?.length ? pathPlan.lampSourceAngles : distinct(from);
+  const dstAngles = pathPlan.lampTargetAngles?.length ? pathPlan.lampTargetAngles : distinct(to);
+  entry = {
+    from,
+    to,
+    angularTravel: pathPlan.delta,
+    srcAngles,
+    dstAngles,
+    srcMap: markMappedAnglePopulation(from, srcAngles),
+    dstMap: markMappedAnglePopulation(to, dstAngles),
+  };
+  circleLampCorrespondence.set(pathPlan, entry);
+  return entry;
+}
+
+function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach = isLampContourAttachmentEnabled(), keyMotion = false) {
   const base = state.layers[layerIndex];
   const src = runtimeState.morph.renderSourceLayers?.[layerIndex] || {
     ...base,
@@ -704,18 +730,9 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
       rd = getEffectiveLayerRadius(dst, rs),
       R = rs + (rd - rs) * u;
     for (let pathIndex = 0; pathIndex < (plan?.pathPlans?.length || 0); pathIndex++) {
-      const pp = plan.pathPlans[pathIndex],
-        from = pp.from || [],
-        delta = pp.delta || [];
+      const pp = plan.pathPlans[pathIndex];
+      const { from, to, angularTravel, srcAngles, dstAngles, srcMap, dstMap } = getCircleLampCorrespondence(pp);
       if (!from.length) continue;
-      const to = from.map((a, i) => a + (Number(delta[i]) || 0));
-      const distinct = (angles) => angles.filter((a, i) =>
-        angles.findIndex((b) => angularDistance(a, b) < 1e-8) === i,
-      );
-      const srcAngles = pp.lampSourceAngles?.length ? pp.lampSourceAngles : distinct(from),
-        dstAngles = pp.lampTargetAngles?.length ? pp.lampTargetAngles : distinct(to);
-      const srcMap = markMappedAnglePopulation(from, srcAngles),
-        dstMap = markMappedAnglePopulation(to, dstAngles);
       const sourceKeys = srcAngles.map((a, i) =>
         makeKey({ x: rs * Math.cos(a), y: rs * Math.sin(a) }, pathIndex, i, 'src'),
       );
@@ -725,7 +742,7 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
       for (let i = 0; i < from.length; i++) {
         const sa = from[i],
           ta = to[i],
-          aa = sa + signedAngleDelta(sa, ta) * u;
+          aa = sa + angularTravel[i] * u;
         const x = R * Math.cos(aa),
           y = R * Math.sin(aa);
         const si = Math.max(0, srcMap.keyIndex[i] || 0),
@@ -764,6 +781,7 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
           lampSourcePresent: sourcePresent,
           lampTargetPresent: targetPresent,
           lampAttachFraction: arcFraction,
+          lampCircleSlotCount: from.length,
           lampAttachSourcePoint: sp,
           lampAttachTargetPoint: tp,
           lampAttachSourceFraction: sourceFraction,
@@ -845,7 +863,7 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
             closed,
           )
         : NaN;
-      if (fixedSegmentPoint) {
+      if (fixedSegmentPoint && !keyMotion) {
         x = Number(fixedSegmentPoint.x) || 0;
         y = Number(fixedSegmentPoint.y) || 0;
       } else if (useRadial) {
@@ -1340,16 +1358,21 @@ function collectMorphLampPoints(
     const base = state.layers[layerIndex];
     const info = getLampMorphRenderInfo(layerIndex, t, base);
     const attach = info.roundingFrac > 0 || isLampContourAttachmentEnabled();
-    let points = collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints, attach);
+    let points = collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints, attach, true);
     if (points.length) {
+      let rails;
       if (attach) {
-        const raw = ['topology', 'calm'].includes(state.morph.mode)
+        const topology = ['topology', 'calm'].includes(state.morph.mode);
+        const raw = topology
           ? buildCurrentMorphPathsForLamps(layerIndex, t)
-          : preparedPaths || getCurrentMorphCpuPaths(layerIndex, t, 'lamp-paths');
-        const rails = buildLampRenderedAttachmentPaths(raw, base, info);
-        points = projectReferenceLampPoints(points, rails, base);
+          : base.closedLoop === false ? getCurrentMorphCpuPaths(layerIndex, t, 'lamp-paths')
+            : preparedPaths || getCurrentMorphCpuPaths(layerIndex, t, 'lamp-paths');
+        const visible = preparedRoundedPaths?.length ? preparedRoundedPaths : null;
+        const canonical = !visible || topology ? buildLampRenderedAttachmentPaths(raw, base, info) : null;
+        rails = visible || canonical;
+        points = projectMorphKeyLamps(points, raw, rails, base, canonical);
       }
-      return preserveBlueMorphLampIdentity(layerIndex, points, attach, t);
+      return preserveBlueMorphLampIdentity(layerIndex, points, attach, t, preparedRoundedPaths);
     }
   }
   const linear = getLampEvaluationConfig()?.morphMotionMode === 'linear';
@@ -1401,36 +1424,17 @@ function collectMorphLampPoints(
 
   if (mode === 'key') {
     const exact = linear ? collectTrueLinearKeyLampPoints(layerIndex, motionT, maxPoints) : null;
-    const vertices = exact?.length ? exact : collectSkeletonVertexLampPoints(layerIndex, motionT, maxPoints);
+    let vertices = exact?.length ? exact : collectSkeletonVertexLampPoints(layerIndex, motionT, maxPoints);
+    if (attach && vertices?.length && !circleMode) vertices = bindOpenCircleLampEdges(vertices, lampRawPaths, base);
     if (vertices?.length) {
       let displayed = vertices;
       if (attach) {
-        displayed = projectLampPointsToCurrentPolygon(vertices, attachmentPaths, base, true, circumferenceMode, lampRawPaths);
-        // Both cycles share the authored endpoint, although their moving
-        // rails may have different winding, tessellation and corner counts.
-        const edgeDistance = Math.min(t, 1 - t);
-        if (edgeDistance < 0.15) {
-          const endpoint = (t < 0.5 ? runtimeState.morph.renderSourceLayers : runtimeState.morph.renderTargetLayers)?.[layerIndex];
-          const anchors = endpoint && buildLampCircumferenceAnchors(endpoint, null, maxPoints, true);
-          const u = Math.max(0, edgeDistance / 0.15);
-          const weight = 1 - u * u * (3 - 2 * u);
-          const orbits = new Set(anchors?.map(q => q.pathIndex));
-          if (anchors?.length) displayed = displayed.map((p, i) => {
-            const slot = vertices[i];
-            const v = (t < 0.5 ? slot.lampAttachSourcePoint : slot.lampAttachTargetPoint) || slot;
-            let nearest, best = Infinity;
-            for (const q of anchors) {
-              if (q.pathIndex !== slot.pathIndex && orbits.has(slot.pathIndex)) continue;
-              const d = (q.x - v.x) ** 2 + (q.y - v.y) ** 2;
-              if (d < best) { best = d; nearest = q; }
-            }
-            return nearest ? { ...p, x: p.x + (nearest.x - p.x) * weight,
-              y: p.y + (nearest.y - p.y) * weight } : p;
-          });
-        }
+        const canonical = trueLinearTopology && authoritativeAttachment
+          ? buildLampRenderedAttachmentPaths(lampRawPaths, base, morphRenderInfo) : attachmentPaths;
+        displayed = projectMorphKeyLamps(vertices, lampRawPaths, attachmentPaths, base, canonical);
       }
       // Carry identity using the visible centre at the end of the trajectory.
-      return preserveBlueMorphLampIdentity(layerIndex, capLampPointList(displayed, maxPoints), true, t);
+      return preserveBlueMorphLampIdentity(layerIndex, capLampPointList(displayed, maxPoints), attach, t, authoritativeAttachment);
     }
   }
   if (getLampEvaluationConfig()?.morphMotionMode === 'ghost' && mode === 'key' && rawPaths?.length) {

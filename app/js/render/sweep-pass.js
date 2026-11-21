@@ -997,6 +997,7 @@ SomataFeatureHost.provide('sweep', 'sceneAdmission', (frameCtx) => {
 window.SomataRenderPassRegistry?.register?.('sweep', {
   stage: window.SomataRenderPassRegistry.STAGES.POST_BASE,
   order: 50,
+  enabledPlan: 'sweep',
   run: renderLayerSweepPass,
 });
 

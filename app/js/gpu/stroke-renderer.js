@@ -3848,6 +3848,34 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
               ? 4
               : 0;
   }
+  function strokeCompositeRect(commands, roles) {
+    const contours = getCommandSegmentMeta(commands).contours;
+    if (!contours?.length) return null;
+    let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+    for (const { bounds, command } of contours) {
+      if (!bounds || command.__variableWidthSpiral) return null;
+      const width = Math.max(0.002, Number(command.screenLineWidth) || 1);
+      let reach = width * 0.5;
+      for (const spec of roles) {
+        const radius = spec.mode === 'outline' || spec.mode === 'coreInset'
+          ? Math.max(0, Number(spec.extraLocal) || 0) * width / Math.max(0.001, Number(spec.baseLineWidth) || 1)
+          : Math.max(0.1, Number(spec.radiusPx) || 1);
+        reach = Math.max(reach, width * 0.5 + radius);
+      }
+      // The segment quads can extend in both tangent and normal directions.
+      // Allow for their diagonal, raster edge and linear texture filtering.
+      const pad = Math.ceil(Math.SQRT2 * (reach + 2.5)) + 2;
+      left = Math.min(left, bounds.minX - pad);
+      top = Math.min(top, bounds.minY - pad);
+      right = Math.max(right, bounds.maxX + pad);
+      bottom = Math.max(bottom, bounds.maxY + pad);
+    }
+    const x = Math.max(0, Math.min(mainCanvas.width, Math.floor(left)));
+    const y = Math.max(0, Math.min(mainCanvas.height, Math.floor(top)));
+    const w = Math.max(0, Math.min(mainCanvas.width, Math.ceil(right)) - x);
+    const h = Math.max(0, Math.min(mainCanvas.height, Math.ceil(bottom)) - y);
+    return w * h < mainCanvas.width * mainCanvas.height ? [x, y, w, h] : null;
+  }
   function renderLayerBatch(commands, specs, sceneOpt = null) {
     if (
       !commands?.length ||
@@ -3923,7 +3951,8 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
       let sceneCombined = false,
         sceneTexture = null,
         outlineInScene = false,
-        nativeFillInScene = false;
+        nativeFillInScene = false,
+        compositeRect = null;
       if (wantsScene) {
         if (sceneOpt?.nativeFillMesh && sceneOpt?.nativeFillFrameCtx && layerSceneNativeFillTexture) {
           const fillRec = FillGPURenderer.encodeMeshToTexture(
@@ -4012,6 +4041,11 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                 },
               ],
             });
+          if (!sceneOpt?.fillMask && !nativeFillInScene && !sceneOpt?.preserveExistingScene &&
+              !rec.bezierSpiral && !rec.indexedMorph) {
+            compositeRect = strokeCompositeRect(commands, filtered);
+            if (compositeRect) scenePass.setScissorRect(...compositeRect);
+          }
           if (entry.bundle) {
             scenePass.executeBundles(entry.list);
             layerSceneCompositeBundleExecutes++;
@@ -4035,6 +4069,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
         roles,
         sceneCombined,
         sceneTexture,
+        compositeRect,
         outlineInScene,
         nativeFillInScene,
         preserveExistingScene: sceneOpt?.preserveExistingScene === true,
@@ -4335,6 +4370,9 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
         pass = enc.beginRenderPass({
           colorAttachments: [{ view: frameSceneView, loadOp: 'load', storeOp: 'store' }],
         });
+      // An additional effect may have drawn outside the stroke rectangle.
+      const rect = extraCommands?.length ? null : rec.batch?.compositeRect;
+      if (rect) pass.setScissorRect(...rect);
       if (frameSceneCompositeBundle) {
         pass.executeBundles(frameSceneCompositeBundleList);
         renderBundleExecutes++;

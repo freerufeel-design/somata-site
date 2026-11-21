@@ -21,9 +21,9 @@
     <script defer src="app/js/bootstrap/boot-guard.js?v=14.2-open-spine-v1-r15"></script>
     <script defer src="app/js/bootstrap/error-overlay.js?v=14.2-open-spine-v1-r15"></script>
     <!-- Application entry (ES modules). Browsers refuse modules opened from disk (file://) or served as
-         text/plain (python -m http.server on Windows); start.bat (serve.ps1) / start.command (serve.py) serve them correctly. -->
+         text/plain (python -m http.server on Windows); Somata_Start / app/start.command serve them correctly. -->
     <script type="module" src="app/js/main.js?v=16.1" data-launch-hint
-        onerror="var d=document.createElement('div');d.id='somataLaunchHint';d.style.cssText='position:fixed;inset:auto 0 0 0;margin:auto;top:0;width:min(560px,90vw);height:fit-content;padding:22px 26px;background:#111827;color:#e5e7eb;border:1px solid #f59e0b;border-radius:12px;font:15px/1.5 system-ui,sans-serif;z-index:2147483647;box-shadow:0 20px 60px rgba(0,0,0,.6)';d.innerHTML='<b style=&quot;color:#fbbf24&quot;>Somata не запустилась: браузер отказался загружать модули.</b><br><br>Так бывает, если открыть index.html прямо с диска или через <code>python -m http.server</code> на Windows (он отдаёт .js с неверным типом).<br><br>Для локального запуска откройте <b>start.bat</b> (Windows) или <b>start.command</b> (macOS) в папке Somata: он запустит маленький сервер и откроет эту страницу. На хостинге ничего делать не нужно.';document.body.appendChild(d);"></script>
+        onerror="var d=document.createElement('div');d.id='somataLaunchHint';d.style.cssText='position:fixed;inset:auto 0 0 0;margin:auto;top:0;width:min(560px,90vw);height:fit-content;padding:22px 26px;background:#111827;color:#e5e7eb;border:1px solid #f59e0b;border-radius:12px;font:15px/1.5 system-ui,sans-serif;z-index:2147483647;box-shadow:0 20px 60px rgba(0,0,0,.6)';d.innerHTML='<b style=&quot;color:#fbbf24&quot;>Somata не запустилась: браузер отказался загружать модули.</b><br><br>Так бывает, если открыть index.html прямо с диска или через <code>python -m http.server</code> на Windows (он отдаёт .js с неверным типом).<br><br>Для локального запуска откройте <b>Somata_Start</b> (Windows) или <b>app/start.command</b> (macOS) в папке Somata: он запустит маленький сервер и откроет эту страницу. На хостинге ничего делать не нужно.';document.body.appendChild(d);"></script>
 
 </head>
 <body>
@@ -1046,7 +1046,7 @@
                             <button type="button" data-lamp-motion="key" title="Следовать за опорой профиля на своём участке контура">Ключевой</button>
                         </div>
                         <div id="lampMorphInertiaRow" class="control-row" style="margin-top:6px;" title="−100% — сразу на целевую долю своего контура; 0% — равномерный ход; положительные значения — ускорение к концу фазы, отрицательные — замедление у цели."><div class="row-label"><span>Инерция лампочек</span><span id="lampMorphInertiaText" class="text-mono">0%</span></div><input id="lampMorphInertia" type="range" min="-100" max="100" step="5" value="0"></div>
-                        <div class="lamp-morph-motion-note">«Линейный» использует только реальные ключевые лампы: новые рождаются в родительской точке и плавно проявляются до своей целевой точки/границы радиуса. «Призрачный» сохраняет прежнюю логику v250 по ближайшей ключевой точке. «Плавный» двигается с постоянной скоростью вдоль контура. «Динамический» использует догоняющее движение. Общая инерция действует во всех четырёх режимах: −100% — сразу к цели, 0% — движение по фазе, +100% — задержка до конца.</div>
+                        <div class="lamp-morph-motion-note">«Линейный» ведёт лампы по траектории фазы. «Ключевой» держит лампу у её опорной точки на своём участке линии. При прилипании центр лампы остаётся на линии.</div>
                     </div>
                     
                     <label class="display-enable-toggle lamp-compact-toggle" title="Держит лампочки непосредственно на итоговой нарисованной линии после spline-скругления, в том числе во время Morphing"><input id="lampSnapToContour" type="checkbox" checked><span>Прилипание к линии</span></label>

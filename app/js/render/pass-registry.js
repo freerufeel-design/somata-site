@@ -21,6 +21,7 @@ const SomataRenderPassRegistry = (() => {
         stage: Number(spec.stage) || STAGES.POST_BASE,
         order: Number(spec.order) || 0,
         run: spec.run,
+        enabledPlan: spec.enabledPlan || null,
         fallback: typeof spec.fallback === 'function' ? spec.fallback : null,
       }),
     );
@@ -62,6 +63,9 @@ const SomataRenderPassRegistry = (() => {
     const list = orderedStage(stageId),
       out = [];
     for (const row of list) {
+      // Inactive optional effects need neither an isolated feature scope nor
+      // a Canvas state push/pop. The effect planner already made the decision.
+      if (row.enabledPlan && !frameCtx?.effectsPlan?.[row.enabledPlan]?.enabled) continue;
       stats.runs++;
       try {
         out.push(invoke(row, frameCtx));
