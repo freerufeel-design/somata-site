@@ -718,33 +718,28 @@ export function projectMorphKeyLamps(points, semanticPaths, rails, layer, canoni
   if (slots) return points.map(p => {
     const n = p.lampCircleSlotCount;
     const bindingKey = [layer.id, 'open-visible-edge', p.lampId].join(':');
-    let binding = lampMotionRuntime.snap.get(bindingKey);
-    {
-      let best = Infinity, owner, endpoint;
+    const previous = lampMotionRuntime.snap.get(bindingKey);
+    let best = Infinity, owner, endpoint, hit;
+    for (let i = 0; i < rails.length; i++) {
+      const rail = rails[i];
+      if (!rail.points?.length) continue;
+      const support = nearestLampFractionOnPath(p, rail);
+      const gap = Math.hypot(support.point.x - p.x, support.point.y - p.y);
       for (const side of [1, -1]) {
         const other = slots.get(p.pathIndex + ':' + ((p.vertexIndex + side + n) % n));
         if (!other) continue;
-        for (let i = 0; i < rails.length; i++) {
-          const pts = rails[i].points;
-          if (!pts?.length) continue;
-          const first = pts[0], last = pts[pts.length - 1];
-          const start = side === 1 ? first : last, end = side === 1 ? last : first;
-          const anchorGap = Math.hypot(start.x - p.x, start.y - p.y);
-          const cost = anchorGap + 0.15 * Math.hypot(end.x - other.x, end.y - other.y);
-          const preferred = binding?.phase === phase && binding.endpoint === Number(side < 0);
-          const score = cost - (preferred ? Math.hypot(p.x - other.x, p.y - other.y) * 0.2 : 0);
-          if (score < best - 1e-6) { best = score; owner = i; endpoint = Number(side < 0); }
+        const next = nearestLampFractionOnPath(other, rail);
+        const neighborGap = Math.hypot(next.point.x - other.x, next.point.y - other.y);
+        const score = gap + neighborGap * 0.05;
+        const tie = Math.abs(score - best) < 1e-6 && previous?.phase === phase &&
+          previous.owner === i && previous.endpoint === Number(side < 0);
+        if (score < best - 1e-6 || tie) {
+          best = score; owner = i; endpoint = Number(side < 0); hit = support;
         }
       }
-      if (owner === undefined) return { ...p, lampLevel: 0 };
-      binding = { phase, count: rails.length, owner, endpoint, lastSeen: now };
-      lampMotionRuntime.snap.set(bindingKey, binding);
     }
-    binding.lastSeen = now;
-    const { owner, endpoint } = binding;
-    const owned = rails[owner];
-    const hit = owned.closed ? nearestLampFractionOnPath(p, owned)
-      : nearestLampOnPathInterval(p, owned, endpoint * 0.5, 0.5 + endpoint * 0.5, endpoint);
+    if (!hit) return { ...p, lampLevel: 0 };
+    lampMotionRuntime.snap.set(bindingKey, { phase, owner, endpoint, lastSeen: now });
     return { ...p, ...hit.point, pathIndex: owner, lampContourFraction: hit.fraction, __lampVisualProfileAttached: true };
   });
   return bindOpenCircleLampEdges(points, semanticPaths, layer).map((p) => {
