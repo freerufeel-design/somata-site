@@ -1,6 +1,6 @@
 {
   "name": "somata",
-  "version": "16.1.0",
+  "version": "16.4.2",
   "private": true,
   "description": "Somata — браузерная среда процедурной графики, морфинга и аудиореактивных композиций (WebGPU).",
   "type": "module",

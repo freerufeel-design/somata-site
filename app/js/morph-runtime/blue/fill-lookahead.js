@@ -21,6 +21,38 @@ const smooth = (x) => {
 };
 const gcd = (a, b) => (b === 0 ? Math.abs(a) : gcd(b, a % b));
 
+// Boundary-only handoffs must be continuous on both sides of the seam.
+// A directional profile window controls the corresponding leg; the opposite
+// leg uses the same share, in the adjacent phase. Whole-phase spiral envelopes
+// use half a phase per leg (see spiralFillBoundaryAlpha).
+export function fillBoundaryWindow(morph, whole = 1) {
+  const mode = morph?.profileModeTransition;
+  if (mode !== 'start' && mode !== 'end' && mode !== 'second') return whole;
+  const pct = Number(morph?.profileModeTransitionPercent ?? 20);
+  return Number.isFinite(pct) ? clamp01(pct / 100) : 0.2;
+}
+
+export function spiralFillTransitionProgress(t, morph) {
+  let u=clamp01(t);
+  const mode=morph?.profileModeTransition;
+  if(mode==='start'||mode==='second'||mode==='end') {
+    const w=fillBoundaryWindow(morph);
+    if(w===0) return mode==='end' ? (u>=1?1:0) : 1;
+    u=clamp01(mode==='end'?(u-(1-w))/w:u/w);
+  }
+  return smooth(u);
+}
+
+export function spiralFillBoundaryAlpha(t, morph) {
+  const phase = clamp01(t);
+  const w = Math.min(0.5, fillBoundaryWindow(morph, 0.5));
+  if (w === 0) return 1; // explicit instantaneous transition, like the profile UI
+  // A single current mesh has no old/new region IDs. Both legs meet at zero.
+  // A single mesh cannot finish two longer ramps in one phase; cap each at
+  // half a phase so the selected fill opacity is still reached.
+  return smooth(Math.min(phase, 1 - phase) / w);
+}
+
 // «Лишний» контур морфа. При слиянии орбит (у пути нет пары в цели) он к концу фазы совпадает с
 // соседним и на стыке исчезает; при разделении (нет пары в источнике) он в начале фазы — дубль
 // соседнего. В режиме even-odd совпадающая пара контуров гасит заливку внутри себя (центр звезды
@@ -34,21 +66,21 @@ export function fillGhostWeight(
   { sourcePresent = true, targetPresent = true, splitDone = false, window = FILL_LOOKAHEAD_WINDOW } = {},
 ) {
   if (sourcePresent !== false && targetPresent !== false) return null;
-  const w = Math.max(0.01, Math.min(0.5, Number(window) || FILL_LOOKAHEAD_WINDOW));
+  const w = Number.isFinite(Number(window)) ? clamp01(window) : FILL_LOOKAHEAD_WINDOW;
   const phase = clamp01(t);
   if (targetPresent === false) {
-    let g = 1 - smooth((phase - (1 - w)) / w);
-    if (sourcePresent === false && !splitDone) g *= smooth(phase / w);
+    let g = w === 0 ? (phase < 1 ? 1 : 0) : 1 - smooth((phase - (1 - w)) / w);
+    if (sourcePresent === false && !splitDone) g *= w === 0 ? 1 : smooth(phase / w);
     return { g, dir: -1 };
   }
-  return { g: splitDone ? 1 : smooth(phase / w), dir: 1 };
+  return { g: splitDone || w === 0 ? 1 : smooth(phase / w), dir: 1 };
 }
 
 // Вес дублей, которые орбита получит в начале СЛЕДУЮЩЕЙ фазы (её разделение по плану): они
 // входят в заливку уже в хвосте текущей фазы, чтобы на стыке ничего не менялось.
 export function fillSplitAheadWeight(t, window = FILL_LOOKAHEAD_WINDOW) {
-  const w = Math.max(0.01, Math.min(0.5, Number(window) || FILL_LOOKAHEAD_WINDOW));
-  return smooth((clamp01(t) - (1 - w)) / w);
+  const w = Number.isFinite(Number(window)) ? clamp01(window) : FILL_LOOKAHEAD_WINDOW;
+  return w === 0 ? (clamp01(t) >= 1 ? 1 : 0) : smooth((clamp01(t) - (1 - w)) / w);
 }
 
 // Число активных орбит фигуры {N/K} (как в buildCircleAnchors).

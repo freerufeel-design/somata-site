@@ -14,7 +14,8 @@ import {
 import { getRoundingStrength } from '../core/palette.js';
 import { invalidateLayerEffect } from '../core/render-runtime.js';
 import { requestMainCanvasRender } from '../core/scheduler.js';
-import { runtimeState, state } from '../core/state.js';
+import { runtimeState, state, somataWithFourierLayer } from '../core/state.js';
+import { prepareFourierPathList } from '../geometry/fourier.js';
 import { getLayerStrokeWidthMultiplier } from './motion.js';
 import { SomataFrameContourService, getLayerFrameAuthoritativePaths } from '../geometry/frame-contour.js';
 import {
@@ -37,6 +38,8 @@ import { syncWebOutlineUI } from '../ui/effects-sidebar.js';
 
 function prepareWebVisiblePaths(paths, layer) {
   const source = Array.isArray(paths) ? paths : [];
+  if (layer?.roundingCornerType === 'fourier')
+    return somataWithFourierLayer(layer, () => prepareFourierPathList(source));
 
   if (
     source?._exactSpiralEffectRail === true ||

@@ -66,6 +66,7 @@ const KERNEL_MODULES = [
   'js/ui/profile-editor.js',
   'js/geometry/artwork-extent.js',
   'js/geometry/fourier.js',
+  'js/geometry/straight-profile-bridges.js',
   'js/geometry/spline-rounding.js',
   'js/geometry/spiral/polyline.js',
   'js/geometry/spiral/fillets.js',
@@ -98,6 +99,7 @@ run(
 `,
   'test state',
 );
+run(declarations('getMorphReferenceRadius', 'getLayerReferenceRadius'), 'reference circle');
 run(KERNEL_MODULES.map(moduleAsScript).join('\n'), 'geometry kernel');
 load('js/geometry/spline.js');
 run(declarations('resolveExactPolygonMorphEndpoint'), 'authored profile resolver');

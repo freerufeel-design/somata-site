@@ -40,7 +40,6 @@ import {
   setFourierMode,
   setLayerMainLineMode,
   setSidebarMode,
-  syncFourierStrengthUI,
   syncLampSettingsUI,
   syncMorphModeDependentUI,
   syncMotionUI,
@@ -94,7 +93,7 @@ import {
 } from '../core/palette.js';
 import { invalidateLayerGeometry } from '../core/render-runtime.js';
 import { requestMainCanvasRender } from '../core/scheduler.js';
-import { runtimeState, somataFourierSyncMorphSnapshots, state } from '../core/state.js';
+import { runtimeState, state } from '../core/state.js';
 import {
   ensureMotionAnimation,
   getMotionRotationTargets,
@@ -160,7 +159,7 @@ import { createMorphPlaybackModule } from '../morph-runtime/blue/playback.js';
 import { createMorphUIModule } from '../morph-runtime/blue/morph-ui.js';
 import { positionFloatingPanelNearTrigger } from './floating-panels.js';
 import { noteSuppressedError } from '../core/suppressed-errors.js';
-import { snapLampAdaptiveExponent } from '../lamps/adaptive-exponent.js';
+import { snapLampAdaptiveExponent, normalizeLampAdaptiveExponentMultiplier } from '../lamps/adaptive-exponent.js';
 
 function bindPresetRandomMorphControls(bindingContext) {
   const getActiveLayer = bindingContext.getActiveLayer;
@@ -183,7 +182,7 @@ function bindPresetRandomMorphControls(bindingContext) {
       spiralRoundSeams: l.spiralRoundSeams !== false,
 
       spiralFillEnabled: l.spiralFillEnabled === true,
-      spiralFillType: ['interwinding', 'mathematical'].includes(l.spiralFillType)
+      spiralFillType: ['chopped', 'mathematical', 'bandXor'].includes(l.spiralFillType)
         ? l.spiralFillType
         : 'chopped',
       splineRenderMode: normalizeSplineRenderMode(l.splineRenderMode),
@@ -1965,23 +1964,6 @@ function bindPresetRandomMorphControls(bindingContext) {
   document
     .getElementById('fourierModeToggle')
     ?.addEventListener('change', (e) => setFourierMode(e.target.checked === true, false));
-  const syncFourierStrengthFromUI = () => {
-    const strength = Math.max(
-      0,
-      Math.min(100, Number(document.getElementById('fourierStrength')?.value ?? 50)),
-    );
-    const targets =
-      state.masterLayerEdit === true || hasMultiLayerSelection() ? getLayerEditTargets() : [getActiveLayer()];
-    for (const layer of targets) {
-      if (!layer) continue;
-      layer.fourierStrength = strength;
-      invalidateLayerGeometry(layer, 'fourier-strength');
-      somataFourierSyncMorphSnapshots(layer, 'fourierStrength');
-    }
-    syncFourierStrengthUI();
-    requestMainCanvasRender();
-  };
-  document.getElementById('fourierStrength')?.addEventListener('input', syncFourierStrengthFromUI);
   const updateMotionFromUI = () => {
     const m = normalizeMotionState();
     const enabled = document.getElementById('motionRotationEnabled')?.checked === true;
@@ -3084,10 +3066,12 @@ function bindPresetRandomMorphControls(bindingContext) {
       }
       requestMainCanvasRender();
     });
-  const updateLampStateFromUI = () => {
+  const updateLampStateFromUI = (eventOrId) => {
+    const id = typeof eventOrId === 'string' ? eventOrId : eventOrId?.currentTarget?.id;
+    if (!id) return;
     const targets = getLampConfigTargets();
     if (!targets.length) return;
-    const sample = targets[0];
+    const sample = getActiveLampConfig() || targets[0];
     const patch = {
       color: document.getElementById('lampColor')?.value || sample.color,
       webgl: true,
@@ -3135,6 +3119,7 @@ function bindPresetRandomMorphControls(bindingContext) {
         Number(document.getElementById('lampBrightnessVariationMultiplier')?.value) || 0,
       ),
       adaptiveBrightness: document.getElementById('lampAdaptiveBrightness')?.checked !== false,
+      adaptiveAudio: document.getElementById('lampAdaptiveAudio')?.checked === true,
       extinguishIntersections: document.getElementById('lampExtinguishIntersections')?.checked === true,
       intersectionDistance: Number(document.getElementById('lampIntersectionDistance')?.value ?? 50),
       adaptiveAdjustBrightness: document.getElementById('lampAdaptiveAdjustBrightness')?.checked === true,
@@ -3147,6 +3132,7 @@ function bindPresetRandomMorphControls(bindingContext) {
         Number(document.getElementById('lampAdaptiveStrengthMultiplier')?.value) || 0,
       ),
       adaptiveExponent: snapLampAdaptiveExponent(document.getElementById('lampAdaptiveExponent')?.value),
+      adaptiveExponentMultiplier: normalizeLampAdaptiveExponentMultiplier(document.getElementById('lampAdaptiveExponentMultiplier')?.value),
       adaptiveAutoExponent: document.getElementById('lampAdaptiveAutoExponent')?.checked === true,
       adaptiveFadeSec: Math.max(0, Number(document.getElementById('lampAdaptiveFadeSec')?.value) || 0),
       morphEnabled: false,
@@ -3154,11 +3140,17 @@ function bindPresetRandomMorphControls(bindingContext) {
       morphBrightness: 0,
       calmMode: false,
     };
-    const contour = document.getElementById('lampSnapToContour')?.checked !== false;
-    for (const cfg of targets) {
-      Object.assign(cfg, patch);
-      withLampConfig(cfg, () => setLampContourAttachmentEnabled(contour));
-    }
+    const field = id.startsWith('lamp') ? id[4]?.toLowerCase() + id.slice(5) : '';
+    // Do not read back and overwrite unrelated fields from a stale sidebar.
+    // This includes Master: each physical layer receives precisely this field,
+    // even if the selected source already has the requested value.
+    if (id === 'lampSnapToContour') {
+      const contour = document.getElementById(id)?.checked !== false;
+      for (const cfg of targets) withLampConfig(cfg, () => setLampContourAttachmentEnabled(contour));
+    } else if (Object.hasOwn(patch, field)) {
+      if (['morphEnabled', 'morphSize', 'morphBrightness'].includes(field)) return;
+      for (const cfg of targets) cfg[field] = patch[field];
+    } else return;
     syncLampSettingsUI();
     requestMainCanvasRender();
   };
@@ -3183,12 +3175,14 @@ function bindPresetRandomMorphControls(bindingContext) {
     'lampAdaptiveStrengthMultiplier',
     'lampIntersectionDistance',
     'lampAdaptiveExponent',
+    'lampAdaptiveExponentMultiplier',
     'lampAdaptiveFadeSec',
     'lampMorphSize',
     'lampMorphBrightness',
   ].forEach((id) => document.getElementById(id)?.addEventListener('input', updateLampStateFromUI));
   [
     'lampAdaptiveBrightness',
+    'lampAdaptiveAudio',
     'lampExtinguishIntersections',
     'lampAdaptiveAdjustBrightness',
     'lampAdaptiveAutoExponent',
@@ -3201,7 +3195,7 @@ function bindPresetRandomMorphControls(bindingContext) {
       const box = document.getElementById('lampAdaptiveAdjustBrightness');
       if (!box) return;
       box.checked = btn.dataset.lampAdaptiveChannel === 'light';
-      updateLampStateFromUI();
+      updateLampStateFromUI('lampAdaptiveAdjustBrightness');
     }),
   );
   document.getElementById('lampFreezeLight')?.addEventListener('change', (e) => {
@@ -3381,7 +3375,7 @@ function bindPresetRandomMorphControls(bindingContext) {
     lampMotionRuntime.profileAttach?.clear?.();
     lampMotionRuntime.corners.clear();
     lampAnchorCache.delete(getActiveLayer?.());
-    updateLampStateFromUI();
+    updateLampStateFromUI('lampSnapToContour');
   });
 
   document.querySelectorAll('[data-lamp-position]').forEach((btn) =>
@@ -3401,9 +3395,9 @@ function bindPresetRandomMorphControls(bindingContext) {
   );
   document.querySelectorAll('[data-lamp-motion]').forEach((btn) =>
     btn.addEventListener('click', () => {
-      const m = ['linear', 'key'].includes(btn.dataset.lampMotion)
+      const m = ['linear', 'key', 'stable'].includes(btn.dataset.lampMotion)
         ? btn.dataset.lampMotion
-        : 'linear';
+        : 'key';
       for (const cfg of getLampConfigTargets()) cfg.morphMotionMode = m;
       lampMotionRuntime.snap.clear();
       lampMotionRuntime.profileAttach?.clear?.();
@@ -3542,7 +3536,8 @@ function bindRandomPanelAndMorphRebaseHooks(bindingContext) {
     // A manual spiral-order edit has its OWN clock and geometry
     // rail. The generic capture-phase sidebar transaction must not
     // enqueue a deferred Blue rebase for this one control.
-    if (e.target?.closest?.('#paramSpiralOrder')) return;
+    if (e.target?.closest?.('#paramSpiralOrder, #btnResetProfile')) return;
+    if (e.target?.closest?.('#testMorphDuration') && document.getElementById('testMorphSyncWithMorph')?.checked) return;
     if (!runtimeState.morph.active || e.target.closest?.('#profileCanvas')) return;
     const source = state.layers.find((l) => l.id === state.activeLayerId);
     if (!source) return;

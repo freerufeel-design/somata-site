@@ -4,7 +4,9 @@ import { somataFourierActive, state } from '../core/state.js';
 import { getLayerGeometryContract } from '../geometry/kernel.js';
 import { isSpiralLayer } from '../geometry/spiral/order-params.js';
 import { WebGPUStrokeRenderer } from '../gpu/stroke-renderer.js';
-import { getFrameGLStrokeCommands } from './stroke-command-cache.js';
+import { LampGPURenderer } from '../gpu/lamp-renderer.js';
+import { fourierLampPlanEligible, fourierLampSingleRail } from '../gpu/fourier-lamp-carrier.js';
+import { getFrameGLStrokeCommands, recordGpuFourierCommands, gpuFourierCorridorStatus } from './stroke-command-cache.js';
 import { SomataFrameContourService } from '../geometry/frame-contour.js';
 import { SomataFeatureHost } from './feature-host.js';
 import { SomataEffectStackOrder } from './pass-registry.js';
@@ -12,6 +14,20 @@ import { SomataLayerSceneService } from './layer-scene-service.js';
 import { SomataGeometryRoleService } from './geometry-role-service.js';
 import { SomataFillPassService } from './fill-pass.js';
 
+function gpuFourierBatchIneligible(frameCtx, specs, contract, sharedAuthority, hiddenCarrier) {
+  if (globalThis.__somataGpuFourierEnabled === false) return 'disabled';
+  const layer = frameCtx.layer, graph = frameCtx.consumerDemand?.renderGraph || frameCtx.renderGraph;
+  if (sharedAuthority || hiddenCarrier || frameCtx.lineProfileStrokeOnly || frameCtx._glStrokeCommandFrameId === frameCtx.frameId) return 'shared-cpu-carrier';
+  if (!frameCtx.lineDisplayEnabled || state.tunnel?.active || state.showRoundingGuides) return 'line-policy';
+  if (!['static','light-static','blue-prepared','blue-anchor-linear','blue-circle-slide','manual-prepared'].includes(frameCtx.geometryPlan?.kind)) return 'special-geometry-route';
+  if (layer.fill === true || layer.spiralFillEnabled === true || contract?.fillRequested || layer.geometryCircles?.enabled || frameCtx.effectLayer?.geometryCircles?.enabled) return 'fill-or-geometry-circles';
+  const lamps = graph?.passes.some(p=>p.name==='lamps') && fourierLampPlanEligible(frameCtx,state,LampGPURenderer.isWebGPUReady());
+  if (!graph || graph.passes.some(p=>p.name!=='base' && !(lamps && p.name==='lamps')) || (!lamps && graph.needsCpuPath) || graph.needsCanvas || graph.needsApproxArc || graph.needsExactArc || graph.needsFill || graph.needsCpuPackedTopology) return 'additional-contour-consumer';
+  if (Object.entries(frameCtx.effectsPlan || {}).some(([name,p])=>p?.error || (p?.enabled === true && !(lamps && name==='lamps')))) return 'effect-enabled';
+  if (specs.length !== 1 || specs[0].role !== 'base') return 'stroke-role';
+  if (!WebGPUStrokeRenderer.fourierComputeReady()) return 'compute-warming-or-unavailable';
+  return '';
+}
 const SomataStrokeBatchService = (() => {
   const stats = {
     prepares: 0,
@@ -25,6 +41,9 @@ const SomataStrokeBatchService = (() => {
     fourierNativeCommands: 0,
     fourierIndependentSubpaths: 0,
     lastFourierGpu: null,
+    fourierComputeBatches: 0,
+    fourierComputeFallbacks: 0,
+    lastFourierComputeDecision: null,
   };
   function fail(reason, frameCtx, extra = {}) {
     stats.lastFailure = {
@@ -108,7 +127,13 @@ const SomataStrokeBatchService = (() => {
       stats.nativeGeometrySkips++;
       return null;
     }
-    if (state.tunnel?.active === true) return fail('corridor-owns-base', frameCtx);
+    if (state.tunnel?.active === true) {
+      if (somataFourierActive(frameCtx.layer)) {
+        // Corridor has a separate resident-master selector and counters.
+        stats.lastFourierComputeDecision = {frameId:frameCtx.frameId,layerId:frameCtx.layer?.id,reason:'corridor-dispatch'};
+      }
+      return fail('corridor-owns-base', frameCtx);
+    }
     WebGPUStrokeRenderer.warmup();
     if (!WebGPUStrokeRenderer.isReady())
       return fail('webgpu-stroke-not-ready', frameCtx, {
@@ -123,6 +148,30 @@ const SomataStrokeBatchService = (() => {
           };
         })(),
       });
+    if (somataFourierActive(frameCtx.layer)) {
+      const gpuSpecs = roleSpecs(frameCtx);
+      const reason = gpuFourierBatchIneligible(frameCtx, gpuSpecs, getLayerGeometryContract(frameCtx), sharedAuthority, hiddenGraffitiCarrier);
+      stats.lastFourierComputeDecision = { frameId:frameCtx.frameId, layerId:frameCtx.layer?.id, reason };
+      if (!reason) {
+        const gpuCommands = recordGpuFourierCommands(frameCtx);
+        const wantsLamps = frameCtx.effectsPlan?.lamps?.enabled === true;
+        const lampRail = wantsLamps ? fourierLampSingleRail(gpuCommands) : null;
+        const gpuBatch = gpuCommands && (!wantsLamps || lampRail) && WebGPUStrokeRenderer.renderLayerBatch(gpuCommands, gpuSpecs, {
+          uniformKey: `${frameCtx.layerIndex}:${String(frameCtx.layer?.id || 'layer')}`,
+          preserveExistingScene: Boolean(SomataLayerSceneService.resident(frameCtx)?.texture),
+          ...sceneOptions(frameCtx), gpuFourier:true, fourierLampRail:lampRail,
+        });
+        if (gpuBatch?.gpuFourier && gpuBatch.roles?.has('base')) {
+          frameCtx._webgpuStrokeBatch = gpuBatch;
+          stats.batches++; stats.fourierComputeBatches++; stats.lastFailure = null;
+          stats.roleSpecs += gpuSpecs.length; stats.lastRoles = gpuSpecs.map(s=>s.role);
+          stats.lastFourierComputeDecision.reason = 'resident-compute';
+          return gpuBatch;
+        }
+        stats.lastFourierComputeDecision.reason = 'unsupported-recording-or-encode';
+      }
+      stats.fourierComputeFallbacks++;
+    }
     const commands = sharedAuthority
       ? sharedRecord.commands
       : getFrameGLStrokeCommands(frameCtx, hiddenGraffitiCarrier);
@@ -149,7 +198,7 @@ const SomataStrokeBatchService = (() => {
       sceneFlags = sceneOptions(frameCtx);
     const residentScene = SomataLayerSceneService.resident(frameCtx);
     const sceneOpt = {
-      uniformKey: String(frameCtx.layer?.id || `layer-${frameCtx.layerIndex}`),
+      uniformKey: `${frameCtx.layerIndex}:${String(frameCtx.layer?.id || "layer")}`,
       fillMask: orderedFill ? null : fill?.sceneFillMask || null,
       fillStyle: fill?.fillStyle || null,
       nativeFillMesh: orderedFill ? null : fill?.sceneNativeFill || null,
@@ -203,4 +252,8 @@ const SomataStrokeBatchService = (() => {
 })();
 window.SomataStrokeBatchService = SomataStrokeBatchService;
 
-export { SomataStrokeBatchService };
+window.__somataGpuFourierStatus = () => {
+  const s=SomataStrokeBatchService.status();
+  return {...WebGPUStrokeRenderer.gpuFourierStatus(), corridor:gpuFourierCorridorStatus(), computeBatches:s.fourierComputeBatches, fallbackBatches:s.fourierComputeFallbacks, lastDecision:s.lastFourierComputeDecision};
+};
+export { SomataStrokeBatchService, gpuFourierBatchIneligible };

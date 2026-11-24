@@ -5,7 +5,7 @@ import {
   getSpiralGeometryLayer,
 } from './spiral/order-params.js';
 import { buildCircleSlideAnglePlan } from '../slides/planner.js';
-import { buildCircleAnchors, morphDuplicateEdgeSlots, rephaseAngleSequenceToReference } from './morph.js';
+import { buildCircleAnchors, morphDuplicateEdgeSlots, rephaseAngleSequenceToReference, signedAngleDelta } from './morph.js';
 
 // Reusable geometry and correspondence algorithms. No named mode is registered or queried here.
 window.SomataPhaseMatching = (() => {

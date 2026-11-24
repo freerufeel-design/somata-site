@@ -65,7 +65,7 @@ const MASTER_GEOMETRY_PROPS = new Set([
   'roundingMode',
   'roundingShape',
   'roundingCornerType',
-  'fourierStrength',
+
   'roundingMaxRadiusDrop',
   'roundingSmoothSplines',
   'radius',

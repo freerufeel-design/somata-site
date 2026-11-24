@@ -5,6 +5,7 @@ import { WebGPUFinalCompositeRenderer } from '../gpu/final-composite-renderer.js
 import { clearTunnelFadeRuntime } from '../core/render-runtime.js';
 import { animationScheduler, requestMainCanvasRender } from '../core/scheduler.js';
 import { state } from '../core/state.js';
+import { motionRuntime } from '../effects/motion.js';
 import { renderMainCanvas } from '../render/main-pipeline.js';
 import {
   SPIRAL_OUTER_COPIES_DEFAULT,
@@ -47,6 +48,7 @@ function setTunnelMode(enabled, options = {}) {
     requestMainCanvasRender();
     return;
   }
+  if (next !== wasActive || leaving) motionRuntime.spiralTravelAngles.clear();
   tunnel.active = next;
   const btn = document.getElementById('btnTunnel');
   btn?.classList.toggle('active', next);
@@ -106,6 +108,7 @@ function syncTunnelSettingsUI() {
   const centerHiddenCopies = document.getElementById('tunnelCenterHiddenCopies');
   const spiralOuterCopies = document.getElementById('tunnelSpiralOuterCopies');
   const defaultActive = document.getElementById('tunnelDefaultActive');
+  const spiralTravelRotation = document.getElementById('tunnelSpiralTravelRotation');
   const fadeEnabled = document.getElementById('tunnelFadeEnabled');
   const vignetteToggle = document.getElementById('showVignetteSetting');
   const fadeOffset = document.getElementById('tunnelFadeOffsetSteps');
@@ -168,6 +171,7 @@ function syncTunnelSettingsUI() {
   tunnel.fadeOversize = Boolean(tunnel.fadeOversize);
   tunnel.defaultActive = tunnel.defaultActive === true;
   if (defaultActive) defaultActive.checked = tunnel.defaultActive;
+  if (spiralTravelRotation) spiralTravelRotation.checked = tunnel.spiralTravelRotation === true;
   if (fadeEnabled) fadeEnabled.checked = tunnel.fadeOversize;
   if (vignetteToggle) vignetteToggle.checked = state.showVignette === true;
   if (fadeOffset) fadeOffset.value = String(fadeOffsetValue);
@@ -196,6 +200,7 @@ function setupTunnelUI() {
   const centerHiddenCopies = document.getElementById('tunnelCenterHiddenCopies');
   const spiralOuterCopies = document.getElementById('tunnelSpiralOuterCopies');
   const defaultActive = document.getElementById('tunnelDefaultActive');
+  const spiralTravelRotation = document.getElementById('tunnelSpiralTravelRotation');
   const fadeEnabled = document.getElementById('tunnelFadeEnabled');
   const fadeOffset = document.getElementById('tunnelFadeOffsetSteps');
   const vignetteAmount = document.getElementById('tunnelVignetteAmount');
@@ -239,6 +244,11 @@ function setupTunnelUI() {
     if (text) text.textContent = `${pct > 0 ? '+' : ''}${Math.round(pct)}% × ${formatDisplayNumber(mult, 2)}`;
     if (state.tunnel.active) requestMainCanvasRender();
   };
+  spiralTravelRotation?.addEventListener('change', (e) => {
+    state.tunnel.spiralTravelRotation = e.target.checked === true;
+    motionRuntime.spiralTravelAngles.clear();
+    requestMainCanvasRender();
+  });
   speedStrength?.addEventListener('input', syncSpeed);
   speedMultiplier?.addEventListener('input', syncSpeed);
   speedMultiplier?.addEventListener('change', syncSpeed);

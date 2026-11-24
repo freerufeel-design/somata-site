@@ -11,6 +11,7 @@ import { spiralSmoothStep01 } from '../geometry/spiral/polyline.js';
 import { isSpiralLayer } from '../geometry/spiral/order-params.js';
 import { isFiniteGeometryPoint } from '../geometry/spiral/profile-prep.js';
 import { WebGPUDeviceHub } from './device-hub.js';
+import { FOURIER_GPU_POINTS, warmupGpuFourier, encodeGpuFourier, gpuFourierStatus } from './fourier-compute.js';
 import { WebGPUBufferRecycler } from './buffer-recycler.js';
 import { GPUColorCache, assertWebGPUShaderModule } from './gpu-utils.js';
 import { WebGPUCorridorCopyStore } from './corridor-copy-store.js';
@@ -2731,6 +2732,22 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
     corridorUniformUploadBytes += 48;
     return { buffer, slot };
   }
+  function getLayerBatchUniformRecord(surf, layerKey) {
+    // Command encoding does not snapshot uniform contents. A later queue
+    // write must not change an earlier deferred layer's opacity or style.
+    if (!layerKey) return surf;
+    const rec = getLayerSceneUniformRecord(`stroke-role:${layerKey}:${surf.role}`);
+    if (!rec.bindGroup) {
+      rec.uniformBuffer = rec.buffer;
+      rec.data = new Float32Array(12);
+      rec.hasLastData = false;
+      rec.bindGroup = device.createBindGroup({
+        layout: bindGroupLayout,
+        entries: [{ binding: 0, resource: { buffer: rec.buffer } }],
+      });
+    }
+    return rec;
+  }
   function writeLayerBatchUniform(surf, mode, effectOpt) {
     fillStrokeUniformArray(surf.data, mode, effectOpt);
     if (surf.hasLastData && sameF32Data(surf.data, surf.lastData, 12)) {
@@ -3823,16 +3840,23 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
         blendKind: commandLineBlendKind(commands, 'max'),
         lineRenderMode: commandLineLayerMode(commands),
       };
-    ensureCapacity(count);
-    const meta = packGeometryCommands(commands, data);
+    // Deferred layers may be encoded without advancing lastSubmit. Reserve
+    // a separate vertex buffer for each live batch instead of overwriting it.
+    const frameId = frameResidentDynamicFrameId(commands);
+    const slot = acquireFrameResidentDynamicSlot(count, frameId);
+    const meta = packGeometryCommands(commands, slot.data);
     meta.blendKind = commandLineBlendKind(commands, meta.blendKind);
     meta.lineRenderMode = commandLineLayerMode(commands);
     if (!meta.k)
       return { buffer: null, k: 0, blendKind: meta.blendKind, lineRenderMode: meta.lineRenderMode };
-    const ringBuffer = instanceBuffers[lastSubmit % instanceBuffers.length];
-    device.queue.writeBuffer(ringBuffer, 0, data.buffer, data.byteOffset, meta.k * FLOATS_PER_INSTANCE * 4);
+    slot.lastFrameId = frameId;
+    slot.frameId = frameId;
+    slot.k = meta.k;
+    slot.blendKind = meta.blendKind;
+    slot.lineRenderMode = meta.lineRenderMode;
+    device.queue.writeBuffer(slot.buffer, 0, slot.data.buffer, slot.data.byteOffset, meta.k * FLOATS_PER_INSTANCE * 4);
     dynamicUploadBytes += meta.k * FLOATS_PER_INSTANCE * 4;
-    return { buffer: ringBuffer, k: meta.k, blendKind: meta.blendKind };
+    return slot;
   }
   function layerBatchMode(spec) {
     const base = { saiyan: 2.1, drip: 4.1, mountain: 4.5 }[spec?.mode];
@@ -3876,6 +3900,45 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
     const h = Math.max(0, Math.min(mainCanvas.height, Math.ceil(bottom)) - y);
     return w * h < mainCanvas.width * mainCanvas.height ? [x, y, w, h] : null;
   }
+  function fourierComputeReady() {
+    return Boolean(ready && !lost && indexedMorphPipelineMax && indexedMorphPipelineOver &&
+      warmupGpuFourier(device, requestMainCanvasRender));
+  }
+  function prepareResidentFourierBatch(commands, encoder) {
+    const rails = [], topology = [], styles = new Float32Array(commands.length * 8);
+    let firstStyle = null, multiStyle = false;
+    for (let ci = 0; ci < commands.length; ci++) {
+      const cmd = commands[ci], style = String(cmd.strokeStyle || '#ffffff');
+      if (firstStyle === null) firstStyle = style;
+      else if (style !== firstStyle) multiStyle = true;
+      styles.set([...parseColor(style), Math.max(0.001, Number(cmd.screenLineWidth)*0.5), Math.max(0, Math.min(1, Number(cmd.alpha))), 0, 0], ci*8);
+      for (const sp of cmd.subpaths) {
+        if (!sp.gpuFourier || sp.points.length) return null;
+        const base = rails.length*FOURIER_GPU_POINTS;
+        rails.push(sp.gpuFourier);
+        const count = FOURIER_GPU_POINTS - (sp.closed ? 0 : 1);
+        for (let j = 0; j < count; j++) topology.push(base+j,base+(j+1)%FOURIER_GPU_POINTS,ci,0);
+      }
+    }
+    if (!rails.length || !topology.length || !styles.every(Number.isFinite)) return null;
+    const topoData = new Uint32Array(topology);
+    const limit = Math.min(device.limits.maxStorageBufferBindingSize, device.limits.maxBufferSize);
+    if (Math.max(topoData.byteLength,styles.byteLength,topology.length) > limit) return null;
+    const pointBuffer = encodeGpuFourier(device, encoder, rails);
+    if (!pointBuffer) return null;
+    const makeBuffer = (label, data) => {
+      const b = device.createBuffer({ label, size: data.byteLength, usage: GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(b,0,data); return b;
+    };
+    // A full alpha buffer is needed even without per-segment alpha: WGSL
+    // select evaluates both arguments. The same indexed renderer draws rails.
+    const segmentCount = topology.length/4;
+    return { indexedMorph: true, gpuFourier: true, k: segmentCount, segmentCount,
+      pointBuffer, topology: { buffer:makeBuffer('Somata Fourier topology',topoData),identity:'fourier' },
+      alphaBuffer:makeBuffer('Somata Fourier alpha',new Float32Array(segmentCount)),
+      commandBuffer:makeBuffer('Somata Fourier styles',styles), bindGroups:new Map(), slot:0,
+      lineRenderMode:'uniform', blendKind:multiStyle?'over':'max' };
+  }
   function renderLayerBatch(commands, specs, sceneOpt = null) {
     if (
       !commands?.length ||
@@ -3890,8 +3953,6 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
     if (!filtered.length) return null;
     const wantsScene = filtered.some((spec) => spec.role === 'base');
     try {
-      const rec = prepareLayerBatchGeometry(commands);
-      if (!rec?.k) return { roles: new Set(), empty: true };
       const fillMaskResource =
         sceneOpt?.fillMask && wantsScene ? prepareLayerSceneFillMaskResource(sceneOpt.fillMask) : null;
       const encoder = device.createCommandEncoder({
@@ -3899,6 +3960,15 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
         }),
         roles = new Set(),
         roleTextures = Object.create(null);
+      // The compute pass precedes all draws in this very command buffer.
+      // Lamp accumulation can submit before deferred layer composition. Submit
+      // the shared prerequisite once, independently of the artistic pass order.
+      const lampRail = sceneOpt?.fourierLampRail;
+      const fourierPrerequisite = lampRail ? device.createCommandEncoder({label:'Somata Fourier line + lamp prerequisite'}) : null;
+      const rec = sceneOpt?.gpuFourier === true
+        ? (fourierPrerequisite ? prepareResidentFourierBatch(commands, fourierPrerequisite) : prepareResidentFourierBatch(commands, encoder)) : prepareLayerBatchGeometry(commands);
+      if (lampRail && rec?.pointBuffer) device.queue.submit([fourierPrerequisite.finish()]);
+      if (!rec?.k) return { roles: new Set(), empty: true };
       for (const spec of filtered) {
         const surf = layerBatchSurfaces[spec.role],
           mode = layerBatchMode(spec),
@@ -3914,7 +3984,9 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
             alphaScale: Number.isFinite(Number(spec.alphaScale)) ? Number(spec.alphaScale) : 1,
             overrideColor: mode === 4 ? null : spec.colorOverride || null,
           };
-        writeLayerBatchUniform(surf, mode, effectOpt);
+        const uniform = getLayerBatchUniformRecord(surf, sceneOpt?.uniformKey);
+        const bindKey = `role-${spec.role}-u${uniform.id || 0}`;
+        writeLayerBatchUniform(uniform, mode, effectOpt);
         const tex = surf.texture;
         roleTextures[spec.role] = tex;
         const pass = encoder.beginRenderPass({
@@ -3923,11 +3995,11 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
           ],
         });
         if (rec.bezierSpiral) {
-          encodeBezierPass(pass, rec, surf.uniformBuffer, mode);
+          encodeBezierPass(pass, rec, uniform.uniformBuffer, mode);
         } else if (rec.indexedMorph) {
-          encodeIndexedMorphPass(pass, rec, surf.uniformBuffer, mode, `role-${spec.role}`);
+          encodeIndexedMorphPass(pass, rec, uniform.uniformBuffer, mode, bindKey);
         } else if (rec.sharedJoin) {
-          const bg = sharedJoinBindGroup(rec, surf.uniformBuffer, `role-${spec.role}`);
+          const bg = sharedJoinBindGroup(rec, uniform.uniformBuffer, bindKey);
           encodeSharedJoinPass(pass, rec, bg);
         } else {
           pass.setPipeline(
@@ -3939,7 +4011,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                   : pipelineOver
                 : pipelineMax,
           );
-          pass.setBindGroup(0, surf.bindGroup);
+          pass.setBindGroup(0, uniform.bindGroup);
           pass.setVertexBuffer(0, cornerBuffer);
           pass.setVertexBuffer(1, rec.buffer);
           pass.draw(6, rec.k);
@@ -4067,6 +4139,8 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
       layerBatchFrames++;
       return {
         roles,
+        gpuFourier: rec.gpuFourier === true,
+        fourierLampCarrier: lampRail ? {device, buffer:rec.pointBuffer, closed:lampRail.rail.closed, matrix:lampRail.matrix.slice()} : null,
         sceneCombined,
         sceneTexture,
         compositeRect,
@@ -6815,6 +6889,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
     targetCtx,
     opt,
     copyKey,
+    existingEncoder = null,
   ) {
     if (!rec?.segmentCount || !copyCount || !copyBuffer) return false;
     try {
@@ -6856,7 +6931,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
       const surf = sceneRole ? layerBatchSurfaces[sceneRole] : null,
         targetView = sceneRole ? surf?.view : context.getCurrentTexture().createView();
       if (!targetView) return false;
-      const encoder = device.createCommandEncoder({
+      const encoder = existingEncoder || device.createCommandEncoder({
           label: sceneRole
             ? `SpiroStar indexed Morph Corridor ${sceneRole} -> Layer Scene`
             : effectMode === 4
@@ -6913,8 +6988,15 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
       return false;
     try {
       lastError = '';
-      const indexed = canUseIndexedMorphCorridor(commands) ? getIndexedMorphFrameRecord(commands) : null;
-      if (indexed) {
+      // Fourier master: compute once, then instance the same points for all copies.
+      // Descriptor-only commands must never fall through to CPU segment builders.
+      const fourier = opt.gpuFourier === true;
+      if (fourier && (!fourierComputeReady() || !indexedMorphCorridorPipelineMax || !indexedMorphCorridorPipelineOver || (opt.effectMode && opt.effectMode !== 'base') || opt.weightForCopy || opt.spiralSeamAlpha)) return false;
+      const fourierEncoder = fourier ? device.createCommandEncoder({label:'Somata Fourier master + Corridor'}) : null;
+      const indexed = fourier ? prepareResidentFourierBatch(commands, fourierEncoder)
+        : canUseIndexedMorphCorridor(commands) ? getIndexedMorphFrameRecord(commands) : null;
+      if (fourier && !indexed) return false;
+      if (indexed && !fourier) {
         indexed.lineRenderMode = commandLineLayerMode(commands);
         indexed.blendKind = commandLineBlendKind(commands, indexed.blendKind);
       }
@@ -7094,6 +7176,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
                 ? 3
                 : 4);
       if (indexed) {
+        if (fourier && indexed.segmentCount * k > 0xffffffff) return false;
         return renderIndexedMorphCorridor(
           indexed,
           copyBuffer,
@@ -7103,6 +7186,7 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
           targetCtx,
           opt,
           `${cacheVariant}|${corridorCopyGeneration}|${corridorSubmit % Math.max(1, corridorCopyBuffers.length)}`,
+          fourierEncoder,
         );
       }
       if (bezier) {
@@ -7771,6 +7855,8 @@ struct O{@builtin(position) pos:vec4<f32>,@location(0) uv:vec2<f32>};
     renderEffects,
     renderCorridor,
     renderLayerBatch,
+    fourierComputeReady,
+    gpuFourierStatus,
     compositeLayerBatch,
     compositeLayerScene,
     deferLayerScene,

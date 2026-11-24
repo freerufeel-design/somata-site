@@ -1,4 +1,5 @@
 import '../gpu/particle-renderer.js'; // initialisation order: this module runs after it
+import { checkIsBrokenProfile } from './profile-model.js';
 import { getRoundingStrength } from '../core/palette.js';
 import { runtimeState, somataFourierActive, state } from '../core/state.js';
 import { getLayerVersions } from '../core/layer-versions.js';
@@ -446,7 +447,7 @@ function getLayerFrameAuxiliaryPaths(ctx) {
 // to its corner knots. The Bézier/spline pass can otherwise shrink it
 // again even after the input paths have been compensated.
 function fitRoundedPathsToPrimaryCircle(paths, layer) {
-  if (layer?.roundingMode !== 'monoradius' || !Array.isArray(paths)) return paths;
+  if (layer?.roundingCornerType === 'fourier' || layer?.roundingMode !== 'monoradius' || !Array.isArray(paths)) return paths;
   const radius = getEffectiveLayerRadius(layer, 220);
   if (!(radius > 1e-7)) return paths;
   let r2 = 0;
@@ -1200,7 +1201,7 @@ function createStableSplineRailSampler(stepsPerCubic = 3) {
   };
 }
 function shouldUseStableSmoothRoundedMorph(layerIndex) {
-  if (!runtimeState.morph?.active) return false;
+  if (!runtimeState.morph?.active || somataFourierActive(state.layers?.[layerIndex])) return false;
   const srcMode = runtimeState.morph.sourceProfiles?.[layerIndex]?.mode || 'segments';
   const dstMode = runtimeState.morph.targetProfiles?.[layerIndex]?.mode || srcMode;
   const layer = state.layers?.[layerIndex];
@@ -1220,6 +1221,8 @@ function shouldUseStableSmoothRoundedMorph(layerIndex) {
   // are rounded AFTER the intermediate geometry is constructed.
   const sourceLayer = runtimeState.morph.renderSourceLayers?.[layerIndex];
   const targetLayer = runtimeState.morph.renderTargetLayers?.[layerIndex];
+  if ([sourceLayer, targetLayer, layer].some(l => l && l.closedLoop !== false &&
+    l.lineJoinType === 'straight' && checkIsBrokenProfile(l))) return false;
   if (
     sourceLayer &&
     targetLayer &&
@@ -1281,6 +1284,7 @@ function sampleStableSmoothRoundedEndpointPath(
       false,
       null,
       filletLayer,
+      path.bridgeRoundFlags || [],
     );
   const raw = sampler.points.length > 1 ? sampler.points : pts;
 

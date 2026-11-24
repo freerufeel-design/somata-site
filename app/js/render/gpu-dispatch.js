@@ -25,6 +25,7 @@ import { WebGPUStrokeRenderer } from '../gpu/stroke-renderer.js';
 import { GeometryGPURenderer, LineEffectsGPURenderer } from '../gpu/line-effects-renderer.js';
 import {
   canUseSpiralCorridorMasterInstancing,
+  getGpuFourierCorridorMaster, noteGpuFourierCorridorResult,
   getDynamicTunnelMorphMasterStrokeCommands,
   getFrameGLStrokeCommands,
   getTunnelMasterStrokeCommands,
@@ -121,6 +122,18 @@ function tryRenderBaseGeometryGPU(frameCtx) {
     return commands ? GeometryGPURenderer.render(commands, mainCtx) : false;
   }
 
+  // Try the private resident master before constructing any CPU master.
+  if (gpuOnlyTunnel) {
+    const fourierMaster = getGpuFourierCorridorMaster(frameCtx);
+    if (fourierMaster) {
+      const copies = frameCtx.visibleInstances?.copies || [];
+      if (!copies.length) return true;
+      const ok = GeometryGPURenderer.renderCorridor(fourierMaster, copies, mainCtx,
+        buildCorridorGPUOptions(frameCtx, {gpuFourier:true, copyCacheVariant:'fourier-base'}));
+      noteGpuFourierCorridorResult(ok === true);
+      if (ok) { trace('fourier-master-committed'); return true; }
+    }
+  }
   const spiralCorridor = isSpiralLayer(frameCtx.layer);
   const allowMasterInstancing = !spiralCorridor || canUseSpiralCorridorMasterInstancing(frameCtx);
   const master = allowMasterInstancing

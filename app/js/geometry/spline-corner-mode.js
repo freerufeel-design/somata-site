@@ -1,6 +1,8 @@
 import './unified-fillet.js'; // initialisation order: this module runs after it
 import { somataDrawFullRoundingCircle } from './unified-fillet.js';
-import { roundPolylineForDraw } from './polyline-rounding.js';
+import { drawSimplePolyline } from './polyline-rounding.js';
+import { drawSimpleSpline } from './spline-rounding.js';
+import { somataWithFourierLayer } from '../core/state.js';
 
 function somataDrawSplineCornerMode(ctx, raw, closed, rounding, options = {}) {
   if (!ctx || typeof ctx.bezierCurveTo !== 'function' || !Array.isArray(raw) || raw.length < 2) return false;
@@ -12,6 +14,19 @@ function somataDrawSplineCornerMode(ctx, raw, closed, rounding, options = {}) {
   if (pts.length < 2) return false;
   const value = Math.max(0, Math.min(2, Number(rounding) || 0));
 
+  // The 6.7 method is not a Spline+ variant. Dispatch before its
+  // sharp-junction and radial/local policies, including at zero rounding.
+  if (options.layer?.roundingCornerType === 'simple') {
+    const flags = options.cornerFlags?.length === pts.length
+      ? options.cornerFlags
+      : pts.map((_, i) => Boolean(closed) || (i > 0 && i < pts.length - 1));
+    if (options.baseSplineBlend === 0 || options.layer?.splineRenderMode === 'discrete' ||
+        (options.layer?.profileMode !== 'spline' && options.baseSplineBlend !== 1))
+      somataWithFourierLayer(options.layer, () => drawSimplePolyline(ctx, pts, Boolean(closed), value, flags));
+    else
+      somataWithFourierLayer(options.layer, () => drawSimpleSpline(ctx, pts, Boolean(closed), value, options.cornerFlags || [], options.bridgeRoundFlags || []));
+    return true;
+  }
   if (options.sharpJunctions === true && value <= 1e-10) {
     return somataDrawSharpJunctionSplinePlus(
       ctx,
@@ -24,13 +39,6 @@ function somataDrawSplineCornerMode(ctx, raw, closed, rounding, options = {}) {
     );
   }
 
-  if (options.layer?.roundingCornerType === 'simple') {
-    const flags = options.cornerFlags?.length === pts.length && options.cornerFlags.some(Boolean)
-      ? options.cornerFlags
-      : pts.map((_, i) => closed || (i > 0 && i < pts.length - 1));
-    roundPolylineForDraw(ctx, pts, Boolean(closed), value, flags, null, false, null, options.layer);
-    return true;
-  }
   const draw =
     options.layer?.roundingCornerType === 'local'
       ? somataDrawLocalSplineRounding

@@ -20,7 +20,7 @@ import {
 import { getLayerEditTargets } from '../ui/layer-selection.js';
 import { syncSidebarInputs } from '../ui/sidebar-sync.js';
 import { noteSuppressedError } from './suppressed-errors.js';
-import { snapLampAdaptiveExponent } from '../lamps/adaptive-exponent.js';
+import { snapLampAdaptiveExponent, normalizeLampAdaptiveExponentMultiplier } from '../lamps/adaptive-exponent.js';
 
 const SOMATA_DEFAULT_LINE_STROKE_WIDTH = 2;
 const SOMATA_DEFAULT_GRAFFITI_STROKE_WIDTH = 8;
@@ -974,11 +974,13 @@ function ensureLayerLampState(layer) {
   if (typeof owner.lamps.extinguishIntersections !== 'boolean') owner.lamps.extinguishIntersections = false;
   const overlapDistance = Number(owner.lamps.intersectionDistance ?? 50);
   owner.lamps.intersectionDistance = Number.isFinite(overlapDistance) ? Math.max(0, Math.min(100, overlapDistance)) : 50;
+  owner.lamps.adaptiveAudio = owner.lamps.adaptiveAudio === true;
   if (typeof owner.lamps.adaptiveAdjustBrightness !== 'boolean') owner.lamps.adaptiveAdjustBrightness = false;
   if (!Number.isFinite(Number(owner.lamps.adaptiveStrength))) owner.lamps.adaptiveStrength = 100;
   if (!Number.isFinite(Number(owner.lamps.adaptiveStrengthMultiplier)))
     owner.lamps.adaptiveStrengthMultiplier = 1;
   owner.lamps.adaptiveExponent = snapLampAdaptiveExponent(owner.lamps.adaptiveExponent);
+  owner.lamps.adaptiveExponentMultiplier = normalizeLampAdaptiveExponentMultiplier(owner.lamps.adaptiveExponentMultiplier);
   if (typeof owner.lamps.adaptiveAutoExponent !== 'boolean') owner.lamps.adaptiveAutoExponent = false;
   if (!Number.isFinite(Number(owner.lamps.adaptiveFadeSec))) owner.lamps.adaptiveFadeSec = 1;
   owner.lamps.adaptiveFadeSec = Math.max(0, Number(owner.lamps.adaptiveFadeSec) || 0);
@@ -986,8 +988,8 @@ function ensureLayerLampState(layer) {
   if (!['key', 'corners', 'arbitrary'].includes(owner.lamps.positionMode)) owner.lamps.positionMode = 'key';
 
   owner.lamps.morphEnabled = false;
-  if (!['linear', 'key'].includes(owner.lamps.morphMotionMode))
-    owner.lamps.morphMotionMode = 'linear';
+  if (!['linear', 'key', 'stable'].includes(owner.lamps.morphMotionMode))
+    owner.lamps.morphMotionMode = 'key';
   owner.lamps.calmMode = false;
   owner.lamps.morphInertia = Math.max(
     -100,
@@ -1234,10 +1236,10 @@ function createLayer(name = 'Слой 1') {
     extendedProfileMode: 'linear',
     lineJoinType: 'rounded',
     rounding: 0,
-    roundingMode: 'standard',
-    roundingCornerType: 'local',
+    roundingMode: 'monoradius',
+    roundingCornerType: 'simple',
     roundingPreviousCornerType: 'local',
-    fourierStrength: 50,
+
     roundingShape: 'hybrid',
     roundingMaxRadiusDrop: 30,
     roundingSmoothSplines: false,

@@ -367,15 +367,17 @@ document.getElementById('btnNew').addEventListener('click', () => {
     brightnessVariationMultiplier: 1,
     adaptiveBrightness: true,
     adaptiveAdjustBrightness: false,
+    adaptiveAudio: false,
     adaptiveStrength: 100,
     adaptiveStrengthMultiplier: 1,
     adaptiveExponent: 0,
+    adaptiveExponentMultiplier: 3,
     adaptiveAutoExponent: false,
     adaptiveFadeSec: 1,
     morphEnabled: false,
     morphSize: 20,
     morphBrightness: 25,
-    morphMotionMode: 'linear',
+    morphMotionMode: 'key',
     morphInertia: 0,
     cornerInertiaLinked: true,
     cornerInertiaPercent: 10,
@@ -423,6 +425,7 @@ document.getElementById('btnNew').addEventListener('click', () => {
   setTunnelMode(false, { silent: true });
   state.tunnel.defaultActive = false;
   state.tunnel.speedStrength = 1;
+  state.tunnel.spiralTravelRotation = false;
   state.tunnel.signedSpeedVersion = 1;
   state.tunnel.speedMultiplier = 1;
   state.tunnel.spacingStrength = 3;

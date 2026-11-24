@@ -3,11 +3,13 @@ import '../viewport-background.js'; // initialisation order: this module runs af
 import { renderProfileEditor } from '../profile-editor.js';
 import { syncSidebarToolStates, syncSweepUI, syncWebOutlineUI } from '../effects-sidebar.js';
 import { requestMainCanvasRender } from '../../core/scheduler.js';
-import { state } from '../../core/state.js';
+import { runtimeState, state } from '../../core/state.js';
 import { renderMainCanvas } from '../../render/main-pipeline.js';
 import { getLayerBroadcastTargets, hasMultiLayerSelection, updateLayerListUI } from '../layer-selection.js';
 import { syncSidebarInputs } from '../sidebar-sync.js';
+import { bindGeometryGuides } from '../geometry-guides.js';
 import { masterLayerSnapshot, mirrorMasterLayerDiff, mirrorMasterLayerProps } from '../master-layer.js';
+import { SomataMasterBroadcastCore } from '../master-broadcast-core.js';
 import {
   applyTransparentDesktopMode,
   bindSceneBlendControls,
@@ -39,13 +41,22 @@ function bindMasterAndDisplayControls(bindingContext) {
   // only the active layer synchronously; the other layers were updated
   // at a later checkpoint, after some render consumers had read them.
   const masterMirrorTransactions = new WeakMap();
-  const masterDataSelector =
-    '[data-rounding-mode],[data-spline-render-mode],[data-spiral-layerwise-rotation],[data-join],[data-line-main-mode],[data-line-marker-type],[data-graffiti-nib],[data-line-sprite-type],[data-lamp-position],[data-lamp-motion],[data-lamp-color-mode],[data-lamp-color]';
+  const masterDataSelector = SomataMasterBroadcastCore.dataSelector + ',[data-spiral-layerwise-rotation]';
   // These controls already perform an explicit per-target multi-field edit.
   // Retain those intentional dependent edits rather than rolling them back.
   const masterDirectFanoutSelector =
-    '[data-line-main-mode],[data-line-marker-type],[data-graffiti-nib],[data-line-sprite-type],[data-lamp-position],[data-lamp-motion],[data-lamp-color-mode],[data-lamp-color]';
+    '[data-line-main-mode],[data-line-marker-type],[data-graffiti-nib],[data-line-sprite-type],[data-lamp-position],[data-lamp-motion],[data-lamp-adaptive-channel],[data-lamp-appearance],[data-lamp-color-mode],[data-lamp-color]';
   const masterMirrorHandler = (e) => {
+    if (e.target?.closest?.('#geometryGuidesMenu,#btnGeometryGuides')) return;
+    // A focus/click on a number is not an edit. Its subsequent input/change
+    // commits the value. Do not broadcast the old value on mere focus.
+    const input = e.target;
+    if (input?.tagName === 'INPUT' && ['number', 'text'].includes(input.type)) {
+      if (e.type === 'click' || e.type === 'pointerup') return;
+      if (input.type === 'number' && (input.value === '' || input.validity?.badInput || input.validity?.rangeUnderflow)) return;
+    }
+    if (e.target?.closest?.('#testMorphDuration') && document.getElementById('testMorphSyncWithMorph')?.checked) return;
+    if (runtimeState.morph.active && e.target?.closest?.('#btnResetProfile')) return;
     if (state.masterLayerEdit !== true && !hasMultiLayerSelection()) return;
     if (masterMirrorTransactions.has(e)) return;
     const source = state.layers.find((l) => l.id === state.activeLayerId);
@@ -137,14 +148,7 @@ function bindMasterAndDisplayControls(bindingContext) {
     renderMainCanvas();
   });
 
-  document.getElementById('paramShowRoundingGuides').addEventListener('change', (e) => {
-    state.roundingGuidesOverlayEnabled = e.target.checked;
-    state.showRoundingGuides = false; // strict GPU path must not change for construction guides
-    document
-      .getElementById('roundingGuideControls')
-      ?.classList.toggle('hidden', !state.roundingGuidesOverlayEnabled);
-    renderMainCanvas();
-  });
+  bindGeometryGuides(state, renderMainCanvas);
 
   document.getElementById('paramRoundingGuidesDashed').addEventListener('change', (e) => {
     state.roundingGuidesDashed = e.target.checked;
@@ -162,10 +166,7 @@ function bindMasterAndDisplayControls(bindingContext) {
     requestMainCanvasRender();
   });
 
-  document.getElementById('paramShowBoundingCircle').addEventListener('change', (e) => {
-    state.showBoundingCircle = e.target.checked;
-    renderMainCanvas();
-  });
+
 }
 
 export { bindMasterAndDisplayControls };

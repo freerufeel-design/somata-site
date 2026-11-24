@@ -119,6 +119,7 @@ const SomataParameterRegistry = (() => {
     'lamps.sizeVariationMultiplier',
     'lamps.brightnessVariationMultiplier',
     'lamps.adaptiveStrengthMultiplier',
+    'lamps.adaptiveExponentMultiplier',
     'sweep.speedMultiplier',
     'sweep.glowMultiplier',
     'sweep.glowIntensityMultiplier',
@@ -1719,6 +1720,16 @@ const SomataParameterRegistry = (() => {
     5,
   );
   generic(
+    'lamps.adaptiveExponentMultiplier',
+    'Лампочки',
+    'Множитель экспоненциальности адаптации',
+    'lampAdaptiveExponentMultiplier',
+    'lamps.adaptiveExponentMultiplier',
+    0,
+    64,
+    0.01,
+  );
+  generic(
     'lamps.adaptiveFadeSec',
     'Лампочки',
     'Экспозиция адаптации',
@@ -2065,9 +2076,9 @@ const SomataParameterRegistry = (() => {
     1,
     { type: 'boolean', frameTarget: 'layer' },
   );
-  generic('spiral.fillType', 'Спирали', 'Тип заливки', 'paramSpiralFillType', 'spiralFillType', 0, 1, 1, {
+  generic('spiral.fillType', 'Спирали', 'Тип заливки', 'paramSpiralFillType', 'spiralFillType', 0, 2, 1, {
     type: 'enum',
-    values: ['interwinding', 'chopped', 'mathematical'],
+    values: ['chopped', 'mathematical', 'bandXor'],
     frameTarget: 'layer',
   });
 
@@ -3768,10 +3779,26 @@ const SomataOrangeMorphProfiles = (() => {
       originProfileId,
       config: snapshot(mm, randomOptions, holder?.value),
     };
+    // New Orange is an empty editor, not a duplicate of the current preset.
+    Object.assign(p.config.minimal, {
+      mode: 'standard', family: 'mix', profileGroups: ['standard'],
+      generatorStyle: 'standard', routingBindings: [], defaultActive: false,
+    });
+    p.config.randomOptions = {
+      byShape: false, onlyLine: false, byVertices: false, bySteps: false,
+      byRounding: false, bySize: false, byColor: false,
+      chaosStar: false, orbitBindingEnabled: false,
+      bySpiralLayers: false, bySpiralOrder: false,
+      shapeAdded: false, orbitsAdded: false, chaosAdded: false,
+      spiralLayersAdded: false, spiralOrderAdded: false,
+      lineColorPalette: 'standard', fillHarmony: 'native',
+      cyclePalettes: false, fixedColors: false, spiralLayersMin: 0, spiralLayersMax: 1,
+    };
     ensureConfigBindings(p.config);
     mm.profiles.push(p);
     mm.activeProfileId = p.id;
     drafts.set(p, clone(p.config));
+    apply(mm, randomOptions, holder, p.config);
     return p;
   }
   function remove(mm, randomOptions, holder, id) {

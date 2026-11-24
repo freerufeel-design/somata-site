@@ -65,7 +65,6 @@ function collectFeatureSceneAdmissions(frameCtx, batch) {
 function canDeferLayerSceneDirect(frameCtx, batch) {
   somataCompositorPolicyStats.checks++;
   if (!batch?.sceneCombined || !batch?.sceneTexture || !frameCtx?.frame) return false;
-  if (state.showBoundingCircle) return false;
   const multi = Number(frameCtx.frame.renderLayerCount || 0) > 1;
   if (multi && !WebGPUStrokeRenderer.canUseFrameScene?.(frameCtx.frameId)) return false;
   if (!canBridgeGeometryCirclesIntoLayerScene(frameCtx)) return false;

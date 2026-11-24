@@ -1,7 +1,7 @@
 import '../render/morph-anchor-renderer.js'; // initialisation order: this module runs after it
 import { easeMorphRounding, getRoundingStrength, interpolateMorphRounding } from '../core/palette.js';
 import { runtimeState, somataWithFourierLayer, state } from '../core/state.js';
-import { fillGhostWeight, fillSplitAheadWeight } from '../morph-runtime/blue/fill-lookahead.js';
+import { fillBoundaryWindow, fillGhostWeight, fillSplitAheadWeight } from '../morph-runtime/blue/fill-lookahead.js';
 import {
   chaosCircleMorphPlanCache,
   circleMorphPlanCache,
@@ -23,7 +23,7 @@ import {
   normalizeSplineRenderMode,
   useSmoothSplinePath,
 } from './profile-model.js';
-import { buildFourierWavePoints } from './fourier.js';
+import { drawFourierPath } from './fourier.js';
 import { drawSimpleSpline, splinePathForDraw, transformSplineKnotsForRounding } from './spline-rounding.js';
 import { buildClosedSpiralAutoCloseGeometry } from './spiral/fillets.js';
 import {
@@ -43,6 +43,7 @@ import { buildOrbitPolylines } from './orbit-builder.js';
 import { buildCurrentMorphPaths } from './frame-paths.js';
 import { buildCurrentCircleMorphPaths } from '../effects/aux-paths.js';
 import { drawSimplePolyline, roundPolylineForDraw } from './polyline-rounding.js';
+import { drawStraightProfileBridges } from './straight-profile-bridges.js';
 import { buildCircleSlideAnglePlan } from '../slides/planner.js';
 import {
   createMonoradiusMorphExtentProbe,
@@ -263,6 +264,7 @@ function buildRoundedMorphPolylinePoints(rawPoints, closed, roundingFrac, output
 }
 
 function roundMorphPolyline(ctx, rawPoints, closed, roundingFrac, simple = false) {
+  if (state.fourierMode) return drawFourierPath(ctx, rawPoints, closed);
   const raw = rawPoints || [];
   let src = raw;
   let validCount = 0;
@@ -279,8 +281,6 @@ function roundMorphPolyline(ctx, rawPoints, closed, roundingFrac, simple = false
   let drawable = src;
   if (frac > 0.001 && src.length >= 3)
     drawable = buildRoundedMorphPolylinePoints(src, closed, frac, morphRoundWorkspace.rounded, simple);
-  if (state.fourierMode && drawable?._fourierPrepared !== true)
-    drawable = buildFourierWavePoints(drawable, Boolean(closed), `morph:${frac.toFixed(4)}`);
   if (drawable.length < 2) return;
   ctx.moveTo(drawable[0].x, drawable[0].y);
   for (let i = 1; i < drawable.length; i++) ctx.lineTo(drawable[i].x, drawable[i].y);
@@ -426,7 +426,7 @@ function buildMorphGeometry(layer, sampleCount = 720, reusePaths = null) {
 }
 function buildMorphGeometryScoped(layer, sampleCount = 720, reusePaths = null) {
   let sourcePaths = buildOrbitPolylines(layer);
-  if (layer?.roundingMode === 'monoradius' && typeof applyMonoradiusRoundingCompensation === 'function')
+  if (layer?.roundingCornerType !== 'fourier' && layer?.roundingMode === 'monoradius' && typeof applyMonoradiusRoundingCompensation === 'function')
     sourcePaths = applyMonoradiusRoundingCompensation(sourcePaths, layer, Number(layer.rounding) || 0).paths;
   const out = Array.isArray(reusePaths) ? reusePaths : [];
   while (out.length < sourcePaths.length)
@@ -1543,6 +1543,7 @@ function recordExactPolygonSplinePath(path, layer) {
       false,
       null,
       layer,
+      path.bridgeRoundFlags || [],
     );
   if (
     !valid ||
@@ -1674,6 +1675,7 @@ function drawExactPolygonMorphEndpoint(ctx, lay, alpha) {
         false,
         null,
         lay,
+        path.bridgeRoundFlags || [],
       );
     if (!ctx.__suppressFill && lay.fill && path.closed) fillCanvasGeometry(ctx, lay);
     if (!ctx.__suppressStroke) ctx.stroke();
@@ -2216,6 +2218,11 @@ function legacyFilletEndpointLayer(layer, endpoint) {
     rotation: endpoint.rotation,
     rounding: endpoint.rounding,
     profileNodes: endpoint.profileNodes,
+    ...(layer.roundingCornerType === 'simple' ? {
+      profileMode: endpoint.profileMode,
+      splineRenderMode: endpoint.splineRenderMode,
+      wholeCurveSpline: endpoint.wholeCurveSpline,
+    } : null),
   };
 }
 function legacyFilletCacheKey(startLayer, endLayer, src, dst, slideType, movementMode, mode) {
@@ -2653,7 +2660,7 @@ function legacyFilletDrawCorrected(ctx, layer, src, dst, t, alpha, slideType, mo
     if (useFastPhaseSampling)
       ctx.__somataPhaseSplineFastSampling =
         Math.max(Number(src.rounding) || 0, Number(dst.rounding) || 0) > 145 ? 8 : 6;
-    const trace = window.SomataJumpTrace?.noteRoundingShape;
+    const trace = window.SomataJumpTrace?.isRoundingEnabled?.() ? window.SomataJumpTrace.noteRoundingShape : null;
     const tracedPaths = trace ? [] : null;
     try {
       for (const row of result) {
@@ -2822,17 +2829,13 @@ function getMorphReferenceVertexOffset(pair, pointCount, closed, vertexCountHint
 }
 
 function drawMorphSplineBlendPath(ctx, rawPoints, closed, blend, cornerFlags = []) {
+  if (state.fourierMode) return drawFourierPath(ctx, rawPoints, closed);
   let points = (rawPoints || []).filter(
     (p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)),
   );
   if (points.length < 2) return;
   const b = Math.max(0, Math.min(1, Number(blend) || 0));
   let flags = Array.isArray(cornerFlags) ? cornerFlags.slice(0, points.length) : [];
-  if (state.fourierMode && rawPoints?._fourierPrepared !== true) {
-    points = buildFourierWavePoints(points, Boolean(closed), `morph-spline-blend:${b.toFixed(4)}`);
-    flags = [];
-    if (points.length < 2) return;
-  }
   if (points.length === 2) {
     ctx.moveTo(points[0].x, points[0].y);
     ctx.lineTo(points[1].x, points[1].y);
@@ -3282,63 +3285,25 @@ function drawSimpleMorphPath(
   bridgeRoundFlags = [],
 ) {
   const round = Math.max(0, Math.min(2, Number(roundingFrac) || 0));
-  const hasExplicitBlend = splineBlend != null;
-  const blend = hasExplicitBlend
-    ? Math.max(0, Math.min(1, Number(splineBlend) || 0))
-    : profileMode === 'spline'
-      ? 1
-      : 0;
-  const renderMode = normalizeSplineRenderMode(splineRenderMode);
-  const splineInvolved =
-    continuousProfileBlend || (hasExplicitBlend ? blend > 1e-7 : profileMode === 'spline');
-  const bridgePolicy = Array.isArray(bridgeRoundFlags) && bridgeRoundFlags.length === points.length;
-  const flatProfileSmoothRounding =
-    renderMode === 'smooth' && round > 0 && isFlatProfileConstructionPath(points, cornerFlags);
-
-  if (!splineInvolved && flatProfileSmoothRounding) {
-    // Straight-profile special case: Smooth means spline rounding, not the
-    // legacy v220 polyline rounding. This also covers exact morph boundaries
-    // where the semantic target preset is stored as `segments`.
-    drawSimpleSpline(ctx, points, Boolean(closed), round, cornerFlags || [], bridgeRoundFlags || []);
-    return;
-  }
-
-  if (!splineInvolved) {
-    if (bridgePolicy) {
-      // v247: a broken profile has an explicit bridge policy.  Use the
-      // v220 corner fillet renderer so `Прямой` and `Скругление` are not
-      // collapsed into the same globally-smoothed Morph path.
-      drawSimplePolyline(ctx, points, Boolean(closed), round, cornerFlags || []);
-    } else {
-      roundMorphPolyline(ctx, points, Boolean(closed), round, true);
-    }
-    return;
-  }
-
-  if (renderMode === 'discrete') {
-    // Ordinary Discrete Morphing keeps the established v220 whole-path
-    // smoothing. Broken profiles are the exception: their bridge endpoints
-    // are semantic corners controlled by the left-panel join switch.
-    if (bridgePolicy) drawSimplePolyline(ctx, points, Boolean(closed), round, cornerFlags || []);
-    else roundMorphPolyline(ctx, points, Boolean(closed), round, true);
-    return;
-  }
-
-  if (round > 0) {
-    // Smooth mode: one continuous spline. Rounding changes the spline knots
-    // themselves (same count) instead of adding a rounded polyline layer.
-    drawSimpleSpline(ctx, points, Boolean(closed), round, cornerFlags || [], bridgeRoundFlags || []);
-    return;
-  }
-
-  if (continuousProfileBlend) {
-    // With rounding off, spline <-> hard segments changes curvature continuously
-    // all the way to exact zero by moving cubic handles onto the straight chord.
-    drawMorphSplineBlendPath(ctx, points, Boolean(closed), blend, cornerFlags || []);
-    return;
-  }
-
-  drawSimpleSpline(ctx, points, Boolean(closed), 0, cornerFlags || [], bridgeRoundFlags || []);
+  const blend = splineBlend == null ? (profileMode === 'spline' ? 1 : 0)
+    : Math.max(0, Math.min(1, Number(splineBlend) || 0));
+  // Preserve explicit straight closure chords throughout the mode blend.
+  if (drawStraightProfileBridges(ctx, points, closed, bridgeRoundFlags,
+    (pen, run, indices) => drawSimpleMorphPath(pen, run, false, round, profileMode, blend,
+      continuousProfileBlend, splineRenderMode, indices.map(i => cornerFlags?.[i]), []))) return;
+  const segment = pen => drawSimplePolyline(pen, points, Boolean(closed), round, cornerFlags);
+  const spline = pen => drawSimpleSpline(pen, points, Boolean(closed), round, cornerFlags, bridgeRoundFlags);
+  // 6.7 discrete profiles are rounded polylines, not Spline+ rails.
+  if (normalizeSplineRenderMode(splineRenderMode) === 'discrete') return segment(ctx);
+  // Retain the original per-edge handle interpolation at zero rounding.
+  if (continuousProfileBlend && round === 0)
+    return drawMorphSplineBlendPath(ctx, points, Boolean(closed), blend, cornerFlags);
+  if (blend <= 0) return segment(ctx);
+  if (blend >= 1) return spline(ctx);
+  if (!continuousProfileBlend) return profileMode === 'spline' ? spline(ctx) : segment(ctx);
+  // Both endpoint curves are produced on the same moving anchors, by the
+  // independent 6.7 kernels. Exact cubic subdivision preserves the endpoints.
+  return blendMorphFilletPaths(ctx, segment, spline, blend, Boolean(closed));
 }
 
 function drawMorphPathQuality(
@@ -3357,9 +3322,20 @@ function drawMorphPathQuality(
   recoverLiveJoints = false,
   filletLayer = null,
 ) {
-  if (filletLayer?.roundingCornerType === 'simple' && !state.fourierMode)
-    return drawSimpleMorphPath(ctx, points, closed, roundingFrac, profileMode, splineBlend,
-      continuousProfileBlend, splineRenderMode, cornerFlags, bridgeRoundFlags);
+  if (filletLayer?.roundingCornerType === 'simple')
+    return somataWithFourierLayer(filletLayer, () => drawSimpleMorphPath(ctx, points, closed, roundingFrac,
+      profileMode, splineBlend, continuousProfileBlend, splineRenderMode, cornerFlags, bridgeRoundFlags));
+  if (state.fourierMode) return drawFourierPath(ctx, points, closed);
+  if (bridgeRoundFlags?.length === points.length && bridgeRoundFlags.includes(false)) {
+    const blend = splineBlend == null ? (profileMode === 'spline' ? 1 : 0) : Math.max(0, Math.min(1, Number(splineBlend) || 0));
+    if (blend > 1e-7 || profileMode === 'spline')
+      splinePathForDraw(ctx, points, closed, roundingFrac, cornerFlags, bridgeRoundFlags,
+        false, blend, liveSeamMix, filletLayer);
+    else
+      roundPolylineForDraw(ctx, points, closed, roundingFrac, cornerFlags, null, false, null,
+        filletLayer, bridgeRoundFlags);
+    return;
+  }
   // Preserve the 10.4.19.4 path builder for the two original
   // algorithms. Later discrete-spline and whole-curve alterations
   // must not change their authored topology or movement.
@@ -3715,7 +3691,7 @@ function morphFillGhostInfo(layer, t) {
     splitDone: src?.__fillSplitDone === true,
     splitCounts: src?.__fillSplitDone === true ? src.__fillSplitCounts : null,
     ahead: Array.isArray(dst?.__fillSplitAhead) ? dst.__fillSplitAhead : null,
-    aheadWeight: fillSplitAheadWeight(t),
+    aheadWeight: fillSplitAheadWeight(t, fillBoundaryWindow(state.morph)),
   };
 }
 function setPreparedPathFillGhost(ctx, path, info, t) {
@@ -3728,6 +3704,7 @@ function setPreparedPathFillGhost(ctx, path, info, t) {
   const flagged = path?._fillPathSource !== undefined;
   if (flagged)
     ctx.__fillGhost = fillGhostWeight(t, {
+      window: fillBoundaryWindow(state.morph),
       sourcePresent: path._fillPathSource,
       targetPresent: path._fillPathTarget,
       splitDone: info.splitDone,
@@ -3754,6 +3731,7 @@ function drawPreparedMorphGeometry(
   targetProfileMode = null,
 ) {
   if (
+    layer?.roundingCornerType !== 'fourier' &&
     layer?.roundingMode === 'monoradius' &&
     !isSpiralLayer(layer) &&
     Array.isArray(preparedPaths) &&
@@ -3823,7 +3801,13 @@ function drawPreparedMorphGeometry(
       );
     } else {
       ctx.beginPath();
-      if (path.profileCurveBaked && path._bezierSegments?.length) {
+      if (state.fourierMode && path._greenRenderedRail === true) {
+        ctx.moveTo(base[0].x, base[0].y);
+        for (let i = 1; i < base.length; i++) ctx.lineTo(base[i].x, base[i].y);
+        if (pathClosed) ctx.closePath();
+      } else if (state.fourierMode) {
+        drawFourierPath(ctx, base, pathClosed);
+      } else if (path.profileCurveBaked && path._bezierSegments?.length) {
         const curves = path._bezierSegments;
         ctx.moveTo(curves[0].p0.x, curves[0].p0.y);
         for (const q of curves) ctx.bezierCurveTo(q.c1.x, q.c1.y, q.c2.x, q.c2.y, q.p3.x, q.p3.y);
@@ -3854,6 +3838,7 @@ function drawPreparedMorphGeometry(
             false,
             null,
             layer,
+            path.bridgeRoundFlags || [],
           );
       } else if (path?._stableRoundedSplineRail) {
         const rounded = getRoundingStrength(layer.rounding);

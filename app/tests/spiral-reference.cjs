@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { read, moduleAsScript } = require('./helpers/source.cjs');
+const { read, moduleAsScript, declarations } = require('./helpers/source.cjs');
 
 const ref = process.argv[2] && path.resolve(process.argv[2]);
 if (!ref) {
@@ -72,6 +72,7 @@ function currentKernel() {
   c.getLayerVersions = (layer) => ({ geometry: layer?._geometryVersion });
   c.isCurrentFrameDynamicPathList = () => false;
   run(moduleAsScript('js/geometry/polyline-rounding.js'), 'polyline-rounding');
+  run(declarations('getMorphReferenceRadius', 'getLayerReferenceRadius'), 'reference circle');
   run(KERNEL_MODULES.map(moduleAsScript).join('\n'), 'geometry kernel');
   run(moduleAsScript('js/geometry/spline.js'), 'spline');
   run(moduleAsScript('js/geometry/skeleton-runtime.js'), 'skeleton-runtime');

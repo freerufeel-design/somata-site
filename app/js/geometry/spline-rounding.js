@@ -1,11 +1,12 @@
 // Сплайн-скругление: сглаживание узлов, кубики, локальные участки сплайна на рёбрах, скругления изломов, путь сплайна.
 import './fourier.js'; // initialisation order: this module runs after it
-import { state } from '../core/state.js';
+import { somataWithFourierLayer, state } from '../core/state.js';
 import { blendMorphFilletPaths } from './morph.js';
 import { somataDrawSplineCornerMode } from './spline-corner-mode.js';
 import { centripetalSplineBezierControls } from './spline.js';
 import { drawUnifiedFilletPath } from './unified-fillet.js';
-import { buildFourierWavePoints } from './fourier.js';
+import { drawFourierPath } from './fourier.js';
+import { drawStraightProfileBridges } from './straight-profile-bridges.js';
 
 const smoothSplineRoundWorkspace = {
   px: new Float64Array(256),
@@ -636,6 +637,7 @@ export function drawSimpleSpline(
   cornerFlags = [],
   bridgeRoundFlags = [],
 ) {
+  if (state.fourierMode) return drawFourierPath(ctx, rawPoints, closed);
   let points = (rawPoints || []).filter(
     (p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)),
   );
@@ -646,11 +648,6 @@ export function drawSimpleSpline(
   const bridgePolicy = Array.isArray(bridgeRoundFlags) && bridgeRoundFlags.length === points.length;
   let bridgeFlags = bridgePolicy ? bridgeRoundFlags.slice(0, points.length) : [];
 
-  if (state.fourierMode && rawPoints?._fourierPrepared !== true) {
-    points = buildFourierWavePoints(points, Boolean(closed), `spline:${round.toFixed(4)}`);
-    flags = [];
-    bridgeFlags = [];
-  }
   if (points.length === 2) {
     ctx.moveTo(points[0].x, points[0].y);
     ctx.lineTo(points[1].x, points[1].y);
@@ -726,8 +723,16 @@ function splinePathForDraw(
   liveSeamMix = 0,
   filletLayer = null,
 ) {
-  if (filletLayer?.roundingCornerType === 'simple' && !state.fourierMode)
-    return drawSimpleSpline(ctx, rawPoints, closed, roundingFrac, cornerFlags, bridgeRoundFlags);
+  if (filletLayer?.roundingCornerType === 'simple')
+    return somataWithFourierLayer(filletLayer, () => {
+      if (drawStraightProfileBridges(ctx, rawPoints, closed, bridgeRoundFlags,
+        (pen, run, indices) => drawSimpleSpline(pen, run, false, roundingFrac,
+          indices.map(i => cornerFlags?.[i]), []))) return;
+      return drawSimpleSpline(ctx, rawPoints, closed, roundingFrac, cornerFlags, bridgeRoundFlags);
+    });
+  if (!state.fourierMode && bridgeRoundFlags?.includes(false) && drawStraightProfileBridges(ctx, rawPoints, closed, bridgeRoundFlags,
+    (pen, run, indices) => splinePathForDraw(pen, run, false, roundingFrac,
+      indices.map(i => cornerFlags?.[i]), [], false, splineBlend, liveSeamMix, filletLayer))) return;
   // With rounding disabled, honor the authored Spline profile. Spline+
   // intentionally draws a polygon at 0%, which hid the original
   // edge-local cubic runs and their *unrounded* (sharp) junctions.
@@ -818,6 +823,7 @@ function splinePathForDraw(
     })
   )
     return;
+  if (state.fourierMode) return drawFourierPath(ctx, rawPoints, closed);
   let points = (rawPoints || []).filter(
     (p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)),
   );
@@ -835,11 +841,6 @@ function splinePathForDraw(
   const roundableAt = (boundary) =>
     flags[boundary] === true && (!bridgePolicy || bridgeFlags[boundary] !== false);
 
-  if (state.fourierMode && rawPoints?._fourierPrepared !== true) {
-    points = buildFourierWavePoints(points, Boolean(closed), `spline:${round.toFixed(4)}`);
-    flags = [];
-    bridgeFlags = [];
-  }
   if (points.length === 2) {
     ctx.moveTo(points[0].x, points[0].y);
     ctx.lineTo(points[1].x, points[1].y);

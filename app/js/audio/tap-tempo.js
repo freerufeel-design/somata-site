@@ -77,6 +77,40 @@ function getNextTapBoundary(now = performance.now(), kind = 'minimal') {
   const cycles = Math.floor(elapsed / cycleMs) + 1;
   return tap.anchorTime + cycles * cycleMs;
 }
+// The Geometry duration field represents the effective Blue phase, not the
+// unmultiplied interval. A manual edit releases TAP just like the Morph panel.
+function setSyncedBluePhaseDurationSec(value, now = performance.now()) {
+  const requested = Number(value);
+  if (!Number.isFinite(requested) || requested <= 0) return false;
+  const rt = runtimeState.morph;
+  const oldMs = window.__somataBlueMorphPhaseClock().durationMs;
+  const base = Math.max(0.5, Math.min(60, requested / getMorphIntervalMultiplier('full')));
+  if (!isTapMorphSyncActive('full') && Math.abs(base - Number(state.morph.intervalSec)) < 1e-9) return false;
+  state.tapTempo.syncFullMorph = false;
+  state.morph.intervalSec = base;
+  const newMs = window.__somataBlueMorphPhaseClock().durationMs;
+  // Retime the existing phase, rather than draw a new random target. Preserve
+  // the last presented linear progress; a paused clock stays paused.
+  if (rt.active && Number.isFinite(rt.cycleStart) && rt.cycleStart !== 0 && !rt.boundaryPaintPending && !rt.returnToPhaseStart) {
+    const at = rt.paused && rt.pauseStartedAt > 0 ? rt.pauseStartedAt : now;
+    const progress = Math.max(0, Math.min(1, Number.isFinite(rt.progress) ? rt.progress : (at - rt.cycleStart) / oldMs));
+    rt.cycleStart = at - progress * newMs || Number.EPSILON;
+    rt.transitionMs = newMs;
+  }
+  return true;
+}
+function syncGeometryMorphDuration() {
+  const input = document.getElementById('testMorphDuration');
+  const synced = document.getElementById('testMorphSyncWithMorph')?.checked === true;
+  document.getElementById('testMorphAutoBadge')?.classList.toggle('hidden', !(synced && isTapMorphSyncActive('full')));
+  if (!input || !synced) return;
+  input.disabled = false;
+  const mult = getMorphIntervalMultiplier('full');
+  input.min = String(Math.max(0.1, 0.5 * mult));
+  input.max = String(Math.max(Number(input.min), 60 * mult, window.__somataBlueMorphPhaseClock().durationMs / 1000));
+  if (document.activeElement !== input)
+    input.value = formatDisplayNumber(window.__somataBlueMorphPhaseClock().durationMs / 1000, 3);
+}
 function syncTapTimingIndicators() {
   const fullAuto = isTapMorphSyncActive('full');
   const minimalAuto = isTapMorphSyncActive('minimal');
@@ -100,10 +134,7 @@ function syncTapTimingIndicators() {
       minimalAuto ? getTapTempoIntervalSec(state.minimalMorph.intervalSec) : state.minimalMorph.intervalSec,
       2,
     );
-  const syncedDuration = document.getElementById('testMorphDuration');
-  if (syncedDuration?.disabled && document.getElementById('testMorphSyncWithMorph')?.checked) {
-    syncedDuration.value = formatDisplayNumber(getTapMorphIntervalSec(state.morph.intervalSec, 'full'), 2);
-  }
+  syncGeometryMorphDuration();
 }
 function restartTapPulseAnimation() {
   const btn = document.getElementById('btnTapTempo');
@@ -1248,5 +1279,7 @@ export {
   sampleBlueSpiralOrder,
   setupTapTempoUI,
   syncTapTimingIndicators,
+  syncGeometryMorphDuration,
+  setSyncedBluePhaseDurationSec,
   syncTapUI,
 };

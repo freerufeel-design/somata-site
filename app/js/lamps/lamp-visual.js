@@ -117,6 +117,7 @@ function lampAdaptiveExposureFactors(
   baseR,
   baseBrightness,
   viewZoom = state.zoom,
+  audio = null,
 ) {
   if (cfg?.adaptiveBrightness === false) {
     lampAdaptiveSmoothing.delete(cfg);
@@ -139,7 +140,8 @@ function lampAdaptiveExposureFactors(
     lampAdaptiveFrame.viewportArea = viewportArea;
   }
   const targetArea = viewportArea / 3,
-    estimatedArea = count * Math.PI * rScreen * rScreen;
+    estimatedArea = count * Math.PI * rScreen * rScreen *
+      (cfg?.adaptiveAudio === true ? Math.max(1, Number(audio?.size) || 0) ** 2 * Math.max(1, Number(audio?.brightness) || 0) : 1);
   if (!lampAdaptiveFrame.seen.has(cfg)) {
     lampAdaptiveFrame.seen.add(cfg);
     lampAdaptiveFrame.currentArea += estimatedArea;
@@ -153,6 +155,7 @@ function lampAdaptiveExposureFactors(
     brightnessFactor = 1;
   const overloaded = sharedArea > effectiveTargetArea;
   // Экспоненциальность кривой: 0 — линейно (прежнее поведение), ±100 % — десятичная ± экспонента.
+  // Множитель применяется к итоговой степени (включая авто-добавку), а не к яркости.
   // Авто-экспонента при вспышке (резком росте площади) ненадолго поднимает степень.
   let exponent = Math.max(-100, Math.min(100, Number(cfg?.adaptiveExponent) || 0)) / 100;
   if (cfg?.adaptiveAutoExponent === true) {
@@ -173,6 +176,7 @@ function lampAdaptiveExposureFactors(
     const load = lampAdaptiveExponentShape(
       Math.max(0.001, Math.min(1, effectiveTargetArea / sharedArea)),
       exponent,
+      cfg?.adaptiveExponentMultiplier ?? 3,
     );
     if (adjustBrightness) brightnessFactor = Math.max(0.001, Math.min(1, Math.pow(load, adaptivePower)));
     else radiusFactor = Math.max(0.001, Math.min(1, Math.pow(Math.sqrt(load), adaptivePower)));
@@ -253,6 +257,7 @@ function prepareLampDrawStyle(
   );
   style.morphSize = 0;
   style.morphBright = 0; // 7.10.5: no second lamp Morph layer on top of routed parameters.
+  style.audio = getLampAudioMod(0, audioLayerIndex);
   style.adaptive = lampAdaptiveExposureFactors(
     cfg,
     pointsLength,
@@ -260,12 +265,19 @@ function prepareLampDrawStyle(
     style.baseR,
     style.baseBrightnessPercent / 100,
     viewZoom,
+    style.audio,
   );
   style.blendMode = cfg.blendMode || 'lighter';
   style.colorMode = cfg.colorMode || (cfg.rainbow ? 'rainbow' : cfg.matchLineColor ? 'line' : 'selected');
   style.appearance = cfg.appearance === 'modern' ? 'modern' : 'classic';
   style.type = cfg.type || 'whiteCore';
   return style;
+}
+// Negative audio modulation retains its previous behaviour. Positive boosts
+// optionally participate in exposure rather than being added after exposure.
+function lampAdaptiveAudioValue(base, factor, gain, enabled, boostFactor = factor) {
+  const boost = gain - 1;
+  return base * factor + base * boost * (enabled && boost > 0 ? boostFactor : 1);
 }
 function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out = null, timing = null) {
   const plan = out || {},
@@ -287,7 +299,7 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
     morphBright = style.morphBright,
     adaptive = style.adaptive;
   const layerSeed = lampHash32(String(layer?.id || layer?.name || 'layer')),
-    audio = getLampAudioMod(0, audioLayerIndex),
+    audio = style.audio || getLampAudioMod(0, audioLayerIndex),
     audioSize = Math.max(0, Number(audio?.size) || 0),
     audioBrightness = Math.max(0, Number(audio?.brightness) || 0),
     mode = style.colorMode;
@@ -329,13 +341,13 @@ function prepareLampVisualPlan(points, layer, cfg, style, audioLayerIndex, out =
       color = rainbowLampColorPhase(rainbowPhase);
     }
     const visualRadiusBase = baseR * sizeRandom * sizeMorph * Math.max(0.06, Math.sqrt(level)),
-      rad = Math.max(0, visualRadiusBase * adaptive.radiusFactor + visualRadiusBase * (audioSize - 1)),
+      rad = Math.max(0, lampAdaptiveAudioValue(visualRadiusBase, adaptive.radiusFactor, audioSize, cfg.adaptiveAudio === true)),
       visualBrightnessBase = baseBrightnessPercent * brightRandom * brightMorph * level,
       effectiveBrightness = Math.max(
         0,
         Math.min(
           200,
-          visualBrightnessBase * adaptive.brightnessFactor + visualBrightnessBase * (audioBrightness - 1),
+          lampAdaptiveAudioValue(visualBrightnessBase, adaptive.brightnessFactor, audioBrightness, cfg.adaptiveAudio === true, adaptive.brightnessFactor * adaptive.radiusFactor ** 2),
         ),
       );
     let item = items[write];
@@ -382,6 +394,8 @@ export {
   beginLampAdaptiveFrame,
   finishLampAdaptiveFrame,
   lampAdaptiveFrame,
+  lampAdaptiveAudioValue,
+  lampAdaptiveExposureFactors,
   lampEffectiveBokeh,
   prepareLampDrawStyle,
   prepareLampVisualPlan,

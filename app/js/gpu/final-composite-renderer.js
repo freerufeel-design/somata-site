@@ -585,7 +585,6 @@ fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
   }
   function vignetteInfo(frame) {
     if (
-      state.showBoundingCircle ||
       !state.showVignette ||
       !state.tunnel?.active ||
       !state.tunnel.fadeOversize
@@ -762,7 +761,7 @@ fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
     }
   }
   function canDeferLamps(frame) {
-    if (state.transparentDesktop === true || state.showBoundingCircle || backgroundMorphActive() || !warmup())
+    if (state.transparentDesktop === true || backgroundMorphActive() || !warmup())
       return false;
     const canvasTouched = renderBackendTelemetry.canvasTouched?.() === true;
     if (canvasTouched && (deferredLayerSource() || deferredUnderlaySource())) return false;
@@ -772,7 +771,6 @@ fn lampBlend(cb:vec3<f32>,cs:vec3<f32>,m:i32)->vec3<f32>{
     if (
       state.transparentDesktop === true ||
       renderBackendTelemetry.blocksGpuScene() ||
-      state.showBoundingCircle ||
       backgroundMorphActive()
     )
       return false;

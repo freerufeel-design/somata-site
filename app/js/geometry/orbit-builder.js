@@ -5,6 +5,7 @@ import { getExtraRoundingStrength, getRoundingStrength } from '../core/palette.j
 import { isPreSampledSplineLayer, setPreSampledSplineLayer } from '../core/render-runtime.js';
 import { somataWithFourierLayer, state } from '../core/state.js';
 import { getEffectiveLayerRadius } from '../effects/motion.js';
+import { getLayerReferenceRadius } from './reference-circle.js';
 import {
   checkIsBrokenProfile,
   getConfiguredSplinePointCount,
@@ -168,8 +169,9 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
         spiralAngularN,
         twist: layer.spiralTwist === true ? 1 : 0,
         radialScale: skeletonTargetScale,
-        openCarrier: spiralEnabled ? layer.spiralClosed === false : layer.closedLoop === false,
-        connectEdges: spiralEnabled ? spiralClosed : layer.closedLoop !== false,
+        // Extended contours are open *rails*, not an open source polygon.
+        openCarrier: spiralEnabled ? layer.spiralClosed === false : layer.extendedProfileEnabled !== true && layer.closedLoop === false,
+        connectEdges: spiralEnabled ? spiralClosed : layer.extendedProfileEnabled === true || layer.closedLoop !== false,
       });
       rings.push({ sIdx, P, graph });
       if (graph) {
@@ -182,13 +184,15 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
   const splineSnapshotAlreadySampled = smoothSplineMode && isPreSampledSplineLayer(layer);
   const authoredSmoothSpline =
     smoothSplineMode &&
+    !(layer.roundingCornerType === 'simple' && layer.splineRenderMode === 'discrete') &&
     !splineSnapshotAlreadySampled &&
     Array.isArray(layer.profileNodes) &&
     layer.profileNodes.length >= 2;
 
   const profileSpaceSplineAlreadySampled = spiralEnabled && smoothSplineMode && splineSnapshotAlreadySampled;
   const baseProfilePts =
-    spiralEnabled && smoothSplineMode
+    spiralEnabled && smoothSplineMode &&
+      !(layer.roundingCornerType === 'simple' && layer.splineRenderMode === 'discrete' && !splineSnapshotAlreadySampled)
       ? Array.isArray(layer.profileNodes) && layer.profileNodes.length >= 2
         ? layer.profileNodes.map((p) => ({ x: Number(p?.x) || 0, y: Number(p?.y) || 0 }))
         : getInterpolatedProfilePoints(layer)
@@ -197,13 +201,16 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
         : getInterpolatedProfilePoints(layer);
   const spiralTangential = spiralEnabled ? getSpiralTangentialBlend(layer) : 0;
   const spiralRoundSeams = spiralEnabled && layer.spiralRoundSeams !== false;
-  const spiralRounding = getRoundingStrength(layer.rounding);
-  const spiralExtraRounding = spiralEnabled ? getExtraRoundingStrength(layer.rounding) : 0;
+  const spiralRounding = layer.roundingCornerType === 'fourier' ? 0 : getRoundingStrength(layer.rounding);
+  const spiralExtraRounding = spiralEnabled && layer.roundingCornerType !== 'fourier' ? getExtraRoundingStrength(layer.rounding) : 0;
   const spiralProfileData = spiralEnabled
     ? buildSpiralProfileForDraw(
-        layer,
+        layer.__somataFourierProfileSamplingLayer || layer,
         baseProfilePts,
-        getSpiralRenderSampleCount(layer, Math.max(baseProfilePts.length, getConfiguredSplinePointCount())),
+        getSpiralRenderSampleCount(
+          layer.__somataFourierProfileSamplingLayer || layer,
+          Math.max(baseProfilePts.length, getConfiguredSplinePointCount()),
+        ),
         spiralRounding,
         profileSpaceSplineAlreadySampled,
       )
@@ -274,9 +281,11 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
     if (layer.extendedProfileEnabled === true && !spiralEnabled) {
       const repetitions = 3;
       const repeat = layer.extendedProfileMode === 'repeat';
-      for (let i = 0; i < (carrier && !carrier.closed ? P.length - 1 : P.length); i++) {
-        const a = P[i],
-          b = P[(i + 1) % P.length];
+      // Every side of the underlying polygon owns a separate open rail,
+      // including the last-to-first side during a morph.
+      for (let i = 0; i < (graph?.edgeSamples.length ?? P.length); i++) {
+        const a = graph?.edgeSamples[i][0] ?? P[i],
+          b = graph?.edgeSamples[i].at(-1) ?? P[(i + 1) % P.length];
         const dx = b.x - a.x,
           dy = b.y - a.y,
           L = Math.hypot(dx, dy);
@@ -287,11 +296,13 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
         if (repeat) {
           for (let n = -repetitions; n <= repetitions; n++) {
             for (let j = 0; j < baseProfilePts.length; j++) {
-              if (n > -repetitions && j === 0) continue;
               const p = baseProfilePts[j];
               const u = n + (Number(p.x) || 0),
                 v = (Number(p.y) || 0) * L * 0.5;
-              pts.push({ x: a.x + u * dx + v * nx, y: a.y + u * dy + v * ny });
+              const next = { x: a.x + u * dx + v * nx, y: a.y + u * dy + v * ny };
+              const tail = pts.at(-1);
+              if (j === 0 && tail && Math.hypot(next.x - tail.x, next.y - tail.y) < 1e-8) continue;
+              pts.push(next);
             }
           }
         } else {
@@ -307,7 +318,7 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
             orbitIndex: sIdx,
             extendedEdgeIndex: i,
             ...profileMeta,
-            topoCircleCarrier: false,
+            topoCircleCarrier: Boolean(carrier),
           });
       }
       continue;
@@ -323,10 +334,14 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
       !smoothFlatSpline &&
       !(layer.__somataMixedProfile && !planarClosed)
     ) {
+      // The flat-profile fast path must read the same graph as every
+      // other profile. Keep the contour points separate from graph nodes.
+      const nodes = graph?.nodes ?? P;
+      const points = nodes.map(({ x, y }, i) => carrier ? { x, y } : { ...P[i], x, y });
       paths.push({
-        points: carrier ? P.map(({ x, y }) => ({ x, y })) : P,
+        points,
         closed: planarClosed,
-        cornerFlags: P.map(() => true),
+        cornerFlags: points.map(() => true),
         orbitIndex: sIdx,
         ...profileMeta,
       });
@@ -477,14 +492,17 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
 
         retainedPoints._spiroWholeCurveSpline =
           layer.profileMode === 'spline' && layer.wholeCurveSpline === true;
+        const legacySimple = spiralProfileData?.legacySimpleProfile === true;
+        const legacySmooth = legacySimple && layer.splineRenderMode !== 'discrete';
         let retainedCubics =
           state.fourierMode === true
             ? []
             : buildSpiralBezierSegments(
                 retainedPoints,
-                0,
+                legacySmooth ? spiralRounding : 0,
                 cornerFlags,
-                layer.profileMode === 'spline' && layer.wholeCurveSpline === true,
+                legacySimple ? legacySmooth : layer.profileMode === 'spline' && layer.wholeCurveSpline === true,
+                false, legacySimple ? layer : null,
               );
         if (bakedProfileRound && retainedCubics?.length)
           retainedCubics = repairRoundedSpiralBezierJoins(retainedCubics);
@@ -592,6 +610,18 @@ function buildOrbitPolylinesScoped(layer, skeletonOnly, polygonFrame = null) {
       orbitIndex: sIdx,
       ...profileMeta,
     });
+  }
+  // A closed Fourier rail inherits its radius from the authored circle,
+  // not the rail's centroid or enclosing extent. Center-born orbits use
+  // their explicit lifecycle scale; do not grow them to a full circle early.
+  if (layer.roundingCornerType === 'fourier') {
+    const referenceRadius = getLayerReferenceRadius(layer);
+    for (const path of paths) if (path.closed && !spiralEnabled) {
+      const growth = path.lifecycle ? Math.max(0, Math.min(1, Number(path.strokeGrowth) || 0)) : 1;
+      Object.defineProperty(path.points, '_somataReferenceRadius', {
+        value: referenceRadius * growth, configurable: true,
+      });
+    }
   }
   // Metadata stays on the canonical path set. Neither profile nor
   // GPU renderers are allowed to modify these raw straight edges.

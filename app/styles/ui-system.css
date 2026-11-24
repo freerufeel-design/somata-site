@@ -24,6 +24,29 @@
   display: none !important;
 }
 
+.ui-hover-tooltip {
+  position: fixed;
+  z-index: 2147483000;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid #52627b;
+  border-radius: 7px;
+  background: #172133;
+  color: #e2e8f0;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .38);
+  font: 12px/1.45 system-ui, sans-serif;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ui-hover-tooltip[hidden] {
+  display: none !important;
+}
+
+
 /* ---- Panel scope -------------------------------------------------------------------- */
 /* Everything below applies to the sidebar and the floating settings panels. */
 :is(

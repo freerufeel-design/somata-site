@@ -411,7 +411,7 @@ function advanceLampPathFractionLinear(current, target, path, dtMs) {
 function lampPhaseInertiaProgress(t, cfg = getLampEvaluationConfig()) {
   const u = Math.max(0, Math.min(1, Number(t) || 0));
   const pct = Math.max(-100, Math.min(100, Number(cfg?.morphInertia) || 0));
-  if (cfg?.morphMotionMode === 'linear' || pct === 0) return u;
+  if (['linear', 'stable'].includes(cfg?.morphMotionMode) || pct === 0) return u;
   if (pct <= -100) return 1; // endpoint follows moving target contour
   if (pct >= 100) return u >= 1 ? 1 : 0;
   // Ease along the same owned arc interval: positive = accelerating
@@ -427,7 +427,7 @@ function lampDynamicResponseMs(cfg = getLampEvaluationConfig()) {
   return 190;
 }
 function advanceLampAttachmentFraction(current, target, path, dtMs, responseMs = 190) {
-  if (runtimeState.morph?.active && ['linear', 'ghost'].includes(getLampEvaluationConfig()?.morphMotionMode))
+  if (runtimeState.morph?.active && ['linear', 'stable', 'ghost'].includes(getLampEvaluationConfig()?.morphMotionMode))
     return advanceLampPathFractionLinear(current, target, path, dtMs);
   if (runtimeState.morph?.active && getLampEvaluationConfig()?.morphMotionMode === 'smooth')
     return advanceLampPathFractionLinear(current, target, path, dtMs);

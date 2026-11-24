@@ -3,6 +3,11 @@
 
 /** Шаг ползунка «Экспоненциальность», %. */
 export const LAMP_ADAPTIVE_EXPONENT_STEP = 5;
+export const LAMP_ADAPTIVE_EXPONENT_MULTIPLIER_DEFAULT = 3;
+export function normalizeLampAdaptiveExponentMultiplier(value) {
+  const n = value == null || value === '' ? NaN : Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(64, n)) : LAMP_ADAPTIVE_EXPONENT_MULTIPLIER_DEFAULT;
+}
 /** Наибольшая добавка к степени (в долях ползунка, 0.25 = 25 п. п.) при сильной вспышке. */
 export const LAMP_AUTO_EXPONENT_BOOST = 0.25;
 /** Вспышка начинает учитываться, когда площадь ламп выше своего медленного среднего во столько раз… */
@@ -25,15 +30,15 @@ export function snapLampAdaptiveExponent(value) {
 }
 
 /**
- * Кривая отклика. x ∈ [0, 1] — нагрузка (1 = нагрузки нет), k ∈ [−1, 1] — степень экспоненты.
+ * Кривая отклика. x ∈ [0, 1] — нагрузка (1 = нагрузки нет), k ∈ [−1, 1] — базовая степень экспоненты; multiplier расширяет её диапазон.
  *   k = 0  : линейно, f(x) = x
  *   k = +1 : десятичная положительная экспонента, f(x) = (10^x − 1) / 9
  *   k = −1 : десятичная отрицательная экспонента, f(x) = (1 − 10^−x) / 0.9
  * Промежуточные k плавно переходят одно в другое. f(0) = 0 и f(1) = 1 при любом k.
  */
-export function lampAdaptiveExponentShape(x, k) {
+export function lampAdaptiveExponentShape(x, k, multiplier = 1) {
   const v = Math.max(0, Math.min(1, Number(x) || 0));
-  const kk = Math.max(-1, Math.min(1, Number(k) || 0));
+  const kk = Math.max(-1, Math.min(1, Number(k) || 0)) * normalizeLampAdaptiveExponentMultiplier(multiplier);
   if (Math.abs(kk) < 1e-6) return v;
   return (Math.pow(10, kk * v) - 1) / (Math.pow(10, kk) - 1);
 }

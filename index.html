@@ -12,17 +12,18 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Somata 16.1</title>
-    <link rel="stylesheet" href="app/styles/app.css?v=15-profile-continuity">
-    <link rel="stylesheet" href="app/styles/ui-system.css?v=16.1">
-    <link rel="stylesheet" href="app/styles/mobile.css?v=16.1">
+    <title>Somata 16.4.2r — Lamp Controls & Stable Motion</title>
+    <link rel="stylesheet" href="app/styles/app.css?v=16.4.2r-lamp-controls">
+    <link rel="stylesheet" href="app/styles/ui-system.css?v=16.4.2-skeleton-simple">
+    <link rel="stylesheet" href="app/styles/mobile.css?v=16.4.2">
     <link rel="stylesheet" href="app/styles/interface-guide.css?v=2">
+    <link rel="stylesheet" href="app/styles/morph-header.css?v=16.4.2q">
     <script defer src="app/js/ui/interface-guide.js?v=2"></script>
     <script defer src="app/js/bootstrap/boot-guard.js?v=14.2-open-spine-v1-r15"></script>
-    <script defer src="app/js/bootstrap/error-overlay.js?v=14.2-open-spine-v1-r15"></script>
+    <script defer src="app/js/bootstrap/error-overlay.js?v=16.4.2r-lamp-controls"></script>
     <!-- Application entry (ES modules). Browsers refuse modules opened from disk (file://) or served as
          text/plain (python -m http.server on Windows); Somata_Start / app/start.command serve them correctly. -->
-    <script type="module" src="app/js/main.js?v=16.1" data-launch-hint
+    <script type="module" src="app/js/main.js?v=16.4.2r-lamp-controls" data-launch-hint
         onerror="var d=document.createElement('div');d.id='somataLaunchHint';d.style.cssText='position:fixed;inset:auto 0 0 0;margin:auto;top:0;width:min(560px,90vw);height:fit-content;padding:22px 26px;background:#111827;color:#e5e7eb;border:1px solid #f59e0b;border-radius:12px;font:15px/1.5 system-ui,sans-serif;z-index:2147483647;box-shadow:0 20px 60px rgba(0,0,0,.6)';d.innerHTML='<b style=&quot;color:#fbbf24&quot;>Somata не запустилась: браузер отказался загружать модули.</b><br><br>Так бывает, если открыть index.html прямо с диска или через <code>python -m http.server</code> на Windows (он отдаёт .js с неверным типом).<br><br>Для локального запуска откройте <b>Somata_Start</b> (Windows) или <b>app/start.command</b> (macOS) в папке Somata: он запустит маленький сервер и откроет эту страницу. На хостинге ничего делать не нужно.';document.body.appendChild(d);"></script>
 
 </head>
@@ -179,6 +180,12 @@
                             <input id="tunnelSpeedStrength" type="range" min="-100" max="100" step="1" value="100" aria-label="Скорость коридора">
                             <input id="tunnelSpeedMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель скорости коридора" title="Множитель скорости: ползунок умножается на это значение" data-log-multiplier="1">
                         </div>
+                    </div>
+                    <div class="tunnel-setting">
+                        <label class="tunnel-fade-toggle" title="Вращать спираль при движении копий Коридора. Выключено — масштаб меняется без принудительного вращения; углы соединения витков сохраняются.">
+                            <input id="tunnelSpiralTravelRotation" type="checkbox">
+                            <span>Вращение спирали при движении</span>
+                        </label>
                     </div>
                     <div class="tunnel-setting">
                         <div class="tunnel-setting-head"><span>Дистанция между фигурами</span><span id="tunnelSpacingText" class="text-mono">300% × 1</span></div>
@@ -405,7 +412,7 @@
                             <button id="btnSaveMorphProfile" type="button" class="morph-profile-action morph-profile-save morph-profile-icon" title="Сохранить текущий профиль морфа" aria-label="Сохранить текущий профиль морфа" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h12.5L20.5 6.5V20.5H5z"/><path d="M8 3.5v6h8v-6M8 20.5v-7h9v7"/></svg></button>
                             <button id="btnResetMorphProfile" type="button" class="morph-profile-action morph-profile-reset" title="Сбросить все несохранённые изменения текущего Morph Profile" disabled>Сбросить всё</button>
                         </div>
-                        <div id="morphSpeedToolbar" class="morph-speed-toolbar" role="group" aria-label="Скорость синего морфинга"></div>
+                        <div id="morphSpeedToolbar" class="morph-speed-toolbar" role="group" aria-label="Период и типы синего морфинга"></div>
                         <div id="morphProfileCreateMenu" class="morph-profile-create-menu hidden" role="menu">
                             <button type="button" data-create-morph-profile="standard">Параметры</button>
                         </div>
@@ -979,8 +986,9 @@
                         <div class="row-label"><label for="lampIntersectionDistance">Сила погашения свечения</label><span id="lampIntersectionDistanceText" class="text-mono">50%</span></div>
                         <input id="lampIntersectionDistance" type="range" min="0" max="100" step="1" value="50" title="0% — только при совпадении центров. 100% — с момента касания радиусами.">
                     </div>
+                    <label class="display-enable-toggle lamp-compact-toggle" title="Положительное усиление от цветомузыки учитывается в нагрузке адаптации и подавляется при превышении порога"><input id="lampAdaptiveAudio" type="checkbox"><span>Адаптация цветомузыки</span></label>
                     <div class="control-row lamp-adaptive-strength-row"><div class="row-label"><span id="lampAdaptiveStrengthLabel">Сила адаптивного размера</span><span id="lampAdaptiveStrengthText" class="text-mono">100% × 1</span></div><div class="lamp-slider-mult"><input id="lampAdaptiveStrength" type="range" min="0" max="100" step="1" value="100"><span class="lamp-mult-label">×</span><input id="lampAdaptiveStrengthMultiplier" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Множитель силы адаптации" data-log-multiplier="1"></div></div>
-                    <div class="control-row lamp-adaptive-exponent-row" title="Форма кривой отклика на перегрузку. 0% — линейно (как раньше). +100% — десятичная положительная экспонента: умеренную перегрузку гасит сильнее. −100% — десятичная отрицательная экспонента: умеренную перегрузку гасит мягче. Шаг 5%."><div class="row-label"><span>Экспоненциальность</span><span id="lampAdaptiveExponentText" class="text-mono">0%</span></div><div class="lamp-slider-mult"><input id="lampAdaptiveExponent" type="range" min="-100" max="100" step="5" value="0" aria-label="Экспоненциальность адаптации"></div></div>
+                    <div class="control-row lamp-adaptive-exponent-row" title="Форма кривой отклика на перегрузку. 0% — линейно (как раньше). +100% — десятичная положительная экспонента: умеренную перегрузку гасит сильнее. −100% — десятичная отрицательная экспонента: умеренную перегрузку гасит мягче. Шаг 5%. Множитель усиливает степень экспоненты, включая авто-экспоненту; ×1 — прежний отклик, ×0 — линейный."><div class="row-label"><span>Экспоненциальность</span><span id="lampAdaptiveExponentText" class="text-mono">0% × 3</span></div><div class="lamp-slider-mult"><input id="lampAdaptiveExponent" type="range" min="-100" max="100" step="5" value="0" aria-label="Экспоненциальность адаптации"><span class="lamp-mult-label">×</span><input id="lampAdaptiveExponentMultiplier" type="number" min="0" max="64" step="any" value="3" inputmode="decimal" aria-label="Множитель экспоненциальности адаптации" data-log-multiplier="1"></div></div>
                     <label class="display-enable-toggle lamp-compact-toggle" title="Когда площадь ламп резко выросла (вспышка), степень экспоненты плавно повышается — тем сильнее, чем мощнее вспышка, — удерживается и затем так же плавно возвращается к значению ползунка. Скорость нарастания и спада задаёт «Экспозиция адаптации»."><input id="lampAdaptiveAutoExponent" type="checkbox"><span>Авто-экспонента</span></label>
                     <div class="control-row lamp-adaptive-fade-row" title="На статичной сцене адаптация применяется сразу. Во время Morph и движения это время задаёт скорость экспозиции: 0 — мгновенно, больше 0 — плавное следование за нагрузкой."><div class="row-label"><span>Экспозиция адаптации</span><span id="lampAdaptiveFadeText" class="text-mono">1 с</span></div><div class="row-inputs"><input id="lampAdaptiveFadeSec" type="number" min="0" step="any" value="1" inputmode="decimal" aria-label="Время экспозиции адаптивной яркости в секундах" data-log-step="time"><span class="hint-text">с</span></div></div>
                 </div>
@@ -1042,11 +1050,12 @@
                     <div class="control-row lamp-morph-motion-row">
                         <span class="hint-text">Перемещение в Morphing</span>
                         <div class="lamp-position-mode lamp-morph-motion-mode" role="group" aria-label="Режим перемещения лампочек в морфинге">
-                            <button type="button" class="active" data-lamp-motion="linear" title="Новая лампа плавно и линейно набирает яркость по более быстрому из двух процессов: приближение к своей целевой ключевой точке или выход центра к границе радиуса родительской лампы. При слиянии процесс зеркальный.">Линейный</button>
-                            <button type="button" data-lamp-motion="key" title="Следовать за опорой профиля на своём участке контура">Ключевой</button>
+                            <button type="button" data-lamp-motion="linear" title="Новая лампа плавно и линейно набирает яркость по более быстрому из двух процессов: приближение к своей целевой ключевой точке или выход центра к границе радиуса родительской лампы. При слиянии процесс зеркальный.">Линейный</button>
+                            <button type="button" class="active" data-lamp-motion="key" title="Следовать за опорой профиля на своём участке контура">Ключевой</button>
+                            <button type="button" data-lamp-motion="stable" title="Равномерное время движения ламп в фазе независимо от кривой скорости морфинга">Стабильный</button>
                         </div>
                         <div id="lampMorphInertiaRow" class="control-row" style="margin-top:6px;" title="−100% — сразу на целевую долю своего контура; 0% — равномерный ход; положительные значения — ускорение к концу фазы, отрицательные — замедление у цели."><div class="row-label"><span>Инерция лампочек</span><span id="lampMorphInertiaText" class="text-mono">0%</span></div><input id="lampMorphInertia" type="range" min="-100" max="100" step="5" value="0"></div>
-                        <div class="lamp-morph-motion-note">«Линейный» ведёт лампы по траектории фазы. «Ключевой» держит лампу у её опорной точки на своём участке линии. При прилипании центр лампы остаётся на линии.</div>
+                        <div class="lamp-morph-motion-note">«Линейный» ведёт лампы по траектории фазы. «Ключевой» держит лампу у её опорной точки на своём участке линии. «Стабильный» использует равномерное время фазы. При прилипании движение дополнительно зависит от деформации линии.</div>
                     </div>
                     
                     <label class="display-enable-toggle lamp-compact-toggle" title="Держит лампочки непосредственно на итоговой нарисованной линии после spline-скругления, в том числе во время Morphing"><input id="lampSnapToContour" type="checkbox" checked><span>Прилипание к линии</span></label>
@@ -1710,7 +1719,7 @@
                     <div id="prism3dBackendInfo" hidden class="hint-text" aria-live="polite">Режим 3D: WebGPU, полигональная сетка, преломление по Снеллиусу и RGB-дисперсия. Экранная выборка фоновой сцены; без трассировки лучей.</div>
                 </div>
                 <div id="geometrySettingsGroup" class="control-group shape-settings-group">
-                    <div class="control-group-title skeleton-heading">Геометрия звезды <span class="skeleton-heading-options"><label class="test-morph-heading"><input id="testMorphEnabled" type="checkbox" checked> Анимация</label><label class="test-morph-heading" title="Показывает движущиеся точки и прямые рёбра скелета: при изменении порядка они образуют спираль, без профиля, скругления и Bézier"><input id="testMorphSkeleton" type="checkbox"> Скелет</label></span></div>
+                    <div class="control-group-title skeleton-heading">Геометрия звезды <span class="skeleton-heading-options"><label class="test-morph-heading"><input id="testMorphEnabled" type="checkbox" checked> Анимация</label></span></div>
                     <div id="testMorphControls" class="test-morph-controls hidden" aria-label="Параметры анимации">
                         <div class="control-row test-morph-row" id="testMorphModeRow"><label for="testMorphMode">Тип морфинга многоугольника</label>
                             <div class="test-morph-picker" role="group" aria-label="Переключение типа морфинга">
@@ -1764,7 +1773,7 @@
                                 <button type="button" id="btnTestMorphSpeedNext" class="test-morph-arrow" aria-label="Следующий тип скорости" title="Следующий тип скорости">▶</button>
                             </div>
                         </div>
-                        <div class="control-row test-morph-row test-morph-duration-row"><label for="testMorphDuration">Длительность</label><div class="test-morph-duration"><input id="testMorphDuration" type="number" min="0.1" max="60" step="any" data-log-step="time" inputmode="decimal" value="1"><span>с</span></div><label class="test-morph-sync-label" for="testMorphSyncWithMorph" title="При ручной смене порядка спирали ждать следующую фазу синего морфа и применять Послойный/Честный/Красивый за один его цикл. Учитываются TAP и множитель длительности. Если синий морф остановлен, переход ждёт его запуска."><input id="testMorphSyncWithMorph" type="checkbox"><span>Согласовать с морфом</span></label></div>
+                        <div class="control-row test-morph-row test-morph-duration-row"><label for="testMorphDuration">Длительность <span id="testMorphAutoBadge" class="tap-auto-badge hidden">AUTO</span></label><div class="test-morph-duration"><input id="testMorphDuration" type="number" min="0.1" max="60" step="any" data-log-step="time" inputmode="decimal" value="1"><span>с</span></div><label class="test-morph-sync-label" for="testMorphSyncWithMorph" title="При ручной смене порядка спирали ждать следующую фазу синего морфа и применять Послойный/Честный/Красивый за один его цикл. Учитываются TAP и множитель длительности. Если синий морф остановлен, переход ждёт его запуска."><input id="testMorphSyncWithMorph" type="checkbox"><span>Согласовать с морфом</span></label></div>
                     </div>
                 <div class="ui-block">
                     <div class="ui-block-title"><span>Вершины и шаги</span></div>
@@ -1906,41 +1915,19 @@
                         <div id="spiralSettingsBlock" class="spiral-settings-block" aria-label="Настройки спирали для всех порядков">
                             <label id="spiralTwistRow" class="spiral-tangent-toggle" title="Включено: связанный виток. Выключено: независимые спиральные ветви по геометрии Somata 13.2."><input type="checkbox" id="paramSpiralTwist"><span>Свинчивание</span></label>
                             <label id="spiralTangentialRow" class="spiral-tangent-toggle" title="Тангенциально ориентирует медиану профиля — теоретическую линию между соседними ключевыми точками профиля — с обоих концов каждого спирального участка. Работает и для замкнутой, и для разомкнутой спирали."><input type="checkbox" id="paramSpiralTangential"><span>Тангенциальность с двух концов</span></label>
-                            <label id="spiralRoundSeamsRow" class="spiral-seam-round-toggle" title="Скругляет автозамыкающий стык замкнутой спирали. Для разомкнутой спирали стыка нет, поэтому параметр временно недоступен."><input type="checkbox" id="paramSpiralRoundSeams" checked><span>Скруглять стыки</span></label>
-                            <label id="spiralFillEnabledRow" class="spiral-fill-toggle" title="Включает заливку спирали независимо от общей галочки заливки. Цвет и прозрачность берутся из настроек заливки. Для межвиткового режима нужна чётная замкнутая геометрия; математический режим работает только при реальных пересечениях."><input type="checkbox" id="paramSpiralFillEnabled"><span>Заливка спирали</span></label>
+                            <label id="spiralFillEnabledRow" class="spiral-fill-toggle" title="Включает заливку спирали независимо от общей галочки заливки. Цвет и прозрачность берутся из настроек заливки. С наслоением: объединение полос. Математический: исключение перекрытий полос. Цветочек: прежняя маска ветвей."><input type="checkbox" id="paramSpiralFillEnabled"><span>Заливка спирали</span></label>
                             <div id="spiralFillTypeRow" class="spiral-settings-row spiral-fill-type-row hidden">
-                                <span title="Рубленый — прежние цельные полосы с рублеными границами. Межвитковый — локальные области между соседними витками без длинных диагоналей. Математический — замкнутые области только по реальным пересечениям текущих витков.">Тип заливки</span>
+                                <span title="С наслоением и Математический используют полосы между витками. Цветочек сохраняет старый узор.">Тип заливки</span>
                                 <select id="paramSpiralFillType" aria-label="Тип заливки спирали">
-                                    <option value="chopped" selected>Рубленый</option>
-                                    <option value="interwinding">Межвитковый</option>
-                                    <option value="mathematical" title="Только замкнутые области при пересечении витков">Математический</option>
+                                    <option value="chopped" selected>С наслоением</option>
+                                    <option value="bandXor" title="Исключение перекрытий межвитковых полос">Математический</option>
+                                    <option value="mathematical" title="Прежний радиальный узор">Цветочек</option>
                                 </select>
                             </div>
                         </div>
 
                     </div>
-                    <div class="ui-block ui-block-contour">
-                        <div class="row-label" style="gap:8px;">
-                            <span>Режим контура</span>
-                            <span class="contour-status-badges">
-                                <span id="loopStatusBadge" class="badge" style="background:rgba(16,185,129,0.2); color:#34d399;">Непрерывный</span>
-                                <span id="spiralTopologyBadge" class="badge hidden" style="background:rgba(99,102,241,0.2); color:#818cf8;">Непрерывный</span>
-                            </span>
-                        </div>
-                        
-                        <div class="contour-mode-toggle contour-variant-toggle" role="group" aria-label="Замыкание единой геометрии" style="margin-top:6px;">
-                            <button type="button" data-contour-variant="first" class="active" aria-pressed="true">Замкнутый</button>
-                            <button type="button" data-contour-variant="second" aria-pressed="false">Разомкнутый</button>
-                        </div>
-                        <input type="checkbox" id="paramClosedLoop" checked hidden aria-hidden="true">
-                        <div id="lineJoinTypeContainer" style="margin-top:6px;">
-                            <span class="hint-text">Тип соединения разрыва:</span>
-                            <div class="btn-group-toggle" style="grid-template-columns: 1fr 1fr; margin-top:4px;">
-                                <button data-join="straight" class="line-join-btn active">Прямой</button>
-                                <button data-join="rounded" class="line-join-btn">Скругление</button>
-                            </div>
-                        </div>
-
+                    <div class="ui-block">
                         <div id="roundingContainer" class="ui-block ui-block-rounding">
                             <div class="ui-block-title"><span>Скругление</span></div>
                             <div class="control-row rounding-amount-row">
@@ -1948,29 +1935,21 @@
                                     <span>Скругление вершин:</span>
                                     <label><input id="numRounding" type="number" aria-label="Скругление вершин, проценты" min="0" max="200" step="1" value="0" style="width:5em">%</label><span id="valRounding" hidden></span>
                                 </div>
-                                <input type="range" id="paramRounding" step="1" min="0" max="200" value="0" style="width:100%;" title="0–100% — плечо скругления до половины базового ребра; 100–200% — плавное приближение к окружности">
+                                <input type="range" id="paramRounding" step="1" min="0" max="200" value="0" style="width:100%;" data-ui-tooltip="0–100% — плечо скругления до половины базового ребра; 100–200% — плавное приближение к окружности">
                             </div>
-                            <div class="hint-text" style="margin:5px 0 3px;">Spline+ · скругление</div>
-                            <div class="rounding-mode-row"><span class="hint-text">Тип скругления</span><div class="rounding-mode-toggle rounding-four-types" role="group" aria-label="Тип скругления углов"><button type="button" class="rounding-mode-btn rounding-corner-type-btn active" data-rounding-corner-type="local" aria-pressed="true" title="Прямые стороны и отдельные дуги у углов">Локальное</button><button type="button" class="rounding-mode-btn rounding-corner-type-btn" data-rounding-corner-type="classic" aria-pressed="false" title="Исходный Spline+ из эталонной сборки">Классическое</button><button type="button" class="rounding-mode-btn rounding-corner-type-btn" data-rounding-corner-type="fourier" aria-pressed="false" title="Режим Фурье — применяет преобразование ко всей сцене">Фурье</button><button type="button" class="rounding-mode-btn rounding-corner-type-btn" data-rounding-corner-type="simple" aria-pressed="false" title="Скругление профиля по методу Somata 6.7">Простой</button></div><select id="paramRoundingCornerType" class="hidden" tabindex="-1" aria-label="Тип скругления"><option value="local">Локальное</option><option value="classic">Классическое</option><option value="fourier">Фурье</option><option value="simple">Простой</option></select></div>
-                            <div id="roundingFourierControls" class="rounding-fourier-controls hidden"><div class="control-row fourier-strength-row"><div class="row-label"><span>Сила Фурье</span><span id="fourierStrengthText" class="text-mono">50%</span></div><div class="lamp-slider-mult"><input id="fourierStrength" type="range" min="0" max="100" step="1" value="50" aria-label="Сила режима Фурье"></div><div class="hint-text">0 — окружность · больше — угловатее. Фурье действует на выбранный слой; Мастер — на все слои.</div></div></div>
-                            <div class="rounding-mode-row"><span class="hint-text">Политика радиуса</span><div class="rounding-mode-toggle" role="group" aria-label="Режим скругления"><button type="button" class="rounding-mode-btn active" data-rounding-mode="standard" aria-pressed="true">Обычный</button><button type="button" class="rounding-mode-btn" data-rounding-mode="monoradius" aria-pressed="false">Монорадиус</button></div><select id="paramRoundingMode" class="hidden" tabindex="-1" aria-hidden="true"><option value="standard">Обычный</option><option value="monoradius">Монорадиус</option></select></div>
-                            <label class="rounding-extension-guide" title="Показывать продолжение линий вне скруглённых вершин (без изменения рендера)">
-                                <input type="checkbox" id="paramShowRoundingGuides">
-                                <span class="hint-text" style="margin:0;">Показывать продолжения линий скругления</span>
-                            </label>
-                            <div id="roundingGuideControls" class="hidden" style="margin-top:5px;">
-                                <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-                                    <input type="checkbox" id="paramRoundingGuidesDashed" checked>
-                                    <span class="hint-text" style="margin:0;">Пунктир направляющих</span>
-                                </label>
-                                <div class="row-inputs" style="margin-top:6px;">
-                                    <span class="hint-text">Цвет</span>
-                                    <input type="color" id="paramRoundingGuideColor" value="#94a3b8" title="Цвет направляющих">
-                                    <span class="hint-text">Прозрачность</span>
-                                    <input type="range" id="paramRoundingGuideOpacity" min="0" max="100" value="28" style="flex:1;">
-                                    <span id="valRoundingGuideOpacity" class="text-mono editable-number-value">28%</span>
+                            <div class="rounding-mode-row rounding-compact-row">
+                                <span class="hint-text">Метод</span>
+                                <div class="scene-blend-mode-stepper rounding-method-stepper">
+                                    <button id="roundingPrevMethod" type="button" aria-label="Предыдущий метод скругления" title="Предыдущий метод">‹</button>
+                                    <select id="paramRoundingCornerType" aria-label="Тип скругления"><option value="simple" selected>Простой</option><option value="fourier">Фурье (F)</option><option value="local">Spline+ Local</option><option value="classic">Spline+ Classic</option></select>
+                                    <button id="roundingNextMethod" type="button" aria-label="Следующий метод скругления" title="Следующий метод">›</button>
                                 </div>
                             </div>
+                            <div id="roundingRadiusPolicyRow" class="rounding-compact-radius">
+                                <label class="hint-text"><input id="paramMonoradiusCheck" type="checkbox" checked> Монорадиус</label>
+                                <select id="paramRoundingMode" class="hidden" tabindex="-1" aria-hidden="true"><option value="standard">Обычный</option><option value="monoradius" selected>Монорадиус</option></select>
+                            </div>
+
                         </div>
                     </div>
                 <div class="ui-block">
@@ -2006,10 +1985,14 @@
                 <div id="profileSettingsGroup" class="control-group shape-settings-group">
                     <div class="control-group-title">
                         <span>Профиль отрезка</span>
-                        <button id="btnResetProfile" style="padding:2px 6px; font-size:10px;">Сброс</button>
+                        <button id="btnResetProfile" title="Сбросить профиль в прямую. При синем морфинге — за следующую полную фазу." style="padding:2px 6px; font-size:10px;">Сброс</button>
                     </div>
 
-                    <div class="control-row">
+                    <div class="control-row profile-library-controls">
+                        <div class="profile-closure-options" role="group" aria-label="Замыкание профиля">
+                            <label id="profileCloseRow" title="Соединять конец каждого профиля с началом следующего. Продлённый контур остаётся открытым."><input type="checkbox" id="paramClosedLoop" checked><span>Смыкать профиль</span></label>
+                            <label id="spiralRoundSeamsRow" title="Разрешить скругление замыканий по заданному проценту скругления вершин. Если выключено, соединение остаётся прямым."><input type="checkbox" id="paramSpiralRoundSeams" checked><span>Скругление замыканий</span></label>
+                        </div>
                         <div id="profileLibraryTabs" class="profile-library-tabs" role="tablist" aria-label="Группы шаблонов профилей">
                             <div class="profile-library-tab active" data-profile-group="standard" role="tab" tabindex="0" aria-selected="true"><input type="checkbox" data-morph-profile-group="standard" checked aria-label="Использовать Стандарт в синем морфинге"><span>1 Стандарт</span></div>
                             <div class="profile-library-tab" data-profile-group="closed" role="tab" tabindex="0" aria-selected="false"><input type="checkbox" data-morph-profile-group="closed" aria-label="Использовать Замкнутые в синем морфинге"><span>2 Замкнутые</span></div>
@@ -2033,10 +2016,8 @@
                         <button data-mode="freehand_raw" class="profile-mode-btn">От руки</button>
                     </div>
 
-                    <div id="profileModeLive" class="profile-mode-live" hidden></div>
-
                     <div class="profile-canvas-container">
-                        <canvas id="profileCanvas" width="340" height="160"></canvas>
+                        <canvas id="profileCanvas" width="340" height="160" data-ui-tooltip="Двойной клик — точка. Зажмите ЛКМ на пустом месте для прокрутки, колёсико — зум." aria-description="Двойной клик — точка. Зажмите ЛКМ на пустом месте для прокрутки, колёсико — зум."></canvas>
                         <div class="profile-overlay-controls">
                             <button id="btnProfileZoomIn">+</button>
                             <button id="btnProfileZoomOut">-</button>
@@ -2048,14 +2029,6 @@
                         <button type="button" data-freehand-quality="medium">Интерполяция в сплайн<br><small>средняя</small></button>
                         <button type="button" data-freehand-quality="minimal">Интерполяция в сплайн<br><small>перо (свободная)</small></button>
                     </div>
-                    <div id="profileSplineRenderRow" class="profile-spline-render-row" title="Плавный — непрерывный centripetal Bézier. Дискретный — единая ломаная по выбранному числу точек. Скругление дискретного режима использует алгоритм v220; в плавном режиме скругляется сам spline.">
-                        <span>Режим сплайна</span>
-                        <div class="profile-spline-render-switch" role="group" aria-label="Режим отрисовки сплайна">
-                            <button type="button" data-spline-render-mode="smooth" class="active" aria-pressed="true">Плавный</button>
-                            <button type="button" data-spline-render-mode="discrete" aria-pressed="false">Дискретный</button>
-                        </div>
-                        <label class="profile-spline-point-editor" title="Число опорных/дискретных точек сплайна. Используется также как сетка соответствия при Morphing."><span>Точки</span><input id="profileSplinePointCount" type="number" min="4" max="256" step="1" value="12" inputmode="numeric" aria-label="Число точек сплайна"><span id="profileSplinePointCountText" class="profile-spline-point-count">точ.</span></label>
-                    </div>
                     <div id="profileModeTransitionRow" class="profile-spline-render-row profile-mode-transition-row" title="Как сглаживать смену Отрезки ↔ Сплайн во время Morphing. Меняются только управляющие касательные Bézier — число GPU-сегментов не увеличивается.">
                         <span>Смена режима</span>
                         <div class="profile-spline-render-switch" role="group" aria-label="Сглаживание перехода Отрезки — Сплайн">
@@ -2064,14 +2037,13 @@
                             <button type="button" data-profile-mode-transition="end" aria-pressed="false">Конец фазы</button>
                         </div>
                     </div>
-                    <div id="profileModeTransitionPercentRow" class="profile-spline-render-row profile-mode-transition-percent-row hidden" title="Доля фазы, отведённая на плавный переход. 0% — моментально, 100% — вся фаза.">
-                        <span>Часть фазы</span>
+                    <div id="profileModeTransitionPercentRow" class="profile-phase-points-row">
+                        <label for="profileModeTransitionPercent" title="Доля фазы, отведённая на переход в начале или конце фазы. 0% — моментально, 100% — вся фаза.">Часть фазы</label>
                         <input id="profileModeTransitionPercent" type="range" min="0" max="100" step="1" value="20" aria-label="Доля фазы для смены режима">
                         <span id="profileModeTransitionPercentValue" class="text-mono">20%</span>
+                        <label class="profile-spline-point-editor" title="Число точек сплайна и сетка соответствия при Morphing."><span>Точки</span><input id="profileSplinePointCount" type="number" min="4" max="256" step="1" value="12" inputmode="numeric" aria-label="Число точек сплайна"></label>
                     </div>
-                    <p class="hint-text">
-                        ℹ️ Двойной клик — точка. Зажмите ЛКМ на пустом месте для прокрутки, колёсико — зум.
-                    </p>
+                    <div id="profileModeLive" class="profile-mode-live">Отрезки → Отрезки · 100%</div>
                 </div>
 
 
@@ -2153,6 +2125,25 @@
                 <button id="btnResetSceneBlend" class="scene-blend-reset" type="button">Сбросить: Normal · 100%</button>
             </div>
 
+            <div id="geometryGuidesMenu" class="scene-blend-menu geometry-guides-menu hidden no-viewport-gesture" role="dialog" aria-label="Геометрические ориентиры">
+                <label><input type="checkbox" id="testMorphSkeleton"><span>Скелет</span></label>
+                <label><input type="checkbox" id="paramShowBoundingCircle"><span>Опорная окружность</span></label>
+                <label><input type="checkbox" id="paramShowRoundingGuides"><span>Продолжения линий скругления</span></label>
+                <div id="roundingGuideControls" class="hidden" style="margin-top:5px;">
+                    <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                        <input type="checkbox" id="paramRoundingGuidesDashed" checked>
+                        <span class="hint-text" style="margin:0;">Пунктир направляющих</span>
+                    </label>
+                    <div class="row-inputs" style="margin-top:6px;">
+                        <span class="hint-text">Цвет</span>
+                        <input type="color" id="paramRoundingGuideColor" value="#94a3b8" data-ui-tooltip="Цвет направляющих">
+                        <span class="hint-text">Прозрачность</span>
+                        <input type="range" id="paramRoundingGuideOpacity" min="0" max="100" value="28" style="flex:1;">
+                        <span id="valRoundingGuideOpacity" class="text-mono editable-number-value">28%</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="floating-controls" id="floatingViewportControls">
                 <div class="floating-display-controls" aria-label="Настройки фона и окружности">
                     <label class="display-color-control" title="Цвет фона" aria-label="Цвет фона">
@@ -2163,10 +2154,7 @@
                     <button id="btnClearBackgroundImage" class="btn-icon background-image-clear hidden" type="button" title="Убрать фоновую картинку" aria-label="Убрать фоновую картинку">×</button>
                     <input id="backgroundImageInput" type="file" accept="image/*" hidden>
                     <input type="checkbox" id="paramShowGrid" hidden aria-hidden="true" tabindex="-1">
-                    <label class="display-check" title="Показывать окружность" aria-label="Показывать окружность">
-                        <input type="checkbox" id="paramShowBoundingCircle">
-                        <span>◌</span>
-                    </label>
+                    <button id="btnGeometryGuides" class="btn-icon display-control geometry-guides-button" type="button" aria-label="Геометрические ориентиры" aria-pressed="false" aria-expanded="false" aria-controls="geometryGuidesMenu" aria-haspopup="dialog" data-ui-tooltip="ЛКМ — все ориентиры; ПКМ — выбрать скелет, окружность и продолжения линий">◌</button>
                     <input type="color" id="paramBoundingCircleColor" value="#94a3b8" hidden aria-hidden="true" tabindex="-1">
                 </div>
                 <div class="divider"></div>

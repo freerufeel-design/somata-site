@@ -14,6 +14,7 @@ import { morphInterpolationTForCurrentMode } from '../geometry/morph-frame.js';
 import { encodeGpuMorphArcTable, noteGpuMorphArcTableSubmitted } from './morph-arc-resource.js';
 import { spiroGpuEnsureArcPrerequisite } from '../render/gpu-command-scheduler.js';
 import { noteSuppressedError } from '../core/suppressed-errors.js';
+import { FOURIER_LAMP_WGSL } from './fourier-lamp-carrier.js';
 
 const SOMATA_LAMP_BLEND_MODES = Object.freeze([
   'gentle',
@@ -838,6 +839,7 @@ const WebGPULampRenderer = (() => {
     arcBatchPool = [];
   let arcBatchCount = 0,
     arcDraws = 0,
+    fourierLampDraws = 0,
     arcCorridorDraws = 0,
     arcAttachmentUploads = 0,
     arcPrerequisiteFusions = 0,
@@ -969,8 +971,10 @@ fn sampleMorphArc(pathIndex:u32,fraction:f32)->vec2<f32>{
 fn sampleMorphArcSegment(pathIndex:u32,segmentIndex:f32,segmentT:f32)->vec2<f32>{
     let r=morphPathSegmentRanges[pathIndex];let n=max(1u,r.y);let si=min(n-1u,u32(max(0.0,segmentIndex)+0.5));return sampleArcMicro(r.x+si,clamp(segmentT,0.0,1.0));
 }
+${FOURIER_LAMP_WGSL}
 fn arcLampCenter(i:u32)->vec2<f32> {
     let anchor = corridorLampData[4u*i];
+    if(u.root1.w < -0.5){return sampleFourierLamp(anchor.y);}
     let segment = corridorLampData[4u*i+3u];
     let path = u32(anchor.x+0.5);
     if (segment.y > 0.0) { return sampleMorphArcSegment(path,segment.z,segment.w)+anchor.zw; }
@@ -1004,6 +1008,7 @@ fn arcLampOut(corner:vec2<f32>,li:u32,copyIndex:u32,useCopy:bool)->VSOut{
     let centerLocal=arcLampCenter(li);var center:vec2<f32>;var screenScale:f32;var copyAlpha=1.0;
     if(useCopy){let c0=corridorCopyData[copyIndex*2u];let c1=corridorCopyData[copyIndex*2u+1u];let f00=u.root0.x*c0.x+u.root0.y*c1.x;let f01=u.root0.x*c0.y+u.root0.y*c1.y;let f10=u.root0.z*c0.x+u.root0.w*c1.x;let f11=u.root0.z*c0.y+u.root0.w*c1.y;center=vec2<f32>(f00*centerLocal.x+f01*centerLocal.y+u.root1.x,f10*centerLocal.x+f11*centerLocal.y+u.root1.y);screenScale=length(vec2<f32>(f00,f10));copyAlpha=c0.z;if(arcEndpoint(li) && u.overlapMode!=0u){copyAlpha*=arcSeamVisibility(copyIndex,centerLocal,abs(l3.y));}}
     else{center=vec2<f32>(u.root0.x*centerLocal.x+u.root0.y*centerLocal.y+u.root1.x,u.root0.z*centerLocal.x+u.root0.w*centerLocal.y+u.root1.y);screenScale=length(vec2<f32>(u.root0.x,u.root0.z));}
+    if(u.root1.w < -0.5){screenScale=u.root1.z;}
     let outer=max(1.0,l1.x*screenScale);let p=center+corner*outer;o.position=vec4<f32>(p.x/u.viewport.x*2.0-1.0,1.0-p.y/u.viewport.y*2.0,0.0,1.0);
     o.q=corner;o.body=l1.y;o.color=vec3<f32>(l1.z,l1.w,l2.x);o.soft=l2.y;o.bright=l2.z;o.lampType=l2.w;o.alpha=l3.x*copyAlpha*arcLampVisibility(li,centerLocal,abs(l3.y),l3.x);return o;
 }
@@ -2572,9 +2577,11 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
     const items = visualPlan?.items,
       cfg = drawPlan?.config || visualPlan?.cfg || state.lamps || {},
       table = prepared?.gpuMorphArcTable,
-      arcRec = table?._gpuMorphArcResource;
-    if (!ready || !items?.length || alpha <= 0.001 || !canUse(cfg) || !arcRec?.ready || !frameCtx)
+      arcRec = table?._gpuMorphArcResource,
+      fourier = prepared?.fourierLampCarrier;
+    if (!ready || !items?.length || alpha <= 0.001 || !canUse(cfg) || (!fourier && !arcRec?.ready) || !frameCtx)
       return false;
+    if (fourier && (fourier.device!==device || !fourier.buffer || copies?.length || lampTrailEnabled() || cfg.extinguishIntersections===true || cfg.positionMode!=='arbitrary' || !items.every(v=>v.pathIndex===0 && v.lampHasAttachFraction && v.lampContourBound && Number.isFinite(v.lampAttachFraction)))) return false;
     noteFrameBlend(cfg);
     const root = ctx?.getTransform?.();
     if (!root) return false;
@@ -2666,13 +2673,19 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
       batch.uniformF32[8] = re;
       batch.uniformF32[9] = rf;
     }
-    batch.uniformF32[10] = Math.max(1, Number(arcRec.subdiv) || 1);
+    batch.uniformF32[10] = Math.max(1, Number(arcRec?.subdiv) || 1);
     // A strict Spiral Line draws the resident fastRail as straight microsegments.
     // Its Arc table (visibleRailExact) contains those SAME segments.
     // Evaluating an underlying Bezier between segment endpoints makes
     // lamp centres drift off the pixels actually drawn by Line.
     // Only sample the retained cubic for non-fastRail Arc tables.
-    batch.uniformF32[11] = arcRec.visibleRailExact === true ? 0 : arcRec.morphRec?.cubicBuffer ? 1 : 0;
+    batch.uniformF32[11] = arcRec?.visibleRailExact === true ? 0 : arcRec?.morphRec?.cubicBuffer ? 1 : 0;
+    if (fourier) {
+      // Positions already include the exact Line transform. Radius still uses
+      // the original local-to-screen scale; never transform the centre twice.
+      batch.uniformU32[3]=0;
+      batch.uniformF32.set([1,0,0,1,0,0,Math.hypot(ra,rb),fourier.closed?-2:-1],4);
+    }
     device.queue.writeBuffer(batch.uniformBuffer, 0, batch.uniformF32.buffer, 0, 48);
     const pipe = corridor ? arcCorridorLampPipeline : arcLampPipeline;
     batch.uniformBindGroup = device.createBindGroup({
@@ -2699,9 +2712,9 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
     const entries = [
       { binding: 0, resource: { buffer: lampBuffer } },
       { binding: 1, resource: { buffer: corridor ? copyBuffer : dummyStorageBuffer } },
-      { binding: 2, resource: { buffer: arcRec.segmentBuffer } },
-      { binding: 3, resource: { buffer: arcRec.pathSegmentRangeBuffer } },
-      { binding: 5, resource: { buffer: arcRec.morphRec.cubicBuffer } },
+      { binding: 2, resource: { buffer: fourier ? fourier.buffer : arcRec.segmentBuffer } },
+      { binding: 3, resource: { buffer: fourier ? dummyStorageBuffer : arcRec.pathSegmentRangeBuffer } },
+      { binding: 5, resource: { buffer: fourier ? dummyStorageBuffer : arcRec.morphRec.cubicBuffer } },
     ];
     const bg = device.createBindGroup({ layout: pipe.getBindGroupLayout(1), entries });
     if (corridor) batch.corridorBindGroup = bg;
@@ -2710,8 +2723,8 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
     batch.copyCount = corridor ? copyCount : 1;
     batch.slot = slot;
     batch.table = table;
-    batch.kind = 'arc';
-    batch.arcScheduled = spiroGpuEnsureArcPrerequisite(frameCtx, table);
+    batch.kind = fourier ? 'fourier' : 'arc';
+    batch.arcScheduled = !fourier && spiroGpuEnsureArcPrerequisite(frameCtx, table);
     batch.corridor = corridor;
     if (lampTrailEnabled()) {
       freezeFrameHash = lampHashMix(freezeFrameHash, lampMotionHash);
@@ -3078,7 +3091,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
         encodedArc = new WeakSet();
       for (let ai = 0; ai < arcBatchCount; ai++) {
         const batch = arcBatchPool[ai];
-        if (batch?.kind === 'topology') continue;
+        if (batch?.kind === 'topology' || batch?.kind === 'fourier') continue;
         const table = batch?.table,
           rec = table?._gpuMorphArcResource,
           t = morphInterpolationTForCurrentMode(table?.gpuMorphT);
@@ -3123,7 +3136,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
         const batch = arcBatchPool[ai];
         if (!batch?.lampCount) continue;
         const topology = batch.kind === 'topology';
-        if (!topology && !batch?.table) continue;
+        if (!topology && batch.kind !== 'fourier' && !batch?.table) continue;
         hdrPass.setPipeline(
           topology
             ? batch.corridor
@@ -3140,7 +3153,8 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
         if (topology) {
           if (batch.corridor) topologyCorridorDraws++;
           else topologyDraws++;
-        } else if (batch.corridor) arcCorridorDraws++;
+        } else if (batch.kind === 'fourier') fourierLampDraws++;
+        else if (batch.corridor) arcCorridorDraws++;
         else arcDraws++;
       }
       hdrPass.end();
@@ -3468,6 +3482,7 @@ fn recolorPeak(c:vec3<f32>,tint:vec3<f32>)->vec3<f32>{let p=max(max(c.r,c.g),c.b
         draws: corridorDraws,
         fallbacks: corridorFallbacks,
       },
+      fourierResident: { draws: fourierLampDraws, readbacks: 0, policy: 'shared indexed stroke buffer, CPU semantic plan' },
       arcNative: {
         batches: arcBatchCount,
         draws: arcDraws,

@@ -70,7 +70,7 @@ const SomataFrameContourService = (() => {
         state?.tunnel?.active !== true &&
         frameCtx.geometryPlan?.dynamic !== true &&
         frameCtx.layer.spiralFillEnabled === true &&
-        ['mathematical', 'interwinding'].includes(frameCtx.layer.spiralFillType) &&
+        ['mathematical', 'chopped', 'interwinding', 'bandXor'].includes(frameCtx.layer.spiralFillType) &&
         typeof getFrameGLStrokeCommands === 'function';
       if (!staticVisibleSpiralFill) return 'spiral-specialized-carrier';
     }
@@ -109,7 +109,7 @@ const SomataFrameContourService = (() => {
     return out.length >= 2 ? out : null;
   }
 
-  function buildScreenPaths(stroke, preserveGrowth = false) {
+  function buildScreenPaths(stroke, preserveGrowth = false, countStats = true) {
     const closed = [],
       open = [];
     for (const contour of stroke?.contours || []) {
@@ -227,7 +227,7 @@ const SomataFrameContourService = (() => {
           } else continue;
           q.used = true;
           pointCount += p.length - 1;
-          stats.joins++;
+          if (countStats) stats.joins++;
           changed = true;
           break;
         }
@@ -254,12 +254,14 @@ const SomataFrameContourService = (() => {
       const isClosed = chain.length >= 3 && samePoint(chain[0], chain[chain.length - 1]);
       if (isClosed) chain.pop();
       joined.push({ points: chain, closed: isClosed, strokeGrowth, source });
-      if (isClosed) stats.closed++;
-      else stats.open++;
+      if (countStats) {
+        if (isClosed) stats.closed++;
+        else stats.open++;
+      }
     }
     for (const p of closed) {
       joined.push(p);
-      stats.closed++;
+      if (countStats) stats.closed++;
     }
     return joined;
   }
@@ -537,6 +539,23 @@ const SomataFrameContourService = (() => {
       rec = owner?._frameContourRecord;
     return rec && Number(rec.frameId) === Number(owner?.frameId) ? rec : null;
   }
+  // Diagnostics only: never call get(), recordLineCarrier() or publish a frame record.
+  // Reuse commands that the Base renderer has already prepared; GPU-only paths
+  // without a CPU contour are explicitly unavailable.
+  function inspectRecorded(frameCtx) {
+    const owner = frameOwner(frameCtx);
+    const existing = current(owner);
+    if (existing) return existing;
+    if (owner?._glStrokeCommandFrameId !== owner?.frameId || !owner?._glStrokeCommands?.length ||
+        owner._glStrokeCommandHiddenGraffitiCarrier || isStrict(owner)) return null;
+    const stroke = owner._geometryKernelStrokeView;
+    if (!stroke?.contours?.length || stroke.continuityRisk) return null;
+    const matrix = lineLocalToScreenMatrix(owner), inv = invert(matrix);
+    if (!inv) return null;
+    const screenPaths = buildScreenPaths(stroke, false, false);
+    if (!screenPaths.length) return null;
+    return { paths: buildLocalPaths(screenPaths, inv, owner), localToScreen: matrix };
+  }
   function has(frameCtx) {
     return Boolean(current(frameCtx));
   }
@@ -603,6 +622,7 @@ const SomataFrameContourService = (() => {
     get,
     graffitiPaths,
     current,
+    inspectRecorded,
     has,
     paths,
     screenPaths,

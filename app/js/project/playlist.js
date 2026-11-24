@@ -28,6 +28,7 @@ import {
   isCompactMobileViewport,
   isSpiroProjectData,
   mergePersistentProjectSection,
+  migrateFourierProjectData,
   normalizeMenuSettings,
   normalizePlaylistProjectEntry,
   normalizePlaylistProjectNames,
@@ -706,7 +707,7 @@ async function importProjectsIntoPlaylist(files) {
       id: createLayerId('project'),
       name: importedName,
       updatedAt: new Date().toISOString(),
-      project: rec.project,
+      project: migrateFourierProjectData(rec.project),
     });
     added++;
   }

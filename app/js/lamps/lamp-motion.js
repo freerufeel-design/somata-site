@@ -53,7 +53,7 @@ function lampTopologyPresence(sourcePresent, targetPresent, travelProgress = 0) 
 }
 function lampPhaseLightTiming(now, duration) {
   const morph = runtimeState.morph;
-  if (!morph?.active || !(morph.cycleStart > 0) || !(morph.transitionMs > 0)) return null;
+  if (!morph?.active || !Number(morph.cycleStart) || !(morph.transitionMs > 0)) return null;
   const clock = morph.pauseStartedAt > 0 ? Math.min(now, morph.pauseStartedAt) : now;
   const elapsed = Math.max(0, Math.min(morph.transitionMs, clock - morph.cycleStart));
   return { elapsed, remaining: morph.transitionMs - elapsed, duration };
@@ -97,7 +97,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false,
   const HANDOFF_MS = 140;
   const inertiaCfg = getLampEvaluationConfig();
   const instantTarget = (Number(inertiaCfg?.morphInertia) || 0) <= -100;
-  const linearMode = ['linear', 'key', 'ghost'].includes(inertiaCfg?.morphMotionMode);
+  const linearMode = ['linear', 'key', 'stable', 'ghost'].includes(inertiaCfg?.morphMotionMode);
   let rt = lampMotionRuntime.blueMorph.get(layerKey);
   if (!rt) {
     rt = { serial: -1, assignments: new Map(), last: [], nextStable: 0 };
@@ -407,6 +407,7 @@ function preserveBlueMorphLampIdentity(layerIndex, points, contourBound = false,
 
 export {
   lampAdaptivePointCount,
+  lampLinearMorphProgress,
   lampEndpointTravelProgress,
   lampMotionRuntime,
   lampPhaseLightTiming,

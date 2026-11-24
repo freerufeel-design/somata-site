@@ -26,7 +26,7 @@ function buildExactSpiralEffectPaths(paths, layer) {
   const roundBase = Math.max(0, Math.min(2, Number(getRoundingStrength?.(layer?.rounding)) || 0));
   const geometryVersion = Math.max(0, Number(getLayerVersions(layer)?.geometry) || 0);
   const profileSignature = spiralProfileGeometrySignature(layer);
-  const key = `gv:${geometryVersion}|ps:${profileSignature}|${layer?.profileMode || 'segments'}|whole:${layer?.wholeCurveSpline === true ? 1 : 0}|${normalizeSplineRenderMode(layer?.splineRenderMode)}|${roundBase.toFixed(5)}|fourier:${state.fourierMode ? 1 : 0}:${Math.round((Number(state.fourierStrength) || 0) * 100) / 100}`;
+  const key = `gv:${geometryVersion}|ps:${profileSignature}|${layer?.profileMode || 'segments'}|whole:${layer?.wholeCurveSpline === true ? 1 : 0}|${normalizeSplineRenderMode(layer?.splineRenderMode)}|${roundBase.toFixed(5)}|fourier:${state.fourierMode ? 1 : 0}:${Number(state.fourierStrength) || 0}`;
   if (!dynamic && source && typeof source === 'object') {
     const hit = exactSpiralEffectRailCache.get(source);
     if (hit?.key === key) return hit.paths;
@@ -41,7 +41,8 @@ function buildExactSpiralEffectPaths(paths, layer) {
       const cubics =
         Array.isArray(path?._bezierSegments) && path._bezierSegments.length
           ? path._bezierSegments
-          : buildSpiralBezierSegments(pts, round, path?.cornerFlags || [], smooth);
+          : buildSpiralBezierSegments(pts, round, path?.cornerFlags || [], smooth, false,
+              layer?.roundingCornerType === 'simple' ? layer : null);
       if (cubics?.length) {
         const sampled = [];
         const sampledCorners = [];

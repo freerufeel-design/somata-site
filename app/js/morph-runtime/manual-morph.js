@@ -12,6 +12,8 @@ import { normalizeSpiralSquashY } from '../geometry/orbit-builder.js';
 import { SOMATA_STRICT_SPIRAL_GPU_PRESENTATION } from '../render/layer-scene-service.js';
 import { noteSuppressedError } from '../core/suppressed-errors.js';
 import { profileModeTransitionProgress } from '../geometry/morph.js';
+import { setSyncedBluePhaseDurationSec, syncGeometryMorphDuration, syncTapTimingIndicators } from '../audio/tap-tempo.js';
+import { syncMorphIntervalQuickButtons } from '../ui/morph-settings-panel.js';
 
 const SomataTestMorph = (() => {
   const defaults = Object.freeze({
@@ -920,7 +922,7 @@ const SomataTestMorph = (() => {
         window.__somataCorridorBeginHonestZeroIntro?.(layer.id, now, r.corridorMs / 1000, r.to);
       return;
     }
-    if (clock.paused || !(clock.phaseStart > 0)) return;
+    if (clock.paused || !clock.phaseStart) return;
 
     if (r.waitAfterPhaseSerial !== null) {
       if (clock.phaseSerial === r.waitAfterPhaseSerial) return;
@@ -945,11 +947,15 @@ const SomataTestMorph = (() => {
       r.bluePhaseStart != null &&
       clock?.active &&
       clock.phaseSerial === r.bluePhaseSerial &&
-      clock.phaseStart > 0 &&
-      Math.abs(clock.phaseStart - r.bluePhaseStart) > 0.001
+      clock.phaseStart !== 0 &&
+      (Math.abs(clock.phaseStart - r.bluePhaseStart) > 0.001 || Math.abs(clock.durationMs - r.totalDuration) > 0.001)
     ) {
-      r.start += clock.phaseStart - r.bluePhaseStart;
+      const ratio = r.totalDuration > 0 ? clock.durationMs / r.totalDuration : 1;
+      r.start = clock.phaseStart + (r.start - r.bluePhaseStart) * ratio;
       r.bluePhaseStart = clock.phaseStart;
+      r.corridorMs *= ratio;
+      r.duration *= ratio;
+      r.totalDuration = clock.durationMs;
     }
     const t = r.waitingForBluePhase
       ? 0
@@ -1015,8 +1021,8 @@ const SomataTestMorph = (() => {
       config: cfg,
       instant,
       waitingForBluePhase: !instant && waitForBlue,
-      waitAfterPhaseStart: clock?.active && clock.phaseStart > 0 ? clock.phaseStart : null,
-      waitAfterPhaseSerial: clock?.active && clock.phaseStart > 0 ? clock.phaseSerial : null,
+      waitAfterPhaseStart: clock?.active && clock.phaseStart !== 0 ? clock.phaseStart : null,
+      waitAfterPhaseSerial: clock?.active && clock.phaseStart !== 0 ? clock.phaseSerial : null,
       bluePhaseStart: null,
 
       sourcePaths: old?.displayPaths || null,
@@ -2022,8 +2028,6 @@ const SomataTestMorph = (() => {
       window.__somataSyncBlueFromGeometry(cfg.mode, cfg.slide, cfg.spiralMode);
     }
     if (enabled) enabled.checked = cfg.enabled === true;
-    const skeleton = document.getElementById('testMorphSkeleton');
-    if (skeleton) skeleton.checked = cfg.showSkeleton === true;
     const group = document.getElementById('testMorphControls');
     group?.classList.toggle('hidden', cfg.enabled !== true);
 
@@ -2045,22 +2049,18 @@ const SomataTestMorph = (() => {
     const duration = document.getElementById('testMorphDuration');
     const sync = document.getElementById('testMorphSyncWithMorph');
     if (sync) sync.checked = cfg.syncWithMorph === true;
-    const clock = cfg.syncWithMorph === true ? synchronizedBlueClock() : null;
     if (duration) {
-      duration.disabled = cfg.syncWithMorph === true;
-      duration.value =
-        cfg.syncWithMorph === true
-          ? String(
-              Math.round(
-                (clock?.durationMs || Math.max(100, Number(state.morph?.intervalSec) || 5) * 1000) / 100,
-              ) / 10,
-            )
-          : String(cfg.duration);
-      duration.title =
-        cfg.syncWithMorph === true
-          ? 'Длительность синхронизирована с полным циклом синего морфа (включая TAP)'
-          : '';
+      duration.disabled = false;
+      if (cfg.syncWithMorph !== true) {
+        duration.min = '0.1';
+        duration.max = '60';
+        if (document.activeElement !== duration) duration.value = String(cfg.duration);
+      }
+      duration.title = cfg.syncWithMorph === true
+        ? 'Длительность фазы синего морфа с учётом множителя. Ручное изменение отключает TAP для синего морфа.'
+        : '';
     }
+    syncGeometryMorphDuration();
     syncSpeedUI();
   }
   function updateTask() {
@@ -2152,14 +2152,26 @@ const SomataTestMorph = (() => {
       ['testMorphSlide', 'slide', (el) => (SLIDES.has(el.value) ? el.value : defaults.slide)],
       ['testMorphDuration', 'duration', (el) => clamp(el.value, 0.1, 60, 1)],
       ['testMorphSyncWithMorph', 'syncWithMorph', (el) => el.checked === true],
-      ['testMorphSkeleton', 'showSkeleton', (el) => el.checked === true],
     ];
     for (const [id, key, read] of options) {
       const el = document.getElementById(id);
       if (!el) continue;
-      const handler = () => change(key, read(el));
+      const handler = () => {
+        if (key === 'duration' && config(selectLayer()).syncWithMorph === true) {
+          // Commit on change (including the existing stepper), not while typing.
+          setSyncedBluePhaseDurationSec(el.value);
+          syncTapTimingIndicators();
+          syncMorphIntervalQuickButtons();
+          el.value = String(Math.round((synchronizedBlueClock()?.durationMs || 1000)) / 1000);
+          requestMainCanvasRender();
+          return;
+        }
+        change(key, read(el));
+      };
       el.addEventListener('change', handler);
-      if (key === 'duration') el.addEventListener('input', handler);
+      if (key === 'duration') el.addEventListener('input', () => {
+        if (config(selectLayer()).syncWithMorph !== true) handler();
+      });
     }
     // Use Blue's existing controls and event bindings; these are not new project settings.
     document.getElementById('testMorphFadePercent')?.addEventListener('input', (e) => {

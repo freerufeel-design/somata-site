@@ -14,7 +14,7 @@ import { GeometryKernel } from '../geometry/kernel.js';
 import { smoothMorphPath } from '../geometry/morph.js';
 import { getEffectiveSpiralMorphTransport } from '../morph-runtime/morph-mode.js';
 import { useSmoothSplinePath } from '../geometry/profile-model.js';
-import { buildFourierWavePoints } from '../geometry/fourier.js';
+import { buildFourierWavePoints, prepareGpuFourierRail } from '../geometry/fourier.js';
 import { splineCubicPoint, splinePathForDraw } from '../geometry/spline-rounding.js';
 import { spiralSmoothStep01, spiralStyleWithAlpha } from '../geometry/spiral/polyline.js';
 import {
@@ -233,7 +233,7 @@ function prepareSpiralStrokePoints(
   const round = Math.max(0, Math.min(2, Number(roundingFrac) || 0));
   const frameTag = Number(points._frameGeometryId) || 0;
   const fourier = state.fourierMode === true ? 1 : 0;
-  const fourierStrength = Math.round((Number(state.fourierStrength) || 0) * 100) / 100;
+  const fourierStrength = Number(state.fourierStrength) || 0;
   const key = `${smoothSpline === true ? 1 : 0}|${splineShape ? 1 : 0}|shape:${filletLayer?.roundingShape || 'spline'}|corner:${filletLayer?.roundingCornerType || 'classic'}|${round.toFixed(5)}|${fourier}|${fourierStrength}`;
   const rec = spiralStrokePreparedCache.get(points);
   if (rec && rec.key === key && rec.cornerFlags === cornerFlags && rec.frameTag === frameTag) {
@@ -243,7 +243,9 @@ function prepareSpiralStrokePoints(
     return rec.points;
   }
   let pts = points;
-  if (!fourier && points._somataJoinedFillet === true && points._spiroRetainedCubics?.length) {
+  if (fourier) {
+    pts = buildFourierWavePoints(points, false);
+  } else if (points._somataJoinedFillet === true && points._spiroRetainedCubics?.length) {
     const cubics = points._spiroRetainedCubics;
     pts = [{ ...cubics[0].p0, widthScale: cubics[0].widthScale0 }];
     for (const q of cubics)
@@ -254,13 +256,28 @@ function prepareSpiralStrokePoints(
           b = q.widthScale1 ?? 1;
         pts.push({ ...p, widthScale: a + (b - a) * u });
       }
+  } else if (filletLayer?.roundingCornerType === 'simple' &&
+      ((!points._spiroRetainedCubics?.length && (smoothSpline === true || round > 0.001)) ||
+        (filletLayer.profileMode === 'spline' && points._spiroRetainedCubics?.length))) {
+    // Use the same exact legacy cubics as the GPU stroke. Do not route
+    // Segments/Discrete through Spline+ solely because rounding is positive.
+    const cubics = buildSpiralBezierSegments(points, round, cornerFlags, smoothSpline, splineShape, filletLayer);
+    if (cubics.length) {
+      pts = [{ ...cubics[0].p0, widthScale: cubics[0].widthScale0 }];
+      for (const q of cubics) {
+        const a = Math.max(0.02, Number(q.widthScale0) || 1),
+          b = Math.max(0.02, Number(q.widthScale1) || a);
+        for (let j = 1; j <= 12; j++) {
+          const u = j / 12;
+          pts.push({ ...splineCubicPoint(q, u), widthScale: Math.exp(Math.log(a) * (1 - u) + Math.log(b) * u) });
+        }
+      }
+    }
   } else if (smoothSpline === true) {
     pts = sampleSmoothSpiralSplineForVariableWidth(points, round, cornerFlags, splineShape, filletLayer);
   } else {
     if (round > 0.001 && Array.isArray(cornerFlags) && cornerFlags.some(Boolean))
       pts = smoothMorphPath(points, false, round, cornerFlags);
-    if (state.fourierMode && pts?._fourierPrepared !== true)
-      pts = buildFourierWavePoints(pts, false, `spiral:${round.toFixed(4)}`);
   }
   spiralStrokePreparedCache.set(points, { key, cornerFlags, frameTag, points: pts });
   spiralStrokeHotpathStats.builds++;
@@ -287,7 +304,9 @@ function strokeVariableWidthSpiralPath(
 
   const round = Math.max(0, Math.min(2, Number(roundingFrac) || 0));
   const splineShape = round > 0 && filletLayer && !state.fourierMode;
-  if (splineShape) smoothSpline = true;
+  if (splineShape && filletLayer?.roundingCornerType !== 'simple') smoothSpline = true;
+  if (filletLayer?.roundingCornerType === 'simple' && !state.fourierMode)
+    smoothSpline = smoothSpline === true && useSmoothSplinePath(filletLayer);
   const baseWidth = Math.max(0.05, Number(ctx.lineWidth) || 1);
   const alphaStart = Math.max(0, Math.min(1, Number(ctx.globalAlpha) || 0));
   const alphaEndRatioRaw = Number(ctx.__spiralCorridorAlphaEndRatio);
@@ -329,6 +348,10 @@ function strokeVariableWidthSpiralPath(
     }
   }
 
+  if (ctx.__somataGpuFourierRecording === true && state.fourierMode && !alphaRampActive) {
+    const rail = prepareGpuFourierRail(points, false);
+    if (rail && ctx.__recordGpuFourierSpiral?.(rail, baseWidth, strokeGrowth)) return;
+  }
   let pts = prepareSpiralStrokePoints(points, round, cornerFlags, smoothSpline, splineShape, filletLayer);
   if (!Array.isArray(pts) || pts.length < 2) return;
 
@@ -587,6 +610,7 @@ function renderLayerOrbitPaths(ctx, layer, prepared = null) {
             false,
             null,
             layer,
+            path.bridgeRoundFlags || [],
           );
         if (!ctx.__suppressFill && layer.fill && path.closed) fillCanvasGeometry(ctx, layer);
         if (!ctx.__suppressStroke) ctx.stroke();

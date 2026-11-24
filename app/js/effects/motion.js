@@ -1,3 +1,4 @@
+import { getEffectiveLayerRadius, getLayerRadiusMultiplier } from '../geometry/reference-circle.js';
 import '../core/coordinated-carrier.js'; // initialisation order: this module runs after it
 import {
   getActivePlaylistPaletteKeys,
@@ -50,6 +51,7 @@ const motionRuntime = {
   lastTime: 0,
   rotationRad: 0,
   layerRotationRad: new Map(),
+  spiralTravelAngles: new Map(),
   cameraPhase: 0,
   colorPhase: 0,
 };
@@ -245,6 +247,37 @@ function getSpiralMorphTunnelPhaseRadians(copy, layer) {
 
     const direction = order < -1e-8 ? -1 : 1;
     delta = ((Math.PI * 2 * step) / n) * direction;
+  }
+  // Ordinary Corridor copies have an immutable identity across travel cycles.
+  // Remove the fractional travel angle (scale still animates), but retain the
+  // angular difference required by the spiral seam between adjacent copies.
+  // Accumulate the common angle at integer-cycle crossings rather than using
+  // an ever-growing physical index times a changing morph period.
+  const travel = Number(state.tunnel.travelPhase);
+  if (
+    state.tunnel.spiralTravelRotation !== true &&
+    Number.isFinite(travel) &&
+    Number.isFinite(Number(copy?.copyId)) &&
+    Math.abs(position - copyId - travel) < 1e-6 &&
+    !Number.isFinite(copy?._spiralUnfoldFocusPosition)
+  ) {
+    const cycle = Math.floor(travel);
+    const fraction = travel - cycle;
+    const key = String(layer.id || '');
+    const tau = Math.PI * 2;
+    const wrap = (a) => ((a % tau) + tau) % tau;
+    const angles = motionRuntime.spiralTravelAngles;
+    let ref = angles.get(key);
+    if (!ref) {
+      ref = { cycle, offset: wrap(-cycle * delta) };
+      angles.set(key, ref);
+      // Orange may replace layer IDs indefinitely; keep the cache bounded.
+      if (angles.size > 256) angles.delete(angles.keys().next().value);
+    } else if (cycle !== ref.cycle) {
+      ref.offset = wrap(ref.offset - (cycle - ref.cycle) * delta);
+      ref.cycle = cycle;
+    }
+    return (position - fraction - focusPos) * delta + ref.offset;
   }
   return (position - focusPos) * delta;
 }
@@ -546,10 +579,6 @@ function replayVectorRecording(ctx, recording, alphaMultiplier = 1, scaleRatio =
   ctx.restore();
 }
 
-function getLayerRadiusMultiplier(layer) {
-  const v = Number(layer?.radiusMultiplier);
-  return Number.isFinite(v) ? Math.max(0, v) : 1;
-}
 function getLayerStrokeWidthMultiplier(layer) {
   const v = Number(layer?.strokeWidthMultiplier);
   return Number.isFinite(v) ? Math.max(0, v) : 1;
@@ -561,11 +590,6 @@ function getLayerGlowMultiplier(layer) {
 function getLayerGlowIntensityMultiplier(layer) {
   const v = Number(layer?.glowIntensityMultiplier);
   return Number.isFinite(v) ? Math.max(0, v) : 1;
-}
-function getEffectiveLayerRadius(layer, fallback = 220) {
-  const raw = Number(layer?.radius);
-  const base = Number.isFinite(raw) ? raw : Number(fallback) || 220;
-  return Math.max(1, base * getLayerRadiusMultiplier(layer));
 }
 
 function layerGeometrySignature(layer) {
@@ -590,8 +614,9 @@ function layerGeometrySignature(layer) {
     layer.extendedProfileEnabled === true ? (layer.extendedProfileMode === 'repeat' ? 2 : 1) : 0;
   const lineJoinType = layer.lineJoinType || '';
   const roundingMode = layer.roundingMode === 'monoradius' ? 'monoradius' : 'standard';
-  const roundingShape = 'spline-plus';
-  const roundingCornerType = ['local', 'simple'].includes(layer.roundingCornerType)
+  const roundingShape = layer.roundingCornerType === 'simple' ? 'simple-6.7' :
+    layer.roundingCornerType === 'fourier' ? 'fourier' : 'spline-plus';
+  const roundingCornerType = ['local', 'simple', 'fourier'].includes(layer.roundingCornerType)
     ? layer.roundingCornerType
     : 'classic';
   const roundingMaxRadiusDrop = Number(layer.roundingMaxRadiusDrop ?? 30);
@@ -778,7 +803,7 @@ function applyMonoradiusRoundingCompensation(paths, layer, roundingValue) {
   // return a zero sentinel so that single existing scan supplies
   // the EXACT same Math.sqrt(maxRadiusSq) result. Mono Radius keeps
   // its own measurement/iteration contract unchanged.
-  if (layer?.roundingMode !== 'monoradius' || !Array.isArray(paths) || !paths.length)
+  if (layer?.roundingCornerType === 'fourier' || layer?.roundingMode !== 'monoradius' || !Array.isArray(paths) || !paths.length)
     return { paths, targetRadius: 0, scale: 1 };
   const targetRadius = getEffectiveLayerRadius(layer, 220);
   if (
@@ -938,8 +963,9 @@ function buildLegacyLayerDrawData(layer) {
     // the underlying paths instead. A multi-turn Spiral can have
     // dozens of separate paths, so eagerly materializing them here
     // also allocates and merges paths that no renderer will read.
-    // Order=0 remains a polygon and retains the original cache.
-    if (typeof Path2D !== 'undefined' && !isSpiralLayer(layer)) {
+    // Fourier never consumes these Path2Ds either (including Canvas fallback).
+    // Order=0 remains a polygon and retains the original cache otherwise.
+    if (typeof Path2D !== 'undefined' && !isSpiralLayer(layer) && !state.fourierMode) {
       const roundingFrac = getRoundingStrength(layer.rounding);
       cached.path2ds = cached.paths.map((path) => {
         if (!path.points || path.points.length < 2) return null;
@@ -968,6 +994,7 @@ function buildLegacyLayerDrawData(layer) {
             false,
             null,
             layer,
+            path.bridgeRoundFlags || [],
           );
         return p;
       });

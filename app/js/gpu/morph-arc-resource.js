@@ -837,6 +837,7 @@ function currentGpuBezierMorphResource(layerIndex) {
         o.byVertices ||
         o.bySteps ||
         o.byShape ||
+        runtimeState.morph.manualProfileResetIds?.has(base?.id) ||
         state?.morph?.monoOrbitTransforms ||
         o.byRounding ||
         o.bySize ||

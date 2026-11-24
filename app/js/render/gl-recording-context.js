@@ -126,6 +126,7 @@ function createGeometryGLRecordingContext(baseCtx) {
       sp = workSubpaths[workSubpathCount] = { points: [], pointCount: 0, closed: false };
       if (phaseResidentMode) phaseResidentMorphRecorderStats.subpathPoolGrows++;
     }
+    sp.gpuFourier = null;
     sp.pointCount = 0;
     sp.closed = false;
     workSubpathCount++;
@@ -187,6 +188,7 @@ function createGeometryGLRecordingContext(baseCtx) {
         if (phaseResidentMode) phaseResidentMorphRecorderStats.subpathPoolGrows++;
       }
       dst.closed = src.closed === true;
+      dst.gpuFourier = src.gpuFourier || null;
       dst.segmentAlphas = null;
       const pts = dst.points || (dst.points = []);
       for (let pi = 0; pi < src.pointCount; pi++) {
@@ -280,6 +282,7 @@ function createGeometryGLRecordingContext(baseCtx) {
       stackDepth = 0;
       phaseResidentMode = phaseResident === true;
       this.__phaseResidentMode = phaseResidentMode;
+      this.__somataGpuFourierRecording = false;
       this.__disableAdaptiveSpiral = false;
       this.__somataPhaseSplineFastSampling = false;
       this.__spiroWholeTurnBatch = false;
@@ -659,6 +662,26 @@ function createGeometryGLRecordingContext(baseCtx) {
       cmd.screenLineWidth = screenWidth;
       cmd.strokeStyle = style;
       if (this.__spiroWholeTurnBatch === true) this.__spiroWholeTurnCommand = cmd;
+      return true;
+    },
+    // This descriptor-only recording is private to the Fourier GPU batch.
+    // Never bind it to GeometryKernel or the shared CPU contour.
+    __recordGpuFourierRail(rail) {
+      if (!this.__somataGpuFourierRecording || !rail || !this._matrix.every(Number.isFinite)) return false;
+      current = acquireWorkSubpath();
+      current.closed = rail.closed;
+      current.gpuFourier = { rail, matrix: this._matrix.slice(), variable: false };
+      return true;
+    },
+    __recordGpuFourierSpiral(rail, baseWidth, growth) {
+      if (!this.__somataGpuFourierRecording || !rail || !this._matrix.every(Number.isFinite)) return false;
+      this.beginPath();
+      if (!this.__recordGpuFourierRail(rail)) return false;
+      current.gpuFourier.variable = true;
+      const previous = this.lineWidth, cap = this.lineCap, join = this.lineJoin;
+      this.lineWidth = baseWidth; this.lineCap = this.lineJoin = 'round';
+      try { this.stroke(undefined, growth); }
+      finally { this.lineWidth = previous; this.lineCap = cap; this.lineJoin = join; }
       return true;
     },
     __strokeWithGrowth(growth) {

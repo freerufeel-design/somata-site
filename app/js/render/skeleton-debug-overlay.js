@@ -6,6 +6,7 @@ import { normalizeSpiralSquashY } from '../geometry/orbit-builder.js';
 window.SomataSkeletonOverlay = (() => {
   const id = 'skeletonOverlayCanvas';
   const seen = [];
+  let referenceCircle = null;
   const stats = {
     frames: 0,
     captured: 0,
@@ -41,6 +42,7 @@ window.SomataSkeletonOverlay = (() => {
   }
   function begin() {
     seen.length = 0;
+    referenceCircle = null;
   }
   function active(layerIndex) {
     const layer = state?.layers?.[layerIndex];
@@ -50,8 +52,9 @@ window.SomataSkeletonOverlay = (() => {
     const service = window.SomataSkeletonRuntime;
     if (!service) return null;
 
-    const shared = frameCtx.__somataSkeletonFrame || frameCtx.geometryProvider?.skeletonFrame;
-    if (Array.isArray(shared)) return shared;
+    const shared = [frameCtx.__somataSkeletonFrame, frameCtx.geometryProvider?.skeletonFrame]
+      .find(paths => Array.isArray(paths) && paths.length);
+    if (shared) return shared;
     const gp = frameCtx.geometryProvider,
       blue = frameCtx.blueMorphProvider;
     const runtime = window.SomataMorphRuntime;
@@ -79,7 +82,19 @@ window.SomataSkeletonOverlay = (() => {
       t = blue.geometryT;
     }
     if (spec) {
-      return []; // The compatibility renderer has no authoritative moving skeleton.
+      // Compatibility Blue polygon providers can skip publication of the
+      // primary frame. Evaluate the moving anchor graph, never the rendered
+      // contour. Prefer the phase's stable endpoint objects to per-frame clones.
+      if (blue?.active && blue.kind !== 'lightning' &&
+          (!gp || gp === blue || ['blue-circle-slide', 'blue-anchor-linear', 'blue-fade'].includes(gp.kind))) {
+        const phaseSpec = runtime.fromBlue(frameCtx.layerIndex) || spec;
+        const order = Number(frameCtx.layer?.spiralOrder) || 0;
+        return runtime.sampleSkeleton(phaseSpec, blue.geometryT ?? t, {
+          layer: frameCtx.layer,
+          order: frameCtx.layer?.spiralEnabled === true ? order : 0,
+        });
+      }
+      return []; // Other compatibility providers have no authoritative moving skeleton.
     }
     return service.staticFrame(frameCtx.layer);
   }
@@ -220,13 +235,36 @@ window.SomataSkeletonOverlay = (() => {
     }
     stats.captured++;
   }
+  // The guide is independent of line visibility, skeleton debug visibility,
+  // opacity, and the final GPU scene. Use the same viewport transform as before.
+  function captureReferenceCircle(radius, rootTransform) {
+    if (!state.showBoundingCircle || !Number.isFinite(radius) || radius <= 0 || !rootTransform) return;
+    const { a, b, c, d, e, f } = rootTransform;
+    referenceCircle = { radius, transform: [a, b, c, d, e, f] };
+  }
+  function drawReferenceCircle(ctx) {
+    if (!state.showBoundingCircle || !referenceCircle) return;
+    ctx.save();
+    ctx.setTransform(...referenceCircle.transform);
+    ctx.beginPath();
+    ctx.arc(0, 0, referenceCircle.radius, 0, Math.PI * 2);
+    ctx.setLineDash([6, 6]);
+    ctx.strokeStyle = state.boundingCircleColor || '#94a3b8';
+    ctx.globalAlpha = 0.42;
+    ctx.lineWidth = 1 / Math.max(state.zoom, 0.2);
+    ctx.shadowBlur = 0;
+    ctx.stroke();
+    ctx.restore();
+  }
   function present() {
     const ctx = ensure();
     if (!ctx) return;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    canvas.style.display = seen.length ? 'block' : 'none';
-    if (!seen.length) return;
+    const showGuide = state.showBoundingCircle && referenceCircle !== null;
+    canvas.style.display = seen.length || showGuide ? 'block' : 'none';
+    if (!seen.length && !showGuide) return;
+    drawReferenceCircle(ctx);
     let nPaths = 0,
       nPoints = 0;
     for (const rec of seen) {
@@ -270,5 +308,5 @@ window.SomataSkeletonOverlay = (() => {
     };
   }
   window.__somataSkeletonStatus = status;
-  return Object.freeze({ begin, capture, present, status });
+  return Object.freeze({ begin, capture, captureReferenceCircle, present, status, framePaths });
 })();

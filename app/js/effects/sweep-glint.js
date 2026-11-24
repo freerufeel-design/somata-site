@@ -3,7 +3,7 @@ import './graffiti-ribbon.js'; // initialisation order: this module runs after i
 import { currentSweepConfig, gcd, normalizeSweepFlashMode } from '../core/defaults-layers.js';
 import { getRoundingStrength } from '../core/palette.js';
 import { runtimeState, state } from '../core/state.js';
-import { buildFourierWavePoints } from '../geometry/fourier.js';
+import { buildFourierWavePoints, prepareFourierPathList } from '../geometry/fourier.js';
 import {
   acquireEffectPiece,
   buildPathLengthTable,
@@ -276,6 +276,7 @@ function buildHighPrecisionGlintPaths(frameCtx) {
   const source = getLayerFrameAuxiliaryPaths(frameCtx),
     layer = frameCtx?.layer;
   if (!Array.isArray(source) || !source.length || !layer) return source || [];
+  if (state.fourierMode) return prepareFourierPathList(source);
   const round = getRoundingStrength(layer.rounding),
     glintTolerance = highPrecisionGlintTolerance(layer);
   const dynamicSource =
@@ -288,7 +289,7 @@ function buildHighPrecisionGlintPaths(frameCtx) {
     return source;
   const staticCacheable = !dynamicSource && !isSpiralLayer(layer);
   const staticKey = staticCacheable
-    ? `${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode || 'segments'}|shape:${layer?.roundingShape || 'spline'}|r:${round.toFixed(5)}|tol:${glintTolerance.toFixed(2)}|fourier:${state.fourierMode ? 1 : 0}:${Math.round((Number(state.fourierStrength) || 0) * 100) / 100}`
+    ? `${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode || 'segments'}|shape:${layer?.roundingShape || 'spline'}|r:${round.toFixed(5)}|tol:${glintTolerance.toFixed(2)}|fourier:${state.fourierMode ? 1 : 0}:${Number(state.fourierStrength) || 0}`
     : '';
   if (staticCacheable) {
     const variants = persistentHighPrecisionGlintCache.get(source),
@@ -299,7 +300,7 @@ function buildHighPrecisionGlintPaths(frameCtx) {
   if (isSpiralLayer(layer)) {
     const out = source.map((path) => {
       let pts = path?.points || [];
-      if (round > 0.001 && Array.isArray(path?.cornerFlags) && path.cornerFlags.some(Boolean))
+      if (!state.fourierMode && round > 0.001 && Array.isArray(path?.cornerFlags) && path.cornerFlags.some(Boolean))
         pts = smoothMorphPath(pts, false, round, path.cornerFlags);
       if (state.fourierMode && pts?._fourierPrepared !== true)
         pts = buildFourierWavePoints(pts, false, `sweep-spiral:${round.toFixed(4)}`);
@@ -360,6 +361,7 @@ function buildHighPrecisionGlintPaths(frameCtx) {
         false,
         null,
         layer,
+        path.bridgeRoundFlags || [],
       );
     }
     return { ...path, points: sampler.points.length > 1 ? sampler.points : pts, cornerFlags: [] };
@@ -372,6 +374,7 @@ function buildHighPrecisionGlintPaths(frameCtx) {
       persistentHighPrecisionGlintCache.set(source, variants);
     }
     variants.set(staticKey, out);
+    if (state.fourierMode) while (variants.size > 8) variants.delete(variants.keys().next().value);
   }
   return out;
 }

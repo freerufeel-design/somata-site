@@ -761,8 +761,11 @@ function createMorphTargetsModule(deps) {
         isPreSampledSplineLayer(layer),
       );
 
-      let generatedProfile = state.morph.options.byShape ? createMorphProfileVariant() : null;
-      if (state.morph.diversity && state.morph.options.byShape) {
+      const resetProfile = runtimeState.morph.manualProfileResetIds?.has(layer.id) === true;
+      let generatedProfile = resetProfile
+        ? { profileKey: 'line', mode: 'segments', nodes: [{ x: 0, y: 0 }, { x: 1, y: 0 }], closedLoop: layer.closedLoop !== false }
+        : state.morph.options.byShape ? createMorphProfileVariant() : null;
+      if (!resetProfile && state.morph.diversity && state.morph.options.byShape) {
         for (let attempt = 0; attempt < 10 && sameProfileVariant(layer, generatedProfile); attempt++) {
           generatedProfile = createMorphProfileVariant();
         }

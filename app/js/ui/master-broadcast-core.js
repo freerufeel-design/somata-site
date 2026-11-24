@@ -91,6 +91,8 @@ const SomataMasterBroadcastCore = (() => {
     paramSuborbits: ['customSuborbits'],
     numSuborbits: ['customSuborbits'],
     paramSpiralConstruction: ['spiralConstructionMode'],
+    paramSpiralRoundSeams: ['spiralRoundSeams', 'lineJoinType'],
+    paramClosedLoop: ['closedLoop', 'spiralClosed'],
     paramSpiralZeroTransition: ['spiralZeroTransitionMode'],
     paramSpiralFocusHighlight: ['corridorFocusHighlight'],
     paramGeometryCircles: ['geometryCircles.enabled'],
@@ -102,6 +104,11 @@ const SomataMasterBroadcastCore = (() => {
     btnIncS: ['customSuborbits'],
     btnRegenerateChaosStar: ['chaosSeed'],
     showLamps: ['showLamps'],
+    lampSnapToContour: ['lamps.snapToContour', 'lamps.snapToPolygon', 'lamps.stickToRounding'],
+    lampDurationLinked: ['lamps.cornerInertiaLinked'],
+    lampCornerInertia: ['lamps.cornerInertiaSec'],
+    lampFreezeRainDegreesNumber: ['lamps.freezeRainDegrees'],
+    lampFreezeHueDegreesNumber: ['lamps.freezeHueDegrees'],
     showWeb: ['showWeb'],
     showSweep: ['sweep.glintEnabled'],
     showLightning: ['sweep.lightningEnabled'],
@@ -150,6 +157,7 @@ const SomataMasterBroadcastCore = (() => {
     lampAppearance: ['lamps.appearance'],
     lampPosition: ['lamps.positionMode'],
     lampMotion: ['lamps.morphMotionMode'],
+    lampAdaptiveChannel: ['lamps.adaptiveAdjustBrightness'],
     lampColorMode: ['lamps.colorMode', 'lamps.matchLineColor', 'lamps.rainbow'],
     lampColor: ['lamps.color', 'lamps.colorMode', 'lamps.matchLineColor', 'lamps.rainbow'],
   });
@@ -180,6 +188,14 @@ const SomataMasterBroadcastCore = (() => {
       if (Object.prototype.hasOwnProperty.call(source[root] || {}, property))
         keys.push(`${root}.${property}`);
     }
+    // Registry-owned controls need no duplicate hand-written Master mapping.
+    // Only accept actual authored layer paths, never global/routing settings.
+    if (!keys.length && id) {
+      for (const def of window.SomataParameterRegistry?.all?.() || []) {
+        if (def.ui?.mainId !== id || def.scope !== 'layer' || def.morph?.frameTarget === 'global') continue;
+        if (typeof def.morph?.framePath === 'string') keys.push(def.morph.framePath);
+      }
+    }
     return [...new Set(keys)].filter((path) => {
       const parts = path.split('.');
       let owner = source;
@@ -190,7 +206,10 @@ const SomataMasterBroadcastCore = (() => {
       return true;
     });
   }
-  return { clone, equal, collectChangedPaths, valueAt, applyPath, controlPaths };
+  const dataSelector = Object.keys(DATASET_FIELDS)
+    .map(key => `[data-${key.replace(/[A-Z]/g, c => '-' + c.toLowerCase())}]`)
+    .join(',');
+  return { clone, equal, collectChangedPaths, valueAt, applyPath, controlPaths, dataSelector };
 })();
 window.SomataMasterBroadcastCore = SomataMasterBroadcastCore;
 

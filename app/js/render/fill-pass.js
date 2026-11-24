@@ -288,8 +288,10 @@ function tryRenderLayerFillGPU(frameCtx) {
       geometryContractStats.nativeMeshFill++;
       return true;
     }
+    // A valid empty ribbon is not a missing mesh; don't draw a fallback.
+    if(frameCtx._spiralRibbonFillEmpty?.frameId===Number(frameCtx.frameId)&&frameCtx._spiralRibbonFillEmpty.mode===frameCtx.layer?.spiralFillType)return true;
     // A claimed FrameContour forbids a different Fill boundary fallback.
-    if (sharedOrdinary) return false;
+    if (sharedOrdinary || (isSpiralLayer(frameCtx.layer) && frameCtx.layer.spiralFillEnabled && ['chopped','bandXor'].includes(frameCtx.layer.spiralFillType))) return false;
   }
   if (contract?.fillRequested && FillMeshPreparer.canUseNative(frameCtx)) {
     const mesh = frameCtx._nativeFillMeshCandidate || frameCtx._fillMeshShadow;
@@ -515,7 +517,7 @@ function prepareOrdinaryFillBelowWeb(frameCtx) {
       frameCtx?.layer?.spiralFillEnabled === true &&
       frameCtx.layer.spiralFillType === 'mathematical' &&
       isSpiralLayer(frameCtx.layer);
-    const mathStatus = mathematical ? window.__somataSpiralMathematicalFillStatus?.()?.last : null;
+    const mathStatus = mathematical ? window.__somataSpiralMathematicalFillStatus?.()?.last : frameCtx._spiralRibbonFillEmpty?.mode===frameCtx.layer?.spiralFillType ? frameCtx._spiralRibbonFillEmpty : null;
     if (
       mathStatus?.frameId === Number(frameCtx.frameId) &&
       mathStatus.reason !== 'missing-current-line-master'

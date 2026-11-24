@@ -3,7 +3,7 @@ import '../gpu/line-effects-renderer.js'; // initialisation order: this module r
 import { getLayerVersions } from '../core/layer-versions.js';
 import { mainCtx } from '../core/render-runtime.js';
 import { runtimeState, somataFourierActive, state } from '../core/state.js';
-import { GeometryKernel } from '../geometry/kernel.js';
+import { GeometryKernel, getLayerGeometryContract } from '../geometry/kernel.js';
 import { getEffectiveSpiralMorphTransport } from '../morph-runtime/morph-mode.js';
 import { mainCanvas } from '../ui/profile-presets.js';
 import { spiralProfileGeometrySignature } from '../geometry/spiral/bezier-carrier.js';
@@ -630,7 +630,72 @@ function getFrameGLStrokeCommands(frameCtx, allowHiddenGraffitiCarrier = false) 
   return frameCtx._glStrokeCommands;
 }
 
+// Separate descriptor recorder: ordinary command caches and shared contour
+// consumers must never see an unfinished GPU-only path.
+function recordGpuFourierCommands(frameCtx, corridorMaster = false) {
+  const rec = createGeometryGLRecordingContext(mainCtx);
+  rec.__somataGpuFourierRecording = true;
+  rec.__suppressFill = true;
+  rec.globalAlpha = 1;
+  rec.strokeStyle = String((corridorMaster ? frameCtx.tunnelBaseStrokeColor : frameCtx.lightningStroke) || frameCtx.layer?.strokeColor || '#ffffff');
+  rec.lineWidth = Math.max(0.001, Number(frameCtx.strokeWidth) || Number(frameCtx.layer?.strokeWidth) || 1.5);
+  rec.lineCap = String(frameCtx.lineCap || 'round');
+  rec.lineJoin = String(frameCtx.lineJoin || 'round');
+  rec.miterLimit = Math.max(1, Number(frameCtx.miterLimit) || 6);
+  rec.globalCompositeOperation = 'source-over';
+  const oldBase = frameCtx.baseAlpha;
+  try {
+    if (corridorMaster) {
+      rec.__disableAdaptiveSpiral = isSpiralLayer(frameCtx.layer) && frameCtx.layer?.spiralClosed !== false;
+      frameCtx.baseAlpha = 1;
+      frameCtx.drawLayerGeometry(rec, 1);
+    } else frameCtx.drawLayerInstances(rec, true, null, false);
+  } catch (_) { return null; }
+  finally { if (corridorMaster) frameCtx.baseAlpha = oldBase; }
+  if (rec.unsupported || !rec.commands.length) return null;
+  if (!rec.commands.every(c => c.lineCap === 'round' && c.lineJoin === 'round' && c.subpaths.length && c.subpaths.every(sp => sp.gpuFourier && !sp.points.length))) return null;
+  if (corridorMaster && !rec.commands.every(c => String(c.strokeStyle).toLowerCase() === String(frameCtx.tunnelBaseStrokeColor || frameCtx.layer?.strokeColor || '#ffffff').toLowerCase())) return null;
+  return rec.commands;
+}
+// Private descriptor carrier: do not publish it as a CPU FrameContour or in
+// the persistent ordinary master cache. The base is the only consumer here.
+function gpuFourierCorridorIneligible(frameCtx, contract = null) {
+  const layer = frameCtx?.layer, tunnel = state.tunnel;
+  const owner = sharedCorridorFrameOwner(frameCtx);
+  if (globalThis.__somataGpuFourierEnabled === false) return 'disabled';
+  if (!layer || !somataFourierActive(layer) || !tunnel?.active || !frameCtx.lineDisplayEnabled || state.showRoundingGuides || frameCtx.lineProfileStrokeOnly) return 'line-policy';
+  if (tunnel.colorShiftEnabled || tunnel.paletteLagEnabled) return 'mixed-cpu-corridor';
+  if (owner?._sharedFrameContourRequired || frameCtx._sharedFrameContourRequired || owner?._spiralCorridorSharedLineAuthority || frameCtx._spiralCorridorSharedLineAuthority) return 'shared-cpu-carrier';
+  if (!['static','light-static','blue-prepared','blue-anchor-linear','blue-circle-slide','manual-prepared'].includes(frameCtx.geometryPlan?.kind)) return 'special-geometry-route';
+  if (isSpiralLayer(layer) && !canUseSpiralCorridorMasterInstancing(frameCtx)) return 'split-spiral';
+  if (layer.fill === true || layer.spiralFillEnabled === true || contract?.fillRequested || layer.geometryCircles?.enabled || frameCtx.effectLayer?.geometryCircles?.enabled) return 'fill-or-geometry-circles';
+  const graph = frameCtx.consumerDemand?.renderGraph || frameCtx.renderGraph;
+  if (!graph || !graph.passes?.length || graph.passes.some(p=>p.name!=='base') || graph.needsCpuPath || graph.needsCpuPackedTopology || graph.needsCanvas || graph.needsApproxArc || graph.needsExactArc || graph.needsFill || graph.needsLamps || graph.needsLampIdentity) return 'additional-contour-consumer';
+  if (Object.values(owner?.effectsPlan || frameCtx.effectsPlan || {}).some(p=>p?.enabled === true || p?.error)) return 'effect-enabled';
+  if (!WebGPUStrokeRenderer.fourierComputeReady()) return 'compute-warming-or-unavailable';
+  return '';
+}
+const fourierCorridorStats = { attempts:0, encoded:0, fallback:0, lastReason:'' };
+function getGpuFourierCorridorMaster(frameCtx) {
+  if (!frameCtx?.layer || !somataFourierActive(frameCtx.layer)) return null;
+  fourierCorridorStats.attempts++;
+  const owner = sharedCorridorFrameOwner(frameCtx);
+  const reason = gpuFourierCorridorIneligible(frameCtx, getLayerGeometryContract(owner));
+  fourierCorridorStats.lastReason = reason;
+  if (reason) return null;
+  const commands = recordGpuFourierCommands(owner, true);
+  if (!commands) fourierCorridorStats.lastReason = 'unsupported-master-recording';
+  return commands;
+}
+function noteGpuFourierCorridorResult(ok) {
+  fourierCorridorStats[ok ? 'encoded' : 'fallback']++;
+  fourierCorridorStats.lastReason = ok ? 'resident-master-compute' : 'encoder-declined';
+}
+function gpuFourierCorridorStatus() { return {...fourierCorridorStats}; }
+
 export {
+  recordGpuFourierCommands,
+  gpuFourierCorridorIneligible, getGpuFourierCorridorMaster, noteGpuFourierCorridorResult, gpuFourierCorridorStatus,
   canUseSpiralCorridorMasterInstancing,
   getDynamicTunnelMorphMasterStrokeCommands,
   getFrameGLStrokeCommands,

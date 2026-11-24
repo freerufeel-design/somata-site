@@ -32,6 +32,7 @@ import {
 } from './lamp-anchors.js';
 import {
   lampEndpointTravelProgress,
+  lampLinearMorphProgress,
   lampMotionRuntime,
   lampTopologyPresence,
   lampVisualNow,
@@ -55,6 +56,7 @@ import {
   projectMorphKeyLamps,
 } from './lamp-points.js';
 import { lampEffectiveBokeh } from './lamp-visual.js';
+import { stablePolarProgress } from './stable-motion.js';
 import {
   buildCurrentChaosCircleMorphPaths,
   buildCurrentCircleMorphPaths,
@@ -277,7 +279,7 @@ function lampLinearSplitMergePresence(
   layerKey = 'layer',
   gateKey = '',
 ) {
-  if (!['key', 'linear'].includes(getLampEvaluationConfig()?.morphMotionMode) || !runtimeState.morph?.active) return 1;
+  if (!['key', 'linear', 'stable'].includes(getLampEvaluationConfig()?.morphMotionMode) || !runtimeState.morph?.active) return 1;
   const fallback = Math.max(0, Math.min(1, Number(travelProgress) || 0));
   if (fallback <= 1e-6) return sourcePresent ? 1 : 0;
   if (fallback >= 1 - 1e-6) return targetPresent ? 1 : 0;
@@ -708,7 +710,8 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
     ...(runtimeState.morph.targetVisuals?.[layerIndex] || {}),
   };
   if (!base || !src || !dst) return [];
-  const u = Math.max(0, Math.min(1, Number(t) || 0)),
+  const phaseU = Math.max(0, Math.min(1, Number(t) || 0)),
+    stable = getLampEvaluationConfig()?.morphMotionMode === 'stable',
     layerKey = String(base?.id || layerIndex),
     out = [];
   const makeKey = (p, pathIndex, keyIndex, side) => ({
@@ -728,7 +731,7 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
       : getCircleMorphPlan(src, dst, state.morph.slideType || 'minimal');
     const rs = getEffectiveLayerRadius(src, 220),
       rd = getEffectiveLayerRadius(dst, rs),
-      R = rs + (rd - rs) * u;
+      R = rs + (rd - rs) * phaseU;
     for (let pathIndex = 0; pathIndex < (plan?.pathPlans?.length || 0); pathIndex++) {
       const pp = plan.pathPlans[pathIndex];
       const { from, to, angularTravel, srcAngles, dstAngles, srcMap, dstMap } = getCircleLampCorrespondence(pp);
@@ -742,9 +745,11 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
       for (let i = 0; i < from.length; i++) {
         const sa = from[i],
           ta = to[i],
+          u = stable ? stablePolarProgress(phaseU, rs, rd, angularTravel[i]) : phaseU,
           aa = sa + angularTravel[i] * u;
-        const x = R * Math.cos(aa),
-          y = R * Math.sin(aa);
+        const radius = stable ? rs + (rd - rs) * u : R;
+        const x = radius * Math.cos(aa),
+          y = radius * Math.sin(aa);
         const si = Math.max(0, srcMap.keyIndex[i] || 0),
           ti = Math.max(0, dstMap.keyIndex[i] || 0);
         const sp =
@@ -753,7 +758,7 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
           targetKeys[ti] || makeKey({ x: rd * Math.cos(ta), y: rd * Math.sin(ta) }, pathIndex, ti, 'dst');
         const sourcePresent = pp.sourcePathPresent !== false && srcMap.present[i] === true;
         const targetPresent = pp.targetPathPresent !== false && dstMap.present[i] === true;
-        const travel = u;
+        const travel = stable ? phaseU : u;
         const presence = lampLinearSplitMergePresence(
           sourcePresent,
           targetPresent,
@@ -786,7 +791,7 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
           lampAttachTargetPoint: tp,
           lampAttachSourceFraction: sourceFraction,
           lampAttachTargetFraction: targetFraction,
-          lampAttachProgress: u,
+          lampAttachProgress: stable ? phaseU : u,
           lampId: `linear:key:${pathIndex}:${i}`,
           lampSeed: lampHash32(`${layerKey}:linear:key:${pathIndex}:${i}`),
         });
@@ -822,8 +827,9 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
       sourceAttachRenderParams,
       targetAttachRenderParams,
     } = rec;
+    const u = phaseU;
     let morphDstPts = finalDstPts;
-    if (rec.radialMerge || rec.radialSplit) {
+    if (!stable && (rec.radialMerge || rec.radialSplit)) {
       const rotated = rotateMorphPath(
         dp,
         signedAngleDelta(rec.targetReferenceAngle, rec.sourceReferenceAngle) * (1 - u),
@@ -871,8 +877,10 @@ function collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints = 260, attach =
           tr = Math.hypot(mt.x, mt.y);
         const sa = Math.atan2(sourcePoint.y, sourcePoint.x),
           ta = Math.atan2(mt.y, mt.x);
-        const rr = sr + (tr - sr) * u,
-          aa = interpolateMorphPolarAngle(sa, ta, u);
+        const angleTravel = interpolateMorphPolarAngle(sa, ta, 1) - sa;
+        const q = stable ? stablePolarProgress(u, sr, tr, angleTravel) : u;
+        const rr = sr + (tr - sr) * q,
+          aa = interpolateMorphPolarAngle(sa, ta, q);
         x = rr * Math.cos(aa);
         y = rr * Math.sin(aa);
       } else {
@@ -1354,11 +1362,13 @@ function collectMorphLampPoints(
   preparedPaths = null,
   preparedRoundedPaths = null,
 ) {
-  if (getLampEvaluationConfig()?.morphMotionMode === 'key') {
+  const stable = getLampEvaluationConfig()?.morphMotionMode === 'stable';
+  if ((stable && (getLampEvaluationConfig()?.positionMode || 'key') === 'key') || getLampEvaluationConfig()?.morphMotionMode === 'key') {
     const base = state.layers[layerIndex];
     const info = getLampMorphRenderInfo(layerIndex, t, base);
-    const attach = info.roundingFrac > 0 || isLampContourAttachmentEnabled();
-    let points = collectTrueLinearKeyLampPoints(layerIndex, t, maxPoints, attach, true);
+    const attach = (!stable && info.roundingFrac > 0) || isLampContourAttachmentEnabled();
+    const motionT = stable ? lampLinearMorphProgress(t) : t;
+    let points = collectTrueLinearKeyLampPoints(layerIndex, motionT, maxPoints, attach, true);
     if (points.length) {
       let rails;
       if (attach) {
@@ -1372,11 +1382,11 @@ function collectMorphLampPoints(
         rails = visible || canonical;
         points = projectMorphKeyLamps(points, raw, rails, base, canonical);
       }
-      return preserveBlueMorphLampIdentity(layerIndex, points, attach, t, preparedRoundedPaths);
+      return preserveBlueMorphLampIdentity(layerIndex, points, attach, motionT, preparedRoundedPaths);
     }
   }
   const linear = getLampEvaluationConfig()?.morphMotionMode === 'linear';
-  const motionT = lampPhaseInertiaProgress(t);
+  const motionT = stable ? lampLinearMorphProgress(t) : lampPhaseInertiaProgress(t);
   let mode = getLampEvaluationConfig()?.positionMode || 'key';
   if (mode === 'circumference') mode = 'key'; // legacy project migration
   const base = state.layers[layerIndex];
@@ -1446,7 +1456,8 @@ function collectMorphLampPoints(
       );
   }
   if (mode === 'arbitrary')
-    return collectArbitraryMorphLampPoints(layerIndex, t, Math.max(600, maxPoints), attachmentPaths); // v308: IDs/fractions are already contour-stable; no straight-line handoff
+    return collectArbitraryMorphLampPoints(layerIndex, stable ? motionT : t, Math.max(600, maxPoints),
+      stable && !attach && runtimeState.morph.sourceGeometry?.[layerIndex]?.length && runtimeState.morph.targetGeometry?.[layerIndex]?.length ? [] : attachmentPaths); // v308: IDs/fractions are already contour-stable; no straight-line handoff
   if (mode === 'key') {
     const srcSpiral = isSpiralLayer(
       runtimeState.morph.renderSourceLayers?.[layerIndex] ||

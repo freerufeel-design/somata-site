@@ -1,5 +1,7 @@
 // Контролы: геометрия и стиль слоя.
+import { recentManualGeometryIntent } from '../../app/geometry-monitor-origin.js';
 import './master-display.js'; // initialisation order: this module runs after it
+import { syncRoundingModeHelp } from '../effects-sidebar.js';
 import {
   contourModeIsSpiral,
   getEffectiveSpiralOrder,
@@ -12,7 +14,6 @@ import { normalizeSpiralSquashY } from '../../geometry/orbit-builder.js';
 import { WebGPUDeviceHub } from '../../gpu/device-hub.js';
 import { WebGPUFinalCompositeRenderer } from '../../gpu/final-composite-renderer.js';
 import { WebGPUStrokeRenderer } from '../../gpu/stroke-renderer.js';
-import { syncFourierStrengthUI } from '../effects-sidebar.js';
 import {
   DEFAULT_FILL_OPACITY_PERCENT,
   colorBaseHex6,
@@ -338,14 +339,6 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
     if (!layer) return;
     layer.spiralTangential = e.target.checked === true;
 
-    const seamRow = document.getElementById('spiralRoundSeamsRow');
-    seamRow?.classList.remove('hidden');
-    seamRow?.classList.toggle(
-      'spiral-setting-disabled',
-      layer.closedLoop === false || layer.spiralClosed === false,
-    );
-    const seamInput = document.getElementById('paramSpiralRoundSeams');
-    if (seamInput) seamInput.disabled = layer.closedLoop === false || layer.spiralClosed === false;
     invalidateLayerGeometry(layer, 'legacy-geometry-control');
     if (runtimeState.morph.active) activeRebaseMorphing();
     requestMainCanvasRender();
@@ -353,16 +346,24 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
   document.getElementById('paramSpiralRoundSeams')?.addEventListener('change', (e) => {
     const layer = getActiveLayer();
     if (!layer) return;
-    layer.spiralRoundSeams = e.target.checked !== false;
-    invalidateLayerGeometry(layer, 'legacy-geometry-control');
-    if (runtimeState.morph.active) activeRebaseMorphing();
+    const enabled = e.target.checked === true;
+    // One authoring control for both order-zero and wound contours.
+    // Keep the two serialized fields for compatibility with old projects.
+    layer.spiralRoundSeams = enabled;
+    layer.lineJoinType = enabled ? 'rounded' : 'straight';
+    const paths = ['spiralRoundSeams', 'lineJoinType'];
+    invalidateLayerGeometry(layer, 'profile-closure-rounding');
+    syncMasterPathsIntoBlueRuntime(layer, paths, layer);
+    mirrorMasterLayerProps(paths);
+    if (runtimeState.morph.active) activeRebaseMorphing({ preservePaths: paths });
+    syncSidebarInputs();
     requestMainCanvasRender();
   });
   document.getElementById('paramSpiralFillEnabled')?.addEventListener('change', (e) => {
     const layer = getActiveLayer();
     if (!layer) return;
     layer.spiralFillEnabled = e.target.checked === true;
-    if (!['chopped', 'interwinding', 'mathematical'].includes(layer.spiralFillType))
+    if (!['chopped', 'mathematical', 'bandXor'].includes(layer.spiralFillType))
       layer.spiralFillType = 'chopped';
     try {
       FillMeshPreparer.reset?.();
@@ -375,9 +376,9 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
   document.getElementById('paramSpiralFillType')?.addEventListener('change', (e) => {
     const layer = getActiveLayer();
     if (!layer) return;
-    layer.spiralFillType = ['chopped', 'mathematical'].includes(e.target.value)
+    layer.spiralFillType = ['chopped', 'mathematical', 'bandXor'].includes(e.target.value)
       ? e.target.value
-      : 'interwinding';
+      : 'chopped';
     try {
       FillMeshPreparer.reset?.();
     } catch (error) {
@@ -602,16 +603,9 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
     requestMainCanvasRender();
     return true;
   };
-  document
-    .getElementById('paramClosedLoop')
-    .addEventListener('change', (e) => applyContourModeFromUI(e.target.checked ? 'closed' : 'open'));
-  // Two shape families are no longer chosen in the UI. A continuous
-  // spiralOrder property determines whether the geometry is a polygon.
-
   const applyUnifiedClosedFromUI = (closed) => {
     const layer = getActiveLayer();
     if (!layer) return false;
-    const order = getEffectiveSpiralOrder(layer);
     setUnifiedContourClosed(layer, closed);
     invalidateLayerGeometry(layer, 'unified-contour-closure');
     syncSidebarInputs();
@@ -628,11 +622,9 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
     requestMainCanvasRender();
     return true;
   };
-  document
-    .querySelectorAll('[data-contour-variant]')
-    .forEach((btn) =>
-      btn.addEventListener('click', () => applyUnifiedClosedFromUI(btn.dataset.contourVariant === 'first')),
-    );
+  document.getElementById('paramClosedLoop').addEventListener('change', (e) =>
+    applyUnifiedClosedFromUI(e.target.checked === true),
+  );
   document.getElementById('btnExtendedContour')?.addEventListener('click', () => {
     const layer = getActiveLayer();
     if (!layer) return;
@@ -671,17 +663,6 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
       ),
     );
 
-  document.querySelectorAll('.line-join-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const layer = getActiveLayer();
-      if (layer) {
-        layer.lineJoinType = btn.dataset.join;
-        syncSidebarInputs();
-        renderMainCanvas();
-      }
-    });
-  });
-
   document
     .querySelectorAll('.color-swatch[data-color]:not([data-graffiti-palette-swatch])')
     .forEach((btn) => {
@@ -701,14 +682,18 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
     });
 
   let monoradiusRebaseTimer = 0;
+  let monoradiusDiagnosticEdit = null;
   const flushMonoradiusRebase = () => {
     if (monoradiusRebaseTimer) clearTimeout(monoradiusRebaseTimer);
     monoradiusRebaseTimer = 0;
-    if (runtimeState.morph.active) activeRebaseMorphing({ preservePaths: ['rounding', 'roundingMode'] });
+    const diagnosticManualEdit = recentManualGeometryIntent() ?? monoradiusDiagnosticEdit;
+    monoradiusDiagnosticEdit = null;
+    if (runtimeState.morph.active) activeRebaseMorphing({ preservePaths: ['rounding', 'roundingMode'], diagnosticManualEdit });
     requestMainCanvasRender();
   };
   const scheduleMonoradiusRebase = () => {
     if (monoradiusRebaseTimer) clearTimeout(monoradiusRebaseTimer);
+    monoradiusDiagnosticEdit = recentManualGeometryIntent();
     monoradiusRebaseTimer = setTimeout(flushMonoradiusRebase, 100);
   };
   // The live Morph displays geometry snapshots, not the authored
@@ -717,7 +702,7 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
   // necessary for Mono Radius because its fitted points differ.
   const previewLiveRoundingSetting = (layer, property) => {
     const rt = runtimeState.morph;
-    if (!rt?.active || (layer?.roundingMode === 'monoradius' && property !== 'roundingCornerType'))
+    if (!rt?.active || (layer?.roundingCornerType !== 'fourier' && layer?.roundingMode === 'monoradius' && property !== 'roundingCornerType'))
       return false;
     const idx = (state.layers || []).findIndex((item) => item?.id === layer.id);
     if (idx < 0) return false;
@@ -835,8 +820,7 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
       target.roundingCornerType = next;
       invalidateLayerGeometry(target, 'rounding-corner-type');
     }
-    syncFourierStrengthUI();
-    document.getElementById('roundingFourierControls')?.classList.toggle('hidden', next !== 'fourier');
+    syncRoundingModeHelp(next === 'fourier');
     document.querySelectorAll('.rounding-corner-type-btn').forEach((btn) => {
       const active = btn.dataset.roundingCornerType === next;
       btn.classList.toggle('active', active);
@@ -852,14 +836,14 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
     }
     requestMainCanvasRender();
   });
-  document.querySelectorAll('.rounding-corner-type-btn').forEach((btn) =>
-    btn.addEventListener('click', () => {
+  for (const [id, step] of [['roundingPrevMethod', -1], ['roundingNextMethod', 1]]) {
+    document.getElementById(id)?.addEventListener('click', () => {
       const input = document.getElementById('paramRoundingCornerType');
-      if (!input || input.value === btn.dataset.roundingCornerType) return;
-      input.value = btn.dataset.roundingCornerType;
+      if (!input?.options?.length) return;
+      input.selectedIndex = (input.selectedIndex + step + input.options.length) % input.options.length;
       input.dispatchEvent(new Event('change', { bubbles: true }));
-    }),
-  );
+    });
+  }
   document.getElementById('paramRoundingMode')?.addEventListener('change', (e) => {
     const layer = getActiveLayer();
     if (!layer) return;
@@ -868,6 +852,8 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
       monoradiusRebaseTimer = 0;
     }
     const next = e.target.value === 'monoradius' ? 'monoradius' : 'standard';
+    const checkbox = document.getElementById('paramMonoradiusCheck');
+    if (checkbox) checkbox.checked = next === 'monoradius';
     const targets =
       state.masterLayerEdit === true || hasMultiLayerSelection() ? getLayerEditTargets() : [layer];
     for (const target of targets) {
@@ -885,15 +871,12 @@ function bindLayerGeometryAndStyleControls(bindingContext) {
     if (runtimeState.morph.active) activeRebaseMorphing({ preservePaths: ['roundingMode', 'rounding'] });
     requestMainCanvasRender();
   });
-  document.querySelectorAll('.rounding-mode-btn[data-rounding-mode]').forEach((btn) =>
-    btn.addEventListener('click', () => {
-      const input = document.getElementById('paramRoundingMode');
-      if (!input) return;
-      if (input.value === btn.dataset.roundingMode) return;
-      input.value = btn.dataset.roundingMode;
-      input.dispatchEvent(new Event('change', { bubbles: true }));
-    }),
-  );
+  document.getElementById('paramMonoradiusCheck')?.addEventListener('change', (e) => {
+    const input = document.getElementById('paramRoundingMode');
+    if (!input) return;
+    input.value = e.target.checked ? 'monoradius' : 'standard';
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
 
   document.getElementById('paramRadius').addEventListener('input', (e) => {
     const layer = getActiveLayer();

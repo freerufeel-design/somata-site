@@ -6,7 +6,7 @@ import { isPreSampledSplineLayer, setPreSampledSplineLayer } from '../core/rende
 import { requestMainCanvasRender } from '../core/scheduler.js';
 import { getEffectiveLayerRadius, getMotionTunnelLagRadians } from '../effects/motion.js';
 import { SomataCorridorCopyFrame } from '../render/corridor-copy-frame.js';
-import { buildSpiralBezierSegments } from '../geometry/spiral/bezier-carrier.js';
+import { buildSpiralBezierSegments, isLinearSpiralCubic } from '../geometry/spiral/bezier-carrier.js';
 import {
   getEffectiveSpiralOrder,
   getEffectiveSpiralStep,
@@ -853,12 +853,13 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let boundary=flags-fl
       path?.spiralProfileRoundingBaked === true
         ? 0
         : Math.max(0, Math.min(2, Number(getRoundingStrength(layer?.rounding)) || 0));
+    const simpleLayer = layer?.roundingCornerType === 'simple' ? layer : null;
     {
-      const c = buildSpiralBezierSegments(points, round, path?.cornerFlags || [], smooth);
+      const c = buildSpiralBezierSegments(points, round, path?.cornerFlags || [], smooth, false, simpleLayer);
       if (c?.length) return c;
     }
     if (typeof __spiroBuildSpiralBezierSegments === 'function') {
-      const c = __spiroBuildSpiralBezierSegments(points, round, path?.cornerFlags || [], smooth);
+      const c = __spiroBuildSpiralBezierSegments(points, round, path?.cornerFlags || [], smooth, false, simpleLayer);
       if (c?.length) return c;
     }
     return lineCubics(points);
@@ -2667,7 +2668,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let boundary=flags-fl
   // During Morph, N/K/scale can vary nonlinearly. Update only the trailing
   // bridge endpoint to the CURRENT next-period origin; never distribute a
   // correction through the body of the Spiral or add a second spline fit.
-  function alignExplicitBridgeToCurrentPeriod(cubics, frame, roundSeams = false) {
+  function alignExplicitBridgeToCurrentPeriod(cubics, frame, roundSeams = false, straightBridge = false) {
     if (!cubics?.length || !frame) return cubics;
     const first = cubics[0]?.p0,
       last = cubics[cubics.length - 1]?.p3;
@@ -2681,9 +2682,15 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let boundary=flags-fl
     if (!roundSeams) {
       const c = cubics[n - 1],
         p = c.p0;
+      // Explicit period metadata may also describe a rail with no connector.
+      // Never straighten an actual curved carrier span merely because rounding is zero.
+      if (straightBridge || isLinearSpiralCubic(c)) {
+        c.c1 = { x: p.x + (next.x - p.x) / 3, y: p.y + (next.y - p.y) / 3 };
+        c.c2 = { x: p.x + (2 * (next.x - p.x)) / 3, y: p.y + (2 * (next.y - p.y)) / 3 };
+      } else {
+        c.c2 = { x: c.c2.x + dx, y: c.c2.y + dy };
+      }
       c.p3 = { ...next };
-      c.c1 = { x: p.x + (next.x - p.x) / 3, y: p.y + (next.y - p.y) / 3 };
-      c.c2 = { x: p.x + (2 * (next.x - p.x)) / 3, y: p.y + (2 * (next.y - p.y)) / 3 };
       return cubics;
     }
     // A rounded bridge may contain several authored fillet cubics. Move
@@ -2887,7 +2894,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let boundary=flags-fl
           rec.liveRoundedSplineFallbacks = (rec.liveRoundedSplineFallbacks || 0) + 1;
           cubics = interpolatePreparedProfileCubics(r.sc, r.dc, tt, splineHandleT);
           if (r.explicitBridge === true)
-            cubics = alignExplicitBridgeToCurrentPeriod(cubics, frame, r.roundedBridge === true);
+            cubics = alignExplicitBridgeToCurrentPeriod(cubics, frame, r.roundedBridge === true, r.straightBridge === true);
         } else rec.liveRoundedSplineFrames = (rec.liveRoundedSplineFrames || 0) + 1;
         // 12.7.1: true C0 continuity for *nearby* real frames, not
         // just the idealized 1.0/0.0 snapshot tested in 12.7.0.
@@ -2913,7 +2920,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let boundary=flags-fl
           preparedSpiralWidthLogs(r),
         );
         if (r.explicitBridge === true) {
-          cubics = alignExplicitBridgeToCurrentPeriod(cubics, frame, r.roundedBridge === true);
+          cubics = alignExplicitBridgeToCurrentPeriod(cubics, frame, r.roundedBridge === true, r.straightBridge === true);
         } else if (r.periodic === true) {
           // The carrier's instantaneous delta is authoritative for
           // Corridor as well as the Spiral rail, even during N/K Morph.
@@ -3008,7 +3015,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let boundary=flags-fl
           if (Number.isFinite(expected.x) && Number.isFinite(expected.y)) {
             const original = last.p3;
             if (Math.hypot(expected.x - original.x, expected.y - original.y) > 1e-8) {
-              if (r.explicitBridge && r.roundedBridge !== true) {
+              if (r.explicitBridge && r.roundedBridge !== true && (r.straightBridge || isLinearSpiralCubic(last))) {
                 last.c1 = {
                   x: last.p0.x + (expected.x - last.p0.x) / 3,
                   y: last.p0.y + (expected.y - last.p0.y) / 3,
@@ -3017,7 +3024,7 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let boundary=flags-fl
                   x: last.p0.x + (2 * (expected.x - last.p0.x)) / 3,
                   y: last.p0.y + (2 * (expected.y - last.p0.y)) / 3,
                 };
-              } else if (r.sourceClosure?.tangentProtected && r.targetClosure?.tangentProtected) {
+              } else if ((r.explicitBridge && r.roundedBridge !== true) || (r.sourceClosure?.tangentProtected && r.targetClosure?.tangentProtected)) {
                 // Translation of terminal handle preserves
                 // its authored local tangent direction.
                 last.c2 = { x: last.c2.x + expected.x - original.x, y: last.c2.y + expected.y - original.y };
@@ -3318,7 +3325,12 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let boundary=flags-fl
         targetPathLength: targetRawArcMap.total,
         knotFractions: commonFractions || cubicKnotFractions(sc),
         explicitBridge: pair.src?.spiralExplicitBridge === true && pair.dst?.spiralExplicitBridge === true,
-        roundedBridge: srcLayer.spiralRoundSeams !== false && dstLayer.spiralRoundSeams !== false,
+        // The checkbox is permission, not rounding strength. A zero-strength
+        // period must not run the rounded-tail deformation during morph.
+        roundedBridge:
+          (pairSourceLayer.spiralRoundSeams !== false && getRoundingStrength(pairSourceLayer.rounding) > 0.001) ||
+          (pairTargetLayer.spiralRoundSeams !== false && getRoundingStrength(pairTargetLayer.rounding) > 0.001),
+        straightBridge: isLinearSpiralCubic(sc[n - 1]) && isLinearSpiralCubic(dc[n - 1]),
         arcEqualized,
         exactSubdivisionOnly,
         crossFamilyCartesianTransport,
@@ -3935,7 +3947,12 @@ fn fastJoinHasNeighbor(sub:u32,right:bool,flags:f32)->bool{let boundary=flags-fl
         targetPathLength: targetRawArcMap.total,
         knotFractions: commonFractions || cubicKnotFractions(sc),
         explicitBridge: pair.src?.spiralExplicitBridge === true && pair.dst?.spiralExplicitBridge === true,
-        roundedBridge: srcLayer.spiralRoundSeams !== false && dstLayer.spiralRoundSeams !== false,
+        // The checkbox is permission, not rounding strength. A zero-strength
+        // period must not run the rounded-tail deformation during morph.
+        roundedBridge:
+          (pairSourceLayer.spiralRoundSeams !== false && getRoundingStrength(pairSourceLayer.rounding) > 0.001) ||
+          (pairTargetLayer.spiralRoundSeams !== false && getRoundingStrength(pairTargetLayer.rounding) > 0.001),
+        straightBridge: isLinearSpiralCubic(sc[n - 1]) && isLinearSpiralCubic(dc[n - 1]),
         arcEqualized,
         exactSubdivisionOnly,
         crossFamilyCartesianTransport,

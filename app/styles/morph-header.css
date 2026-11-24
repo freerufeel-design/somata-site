@@ -1,0 +1,184 @@
+/* Blue morph header only. Loaded after the shared desktop and mobile UI styles. */
+@media (min-width: 1301px) {
+  #morphSettingsPanel.morph-audio-routing-panel { max-width: 1440px !important; }
+}
+@media (min-width: 1800px) {
+  #morphSettingsPanel.morph-audio-routing-panel { width: 75vw !important; }
+}
+#morphSettingsPanel #morphSpeedToolbar {
+  display: flex !important;
+  flex-flow: row wrap !important;
+  align-items: center !important;
+  gap: 6px !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow: visible !important;
+  box-sizing: border-box;
+  padding: 5px 6px !important;
+  margin: 0 0 6px !important;
+}
+#morphSettingsPanel #morphSpeedToolbar .morph-top-cycle-row {
+  flex: 0 1 auto !important;
+  width: auto !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  box-sizing: border-box;
+  flex-flow: row wrap !important;
+  justify-content: flex-start !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 3px 5px !important;
+}
+#morphSettingsPanel #morphSpeedToolbar .morph-top-cycle-row > span:first-child {
+  flex: none;
+  white-space: nowrap;
+}
+#morphSettingsPanel #morphSpeedToolbar .morph-cycle-controls {
+  display: flex !important;
+  flex: 0 1 auto !important;
+  flex-flow: row wrap !important;
+  align-items: center;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  justify-content: flex-start !important;
+  gap: 5px !important;
+}
+#morphSettingsPanel #morphSpeedToolbar :is(.morph-cycle-inputs, .morph-cycle-presets) {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  min-width: 0;
+}
+#morphSettingsPanel #morphSpeedToolbar .morph-cycle-presets { flex-wrap: wrap; }
+#morphSettingsPanel #morphSpeedToolbar .morph-cycle-inputs input[type='number'] {
+  flex: 0 0 48px !important;
+  width: 48px !important;
+  min-width: 0 !important;
+  box-sizing: border-box;
+  padding: 0 4px !important;
+  text-align: center !important;
+}
+#morphSettingsPanel #morphSpeedToolbar .morph-cycle-presets .morph-quick-btn {
+  flex: none !important;
+  min-width: 29px !important;
+  padding-inline: 5px !important;
+}
+/* The three types move as a group, and wrap individually on narrow screens. */
+#morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls {
+  display: flex !important;
+  flex: 1 1 815px !important;
+  flex-flow: row wrap !important;
+  align-items: center;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  gap: 5px !important;
+}
+#morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls > :is(.morph-compact-profile-field, .morph-speed-toolbar-field) {
+  display: flex !important;
+  flex: 1 1 250px !important;
+  flex-flow: row nowrap !important;
+  align-items: center !important;
+  gap: 5px !important;
+  width: auto !important;
+  min-width: min(100%, 250px) !important;
+  max-width: 100% !important;
+  height: auto !important;
+  box-sizing: border-box;
+  padding: 3px 5px !important;
+  border: 1px solid rgba(71, 85, 105, 0.42);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.48);
+}
+#morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls > .morph-compact-profile-field:has(#morphSlideType) {
+  flex-basis: 280px !important;
+  min-width: min(100%, 280px) !important;
+}
+#morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls > .morph-compact-profile-field:has(#morphMode) {
+  flex-basis: 265px !important;
+  min-width: min(100%, 265px) !important;
+}
+#morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls > :is(.morph-compact-profile-field, .morph-speed-toolbar-field) > :is(span:first-child, label) {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+#morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls :is(.select-arrows, .morph-speed-picker) {
+  display: flex;
+  flex: 1 1 0;
+  align-items: stretch;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  gap: 3px;
+}
+#morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls select {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  min-width: 70px !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  box-sizing: border-box;
+  text-overflow: ellipsis;
+}
+#morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls :is(.select-arrows > button, .morph-speed-arrow) {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px !important;
+  width: 24px !important;
+  min-width: 24px !important;
+  height: var(--ui-control-h) !important;
+  min-height: var(--ui-control-h) !important;
+  padding: 0 !important;
+  box-sizing: border-box;
+}
+#morphSettingsPanel .morph-profile-toolbar.morph-routing-preset-bar {
+  flex-flow: row wrap !important;
+  align-items: center;
+  overflow: visible !important;
+}
+#morphSettingsPanel .morph-profile-toolbar.morph-routing-preset-bar .morph-profile-select-wrap {
+  flex: 1 1 270px !important;
+  width: auto !important;
+  min-width: min(100%, 220px) !important;
+  max-width: min(100%, 370px) !important;
+  flex-wrap: nowrap;
+}
+#morphSettingsPanel .morph-profile-toolbar .morph-profile-select-wrap > span:first-child { flex: none; }
+#morphSettingsPanel .morph-profile-toolbar .morph-profile-select-wrap .select-arrows {
+  flex: 1 1 0;
+  min-width: 0;
+}
+#morphSettingsPanel .morph-profile-toolbar .morph-profile-select-wrap select {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  min-width: 70px !important;
+  max-width: 100% !important;
+  text-overflow: ellipsis;
+}
+#morphSettingsPanel .morph-profile-toolbar .morph-profile-toolbar-flags {
+  flex: 0 1 auto !important;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+@media (max-width: 760px), (max-height: 480px) and (hover: none) and (pointer: coarse) {
+  #morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls { flex-basis: 100% !important; }
+  #morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls > :is(.morph-compact-profile-field, .morph-speed-toolbar-field) {
+    flex-basis: 100% !important;
+    min-width: 0 !important;
+  }
+  #morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls > .morph-compact-profile-field:has(:is(#morphMode, #morphSlideType)) { flex-basis: 100% !important; min-width: 0 !important; }
+  #morphSettingsPanel #morphSpeedToolbar #morphCompactProfileControls :is(.select-arrows > button, .morph-speed-arrow) {
+    flex-basis: 30px !important;
+    width: 30px !important;
+    min-width: 30px !important;
+    height: 38px !important;
+    min-height: 38px !important;
+  }
+  #morphSettingsPanel .morph-profile-toolbar.morph-routing-preset-bar .morph-profile-select-wrap { flex-basis: 100% !important; max-width: 100% !important; }
+}

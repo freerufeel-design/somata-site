@@ -4,7 +4,6 @@ import {
   DEFAULT_PROFILE_CONFIG,
   PROFILE_CONFIG,
   normalizeSplinePointCount,
-  normalizeSplineRenderMode,
 } from '../../geometry/profile-model.js';
 import { renderProfileEditor } from '../profile-editor.js';
 import { ensureAudioRoutingState, initializeNewLayerAudioRouting } from '../../audio/audio-routing.js';
@@ -85,21 +84,6 @@ function bindProfileEditorControls(bindingContext) {
     syncSidebarInputs();
     if (runtimeState.morph.active) activeRebaseMorphing();
     requestMainCanvasRender();
-  });
-
-  document.querySelectorAll('[data-spline-render-mode]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const layer = getActiveLayer();
-      if (!layer) return;
-      const requested = normalizeSplineRenderMode(btn.dataset.splineRenderMode);
-      const next = layer.profileMode === 'spline' ? 'smooth' : requested;
-      if (normalizeSplineRenderMode(layer.splineRenderMode) === next) return;
-      layer.splineRenderMode = next;
-      invalidateLayerGeometry(layer, 'legacy-geometry-control');
-      syncSidebarInputs();
-      renderProfileEditor();
-      requestMainCanvasRender();
-    });
   });
 
   document.querySelectorAll('[data-profile-mode-transition]').forEach((btn) => {
@@ -218,6 +202,11 @@ function bindProfileEditorControls(bindingContext) {
 
   document.getElementById('btnResetProfile').addEventListener('click', () => {
     const layer = getActiveLayer();
+    if (layer && runtimeState.morph.active && activeRebaseMorphing({ resetProfileLayerId: layer.id })) {
+      renderProfileEditor();
+      requestMainCanvasRender();
+      return;
+    }
     if (layer) {
       layer.profileMode = 'segments';
       layer.profileNodes = [

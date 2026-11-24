@@ -107,6 +107,8 @@ function resetLayerMorphProvider(provider, system) {
   provider.sourcePaths = null;
   provider.targetPaths = null;
   provider.framePaths = null;
+  provider.skeletonFrame = null;
+  provider.primarySkeleton = false;
   provider.frameLampPoints = null;
   provider.sourceLampPoints = null;
   provider.targetLampPoints = null;
@@ -166,7 +168,9 @@ function resolveBlueMorphLayerProvider(frameCtx, renderFrame) {
   provider.geometryT = snap.geometryT;
   provider.linearProgress = snap.progress;
   provider.progress = snap.progress;
-  provider.options = snap.options;
+  const manualProfileReset = snap.runtime?.manualProfileResetIds?.has(sourceLayer?.id) === true;
+  const options = manualProfileReset ? { ...snap.options, byShape: true } : snap.options;
+  provider.options = options;
   const carrierPlan = snap.profileCarrierPlans?.[layerIndex] || null;
   provider.carrierKind = carrierPlan?.carrierKind || 'polygon';
   provider.spiralTransport = carrierPlan?.spiralTransport || 'polygon';
@@ -229,7 +233,7 @@ function resolveBlueMorphLayerProvider(frameCtx, renderFrame) {
     Boolean(
       snap.options.byVertices ||
       snap.options.bySteps ||
-      snap.options.byShape ||
+      options.byShape ||
       snap.monoOrbitTransforms ||
       specialSpiralExtraGeometry,
     );
@@ -271,7 +275,7 @@ function resolveBlueMorphLayerProvider(frameCtx, renderFrame) {
     effectiveCircleMode &&
     (snap.options.byVertices ||
       snap.options.bySteps ||
-      snap.options.byShape ||
+      options.byShape ||
       snap.monoOrbitTransforms ||
       specialSpiralExtraGeometry),
   );
@@ -282,7 +286,7 @@ function resolveBlueMorphLayerProvider(frameCtx, renderFrame) {
       (provider.sourceGeometry &&
         (sourceChaos ||
           targetChaos ||
-          snap.options.byShape ||
+          options.byShape ||
           snap.options.byVertices ||
           snap.options.bySteps ||
           snap.monoOrbitTransforms ||
@@ -308,7 +312,7 @@ function resolveBlueMorphLayerProvider(frameCtx, renderFrame) {
     effectiveCircleMode &&
     (snap.options.byVertices ||
       snap.options.bySteps ||
-      snap.options.byShape ||
+      options.byShape ||
       snap.monoOrbitTransforms ||
       specialSpiralExtraGeometry)
   ) {

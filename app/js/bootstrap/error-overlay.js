@@ -11,6 +11,8 @@
   const MAX_ARRAY_ITEMS = 16;
   const AUTO_SHOW_STORAGE_KEY = 'somata.errorConsole.autoShow.v4';
   const entries = [];
+  const automaticHistory = [], manualHistory = [];
+  let showManual = false, manualCheckbox = null;
   let dock = null;
   let body = null;
   let output = null;
@@ -29,7 +31,7 @@
   let lastLoadCounters = null;
   let lastLoadCounterAt = 0;
   let lastLoadSnapshot = null;
-  let totalChars = 0;
+
   let sequence = 0;
   let visible = false;
   let collapsed = true;
@@ -168,6 +170,7 @@
         first.startsWith('[Somata Performance]') ||
         first.startsWith('[Somata GPU diagnostic]') ||
         first.startsWith('[Somata Morph Freeze]') ||
+        first.startsWith('[Somata Geometry Monitor]') ||
         /^\[Somata [^\]]+ FullGPU\] (?:STRICT_SPIRAL_CANVAS_PATH_TOUCHED|FINAL_FULL_GPU_PRESENT_FAILED)$/.test(
           first,
         )
@@ -634,7 +637,8 @@
 
   function clearErrors({ clearDevtools = true } = {}) {
     entries.length = 0;
-    totalChars = 0;
+    automaticHistory.length = 0;
+    manualHistory.length = 0;
     if (output) output.textContent = 'Ошибок нет.';
     if (countNode) countNode.textContent = '0';
 
@@ -744,6 +748,16 @@
     errorsPanel = document.createElement('div');
     errorsPanel.id = 'screenErrorOverlayErrorsPanel';
     errorsPanel.setAttribute('role', 'tabpanel');
+    const manualLabel = document.createElement('label');
+    manualLabel.id = 'screenErrorOverlayManualLabel';
+    manualLabel.title = 'Показывать телепорты и острые углы, связанные с ручным редактированием. Автоматические ошибки видны всегда.';
+    manualCheckbox = document.createElement('input');
+    manualCheckbox.type = 'checkbox';
+    manualCheckbox.id = 'screenErrorOverlayShowManual';
+    manualCheckbox.checked = showManual;
+    manualCheckbox.addEventListener('change', () => setShowManual(manualCheckbox.checked));
+    manualLabel.append(manualCheckbox, 'Ручные изменения');
+    errorsPanel.appendChild(manualLabel);
     output = document.createElement('pre');
     output.id = 'screenErrorOverlayText';
     output.setAttribute('aria-label', 'Текст ошибок');
@@ -766,17 +780,32 @@
     return true;
   }
 
-  function push(kind, message) {
+  function refreshVisibleEntries() {
+    const records = showManual ? [...automaticHistory, ...manualHistory].sort((a,b)=>a.sequence-b.sequence) : automaticHistory;
+    entries.splice(0, entries.length, ...records.map(r=>r.text));
+  }
+
+  function setShowManual(next) {
+    showManual = next === true;
+    if (manualCheckbox) manualCheckbox.checked = showManual;
+    refreshVisibleEntries();
+    if (output) output.textContent = entries.length ? entries.join('\n\n') : 'Ошибок нет.';
+    if (countNode) countNode.textContent = String(entries.length);
+    updateFpsErrorState();
+    if (visible && activeTab === 'load') renderLoadText();
+    return showManual;
+  }
+
+  function push(kind, message, {manual = false} = {}) {
     const text = String(message || 'Unknown error').trim() || 'Unknown error';
     const stamp = new Date().toLocaleTimeString([], { hour12: false });
     const rec = `[${stamp}] ${kind}\n${text}`;
-    entries.push(rec);
-    totalChars += rec.length;
-    while (entries.length > MAX_ENTRIES || totalChars > MAX_TEXT_CHARS) {
-      const removed = entries.shift();
-      totalChars -= removed.length;
-    }
-    sequence++;
+    const history = manual ? manualHistory : automaticHistory;
+    history.push({text:rec,sequence:++sequence});
+    let chars = history.reduce((sum,r)=>sum+r.text.length,0);
+    while (history.length > MAX_ENTRIES || chars > MAX_TEXT_CHARS) chars -= history.shift().text.length;
+    if (manual && !showManual) return;
+    refreshVisibleEntries();
 
     if (autoShow) {
       setTab('errors');
@@ -832,7 +861,8 @@
       }
       try {
         const first = String(args?.[0] ?? '');
-        push(first.startsWith('[Somata Morph Freeze]') ? 'morph.freeze' : 'gpu.warning', formatArgs(args));
+        const manual = /^\[Somata Geometry Monitor\] (?:SPIKE|TELEPORT|PHASE TELEPORT)$/.test(first) && args[1]?.origin === 'manual';
+        push(first.startsWith('[Somata Geometry Monitor]') ? 'geometry.monitor' : first.startsWith('[Somata Morph Freeze]') ? 'morph.freeze' : 'gpu.warning', formatArgs(args), {manual});
       } catch (_) {}
     };
   }
@@ -912,6 +942,9 @@
     get visible() {
       return visible;
     },
+    get showManual() { return showManual; },
+    setShowManual: (value) => setShowManual(value),
+    get hiddenManualCount() { return showManual ? 0 : manualHistory.length; },
     get autoShow() {
       return autoShow;
     },

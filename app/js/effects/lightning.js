@@ -572,7 +572,7 @@ function getLightningTriggerPhase(now, cfg, layerIndex, source) {
       rt?.paused === true ||
       rt?.pausedByOrangeProject === true ||
       rt?.pausedByGreenProject === true ||
-      !(rt?.cycleStart > 0)
+      !Number(rt?.cycleStart)
     )
       return { phase: 1, cycle: 0 };
     const cycleMs = Math.max(100, getTapMorphIntervalSec(state.morph.intervalSec, 'full') * 1000);

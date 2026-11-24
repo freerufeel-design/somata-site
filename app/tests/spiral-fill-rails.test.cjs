@@ -36,7 +36,8 @@ assert.equal(somataCoordinatedFillRails({}), null);
 // Адаптер использует ветви кадра, когда у удерживаемой GPU-ветви кадра нет, и для «Межвиткового» типа
 // при отсутствии локальных ячеек возвращается к полосам между соседними ветвями.
 const adapter = read('js/render/spiral-fill-adapter.js');
-assert.match(adapter, /return paths\?\.length \? paths : somataCoordinatedFillRails\(frameCtx\)/);
+assert.match(adapter, /if \(native\) \{\s*paths = getGpuSpiralBezierMorphAuxPaths/);
+assert.match(adapter, /const raw = dynamic \? plan.framePaths : \(plan.sourceData \|\| frameCtx.staticDrawData\)\?\.paths/);
 assert.match(adapter, /prepareSpiralMorphBands\?\.\(frameCtx, rails\)/);
 
 console.log('PASS: ветви согласованного кадра становятся ветвями заливки спирали; запасной путь межвиткового типа');

@@ -11,6 +11,7 @@ import { WebGPUStrokeRenderer } from '../gpu/stroke-renderer.js';
 import { GeometryGPURenderer } from '../gpu/line-effects-renderer.js';
 import {
   canUseSpiralCorridorMasterInstancing,
+  getGpuFourierCorridorMaster, noteGpuFourierCorridorResult,
   getDynamicTunnelMorphMasterStrokeCommands,
   getTunnelMasterStrokeCommands,
 } from './stroke-command-cache.js';
@@ -66,8 +67,6 @@ function canDeferStrictSpiralLayerSceneRoot(frameCtx, batch, requiresExternal = 
     );
   if (!frameCtx?.frame)
     return noteSomataSpiralRootDecision(frameCtx, requiresExternal, false, 'frame-missing', batch);
-  if (state.showBoundingCircle)
-    return noteSomataSpiralRootDecision(frameCtx, requiresExternal, false, 'bounding-circle-enabled', batch);
   const id = Number(frameCtx.frameId) || 0,
     multi = Number(frameCtx.frame.renderLayerCount || 0) > 1;
   if (typeof WebGPUStrokeRenderer === 'undefined')
@@ -384,6 +383,20 @@ function encodeGpuOnlyCorridorLayerRole(
       externalReady: WebGPUStrokeRenderer?.canUseExternalLayerScene?.(frameCtx.frameId) === true,
     });
     return null;
+  }
+  if (role === 'base' && !allowHiddenGraffitiCarrier) {
+    const fourierMaster = getGpuFourierCorridorMaster(frameCtx);
+    if (fourierMaster) {
+      const copies = frameCtx.visibleInstances?.copies || [];
+      if (!copies.length) return {handled:true, commandBuffer:null};
+      const opt = buildCorridorGPUOptions(frameCtx, {...extra, gpuFourier:true,
+        copyCacheVariant:'fourier-layer-scene-base', weightForCopy:null,
+        deferComposite:true, layerSceneRole:role, layerSceneClear:clearScene,
+        forceResidentCopyPayload:true});
+      const result = WebGPUStrokeRenderer.renderCorridor(fourierMaster, copies, null, opt);
+      noteGpuFourierCorridorResult(result?.handled === true);
+      if (result?.handled) { trace('fourier-master-committed'); return result; }
+    }
   }
   const master = getGpuOnlyCorridorMaster(frameCtx, allowHiddenGraffitiCarrier);
   if (!master?.length) {

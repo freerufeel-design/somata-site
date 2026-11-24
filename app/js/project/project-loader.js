@@ -116,6 +116,7 @@ import {
   buildProjectData,
   cloneData,
   mergePersistentProjectSection,
+  migrateFourierProjectData,
   sanitizeProjectFileBase,
 } from './project-data.js';
 import { activateProjectDefaultModes, stopProjectMorphing } from './project-morph.js';
@@ -134,9 +135,10 @@ import {
   syncAudioSettingsUIFromState,
 } from '../audio/audio-reactive.js';
 import { noteSuppressedError } from '../core/suppressed-errors.js';
-import { snapLampAdaptiveExponent } from '../lamps/adaptive-exponent.js';
+import { snapLampAdaptiveExponent, normalizeLampAdaptiveExponentMultiplier } from '../lamps/adaptive-exponent.js';
 
 function applyLoadedProject(parsed, loadOptions = {}) {
+  parsed = migrateFourierProjectData(parsed);
   const preserveFullMorph = loadOptions.preserveFullMorph === true && runtimeState.morph?.active === true;
   const preserveMinimalMorph =
     loadOptions.preserveMinimalMorph === true && runtimeState.minimalMorph?.active === true;
@@ -146,7 +148,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
   const loadedLayers = Array.isArray(parsed) ? parsed : parsed.layers;
   if (!Array.isArray(loadedLayers) || loadedLayers.length === 0) throw new Error('Empty project');
 
-  const defaults = createLayer();
+  const defaults = { ...createLayer(), roundingMode: 'standard' }; // legacy files without an explicit radius policy
   state.layers = loadedLayers.map((l, idx) => ({
     ...defaults,
     ...l,
@@ -154,9 +156,6 @@ function applyLoadedProject(parsed, loadOptions = {}) {
     roundingCornerType: ['local', 'classic', 'fourier', 'simple'].includes(l.roundingCornerType)
       ? l.roundingCornerType
       : 'classic',
-    fourierStrength: Number.isFinite(Number(l.fourierStrength))
-      ? Math.max(0, Math.min(100, Number(l.fourierStrength)))
-      : 50,
     // Older projects did not distinguish automatic from authored bands.
     // Preserve their routes unless they explicitly opted into auto-assignment.
     audioNativeBandAuto:
@@ -265,7 +264,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
     spiralRoundSeams: l.spiralRoundSeams !== false,
 
     spiralFillEnabled: l.spiralFillEnabled === true,
-    spiralFillType: ['interwinding', 'mathematical'].includes(l.spiralFillType)
+    spiralFillType: ['chopped', 'mathematical', 'bandXor'].includes(l.spiralFillType)
       ? l.spiralFillType
       : 'chopped',
     lineProfile: ['round', 'slash', 'square', 'circle', 'cross'].includes(l.lineProfileStroke)
@@ -344,6 +343,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
   }));
 
   for (const layer of state.layers) {
+    delete layer.fourierStrength;
     delete layer.graffitiDistressEnabled;
     delete layer.graffitiDistress;
   }
@@ -439,16 +439,6 @@ function applyLoadedProject(parsed, loadOptions = {}) {
     )
   )
     state.sidebarMode = settings.sidebarMode;
-  // One-time migration: pre-13.1.3 projects stored Fourier as a global
-  // scene setting. New saves carry per-layer modes and explicit marker.
-  if (settings.fourierPerLayer !== true && settings.fourierMode === true) {
-    for (const layer of state.layers) {
-      layer.roundingPreviousCornerType = ['local', 'simple'].includes(layer.roundingCornerType) ? layer.roundingCornerType : 'classic';
-      layer.roundingCornerType = 'fourier';
-      const v = Number(settings.fourierStrength);
-      layer.fourierStrength = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 50;
-    }
-  }
   state.forceAllLinesHidden = false;
   const _lineMemory = ensureSidebarFeatureToggleMemory();
   if (_lineMemory.lines) delete _lineMemory.lines;
@@ -780,8 +770,8 @@ function applyLoadedProject(parsed, loadOptions = {}) {
       : 1;
     if (state.lamps.positionMode === 'circumference') state.lamps.positionMode = 'key';
     if (!['key', 'corners', 'arbitrary'].includes(state.lamps.positionMode)) state.lamps.positionMode = 'key';
-    if (!['linear', 'key'].includes(state.lamps.morphMotionMode))
-      state.lamps.morphMotionMode = 'linear';
+    if (!['linear', 'key', 'stable'].includes(state.lamps.morphMotionMode))
+      state.lamps.morphMotionMode = 'key';
     state.lamps.morphInertia = Math.max(
       -100,
       Math.min(100, Number.isFinite(Number(state.lamps.morphInertia)) ? Number(state.lamps.morphInertia) : 0),
@@ -898,11 +888,13 @@ function applyLoadedProject(parsed, loadOptions = {}) {
     if (typeof settings.lamps.adaptiveBrightness !== 'boolean') state.lamps.adaptiveBrightness = true;
     state.lamps.extinguishIntersections = settings.lamps.extinguishIntersections === true;
     state.lamps.intersectionDistance = Math.min(100, Math.max(0, Number(settings.lamps.intersectionDistance ?? 50)));
+    state.lamps.adaptiveAudio = settings.lamps.adaptiveAudio === true;
     if (typeof settings.lamps.adaptiveAdjustBrightness !== 'boolean')
       state.lamps.adaptiveAdjustBrightness = false;
     state.lamps.adaptiveStrength = Math.max(0, Math.min(100, Number(state.lamps.adaptiveStrength ?? 100)));
     state.lamps.adaptiveStrengthMultiplier = Math.max(0, Number(state.lamps.adaptiveStrengthMultiplier ?? 1));
     state.lamps.adaptiveExponent = snapLampAdaptiveExponent(state.lamps.adaptiveExponent);
+    state.lamps.adaptiveExponentMultiplier = normalizeLampAdaptiveExponentMultiplier(state.lamps.adaptiveExponentMultiplier);
     if (typeof state.lamps.adaptiveAutoExponent !== 'boolean') state.lamps.adaptiveAutoExponent = false;
     state.lamps.adaptiveFadeSec = Math.max(0, Number(state.lamps.adaptiveFadeSec ?? 1));
     state.lamps.morphEnabled = false;
@@ -1042,6 +1034,7 @@ function applyLoadedProject(parsed, loadOptions = {}) {
   syncMotionUI();
 
   const tunnelSettings = settings.tunnel || {};
+  state.tunnel.spiralTravelRotation = tunnelSettings.spiralTravelRotation === true;
   state.tunnel.density = normalizeTunnelDensity(tunnelSettings.density);
   if (Number.isFinite(Number(tunnelSettings.speedStrength))) {
     let signed = Math.max(-1, Math.min(1, Number(tunnelSettings.speedStrength)));
@@ -1747,6 +1740,7 @@ async function saveShapeFile() {
   downloadJsonFile(data, `Somata_Shapes_${Date.now()}.spiroshape`);
 }
 function applyShapeFile(parsed) {
+  parsed = migrateFourierProjectData(parsed);
   if (
     !parsed ||
     parsed.format !== 'SpiroStarShapes' ||
@@ -1756,7 +1750,7 @@ function applyShapeFile(parsed) {
     throw new Error('Invalid shape file');
   activeStopMinimalMorphing();
   activeStopMorphing();
-  const defaults = createLayer();
+  const defaults = { ...createLayer(), roundingMode: 'standard' }; // legacy files without an explicit radius policy
   state.layers = parsed.layers.map((l, idx) => {
     const application = ['stroke', 'graffiti'].includes(l.lineProfileApplication)
       ? l.lineProfileApplication
@@ -1844,6 +1838,7 @@ function applyShapeFile(parsed) {
     };
   });
   for (const layer of state.layers) {
+    delete layer.fourierStrength;
     delete layer.graffitiDistressEnabled;
     delete layer.graffitiDistress;
     ensureLayerEffectState(layer);

@@ -1,5 +1,6 @@
 // Лампы: привязка к отрисованным путям, опорные точки на окружности.
 import '../ui/audio-routing-panel.js'; // initialisation order: this module runs after it
+import { prepareFourierPathList } from '../geometry/fourier.js';
 import { lampPointAtFraction } from './lamp-attachment.js';
 import { roundPolylineForDraw } from '../geometry/polyline-rounding.js';
 import { gcd, getLampEvaluationConfig } from '../core/defaults-layers.js';
@@ -158,7 +159,7 @@ function buildLampRenderedAttachmentPaths(paths, layer, morphInfo = null) {
     Math.min(2, Number(morphInfo?.roundingFrac ?? getRoundingStrength(layer?.rounding)) || 0),
   );
   const dynamic = Boolean(morphInfo) || isCurrentFrameDynamicPathList(source);
-  const cacheKey = `${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode || 'segments'}|shape:${layer?.roundingShape || 'spline'}|corner:${layer?.roundingCornerType || 'classic'}|drop:${layer?.roundingMaxRadiusDrop ?? 30}|spline:${layer?.roundingSmoothSplines === true ? 1 : 0}|filletSteps:${typeof window !== 'undefined' && window.__somataSplineFilletSteps === 8 ? 8 : 16}|filletSweep:${typeof window !== 'undefined' && window.__somataFastFilletSweep === true ? 1 : 0}|${round.toFixed(5)}|fourier:${state.fourierMode ? 1 : 0}`;
+  const cacheKey = `${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode || 'segments'}|shape:${layer?.roundingShape || 'spline'}|corner:${layer?.roundingCornerType || 'classic'}|drop:${layer?.roundingMaxRadiusDrop ?? 30}|spline:${layer?.roundingSmoothSplines === true ? 1 : 0}|filletSteps:${typeof window !== 'undefined' && window.__somataSplineFilletSteps === 8 ? 8 : 16}|filletSweep:${typeof window !== 'undefined' && window.__somataFastFilletSweep === true ? 1 : 0}|${round.toFixed(5)}|fourier:${state.fourierMode ? 1 : 0}:${state.fourierMode ? Number(state.fourierStrength) || 0 : 0}`;
   if (!dynamic && source && typeof source === 'object') {
     let variants = persistentLampRenderedPathsCache.get(source);
     const hit = variants?.get(cacheKey);
@@ -169,11 +170,13 @@ function buildLampRenderedAttachmentPaths(paths, layer, morphInfo = null) {
       persistentLampRenderedPathsCache.set(source, variants);
     }
     variants.set(cacheKey, built);
+    if (state.fourierMode) while (variants.size > 8) variants.delete(variants.keys().next().value);
     return built;
   }
   return buildLampRenderedAttachmentPathsUncached(source, layer, morphInfo, round);
 }
 function buildLampRenderedAttachmentPathsUncached(source, layer, morphInfo, round) {
+  if (state.fourierMode) return prepareFourierPathList(source);
   const out = source.map((path) => {
     const pts = path?.points || [];
     if (pts.length < 2 || path.profileCurveBaked) return path;
@@ -220,6 +223,7 @@ function buildLampRenderedAttachmentPathsUncached(source, layer, morphInfo, roun
         false,
         null,
         layer,
+        path.bridgeRoundFlags || [],
       );
     }
     return { ...path, points: sampler.points.length > 1 ? sampler.points : pts, cornerFlags: [] };
@@ -232,7 +236,7 @@ function nearestPointOnLampPaths(anchor, paths, roundingFrac, useRoundedPath) {
     bestD = Infinity;
   for (const path of paths || []) {
     let pts = path.points || [];
-    if (useRoundedPath && roundingFrac > 0.001 && pts.length > 2) {
+    if (!state.fourierMode && useRoundedPath && roundingFrac > 0.001 && pts.length > 2) {
       pts = smoothMorphPath(pts, path.closed, roundingFrac, path.cornerFlags || []);
     }
     if (pts.length < 2) continue;

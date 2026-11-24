@@ -778,18 +778,6 @@ aside {
   text-align: center !important;
   color: #a5b4fc !important;
 }
-.profile-spline-point-count {
-  flex: 0 0 auto;
-  min-width: 20px;
-  text-align: left;
-  font:
-    9px/1.2 ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Consolas,
-    monospace;
-  color: #a5b4fc;
-}
 #profilePresetSelect.family-triangle {
   background: #5a4a14;
   border-color: #a88519;
@@ -6448,7 +6436,7 @@ header {
   color: #fef08a;
 }
 .lamp-morph-motion-mode {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .lamp-morph-motion-mode button {
   font-size: 10px;
@@ -8559,15 +8547,6 @@ header {
 }
 .fourier-mode-toggle input {
   accent-color: #22d3ee;
-}
-.fourier-strength-row {
-  margin-top: 2px;
-}
-.fourier-strength-row .lamp-slider-mult {
-  grid-template-columns: minmax(0, 1fr);
-}
-.fourier-strength-row .hint-text {
-  margin-top: 2px;
 }
 .playlist-global-hue-control {
   display: grid;
@@ -10802,17 +10781,6 @@ html.app-pseudo-fullscreen #btnPseudoFullscreenExit {
 }
 .morph-reset-defaults:hover {
   background: rgba(56, 189, 248, 0.18);
-}
-
-.profile-mode-transition-percent-row {
-  display: grid;
-  grid-template-columns: auto minmax(80px, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-}
-.profile-mode-transition-percent-row input[type='range'] {
-  width: 100%;
-  accent-color: #38bdf8;
 }
 
 .control-row.blue-morph-enabled,
@@ -15029,7 +14997,6 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter {
 .somata-removed-menu,
 .somata-removed-row,
 #gcdNotice,
-#roundingGuideControls,
 #fileSettingsBlock > input[hidden] {
   display: none !important;
 }
@@ -15359,6 +15326,14 @@ body:has(#projectMorphSettingsPanel:not(.hidden)) #fpsCounter {
   }
 }
 
+#geometrySettingsGroup #testMorphControls .test-morph-duration-row #testMorphAutoBadge {
+  display: block;
+  margin-top: 2px;
+  color: #ef4444;
+}
+#geometrySettingsGroup #testMorphControls .test-morph-duration-row #testMorphAutoBadge.hidden {
+  display: none;
+}
 #geometrySettingsGroup #testMorphControls .test-morph-duration-row {
   grid-template-columns: max-content minmax(45px, 1fr) auto;
   gap: 5px;
@@ -17617,34 +17592,46 @@ input[type='number'].somata-number-is-scrubbing {
   display: none !important;
 }
 
-.rounding-mode-row #paramRoundingCornerType {
-  display: none !important;
+#settingsSidebar .rounding-mode-row.rounding-compact-row {
+  flex-wrap: nowrap !important;
 }
+#settingsSidebar .rounding-mode-row.rounding-compact-row > .hint-text:first-child {
+  flex: 0 0 auto;
+}
+.rounding-compact-row .rounding-method-stepper {
+  flex: 1 1 auto;
+  min-width: 0;
+  grid-template-columns: 24px minmax(0, 1fr) 24px;
+  gap: 3px;
+}
+.rounding-compact-row #paramRoundingCornerType {
+  display: block;
+  min-width: 0;
+  max-width: none;
+  width: 100%;
+  font-size: 10px;
+}
+.rounding-method-stepper button { width: 24px; min-width: 24px; }
+.rounding-compact-radius { margin-top: 3px; }
+.rounding-compact-radius.hidden { display: none !important; }
+.rounding-compact-radius label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.rounding-compact-radius input { width: 12px; height: 12px; margin: 0; accent-color: var(--accent); }
+.rounding-compact-radius #paramRoundingMode { display: none !important; }
 .rounding-corner-type-btn {
   white-space: nowrap;
 }
 
-.rounding-mode-toggle.rounding-four-types {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.rounding-mode-toggle.rounding-method-types {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   min-width: 0;
   width: 100%;
   gap: 2px;
 }
-.rounding-four-types .rounding-mode-btn {
+.rounding-method-types .rounding-mode-btn {
   min-width: 0;
   padding-left: 2px;
   padding-right: 2px;
   font-size: 11px;
-}
-.rounding-fourier-controls {
-  margin: 4px 0 8px;
-  padding: 7px 8px;
-  border-radius: 6px;
-  background: rgba(34, 211, 238, 0.045);
-  border: 1px solid rgba(34, 211, 238, 0.22);
-}
-.rounding-fourier-controls.hidden {
-  display: none !important;
 }
 
 .web-branch-toggle.spiral-web-choice-muted {
@@ -18158,3 +18145,85 @@ input[type='number'].somata-number-is-scrubbing {
 .profile-mode-live[hidden] {
   display: none;
 }
+
+/* Profile UI 2: authoring controls inside the live profile library row. */
+#profileSettingsGroup .profile-closure-options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 12px;
+  min-width: 0;
+  padding: 2px 0;
+}
+#profileSettingsGroup .profile-closure-options label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+#profileSettingsGroup .profile-closure-options input[type="checkbox"] { flex: none; margin: 0; }
+#profileSettingsGroup .profile-closure-options label:has(input:disabled) { opacity: .55; cursor: default; }
+#profileSettingsGroup .profile-phase-points-row {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+  align-items: center;
+  column-gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+#profileSettingsGroup .profile-phase-points-row > label { white-space: nowrap; }
+#profileSettingsGroup .profile-phase-points-row > input[type="range"] {
+  width: 100% !important;
+  min-width: 0 !important;
+  margin: 0;
+  accent-color: #38bdf8;
+}
+#profileSettingsGroup .profile-phase-points-row > .text-mono {
+  min-width: 3ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+#profileSettingsGroup .profile-phase-points-row .profile-spline-point-editor {
+  display: inline-flex;
+  gap: 4px;
+}
+#profileSettingsGroup .profile-phase-points-row #profileSplinePointCount {
+  width: 44px !important;
+  min-width: 0 !important;
+}
+
+/* Geometry guide controls: a global toolbar button and an independent popup. */
+.floating-display-controls .geometry-guides-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  line-height: 1;
+}
+.floating-display-controls .geometry-guides-button.active {
+  background: rgba(99, 102, 241, 0.18);
+  color: #c7d2fe;
+  border-color: rgba(99, 102, 241, 0.45);
+}
+.floating-display-controls .geometry-guides-button.partial {
+  color: #c7d2fe;
+  border-color: rgba(99, 102, 241, 0.45);
+}
+.geometry-guides-menu { width: min(282px, calc(100vw - 16px)); box-sizing: border-box; }
+.geometry-guides-menu > label { display: flex; align-items: center; gap: 7px; padding: 4px 0; cursor: pointer; font-size: 12px; }
+.geometry-guides-menu #roundingGuideControls.hidden { display: none !important; }
+.geometry-guides-menu #roundingGuideControls { border-top: 1px solid var(--border-light); padding-top: 6px; }
+.geometry-guides-menu #roundingGuideControls .row-inputs { flex-wrap: wrap; }
+#profileSettingsGroup .profile-mode-live { margin: 5px 0 0; }
+
+/* Geometry diagnostic visibility; separate from the analysis and auto-open controls. */
+#screenErrorOverlayManualLabel {
+  display: flex; align-items: center; gap: 6px; width: fit-content;
+  margin: 0 0 8px; font: 11px/1.3 ui-monospace, monospace; color: #cbd5e1; cursor: pointer;
+}
+#screenErrorOverlayShowManual { width: 13px; height: 13px; margin: 0; accent-color: #38bdf8; }

@@ -57,7 +57,7 @@ import {
 } from '../effects/lightning.js';
 import { ensureSweepAnimation } from '../effects/effect-animation.js';
 import { getWebBranchFlags, webRuntime } from '../effects/web.js';
-import { snapLampAdaptiveExponent } from '../lamps/adaptive-exponent.js';
+import { snapLampAdaptiveExponent, normalizeLampAdaptiveExponentMultiplier } from '../lamps/adaptive-exponent.js';
 
 function syncMorphModeDependentUI() {
   const mode = state.morph.mode;
@@ -174,7 +174,6 @@ function syncSidebarToolStates() {
   syncMotionUI();
   const fourierToggle = document.getElementById('fourierModeToggle');
   if (fourierToggle) fourierToggle.checked = state.fourierMode === true;
-  syncFourierStrengthUI();
 }
 function normalizeLineProfileValue(value, fallback = 'round') {
   return ['round', 'slash', 'square', 'circle', 'cross'].includes(value) ? value : fallback;
@@ -296,12 +295,12 @@ function setLayerGraffitiMode(layer, enabled) {
   syncSidebarToolStates();
   requestMainCanvasRender();
 }
-function syncFourierStrengthUI() {
-  state.fourierStrength = Math.max(0, Math.min(100, Number(state.fourierStrength ?? 50)));
-  const r = document.getElementById('fourierStrength');
-  if (r && document.activeElement !== r) r.value = String(state.fourierStrength);
-  const t = document.getElementById('fourierStrengthText');
-  if (t) t.textContent = `${Math.round(state.fourierStrength)}%`;
+function syncRoundingModeHelp(fourier) {
+  const slider = document.getElementById('paramRounding');
+  if (slider) slider.dataset.uiTooltip = fourier
+    ? 'Фурье: 0% — исходные острые углы; с увеличением скругления сила Фурье уменьшается; 200% — окружность.'
+    : '0–100% — плечо скругления до половины базового ребра; 100–200% — плавное приближение к окружности.';
+  document.getElementById('roundingRadiusPolicyRow')?.classList.toggle('hidden', fourier);
 }
 function setFourierMode(enabled, syncControl = true) {
   const layer = state.layers.find((l) => l.id === state.activeLayerId) || state.layers[0];
@@ -315,6 +314,7 @@ function setFourierMode(enabled, syncControl = true) {
   }
   document.getElementById('btnSidebarFourier')?.classList.toggle('fourier-on', state.fourierMode);
   const cornerValue = layer?.roundingCornerType || 'classic';
+  syncRoundingModeHelp(cornerValue === 'fourier');
   const cornerSelect = document.getElementById('paramRoundingCornerType');
   if (cornerSelect) cornerSelect.value = cornerValue;
   document.querySelectorAll('.rounding-corner-type-btn').forEach((btn) => {
@@ -322,8 +322,6 @@ function setFourierMode(enabled, syncControl = true) {
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', String(active));
   });
-  document.getElementById('roundingFourierControls')?.classList.toggle('hidden', !state.fourierMode);
-  syncFourierStrengthUI();
   requestMainCanvasRender();
 }
 function setSidebarMode(mode) {
@@ -680,12 +678,14 @@ function syncLampSettingsUI() {
     lampBrightnessVariation: c.brightnessVariation ?? 0,
     lampBrightnessVariationMultiplier: c.brightnessVariationMultiplier ?? 1,
     lampAdaptiveBrightness: c.adaptiveBrightness !== false,
+    lampAdaptiveAudio: c.adaptiveAudio === true,
     lampExtinguishIntersections: c.extinguishIntersections === true,
     lampIntersectionDistance: c.intersectionDistance ?? 50,
     lampAdaptiveAdjustBrightness: c.adaptiveAdjustBrightness === true,
     lampAdaptiveStrength: c.adaptiveStrength ?? 100,
     lampAdaptiveStrengthMultiplier: c.adaptiveStrengthMultiplier ?? 1,
     lampAdaptiveExponent: snapLampAdaptiveExponent(c.adaptiveExponent),
+    lampAdaptiveExponentMultiplier: normalizeLampAdaptiveExponentMultiplier(c.adaptiveExponentMultiplier),
     lampAdaptiveAutoExponent: c.adaptiveAutoExponent === true,
     lampAdaptiveFadeSec: c.adaptiveFadeSec ?? 1,
     lampMorphEnabled: c.morphEnabled === true,
@@ -698,7 +698,7 @@ function syncLampSettingsUI() {
     const el = document.getElementById(id);
     if (!el) continue;
     if (el.type === 'checkbox') el.checked = !!v;
-    else el.value = v;
+    else if (el.value !== String(v) && !(el.type === 'number' && document.activeElement === el && (el.value === '' || el.validity?.badInput || Number(el.value) === Number(v)))) el.value = v;
   }
   const showLines = document.getElementById('showLines');
   if (showLines) showLines.checked = linesAreEffectivelyVisible();
@@ -727,7 +727,7 @@ function syncLampSettingsUI() {
     btn.classList.toggle('active', on);
     btn.setAttribute('aria-pressed', on ? 'true' : 'false');
   });
-  const motionMode = c.morphMotionMode === 'key' ? 'key' : 'linear';
+  const motionMode = ['key', 'linear', 'stable'].includes(c.morphMotionMode) ? c.morphMotionMode : 'key';
   document.querySelectorAll('[data-lamp-motion]').forEach((btn) => {
     const on = btn.dataset.lampMotion === motionMode;
     btn.classList.toggle('active', on);
@@ -818,7 +818,7 @@ function syncLampSettingsUI() {
   set('lampAdaptiveFadeText', `${formatTimeSeconds(Math.max(0, Number(c.adaptiveFadeSec ?? 1)))} с`);
   {
     const exponent = snapLampAdaptiveExponent(c.adaptiveExponent);
-    set('lampAdaptiveExponentText', `${exponent > 0 ? '+' : ''}${exponent}%`);
+    set('lampAdaptiveExponentText', `${exponent > 0 ? '+' : ''}${exponent}% × ${fmt(normalizeLampAdaptiveExponentMultiplier(c.adaptiveExponentMultiplier))}`);
     const lightChannel = c.adaptiveAdjustBrightness === true;
     document.querySelectorAll('[data-lamp-adaptive-channel]').forEach((btn) => {
       const on = (btn.dataset.lampAdaptiveChannel === 'light') === lightChannel;
@@ -1232,9 +1232,9 @@ export {
   normalizeLineMarkerType,
   normalizeLineProfileValue,
   setFourierMode,
+  syncRoundingModeHelp,
   setLayerMainLineMode,
   setSidebarMode,
-  syncFourierStrengthUI,
   syncLampSettingsUI,
   syncMorphModeDependentUI,
   syncMotionUI,

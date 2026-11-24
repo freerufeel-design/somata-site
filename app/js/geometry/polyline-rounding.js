@@ -1,8 +1,7 @@
 // Скругление ломаной для отрисовки (roundPolylineForDraw).
 import '../ui/effects-sidebar.js'; // initialisation order: this module runs after it
-import { state } from '../core/state.js';
-import { buildFourierWavePoints } from './fourier.js';
-import { smoothMorphPath } from './morph.js';
+import { somataWithFourierLayer, state } from '../core/state.js';
+import { drawFourierPath } from './fourier.js';
 import { somataDrawSplineCornerMode } from './spline-corner-mode.js';
 import {
   highTurnRoundingFactor,
@@ -10,9 +9,11 @@ import {
   transformSplineKnotsForRounding,
 } from './spline-rounding.js';
 import { drawUnifiedFilletPath } from './unified-fillet.js';
+import { drawStraightProfileBridges } from './straight-profile-bridges.js';
 
 export function drawSimplePolyline(ctx, points, closed, roundingFrac, cornerFlags, cornerFactors = null) {
   if (!points || points.length < 2) return;
+  if (state.fourierMode) return drawFourierPath(ctx, points, closed);
   const strength = Math.max(0, Math.min(2, Number(roundingFrac) || 0));
   // v341: 100..200% is a continuous second stage. Preserve topology by moving
   // knots first, then reuse the proven 100% local fillet without consuming more edge.
@@ -21,18 +22,6 @@ export function drawSimplePolyline(ctx, points, closed, roundingFrac, cornerFlag
     return drawSimplePolyline(ctx, pre, closed, 1, cornerFlags, cornerFactors);
   }
 
-  if (state.fourierMode && points?._fourierPrepared !== true) {
-    const amount = Math.min(1, strength);
-    let source = points;
-    if (amount > 0.001 && Array.isArray(cornerFlags) && cornerFlags.some(Boolean))
-      source = smoothMorphPath(points, Boolean(closed), amount, cornerFlags);
-    const wave = buildFourierWavePoints(source, Boolean(closed), `poly:${amount.toFixed(4)}`);
-    if (wave.length < 2) return;
-    ctx.moveTo(wave[0].x, wave[0].y);
-    for (let i = 1; i < wave.length; i++) ctx.lineTo(wave[i].x, wave[i].y);
-    if (closed) ctx.closePath();
-    return;
-  }
 
   const n = points.length;
   const rawPath = () => {
@@ -213,10 +202,22 @@ function roundPolylineForDraw(
   independentMorphCuts = false,
   roundingGuardSource = null,
   filletLayer = null,
+  bridgeRoundFlags = null,
 ) {
   if (!points || points.length < 2) return;
-  if (filletLayer?.roundingCornerType === 'simple' && !state.fourierMode)
-    return drawSimplePolyline(ctx, points, closed, roundingFrac, cornerFlags, cornerFactors);
+  if (filletLayer?.roundingCornerType === 'simple')
+    return somataWithFourierLayer(filletLayer, () => {
+      if (drawStraightProfileBridges(ctx, points, closed, bridgeRoundFlags,
+        (pen, run, indices) => drawSimplePolyline(pen, run, false, roundingFrac,
+          indices.map(i => cornerFlags?.[i]), cornerFactors ? indices.map(i => cornerFactors[i]) : null))) return;
+      return drawSimplePolyline(ctx, points, closed, roundingFrac, cornerFlags, cornerFactors);
+    });
+  if (state.fourierMode) return drawFourierPath(ctx, points, closed);
+  if (!state.fourierMode && bridgeRoundFlags?.includes(false) && drawStraightProfileBridges(ctx, points, closed, bridgeRoundFlags,
+    (pen, run, indices) => roundPolylineForDraw(pen, run, false, roundingFrac,
+      indices.map(i => cornerFlags?.[i]),
+      cornerFactors ? indices.map(i => cornerFactors[i]) : null,
+      independentMorphCuts, null, filletLayer))) return;
   if (
     !state.fourierMode &&
     filletLayer &&
@@ -257,18 +258,6 @@ function roundPolylineForDraw(
     );
   }
 
-  if (state.fourierMode && points?._fourierPrepared !== true) {
-    const amount = Math.min(1, strength);
-    let source = points;
-    if (amount > 0.001 && Array.isArray(cornerFlags) && cornerFlags.some(Boolean))
-      source = smoothMorphPath(points, Boolean(closed), amount, cornerFlags);
-    const wave = buildFourierWavePoints(source, Boolean(closed), `poly:${amount.toFixed(4)}`);
-    if (wave.length < 2) return;
-    ctx.moveTo(wave[0].x, wave[0].y);
-    for (let i = 1; i < wave.length; i++) ctx.lineTo(wave[i].x, wave[i].y);
-    if (closed) ctx.closePath();
-    return;
-  }
 
   const n = points.length;
   const rawPath = () => {

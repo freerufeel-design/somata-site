@@ -191,6 +191,14 @@ function buildSpiralProfileForDraw(
         keyFlags: carried,
       };
     }
+    if (layer.roundingCornerType === 'simple') {
+      // Somata 6.7: the smooth spline is constructed in final spiral
+      // coordinates, not in flat profile space. Discrete uses sampled points.
+      const points = layer.splineRenderMode === 'discrete'
+        ? densifySegmentProfileForSpiral(base, target, false) : base;
+      return { points, roundingBaked: false, splineBaked: false,
+        keyFlags: points.map(() => false), legacySimpleProfile: true };
+    }
     const polygonSpline = buildPolygonProfileSplineSamplesForSpiral(base, target);
     const authoredLogicalCorners = segmentProfileCornerFlags(base);
     return {

@@ -34,6 +34,7 @@ import {
 } from '../geometry/profile-model.js';
 import { splinePathForDraw } from '../geometry/spline-rounding.js';
 import { noteSuppressedError } from '../core/suppressed-errors.js';
+import { profileModeLiveLabel } from './profile-mode-live.js';
 
 function renderProfileEditor() {
   const canonicalLayer = state.layers.find((l) => l.id === state.activeLayerId);
@@ -50,7 +51,7 @@ function renderProfileEditor() {
   const tabs = document.querySelectorAll('#profileModeTabs .profile-mode-btn');
   const idx = state.layers.indexOf(canonicalLayer);
   const blue =
-    displayLayer && runtimeState.morph.active === true && state.morph?.options?.byShape === true
+    displayLayer && runtimeState.morph.active === true && (state.morph?.options?.byShape === true || runtimeState.morph.manualProfileResetIds?.has(canonicalLayer?.id))
       ? SomataMorphRuntime.fromBlue(idx)
       : null;
   const from = blue?.sourceLayer?.profileMode,
@@ -64,12 +65,14 @@ function renderProfileEditor() {
     button.setAttribute('aria-pressed', String(active));
   }
   if (indicator) {
-    const name = (mode) => (mode === 'spline' ? 'Сплайн' : mode === 'segments' ? 'Отрезки' : 'От руки');
-    indicator.hidden = !mixing;
-    if (mixing) {
-      const label = `${name(from)} → ${name(to)} · ${Math.round(weight * 100)}%`;
-      if (indicator.textContent !== label) indicator.textContent = label;
-    }
+    const label = profileModeLiveLabel({
+      current: layer.profileMode,
+      from,
+      to,
+      progress: runtimeState.morph.geometryT,
+      weight: mixing ? weight : undefined,
+    });
+    if (indicator.textContent !== label) indicator.textContent = label;
   }
 
   const w = profileCanvas.width;

@@ -1,6 +1,8 @@
 // Синхронизация сайдбара с состоянием слоя и морфа.
 import '../morph-runtime/morph-mode.js'; // initialisation order: this module runs after it
-import { getConfiguredSplinePointCount, normalizeSplineRenderMode } from '../geometry/profile-model.js';
+import { syncRoundingModeHelp } from './effects-sidebar.js';
+import { syncGeometryGuides } from './geometry-guides.js';
+import { getConfiguredSplinePointCount } from '../geometry/profile-model.js';
 import {
   contourModeIsSpiral,
   getContourMode,
@@ -9,7 +11,6 @@ import {
   isSpiralLayer,
   normalizeSpiralOrder,
 } from '../geometry/spiral/order-params.js';
-import { applyTopologyBadgeStyle, getProfileTopologyStatus } from './profile-topology-badge.js';
 import { normalizeSpiralSquashY } from '../geometry/orbit-builder.js';
 import { getGraffitiVariationMode } from '../effects/graffiti-ribbon.js';
 import { ensureGpuPathFxAnimation, syncParticleUI } from '../effects/effect-animation.js';
@@ -306,6 +307,7 @@ function syncGpuLineFxUI(layer) {
   ensureGpuPathFxAnimation();
 }
 function syncSidebarInputs() {
+  syncGeometryGuides(state);
   window.SomataTestMorph?.syncUI?.();
   const layer = state.layers.find((l) => l.id === state.activeLayerId);
   if (!layer) return;
@@ -324,12 +326,8 @@ function syncSidebarInputs() {
   const bgDot = document.getElementById('bgColorDot');
   if (bgDot) bgDot.style.background = state.bgColor;
   document.getElementById('paramShowGrid').checked = state.showGrid;
-  const showGuidesCb = document.getElementById('paramShowRoundingGuides');
-  if (showGuidesCb) showGuidesCb.checked = state.roundingGuidesOverlayEnabled === true;
   const dashedGuidesCb = document.getElementById('paramRoundingGuidesDashed');
   if (dashedGuidesCb) dashedGuidesCb.checked = state.roundingGuidesDashed !== false;
-  const guideControls = document.getElementById('roundingGuideControls');
-  if (guideControls) guideControls.classList.toggle('hidden', state.roundingGuidesOverlayEnabled !== true);
   const guideColor = state.roundingGuideColor || '#94a3b8';
   const guideColorEl = document.getElementById('paramRoundingGuideColor');
   if (guideColorEl) guideColorEl.value = guideColor;
@@ -339,7 +337,6 @@ function syncSidebarInputs() {
   const guideOpacityText = document.getElementById('valRoundingGuideOpacity');
   if (guideOpacityText && document.activeElement !== guideOpacityText)
     guideOpacityText.textContent = `${Math.round(guideOpacity)}%`;
-  document.getElementById('paramShowBoundingCircle').checked = state.showBoundingCircle;
   const circleColor = state.boundingCircleColor || '#94a3b8';
   document.getElementById('paramBoundingCircleColor').value = circleColor;
   const circleDot = document.getElementById('boundingCircleColorDot');
@@ -454,32 +451,13 @@ function syncSidebarInputs() {
     subRange.value = maxS;
   }
 
-  const topology = getProfileTopologyStatus(layer);
-  const isBroken = topology.broken;
   const closedCheckbox = document.getElementById('paramClosedLoop');
-  const lineJoinContainer = document.getElementById('lineJoinTypeContainer');
-  const badge = document.getElementById('loopStatusBadge');
-  const spiralTopologyBadge = document.getElementById('spiralTopologyBadge');
   const contourMode = getContourMode(layer);
   const spiralModeActive = contourModeIsSpiral(contourMode);
-
-  closedCheckbox.disabled = false;
-  closedCheckbox.checked = !['open', 'spiral-open'].includes(contourMode);
   const family = contourMode.startsWith('extended-') ? 'extended' : spiralModeActive ? 'spiral' : 'polygon';
-  const second = ['open', 'spiral-open'].includes(contourMode);
-  document.querySelectorAll('[data-contour-family]').forEach((btn) => {
-    const active = btn.dataset.contourFamily === family;
-    btn.classList.toggle('active', active);
-    btn.setAttribute('aria-pressed', String(active));
-  });
-  document.querySelectorAll('[data-contour-variant]').forEach((btn) => {
-    const active = (btn.dataset.contourVariant === 'second') === second;
-    btn.classList.toggle('active', active);
-    btn.setAttribute('aria-pressed', String(active));
-  });
-  document.querySelectorAll('[data-contour-variant]').forEach((btn, i) => {
-    btn.textContent = i === 0 ? 'Замкнутый' : 'Разомкнутый';
-  });
+  const closureRequested = contourMode === 'closed' || contourMode === 'spiral-closed';
+  closedCheckbox.disabled = family === 'extended';
+  closedCheckbox.checked = closureRequested;
   const extendedActive = family === 'extended';
   const extendedButton = document.getElementById('btnExtendedContour');
   if (extendedButton) {
@@ -494,36 +472,15 @@ function syncSidebarInputs() {
     btn.setAttribute('aria-pressed', String(active));
   });
 
-  const closedMode = contourMode === 'closed';
-  lineJoinContainer.classList.toggle('hidden', !closedMode);
-  lineJoinContainer.style.opacity = closedMode && isBroken ? '1' : '0.48';
-  lineJoinContainer.style.pointerEvents = closedMode && isBroken ? 'auto' : 'none';
-
-  if (spiralModeActive) {
-    badge.textContent = 'Спираль';
-    badge.style.background = 'rgba(6,182,212,0.18)';
-    badge.style.color = '#67e8f9';
-    spiralTopologyBadge?.classList.remove('hidden');
-    applyTopologyBadgeStyle(spiralTopologyBadge, topology);
-  } else {
-    spiralTopologyBadge?.classList.add('hidden');
-    applyTopologyBadgeStyle(badge, topology);
-  }
-
-  const currentJoin = layer.lineJoinType || 'straight';
-  document.querySelectorAll('.line-join-btn').forEach((btn) => {
-    btn.classList.toggle('active', btn.dataset.join === currentJoin);
-  });
-
   if (document.activeElement?.id !== 'numRounding') document.getElementById('numRounding').value = Math.round(clampRoundingPercent(layer.rounding));
   document.getElementById('paramRounding').value = clampRoundingPercent(layer.rounding);
-  // Classic Spline+ and local fillets are independent; Fourier is scene-wide.
+  // Classic Spline+ and local fillets are independent; Fourier is per layer.
   // Normalize old imported layers without changing radius policy.
   layer.roundingShape = 'hybrid';
   const cornerType = ['local', 'classic', 'fourier', 'simple'].includes(layer.roundingCornerType)
     ? layer.roundingCornerType
     : 'classic';
-  document.getElementById('roundingFourierControls')?.classList.toggle('hidden', cornerType !== 'fourier');
+  syncRoundingModeHelp(cornerType === 'fourier');
   const cornerSelect = document.getElementById('paramRoundingCornerType');
   if (cornerSelect) cornerSelect.value = cornerType;
   document.querySelectorAll('.rounding-corner-type-btn').forEach((btn) => {
@@ -533,6 +490,8 @@ function syncSidebarInputs() {
   });
   const roundingModeEl = document.getElementById('paramRoundingMode');
   if (roundingModeEl) roundingModeEl.value = layer.roundingMode === 'monoradius' ? 'monoradius' : 'standard';
+  const monoCheck = document.getElementById('paramMonoradiusCheck');
+  if (monoCheck) monoCheck.checked = layer.roundingMode === 'monoradius';
   document.querySelectorAll('.rounding-mode-btn[data-rounding-mode]').forEach((btn) => {
     const active =
       btn.dataset.roundingMode === (layer.roundingMode === 'monoradius' ? 'monoradius' : 'standard');
@@ -626,7 +585,6 @@ function syncSidebarInputs() {
         Math.max(1, Math.min(120, Math.round(Number(layer.spiralStepLimiter ?? 2) || 2))),
       );
   }
-  const spiralClosed = contourMode === 'spiral-closed' || contourMode === 'closed';
   const twistInput = document.getElementById('paramSpiralTwist');
   if (twistInput) twistInput.checked = layer.spiralTwist === true;
   const twistRow = document.getElementById('spiralTwistRow');
@@ -645,15 +603,12 @@ function syncSidebarInputs() {
   }
   const seamRoundInput = document.getElementById('paramSpiralRoundSeams');
   if (seamRoundInput) {
-    seamRoundInput.checked = layer.spiralRoundSeams !== false;
-    seamRoundInput.disabled = !spiralClosed;
+    seamRoundInput.checked = spiralModeActive ? layer.spiralRoundSeams !== false : (layer.lineJoinType || 'rounded') !== 'straight';
+    seamRoundInput.disabled = !closureRequested;
   }
   const tangentRow = document.getElementById('spiralTangentialRow');
-  const seamRow = document.getElementById('spiralRoundSeamsRow');
   tangentRow?.classList.remove('hidden');
-  seamRow?.classList.remove('hidden');
   tangentRow?.classList.toggle('spiral-setting-inactive', Math.abs(getEffectiveSpiralOrder(layer)) <= 1e-8);
-  seamRow?.classList.toggle('spiral-setting-disabled', !spiralClosed);
   const spiralFillInput = document.getElementById('paramSpiralFillEnabled');
   const spiralFillTypeRow = document.getElementById('spiralFillTypeRow');
   const spiralFillTypeInput = document.getElementById('paramSpiralFillType');
@@ -661,7 +616,7 @@ function syncSidebarInputs() {
   if (spiralFillInput) spiralFillInput.checked = spiralFillEnabled;
   spiralFillTypeRow?.classList.toggle('hidden', !spiralFillEnabled);
   if (spiralFillTypeInput && document.activeElement !== spiralFillTypeInput)
-    spiralFillTypeInput.value = ['interwinding', 'mathematical'].includes(layer.spiralFillType)
+    spiralFillTypeInput.value = ['chopped', 'mathematical', 'bandXor'].includes(layer.spiralFillType)
       ? layer.spiralFillType
       : 'chopped';
 
@@ -949,12 +904,6 @@ function syncSidebarInputs() {
     wholeCurveSplineInput.checked = layer.wholeCurveSpline === true;
     wholeCurveSplineInput.disabled = layer.profileMode !== 'spline';
   }
-  const splineRenderMode = normalizeSplineRenderMode(layer.splineRenderMode);
-  document.querySelectorAll('[data-spline-render-mode]').forEach((btn) => {
-    const on = btn.dataset.splineRenderMode === splineRenderMode;
-    btn.classList.toggle('active', on);
-    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-  });
   const rawProfileModeTransition = state.morph.profileModeTransition;
   const profileModeTransition =
     rawProfileModeTransition === 'second'
@@ -973,8 +922,8 @@ function syncSidebarInputs() {
     Math.min(100, Math.round(Number(state.morph.profileModeTransitionPercent) || 0)),
   );
   state.morph.profileModeTransitionPercent = transitionPct;
-  const transitionPctRow = document.getElementById('profileModeTransitionPercentRow');
-  transitionPctRow?.classList.toggle('hidden', profileModeTransition === 'phase');
+  // Keep both controls visible in every transition mode. The phase length is
+  // only consumed by start/end; the point count is always independent.
   const transitionPctInput = document.getElementById('profileModeTransitionPercent');
   if (transitionPctInput && document.activeElement !== transitionPctInput)
     transitionPctInput.value = String(transitionPct);
@@ -982,10 +931,8 @@ function syncSidebarInputs() {
   if (transitionPctValue) transitionPctValue.textContent = `${transitionPct}%`;
   const splinePointCount = getConfiguredSplinePointCount();
   const splinePointInput = document.getElementById('profileSplinePointCount');
-  const splinePointText = document.getElementById('profileSplinePointCountText');
   if (splinePointInput && document.activeElement !== splinePointInput)
     splinePointInput.value = String(splinePointCount);
-  if (splinePointText) splinePointText.textContent = 'точ.';
 
   syncProfilePresetLibrarySelection(layer);
   syncSidebarToolStates();

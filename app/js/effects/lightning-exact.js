@@ -507,7 +507,7 @@ function buildExactLightningPaths(frameCtx, forcePreview = false) {
     frameCtx?.greenMorphEnabled === true;
   const staticCacheable = !dynamicSource && !isSpiralLayer(layer);
   const staticKey = staticCacheable
-    ? `exactSplineV425|preview:${needsPreview ? 1 : 0}|${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode || 'segments'}|shape:${layer?.roundingShape || 'spline'}|r:${round.toFixed(5)}|fourier:${state.fourierMode ? 1 : 0}:${Math.round((Number(state.fourierStrength) || 0) * 100) / 100}`
+    ? `exactSplineV425|preview:${needsPreview ? 1 : 0}|${normalizeSplineRenderMode(layer?.splineRenderMode)}|${layer?.profileMode || 'segments'}|shape:${layer?.roundingShape || 'spline'}|r:${round.toFixed(5)}|fourier:${state.fourierMode ? 1 : 0}:${Number(state.fourierStrength) || 0}`
     : '';
   if (staticCacheable) {
     const variants = persistentExactLightningCache.get(source),
@@ -554,7 +554,7 @@ function buildExactLightningPaths(frameCtx, forcePreview = false) {
 
     const out = source.map((path) => {
       let pts = path?.points || [];
-      if (round > 0.001 && Array.isArray(path?.cornerFlags) && path.cornerFlags.some(Boolean))
+      if (!state.fourierMode && round > 0.001 && Array.isArray(path?.cornerFlags) && path.cornerFlags.some(Boolean))
         pts = smoothMorphPath(pts, false, round, path.cornerFlags);
       if (state.fourierMode && pts?._fourierPrepared !== true)
         pts = buildFourierWavePoints(pts, false, `lightning-exact-spiral:${round.toFixed(4)}`);
@@ -632,6 +632,7 @@ function buildExactLightningPaths(frameCtx, forcePreview = false) {
         false,
         null,
         layer,
+        path.bridgeRoundFlags || [],
       );
     }
     const rail = recorder.finish(needsPreview),
@@ -651,6 +652,7 @@ function buildExactLightningPaths(frameCtx, forcePreview = false) {
       persistentExactLightningCache.set(source, variants);
     }
     variants.set(staticKey, out);
+    if (state.fourierMode) while (variants.size > 8) variants.delete(variants.keys().next().value);
   }
   if (frameCtx) {
     frameCtx[cacheFrameKey] = frameId;

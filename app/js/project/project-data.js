@@ -199,10 +199,8 @@ function buildProjectData() {
       sidebarMode: state.sidebarMode,
       motion: cloneData(normalizeMotionState()),
       fourierPerLayer: true,
-      // Compatibility metadata for older readers only; the layer list
-      // above now contains the authoritative Fourier settings.
+      // Legacy global-mode marker. Layer rounding is the sole parameter.
       fourierMode: state.layers.some((l) => l.roundingCornerType === 'fourier'),
-      fourierStrength: Math.max(0, Math.min(100, Number(state.fourierStrength ?? 50))),
       showLines: state.showLines !== false,
       showLamps: getLayerLampsEnabled(getActiveEffectLayer()),
       showWeb: getLayerWebEnabled(getActiveEffectLayer()),
@@ -223,6 +221,7 @@ function buildProjectData() {
         ...persistentTunnel,
         defaultActive: state.tunnel.defaultActive === true,
         speedStrength: state.tunnel.speedStrength,
+        spiralTravelRotation: state.tunnel.spiralTravelRotation === true,
         signedSpeedVersion: 1,
         speedMultiplier: state.tunnel.speedMultiplier,
         spacingStrength: state.tunnel.spacingStrength,
@@ -454,6 +453,43 @@ function isSpiroProjectData(value) {
   if (Array.isArray(value)) return value.length > 0;
   return Boolean(value && typeof value === 'object' && Array.isArray(value.layers) && value.layers.length);
 }
+// Normalize old per-layer and scene-wide Fourier values at every import
+// boundary, including inactive playlist entries used by Green Morph.
+function migrateFourierProjectData(project) {
+  const layers = Array.isArray(project) ? project : project?.layers;
+  if (!Array.isArray(layers)) return project;
+  const settings = Array.isArray(project) ? null : project.settings;
+  const global = settings?.fourierPerLayer !== true && settings?.fourierMode === true;
+  const inverse = value => {
+    const v = Number(value);
+    return 200 - 2 * Math.max(0, Math.min(100, Number.isFinite(v) ? v : 50));
+  };
+  let changed = false;
+  const next = layers.map(layer => {
+    if (!layer || typeof layer !== 'object') return layer;
+    if (!global && !Object.hasOwn(layer, 'fourierStrength')) return layer;
+    changed = true;
+    const out = { ...layer };
+    if (global) {
+      if (out.roundingCornerType !== 'fourier')
+        out.roundingPreviousCornerType = ['local','simple'].includes(out.roundingCornerType) ? out.roundingCornerType : 'classic';
+      out.roundingCornerType = 'fourier';
+      out.rounding = inverse(settings.fourierStrength ?? 50);
+    } else if (out.roundingCornerType === 'fourier' && out.fourierStrength != null) {
+      out.rounding = inverse(out.fourierStrength);
+    }
+    delete out.fourierStrength;
+    return out;
+  });
+  if (Array.isArray(project)) return changed ? next : project;
+  if (!changed && !Object.hasOwn(settings || {}, 'fourierStrength')) return project;
+  const out = { ...project, layers: next };
+  if (settings) {
+    out.settings = { ...settings, fourierPerLayer: true };
+    delete out.settings.fourierStrength;
+  }
+  return out;
+}
 function normalizePlaylistProjectEntry(entry, index = 0) {
   const project = entry?.project ?? entry?.data ?? entry;
   if (!isSpiroProjectData(project)) return null;
@@ -462,7 +498,7 @@ function normalizePlaylistProjectEntry(entry, index = 0) {
     name: String(entry?.name || defaultPlaylistProjectName(index)),
     updatedAt: entry?.updatedAt || new Date().toISOString(),
 
-    project,
+    project: migrateFourierProjectData(project),
   };
 }
 function getCurrentPlaylistProjectIndex() {
@@ -648,6 +684,7 @@ export {
   isCompactMobileViewport,
   isSpiroProjectData,
   mergePersistentProjectSection,
+  migrateFourierProjectData,
   normalizeMenuSettings,
   normalizePlaylistProjectEntry,
   normalizePlaylistProjectNames,

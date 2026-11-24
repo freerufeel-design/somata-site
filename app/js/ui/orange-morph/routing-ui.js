@@ -38,7 +38,6 @@ import { syncMorphRouteDecorations } from '../parameter-routing-popup.js';
 import { askTransientMorphProfileDecision, morphProfileDisplayName } from '../blue-morph/profiles.js';
 import {
   activeRebaseMinimalMorphing,
-  activeStartMinimalMorphing,
   activeStopMinimalMorphing,
 } from '../../morph-runtime/morph-hooks.js';
 import {
@@ -1290,8 +1289,10 @@ async function createNewOrangeMorphProfile() {
   const was = runtimeState.minimalMorph?.active === true;
   if (was) activeStopMinimalMorphing(false);
   const created = store.create(state.minimalMorph, state.randomOptions, orangeProfileLayerCountHolder(), '');
+  syncRandomSettingsUI();
   syncOrangeMorphProfileUI();
-  if (was) activeStartMinimalMorphing(true);
+  // A blank Orange editor must not immediately generate a new composition.
+  requestMainCanvasRender();
   return created;
 }
 function installOrangeMorphHeaderLayout() {

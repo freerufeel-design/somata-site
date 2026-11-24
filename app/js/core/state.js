@@ -87,7 +87,6 @@ const state = {
     quickToggleColor: false,
   },
   fourierMode: false,
-  fourierStrength: 50,
   masterLayerEdit: false,
   sidebarFeatureToggleMemory: {},
   graffitiDefaultActive: false,
@@ -230,8 +229,8 @@ const state = {
     freezeRainSpeed: 50,
     freezeRainTailSec: 1.5,
     freezeRainHardness: 50,
-    brightness: 75,
-    radius: 25,
+    brightness: 100,
+    radius: 30,
     radiusMultiplier: 2,
     softness: 100,
     softnessMultiplier: 1,
@@ -249,15 +248,17 @@ const state = {
     extinguishIntersections: false,
     intersectionDistance: 50,
     adaptiveAdjustBrightness: false,
+    adaptiveAudio: false,
     adaptiveStrength: 100,
     adaptiveStrengthMultiplier: 1,
     adaptiveExponent: 0,
+    adaptiveExponentMultiplier: 3,
     adaptiveAutoExponent: false,
     adaptiveFadeSec: 1,
     morphEnabled: false,
     morphSize: 20,
     morphBrightness: 25,
-    morphMotionMode: 'linear',
+    morphMotionMode: 'key',
     morphInertia: 0,
     cornerInertiaLinked: true,
     cornerInertiaPercent: 10,
@@ -316,6 +317,7 @@ const state = {
     lastTime: 0,
     speed: 0.42,
     speedStrength: 1,
+    spiralTravelRotation: false,
     signedSpeedVersion: 1,
     speedMultiplier: 1,
     spacingStrength: 3,
@@ -647,8 +649,8 @@ function somataFourierActive(layer) {
   return somataFourierOwner(layer)?.roundingCornerType === 'fourier';
 }
 function somataFourierPower(layer) {
-  const value = Number(somataFourierOwner(layer)?.fourierStrength);
-  return Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 50;
+  const value = Number(somataFourierOwner(layer)?.rounding);
+  return 100 - Math.max(0, Math.min(200, Number.isFinite(value) ? value : 0)) / 2;
 }
 function somataWithFourierLayer(layer, run) {
   const previous = somataFourierScopedLayer;
@@ -705,12 +707,6 @@ Object.defineProperties(state, {
     enumerable: false,
     get() {
       return somataFourierPower();
-    },
-    set(value) {
-      const layer = somataFourierOwner();
-      if (!layer) return;
-      const v = Number(value);
-      layer.fourierStrength = Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : 50;
     },
   },
 });
@@ -1182,6 +1178,7 @@ export {
   replaceRuntimeBoundSection,
   runtimeState,
   somataFourierActive,
+  somataFourierOwner,
   somataFourierSyncMorphSnapshots,
   somataWithFourierLayer,
   state,

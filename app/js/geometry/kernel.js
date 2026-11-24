@@ -755,7 +755,7 @@ function getLayerGeometryContract(frameCtx) {
   const dynamicSpiralBandTopology =
     dynamic &&
     spiralEndpoint &&
-    (layer.spiralFillType === 'interwinding' || layer.spiralFillType === 'chopped') &&
+    (layer.spiralFillType === 'interwinding' || layer.spiralFillType === 'chopped' || layer.spiralFillType === 'bandXor') &&
     closedSpiral(dynamicSourceLayer) &&
     closedSpiral(dynamicTargetLayer);
 
@@ -797,14 +797,13 @@ function getLayerGeometryContract(frameCtx) {
     spiralEndpoint &&
     (dynamicSpiralBandTopology || mathematicalSpiral) &&
     !unsupportedFillKind &&
-    !state.fourierMode &&
     !state.showRoundingGuides;
   const staticNativeFillTopology =
     !dynamic && ((hasStaticFillTopology && !spiralEndpoint) || spiralBandFillTopology || mathematicalSpiral);
   const nativeGpuFillEligible =
     fillRequested &&
     !unsupportedFillKind &&
-    !state.fourierMode &&
+    (!state.fourierMode || (spiral && !corridor)) &&
     !state.showRoundingGuides &&
     (staticNativeFillTopology || dynamicFrameNative || dynamicSpiralNative || dynamicCorridorNative);
   const gpuMaskEligible =

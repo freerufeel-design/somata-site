@@ -24,7 +24,7 @@ const LAYER_PROPERTY_DEPENDENCIES = (() => {
     'rounding',
     'roundingShape',
     'roundingCornerType',
-    'fourierStrength',
+
     'profileMode',
     'splineRenderMode',
     'profileNodes',

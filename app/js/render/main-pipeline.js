@@ -1,4 +1,5 @@
 import '../app/jump-trace.js'; // initialisation order: this module runs after it
+import { SomataGeometryMonitor } from '../app/geometry-monitor.js';
 import { SomataGeometryPolicy } from './geometry-policy.js';
 import { runtimeState, somataWithFourierLayer, state } from '../core/state.js';
 import { mainCanvas } from '../ui/profile-presets.js';
@@ -44,6 +45,7 @@ import {
   syncLayerFillColorToStroke,
 } from '../core/defaults-layers.js';
 import { computeMaxLayerRadius } from '../geometry/artwork-extent.js';
+import { getFrameReferenceRadius } from '../geometry/reference-circle.js';
 import {
   getEffectiveSpiralOrder,
   getSpiralGeometryLayer,
@@ -563,24 +565,48 @@ function untwistedUnfoldCorridorCopies(copies, layer, baseCopies = copies) {
   const population = frame ? layer.__spiralUnfoldPopulation : 1;
   const forming = frame ? frame.shape > 0 : true;
   const delta = forming ? Number(layer.__somataCoordinatedPeriodDelta) || 0 : 0;
-  const anchorLog = Math.log(Math.max(1e-12, anchor.scale));
+  // Interpolate the virtual unit-size pivot in log scale. Selecting a
+  // nearest discrete copy here rotated ALL visible rails by one period
+  // whenever the travelling copies exchanged their nearest-to-one rank.
+  const virtualPosition = baseCopies?._corridorContinuousOriginPosition;
+  const pivot = Number.isFinite(virtualPosition) ? virtualPosition : anchor.position;
+  let anchorLog = Math.log(Math.max(1e-12, anchor.scale));
+  if (Number.isFinite(virtualPosition)) {
+    for (let i = 1; i < copies.length; i++) {
+      const a = copies[i - 1], b = copies[i];
+      if (a.position <= pivot && b.position >= pivot && b.position > a.position) {
+        const t = (pivot - a.position) / (b.position - a.position);
+        anchorLog = Math.log(Math.max(1e-12, a.scale)) * (1 - t) +
+          Math.log(Math.max(1e-12, b.scale)) * t;
+        break;
+      }
+    }
+  }
   const ratio = Math.max(1, Number(copies._stepRatio) || Number(anchor.stepRatio) || 1);
   const periodScale = Number(layer.__somataContinuousSpiralPeriodScale);
   const spacing = forming && periodScale > 0 ? periodScale : Math.pow(ratio, forming ? 1 : population);
-  const out = copies.map((copy) => ({
-    ...copy,
-    scale:
-      forming && periodScale > 0
-        ? anchor.scale * Math.pow(spacing, copy.position - anchor.position)
-        : Math.exp(
-            anchorLog + (Math.log(Math.max(1e-12, copy.scale)) - anchorLog) * (forming ? 1 : population),
-          ),
-    stepRatio: spacing,
-    alpha: copy === anchor ? copy.alpha : (copy.alpha ?? 1) * population,
-    _spiralUntwistedAngle: (copy.position - anchor.position) * delta,
-    _spiralUnfoldAnchorWeight: copy === anchor ? 1 - population : 0,
-    _spiralUnfoldOpenStep: ratio,
-  }));
+  const out = copies.map((copy) => {
+    // During the collapse, hand the visible anchor to its neighbour
+    // continuously too. At full population this does not affect opacity.
+    const anchorWeight = Number.isFinite(virtualPosition)
+      ? Math.max(0, 1 - Math.abs(copy.position - pivot))
+      : Number(copy === anchor);
+    const focusWeight = anchorWeight * (1 - population);
+    return {
+      ...copy,
+      scale:
+        forming && periodScale > 0
+          ? Math.exp(anchorLog) * Math.pow(spacing, copy.position - pivot)
+          : Math.exp(
+              anchorLog + (Math.log(Math.max(1e-12, copy.scale)) - anchorLog) * (forming ? 1 : population),
+            ),
+      stepRatio: spacing,
+      alpha: (copy.alpha ?? 1) * (population + focusWeight),
+      _spiralUntwistedAngle: (copy.position - pivot) * delta,
+      _spiralUnfoldAnchorWeight: focusWeight,
+      _spiralUnfoldOpenStep: ratio,
+    };
+  });
   for (const key of Object.keys(copies)) if (!/^\d+$/.test(key)) out[key] = copies[key];
   out._stepRatio = spacing;
   out._logStepRatio = Math.log(spacing);
@@ -972,14 +998,15 @@ function prepareMainLayerFrame(renderFrame, layerIndex) {
     project(frameCtx.layer);
     if (frameCtx.effectLayer !== frameCtx.layer) project(frameCtx.effectLayer);
   }
-  prepareMainLayerTransformAndStyle(frameCtx, renderFrame);
-  prepareMainLayerGeometry(frameCtx);
-  prepareMainLayerInstances(frameCtx, renderFrame);
-  // Register the Line draw callbacks before effect planning. Effects can then
-  // request the exact Line commands for this frame.
-  prepareMainLayerVectorMaster(frameCtx);
-  prepareMainLayerEffects(frameCtx);
-  prepareLayerConsumerDemand(frameCtx);
+  somataWithFourierLayer(frameCtx.layer, () => {
+    prepareMainLayerTransformAndStyle(frameCtx, renderFrame);
+    prepareMainLayerGeometry(frameCtx);
+    prepareMainLayerInstances(frameCtx, renderFrame);
+    // Register the Line draw callbacks before effect planning.
+    prepareMainLayerVectorMaster(frameCtx);
+    prepareMainLayerEffects(frameCtx);
+    prepareLayerConsumerDemand(frameCtx);
+  });
   frameCtx.prepared = true;
   return frameCtx;
 }
@@ -1210,6 +1237,7 @@ function renderPreparedMainLayer(frameCtx) {
     runRegisteredStage(SomataRenderPassRegistry.STAGES.POST_BASE);
     window.SomataJumpTrace?.observeRounding?.(frameCtx);
     window.SomataJumpTrace?.sample(frameCtx);
+    SomataGeometryMonitor.sample(frameCtx);
 
     const strictCarrierExpected =
       SomataGeometryPolicy.isStrict(frameCtx) &&
@@ -1388,6 +1416,8 @@ function renderMainLayerFourierScoped(renderFrame, layerIndex) {
     if (diagnostic) diagnostic.prepareMs = performance.now() - started;
   }
   if (frameCtx) {
+    if (state.showBoundingCircle) renderFrame.referenceCircleRadius = Math.max(
+      renderFrame.referenceCircleRadius || 0, getFrameReferenceRadius(frameCtx));
     try {
       window.SomataMirror?.captureLayer?.(frameCtx);
     } catch (error) {
@@ -1406,7 +1436,7 @@ function renderMainLayerFourierScoped(renderFrame, layerIndex) {
       renderFrame.strictSpiralGpuPresentRequired = true;
     const drawStarted = performance.now();
     try {
-      renderPreparedMainLayer(frameCtx);
+      somataWithFourierLayer(frameCtx.layer, () => renderPreparedMainLayer(frameCtx));
     } catch (err) {
       try {
         spiroPassIsolationNoteFailure?.('layerRender', err, frameCtx);
@@ -1427,6 +1457,7 @@ function renderMainLayerFourierScoped(renderFrame, layerIndex) {
 }
 
 function renderMainLayers(renderFrame) {
+  renderFrame.referenceCircleRadius = 0;
   for (let layerIndex = 0; layerIndex < renderFrame.renderLayerCount; layerIndex++) {
     renderMainLayer(renderFrame, layerIndex);
   }
@@ -1446,17 +1477,10 @@ function renderMainViewportEffects(renderFrame) {
   }
 
   if (state.showBoundingCircle) {
-    const maxR = computeMaxLayerRadius();
-    mainCtx.save();
-    mainCtx.beginPath();
-    mainCtx.arc(0, 0, maxR, 0, Math.PI * 2);
-    mainCtx.setLineDash([6, 6]);
-    mainCtx.strokeStyle = state.boundingCircleColor || '#94a3b8';
-    mainCtx.globalAlpha = 0.42;
-    mainCtx.lineWidth = 1 / Math.max(state.zoom, 0.2);
-    mainCtx.shadowBlur = 0;
-    mainCtx.stroke();
-    mainCtx.restore();
+    const maxR = renderFrame.referenceCircleRadius || computeMaxLayerRadius();
+    // The final GPU compositor can hide/replace mainCanvas (including when
+    // only effects remain). The reference guide belongs to the debug overlay.
+    window.SomataSkeletonOverlay?.captureReferenceCircle?.(maxR, mainCtx.getTransform());
   }
 
   mainCtx.restore();
@@ -1943,4 +1967,4 @@ function renderMainCanvas() {
   }
 }
 
-export { renderMainCanvas };
+export { renderMainCanvas, untwistedUnfoldCorridorCopies };

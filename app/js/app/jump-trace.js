@@ -24,13 +24,14 @@ import { SomataFrameContourService } from '../geometry/frame-contour.js';
     return [Math.cos(angle), Math.sin(angle)];
   });
   function logRounding(layer, kind, details) {
+    if (!run?.running) return;
     const now = performance.now();
     const id = layer.id ?? layer.name ?? '(layer)';
     const key = `${id}:${kind}:${details.reason || ''}`;
     if (now - (roundingWarnings.get(key) ?? -Infinity) < 1200) return;
     if (roundingWarnings.size >= 256) roundingWarnings.delete(roundingWarnings.keys().next().value);
     roundingWarnings.set(key, now);
-    console.warn('[Somata Spline+] ' + kind, {
+    console.warn('[Somata rounding:' + (layer.roundingCornerType || 'classic') + '] ' + kind, {
       layer: id,
       name: layer.name,
       phaseSerial: window.__somataBlueMorphPhaseClock?.()?.phaseSerial ?? null,
@@ -65,12 +66,13 @@ import { SomataFrameContourService } from '../geometry/frame-contour.js';
     return support.map((v, i) => v - roundingAxes[i][0] * cx - roundingAxes[i][1] * cy);
   }
   function noteRoundingShape(layer, progress, paths) {
-    if (layer.id == null) return;
+    if (!run?.running || layer.id == null) return;
     if (roundingRails.size >= 128 && !roundingRails.has(layer.id))
       roundingRails.delete(roundingRails.keys().next().value);
     roundingRails.set(layer.id, { progress, paths });
   }
   function observeRounding(f) {
+    if (!run?.running) return;
     const layer = f?.layer;
     if (!layer || !f.morphFrameActive || state.fourierMode || !(Number(layer.rounding) > 0)) return;
     const contour = SomataFrameContourService.current(f);
@@ -103,7 +105,7 @@ import { SomataFrameContourService } from '../geometry/frame-contour.js';
           frame: f.frameId, dt: round(dt), progress, previousProgress: previous.progress,
           mode: f.geometryProvider?.modeOverride ?? f.blueMorphProvider?.mode ?? state.morph?.mode,
           route, previousRoute: previous.route, previousPhaseSerial: previous.phaseSerial,
-          source: contour?.paths ? 'line-command-contour' : 'spline-plus-cubics',
+          source: contour?.paths ? 'line-command-contour' : 'phase-corrected-cubics',
           motionPx: round(motion), impulsePx: round(impulse),
         });
     }
@@ -194,6 +196,9 @@ import { SomataFrameContourService } from '../geometry/frame-contour.js';
   }
   function start(opts = {}) {
     stop();
+    roundingFrames.clear();
+    roundingRails.clear();
+    roundingWarnings.clear();
     const ms = cap(opts.seconds, 30, 1, 3600) * 1000;
     run = {
       running: true,
@@ -485,5 +490,6 @@ import { SomataFrameContourService } from '../geometry/frame-contour.js';
     observeRounding,
     noteRoundingFallback,
     noteRoundingShape,
+    isRoundingEnabled: () => run?.running === true,
   });
 })();

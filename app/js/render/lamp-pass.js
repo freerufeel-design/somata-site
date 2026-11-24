@@ -120,6 +120,18 @@ function renderLayerLampPass(frameCtx) {
     let visualPlan = prepareVisual();
 
     if (!visualPlan?.items?.length) continue;
+    const fourierCarrier = frameCtx._webgpuStrokeBatch?.fourierLampCarrier;
+    if (fourierCarrier && !effect.tunnelActive && effect.instances.copies.length===1) {
+      const a=Math.max(0,Math.min(1,Number(effect.instances.alphas?.[0] ?? 1)));
+      let queued=false;
+      mainCtx.save();
+      try {
+        applyLayerFrameEffectTransform(mainCtx,frameCtx);
+        queued=LampGPURenderer.queueArcVisualPlan(mainCtx,visualPlan,set.alphaBase*a,drawPlan,{fourierLampCarrier:fourierCarrier},null,null,frameCtx)===true;
+      } catch (error) { noteSuppressedError('render/lamp-pass#fourierCarrier',error); }
+      finally { mainCtx.restore(); }
+      if (queued) { renderBackendTelemetry.mark('lamps','gpu','GPU Fourier shared contour lamps'); continue; }
+    }
     if (set.gpuLampNative === true && set.gpuPrepared) {
       const nativeKind = set.gpuPrepared.gpuLampNativeKind || 'arc',
         arcNative = nativeKind === 'arc';

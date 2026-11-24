@@ -243,9 +243,13 @@ function distributeSpiralLampGroups(groups, maxPoints) {
 
 // Runtime Animation publishes exactly the same moving polygon paths used by Line.
 function collectPreparedPolygonLampPoints(layer, paths, config, maxPoints, frameCtx, endpoint = false) {
-  const locked = config?.morphMotionMode === 'key';
-  const mode = locked ? 'key' : config?.positionMode || 'key';
-  const snap = (locked && Number(layer.rounding) > 0) || lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
+  const keyMode = config?.morphMotionMode === 'key';
+  // Manual Animation must retain phase-owned slots (including birth/retire flags)
+  // even when Key is the default motion mode.
+  const manualSlots = !endpoint && frameCtx.geometryProvider?.origin === 'manual' && frameCtx.geometryProvider?.lampPaths?.length > 0;
+  const locked = keyMode && !manualSlots;
+  const mode = keyMode ? 'key' : config?.positionMode || 'key';
+  const snap = (keyMode && Number(layer.rounding) > 0) || lampContourAttachmentEnabledForFrame({ layerLampConfig: config });
   let contour = null;
   if (snap && !endpoint) {
     try {
@@ -334,6 +338,7 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
   const tunnelCopies = frameCtx.tunnelCopies || frameCtx.frame.tunnelCopies;
   const provider = frameCtx.geometryProvider;
   const animation = provider?.origin === 'manual' && provider.geometryActive === true;
+  const stable = plan.baseConfig.morphMotionMode === 'stable';
   const locked = plan.baseConfig.morphMotionMode === 'key';
   const prepared = locked && !SomataGeometryPolicy.isStrict(frameCtx)
     ? (provider?.framePaths?.length ? provider.framePaths : getLayerFrameAuxiliaryPaths(frameCtx))
@@ -399,8 +404,8 @@ function resolveLayerLampEffectProvider(frameCtx, plan) {
       frameCtx.forcedLampMorph || frameCtx.greenLampDisplay || getLayerLampsEnabled(effectLayer);
     const alpha = frameCtx.baseAlpha * (frameCtx.forcedLampMorph || followsMorph ? 1 : 0.95);
 
-    if (locked && !animation && followsMorph && frameCtx.blueMorphProvider?.active &&
-        !preparedSpiral && !SomataGeometryPolicy.isStrict(frameCtx) && allowed) {
+    if ((locked || stable) && !animation && followsMorph && frameCtx.blueMorphProvider?.active &&
+        !preparedSpiral && (!stable || !isSpiralLayer(layer)) && !SomataGeometryPolicy.isStrict(frameCtx) && allowed) {
       const ownRails = SomataFrameContourService.paths(frameCtx);
       const pts = withLampConfig(plan.baseConfig, () =>
         collectMorphLampPoints(layerIndex, frameCtx.blueMorphProvider.geometryT, 260, prepared, ownRails),

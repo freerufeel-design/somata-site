@@ -23,10 +23,11 @@ import {
 } from '../core/defaults-layers.js';
 import { SpiroMorphController } from '../core/morph-controller.js';
 import { animationScheduler, requestMainCanvasRender } from '../core/scheduler.js';
-import { replaceRuntimeBoundSection, runtimeState, state } from '../core/state.js';
+import { replaceRuntimeBoundSection, runtimeState, state, somataWithFourierLayer } from '../core/state.js';
 import { getCachedLayerDrawData, layerGeometrySignature } from '../effects/motion.js';
 import { ensureCanonicalPathTable, getCanonicalLayerGeometry } from '../geometry/canonical.js';
 import { collectArbitraryStaticLampPoints, frameGeometryRuntime } from '../geometry/frame-paths.js';
+import { prepareFourierPathList } from '../geometry/fourier.js';
 import { pairMorphPaths, resampleMorphTopology } from '../geometry/morph.js';
 import { WebGPUGreenProjectMorphRenderer } from '../gpu/green-project-morph-renderer.js';
 import { LampGPURenderer } from '../gpu/lamp-renderer.js';
@@ -724,8 +725,10 @@ function projectMorphRenderedRail(layerIndex, layer, paths, preferActiveMorph = 
   const source = Array.isArray(paths) ? paths : [];
   if (!layer || !source.length) return cloneProjectMorphPathSet(source);
 
-  if (isSpiralLayer(layer)) {
-    const out = cloneProjectMorphPathSet(source);
+  if (layer.roundingCornerType === 'fourier' || isSpiralLayer(layer)) {
+    const rendered = layer.roundingCornerType === 'fourier'
+      ? somataWithFourierLayer(layer, () => prepareFourierPathList(source)) : source;
+    const out = cloneProjectMorphPathSet(rendered);
     out._greenRenderedRail = true;
     for (const p of out) p._greenRenderedRail = true;
     return out;
@@ -758,7 +761,7 @@ function getProjectMorphVisiblePaths(layerIndex, layer) {
   const prior = pm?.frameGeometry?.[layerIndex];
   if (pm?.active && Array.isArray(prior) && prior.length) return cloneProjectMorphPathSet(prior);
   const staticData = layer ? getCachedLayerDrawData(layer) : null;
-  const raw = layer ? getAuxiliaryLayerPaths(layerIndex, layer, staticData || undefined) : [];
+  const raw = layer ? somataWithFourierLayer(layer, () => getAuxiliaryLayerPaths(layerIndex, layer, staticData || undefined)) : [];
   return projectMorphRenderedRail(layerIndex, layer, raw, true);
 }
 function projectMorphCollectLampSnapshot(

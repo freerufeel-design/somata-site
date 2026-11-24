@@ -3,6 +3,7 @@ import { getRoundingStrength } from '../core/palette.js';
 import { runtimeState, state } from '../core/state.js';
 import { isPreSampledSplineLayer, setPreSampledSplineLayer } from '../core/render-runtime.js';
 import { getCachedLayerDrawData, getEffectiveLayerRadius } from '../effects/motion.js';
+import { getMorphReferenceRadius } from '../geometry/reference-circle.js';
 import { roundSpiralRailJoins } from '../geometry/spiral/bezier-carrier.js';
 import { getEffectiveSpiralOrder } from '../geometry/spiral/order-params.js';
 import { getSpiralTangentialBlend } from '../geometry/spiral/profile-prep.js';
@@ -100,12 +101,12 @@ window.SomataMorphRuntime = (() => {
       variants = new Map();
       targets.set(b, variants);
     }
-    const key = `${spec.mode}:${spec.slideType}:${spec.phaseSerial}:${state.fourierMode === true}`;
+    const key = `${spec.mode}:${spec.slideType}:${spec.phaseSerial}:${state.fourierMode === true}:${spec.rootedOrbit === true}`;
     if (variants.has(key)) {
       hits++;
       return variants.get(key);
     }
-    const plan = SomataSkeletonRuntime.planAnchors(a, b, spec.mode, spec.slideType);
+    const plan = SomataSkeletonRuntime.planAnchors(a, b, spec.mode, spec.slideType, { rootedOrbit: spec.rootedOrbit });
     if (variants.size >= 12) variants.clear();
     variants.set(key, plan);
     builds++;
@@ -199,8 +200,12 @@ window.SomataMorphRuntime = (() => {
       const sameLayout = ['N', 'K', 'radius', 'radiusMultiplier', 'rotation', 'customSuborbits'].every(
         (k) => a[k] === b[k],
       );
+      // A single-seam unfold has an authored root and direction: a
+      // cyclic polygon correspondence can rotate or reverse that root,
+      // then snap back to it at t=1. Preserve the rooted orbit order.
+      const unfoldSpec = untwisted ? { ...anchorSpec, rootedOrbit: true } : anchorSpec;
       const anchors =
-        frame?.orderOnly || sameLayout ? sk.anchors(flat) : sk.sample(getPlan(anchorSpec), u, frame);
+        frame?.orderOnly || sameLayout ? sk.anchors(flat) : sk.sample(getPlan(unfoldSpec), u, frame);
       const endpoint = edit
         ? Math.abs(edit.from) > Math.abs(edit.to)
           ? edit.from
@@ -243,7 +248,7 @@ window.SomataMorphRuntime = (() => {
     }
     const anchors = sk.sample(plan, u, frame);
     const connected = (l) =>
-      Math.abs(getEffectiveSpiralOrder(l)) > 1e-8 ? l.spiralClosed !== false : l.closedLoop !== false;
+      Math.abs(getEffectiveSpiralOrder(l)) > 1e-8 ? l.spiralClosed !== false : l.extendedProfileEnabled === true || l.closedLoop !== false;
     const geometry = wind.build(
       anchors.map((p) => ({
         ...p,
@@ -516,7 +521,7 @@ window.SomataMorphRuntime = (() => {
       spiralOrder: order,
       spiralEnabled: Math.abs(order) > 1e-8,
       profileNodes,
-      radius: blend(getEffectiveLayerRadius(a, 220), getEffectiveLayerRadius(b, 220), t),
+      radius: getMorphReferenceRadius(a, b, t),
       radiusMultiplier: 1,
       rounding: blend(a.rounding ?? 0, b.rounding ?? 0, t),
       __spiralTangentialMix: blend(getSpiralTangentialBlend(a), getSpiralTangentialBlend(b), t),
@@ -673,6 +678,63 @@ window.SomataMorphRuntime = (() => {
     }
     return out;
   }
+  // Fourier consumes the unfiltered polyline, not the rounded/spline draw
+  // commands. Match the two rails on the live skeleton by normalized arc
+  // length, retaining every original knot. At either endpoint subdivision
+  // leaves the exact source polyline (and its width field) unchanged.
+  function blendFourierProfilePaths(a, b, t) {
+    if (a.length !== b.length || !a.length) return null;
+    const parameterize = (path) => {
+      const points = path.points, n = points.length;
+      if (n < 2) return null;
+      const count = path.closed ? n : n - 1;
+      const marks = [0];
+      for (let i = 0; i < count; i++) {
+        const p = points[i], q = points[(i + 1) % n];
+        marks.push(marks[i] + Math.hypot(q.x - p.x, q.y - p.y));
+      }
+      const total = marks.at(-1);
+      for (let i = 0; i <= count; i++) marks[i] = total > 0 ? marks[i] / total : i / count;
+      let j = 0;
+      const width = (p, fallback = 1) => Number.isFinite(p.widthScale) ? p.widthScale : fallback;
+      return { marks, at(u) {
+        while (j < count - 1 && marks[j + 1] <= u) j++;
+        const p = points[j], q = points[(j + 1) % n];
+        const span = marks[j + 1] - marks[j];
+        const f = span > 0 ? clamp((u - marks[j]) / span) : 0;
+        const index = f < 1e-9 ? j : f > 1 - 1e-9 ? (j + 1) % n : -1;
+        return { x: blend(p.x, q.x, f), y: blend(p.y, q.y, f),
+          widthScale: blend(width(p), width(q, width(p)), f), index };
+      } };
+    };
+    const out = [];
+    for (let i = 0; i < a.length; i++) {
+      const x = a[i], y = b[i];
+      if (x.closed !== y.closed || x.spiralEdgeIndex !== y.spiralEdgeIndex) return null;
+      const c = parameterize(x), d = parameterize(y);
+      if (!c || !d) return null;
+      // Return the original endpoint, including all logical anchors.
+      if (t === 0 || t === 1) { out.push(t === 0 ? x : y); continue; }
+      const knots = [...new Set([...c.marks, ...d.marks])].sort((m,n) => m - n);
+      if (x.closed) knots.pop();
+      const points = [], cornerFlags = [], lampCornerFlags = [], lampSupportFlags = [];
+      for (const u of knots) {
+        const p = c.at(u), q = d.at(u);
+        const source = t < 0.5 ? x : y, index = t < 0.5 ? p.index : q.index;
+        const meta = index >= 0 ? source.points[index] : null;
+        points.push({ ...meta, x: blend(p.x, q.x, t), y: blend(p.y, q.y, t),
+          widthScale: blend(p.widthScale, q.widthScale, t) });
+        cornerFlags.push(index >= 0 && source.cornerFlags?.[index] === true);
+        lampCornerFlags.push(index >= 0 && source.lampCornerFlags?.[index] === true);
+        lampSupportFlags.push(index >= 0 && source.lampSupportFlags?.[index] === true);
+      }
+      const radius = x.points._somataReferenceRadius;
+      if (Number.isFinite(radius)) Object.defineProperty(points, '_somataReferenceRadius', { value: radius, configurable: true });
+      out.push({ ...(t < 0.5 ? x : y), points, cornerFlags, lampCornerFlags, lampSupportFlags,
+        bridgeRoundFlags: [], _bezierSegments: null });
+    }
+    return out;
+  }
   function samplePrimary(spec, progress, frame) {
     if (!spec) return null;
     const u = clamp(progress),
@@ -713,7 +775,7 @@ window.SomataMorphRuntime = (() => {
     const phaseCircleSlots = spec.mode === 'phaseCircle' ? skeletonFrame[0]?.spiralEdgeLife : null;
     const roundedChain = !state.fourierMode && distanceToBoundary < boundarySpan &&
       skeletonFrame.length === 1 &&
-      (skeletonFrame[0].coordinatedSpine || phaseCircleSlots?.some((life) => life < 0.5)) &&
+      (skeletonFrame[0].coordinatedSpine || skeletonFrame[0].rootedOrbit || phaseCircleSlots?.some((life) => life < 0.5)) &&
       skeletonFrame[0].periodicChain &&
       !skeletonFrame[0].graph?.referenceEdges &&
       getRoundingStrength(endpoint.rounding) > 0.001 &&
@@ -741,6 +803,12 @@ window.SomataMorphRuntime = (() => {
         spiralOrder: path.order,
         spiralEnabled: Math.abs(path.order) > 1e-8,
         spiralClosed: path.graph ? path.graph.connected : base.spiralClosed,
+        // Fade and center-born branches retain their own endpoint scale.
+        __somataReferenceRadius: path.lifecycle === 'birth' ? getEffectiveLayerRadius(b)
+          : path.lifecycle === 'death' ? getEffectiveLayerRadius(a)
+          : path.profileEndpoint === 'source' ? getEffectiveLayerRadius(a)
+          : path.profileEndpoint === 'target' ? getEffectiveLayerRadius(b)
+          : getMorphReferenceRadius(a, b, u),
       };
       if (isPreSampledSplineLayer(base)) setPreSampledSplineLayer(display, true);
       const lock = path.periodic ? seam : null;
@@ -786,7 +854,12 @@ window.SomataMorphRuntime = (() => {
         applySpiralSquashY(null, [path.graph], factor);
         sealSkeleton(path, lock);
       };
-      if (mixed && !path.profileLayer && !path.profileEndpoint && !state.fourierMode) {
+      const fourierProfileMismatch = state.fourierMode && (
+        from.profileMode !== to.profileMode ||
+        (from.profileMode === 'spline' && (from.profileNodes?.length !== to.profileNodes?.length ||
+          isPreSampledSplineLayer(from) !== isPreSampledSplineLayer(to)))
+      );
+      if ((mixed || fourierProfileMismatch) && !path.profileLayer && !path.profileEndpoint) {
         const endpoint = (profile) => {
           const l = {
             ...display,
@@ -796,6 +869,9 @@ window.SomataMorphRuntime = (() => {
             wholeCurveSpline: profile.wholeCurveSpline,
             __lampLogicalCornerFlags: profile.__lampLogicalCornerFlags,
             __somataMixedProfile: true,
+            // Keep each Fourier endpoint's tessellation independent of the
+            // discrete N/K fields on the current projection layer.
+            ...(state.fourierMode ? { __somataFourierProfileSamplingLayer: profile } : {}),
           };
           setPreSampledSplineLayer(l, isPreSampledSplineLayer(profile));
           return l;
@@ -811,7 +887,9 @@ window.SomataMorphRuntime = (() => {
         finish(a, left);
         finish(b, right);
         const weight = profileWeight(u, spec.origin);
-        return blendProfilePaths(a, b, weight, left, right) ?? (weight < 0.5 ? a : b);
+        return (state.fourierMode
+          ? blendFourierProfilePaths(a, b, weight)
+          : blendProfilePaths(a, b, weight, left, right)) ?? (weight < 0.5 ? a : b);
       }
       const geometry = build(display);
       settleSkeleton();
@@ -829,7 +907,7 @@ window.SomataMorphRuntime = (() => {
     const polygonBoundaryT = distanceToBoundary / polygonRoundingBoundary;
     const polygonBoundaryMix = polygonBoundaryT * polygonBoundaryT * (3 - 2 * polygonBoundaryT);
     if (
-      sampled.lampPaths && polygonBoundaryT < 1 &&
+      !state.fourierMode && sampled.lampPaths && polygonBoundaryT < 1 &&
       Number(a.K || 1) === 1 && Number(b.K || 1) === 1 &&
       getRoundingStrength(endpoint.rounding) > 0.001 &&
       paths.length === 1 && sampled.lampPaths.length === 1
@@ -869,7 +947,16 @@ window.SomataMorphRuntime = (() => {
           };
         });
         if (boundaryPaths.every(Boolean)) {
-          paths = blendProfilePaths(boundaryPaths, paths, boundaryMix(), endpoint, endpoint) ?? paths;
+          const blended = blendProfilePaths(boundaryPaths, paths, boundaryMix(), endpoint, endpoint);
+          if (blended && skeletonFrame[0]?.rootedOrbit) {
+            // Subdivision must not inherit the compact endpoint's indices:
+            // Fill and lamps still consume the live skeleton's rail slots.
+            blended.forEach((p, i) => {
+              p.spiralEdgeIndex = paths[i].spiralEdgeIndex;
+              p.spiralBranchIndex = paths[i].spiralBranchIndex;
+            });
+          }
+          paths = blended ?? paths;
         }
       }
     } else if (
@@ -966,6 +1053,7 @@ window.SomataMorphRuntime = (() => {
     frameCtx.geometryMorphEnabled = true;
     frameCtx.topologyMorphEnabled = Boolean(structural);
     frameCtx.circleAngularMorphEnabled = false;
+    frameCtx.layer.__somataReferenceRadius = getMorphReferenceRadius(spec.sourceLayer, spec.targetLayer, progress);
     frameCtx.layer.spiralOrder = order;
     frameCtx.layer.spiralEnabled = Math.abs(order) > 1e-8;
     frameCtx.layer.__somataSkeletonCorridorPhase = phaseSync;

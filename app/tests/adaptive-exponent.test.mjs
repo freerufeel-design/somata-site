@@ -205,3 +205,51 @@ test('расчёт: авто-экспонента по умолчанию вык
     rr.renderRuntime.active = false;
   }
 });
+
+test('множитель степени: ×3 расширяет диапазон, ×1 сохраняет старую кривую, ×0 линейный', () => {
+  for (const x of [0, 0.1, 0.5, 0.9, 1]) {
+    for (const k of [-1, -0.2, 0, 0.2, 1]) {
+      near(lampAdaptiveExponentShape(x, k, 1), lampAdaptiveExponentShape(x, k));
+      near(lampAdaptiveExponentShape(x, k, 0), x);
+      const exponent = k * 3;
+      const expected = exponent === 0 ? x : (10 ** (exponent * x) - 1) / (10 ** exponent - 1);
+      near(lampAdaptiveExponentShape(x, k, 3), expected);
+      assert.ok(Number.isFinite(lampAdaptiveExponentShape(x, k, 64)));
+    }
+  }
+  assert.ok(lampAdaptiveExponentShape(0.5, 1, 3) < lampAdaptiveExponentShape(0.5, 1, 1));
+});
+
+test('реальный рендер: ×3 по умолчанию, оба канала и отключение адаптации', async () => {
+  const {baseCfg, factorsFor} = await setup();
+  for (const adaptiveAdjustBrightness of [false, true]) {
+    const at = (e, m, other = {}) => factorsFor(baseCfg({adaptiveAdjustBrightness, adaptiveExponent:e, adaptiveExponentMultiplier:m, ...other}));
+    const key = adaptiveAdjustBrightness ? 'brightnessFactor' : 'radiusFactor';
+    for (const e of [-20, 20]) {
+      near(at(e, undefined)[key], at(e, 3)[key]);
+      near(at(e, 3)[key], at(e * 3, 1)[key]);
+      near(at(e, 0)[key], at(0, 1)[key]);
+    }
+    assert.ok(at(100, 3)[key] < at(100, 1)[key]);
+    assert.equal(at(100, 3, {adaptiveBrightness:false})[key], 1);
+  }
+});
+
+test('настройка множителя: новый слой, нормализация старого и сохранение явного значения', async () => {
+  const {state} = await importModule('js/core/state.js');
+  const {ensureLayerLampState, createLayer} = await importModule('js/core/defaults-layers.js');
+  const {normalizeLampAdaptiveExponentMultiplier: normalize} = await import('../js/lamps/adaptive-exponent.js');
+  assert.equal(state.lamps.adaptiveExponentMultiplier, 3);
+  const layer = createLayer();
+  assert.equal(ensureLayerLampState(layer).adaptiveExponentMultiplier, 3);
+  delete layer.lamps.adaptiveExponentMultiplier;
+  assert.equal(ensureLayerLampState(layer).adaptiveExponentMultiplier, 3);
+  for (const value of [0, 1, 7.5]) {
+    layer.lamps.adaptiveExponentMultiplier = value;
+    assert.equal(ensureLayerLampState(layer).adaptiveExponentMultiplier, value);
+  }
+  assert.equal(normalize(''), 3);
+  assert.equal(normalize(Infinity), 3);
+  assert.equal(normalize(100), 64);
+  assert.equal(normalize(-1), 0);
+});

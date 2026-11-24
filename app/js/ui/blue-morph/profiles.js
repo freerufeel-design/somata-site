@@ -329,8 +329,20 @@ function installMorphTopSpeedControl() {
   const cycle = document.getElementById('morphInterval')?.closest('.morph-setting-row');
   if (cycle) {
     cycle.classList.add('morph-top-cycle-row');
+    const controls = cycle.querySelector('.morph-cycle-controls');
+    if (controls) {
+      const inputs = document.createElement('span');
+      inputs.className = 'morph-cycle-inputs';
+      const presets = document.createElement('span');
+      presets.className = 'morph-cycle-presets';
+      for (const child of Array.from(controls.children)) {
+        (child.matches('[data-morph-interval]') ? presets : inputs).appendChild(child);
+      }
+      controls.append(inputs, presets);
+    }
     host.appendChild(cycle);
   }
+  if (compact) host.appendChild(compact);
 }
 function installMorphCompactProfileControls() {
   const host = document.getElementById('morphCompactProfileControls');
@@ -344,7 +356,8 @@ function installMorphCompactProfileControls() {
     if (title) wrap.title = title;
     const text = document.createElement('span');
     text.textContent = label;
-    wrap.append(text, el);
+    wrap.htmlFor = id;
+    wrap.append(text, el.parentElement?.classList.contains('select-arrows') ? el.parentElement : el);
     host.appendChild(wrap);
   };
   addSelect('morphSlideType', 'Слайдинг', 'Общий тип слайдинга для порядка 0 и ненулевого порядка');
@@ -696,6 +709,7 @@ function installMorphAudioStyleLayout() {
     }
     const picker = document.getElementById('morphParameterPicker');
     picker?.classList.add('audio-param-menu');
+    if (head && !head.children.length) head.remove();
     main.appendChild(routing);
   }
   const grid = panel.querySelector('.morph-settings-grid');

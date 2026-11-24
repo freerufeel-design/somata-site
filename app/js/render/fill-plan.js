@@ -8,7 +8,7 @@ import { splinePathForDraw } from '../geometry/spline-rounding.js';
 import { isSpiralLayer } from '../geometry/spiral/order-params.js';
 import { createLampRenderedPathSampler } from '../lamps/lamp-anchors.js';
 import { SomataFrameContourService } from '../geometry/frame-contour.js';
-import { ghostFillLayout } from '../morph-runtime/blue/fill-lookahead.js';
+import { ghostFillLayout, spiralFillTransitionProgress } from '../morph-runtime/blue/fill-lookahead.js';
 import { roundPolylineForDraw } from '../geometry/polyline-rounding.js';
 import { noteSuppressedError } from '../core/suppressed-errors.js';
 
@@ -129,6 +129,7 @@ var FillMeshPreparer = (() => {
         false,
         null,
         layer,
+        path.bridgeRoundFlags || [],
       );
     }
     return cleanContourPoints(sampler.points.length >= 3 ? sampler.points : path.points);
@@ -245,7 +246,7 @@ var FillMeshPreparer = (() => {
     while (q <= -Math.PI) q += Math.PI * 2;
     return q;
   }
-  function buildFanMeshFromBands(layer, bands, frameCtx, semantic, flags = {}) {
+  function buildFanMeshFromBands(layer, bands, frameCtx, semantic, flags = {}, groupSpecs = null) {
     if (!bands?.length) return null;
     let minX = Infinity,
       minY = Infinity,
@@ -302,8 +303,19 @@ var FillMeshPreparer = (() => {
       anchorX = minX - span * 2 - 1,
       anchorY = minY - span * 2 - 1,
       out = entry.storage;
-    const o = appendFanContours(cleanBands, out, anchorX, anchorY);
+    let o = 0;
+    const fanGroups = groupSpecs ? [] : null;
+    if (groupSpecs) {
+      let start = 0;
+      for (const spec of groupSpecs) {
+        const offset = o;
+        for (let i = 0; i < spec.count; i++) o = appendFanContour(cleanBands[start++], out, o, anchorX, anchorY);
+        if (o > offset) fanGroups.push({ start: offset / 6, count: (o-offset)/6, weight: 1, power: spec.power });
+      }
+    } else o = appendFanContours(cleanBands, out, anchorX, anchorY);
     const mesh = entry.mesh;
+    mesh.fanGroups = fanGroups;
+    mesh.spiralFillPhaseManaged = false;
     mesh.fanData = entry.storage;
     mesh.fanFloatCount = o;
     mesh.fanTriangleCount = Math.floor(o / 6);
@@ -364,7 +376,76 @@ var FillMeshPreparer = (() => {
     last: null,
   };
 
-  function makeLocalInterwindingCells(aRaw, bRaw) {
+  window.__somataSpiralInterwindingFillStatus = () => ({
+    ...interwindingRoute,
+    last: interwindingRoute.last ? { ...interwindingRoute.last } : null,
+  });
+
+  // Reject a cell if any visible rail passes through its interior. Index the
+  // actual sampled segments, not the skeleton, so this also catches remote
+  // portions of the two rails used to construct the cell.
+  function buildInterwindingRailGuard(rails) {
+    const segments = [];
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const rail of rails) for (let i = 1; i < (rail?.length || 0); i++) {
+      const a = rail[i-1], b = rail[i];
+      if (![a.x,a.y,b.x,b.y].every(Number.isFinite)) continue;
+      if (Math.hypot(b.x-a.x,b.y-a.y) <= 1e-9) continue;
+      segments.push([a,b]);
+      minX = Math.min(minX,a.x,b.x); minY = Math.min(minY,a.y,b.y);
+      maxX = Math.max(maxX,a.x,b.x); maxY = Math.max(maxY,a.y,b.y);
+    }
+    const size = Math.max(1, Math.max(maxX-minX,maxY-minY)/48);
+    const grid = new Map();
+    const bins = (loX,loY,hiX,hiY,fn) => {
+      for(let x=Math.floor((loX-minX)/size); x<=Math.floor((hiX-minX)/size); x++)
+        for(let y=Math.floor((loY-minY)/size); y<=Math.floor((hiY-minY)/size); y++) fn(x+':'+y);
+    };
+    for (const seg of segments) {
+      const [a,b]=seg;
+      bins(Math.min(a.x,b.x),Math.min(a.y,b.y),Math.max(a.x,b.x),Math.max(a.y,b.y),key=>{
+        let bucket=grid.get(key); if(!bucket) grid.set(key,bucket=[]); bucket.push(seg);
+      });
+    }
+    const cross = (ax,ay,bx,by) => ax*by-ay*bx;
+    const interior = (q,poly) => {
+      let inside=false;
+      for(let i=0;i<poly.length;i++) {
+        const a=poly[i],b=poly[(i+1)%poly.length],dx=b.x-a.x,dy=b.y-a.y;
+        const d=Math.hypot(dx,dy);
+        if(d>1e-10 && Math.abs(cross(dx,dy,q.x-a.x,q.y-a.y))<=1e-6*d &&
+          (q.x-a.x)*dx+(q.y-a.y)*dy>=-1e-6*d && (q.x-b.x)*dx+(q.y-b.y)*dy<=1e-6*d) return false;
+        if((a.y>q.y)!==(b.y>q.y) && q.x<(b.x-a.x)*(q.y-a.y)/(b.y-a.y)+a.x) inside=!inside;
+      }
+      return inside;
+    };
+    return poly => {
+      if (!segments.length) return true;
+      const candidates=new Set();
+      bins(Math.min(...poly.map(q=>q.x)),Math.min(...poly.map(q=>q.y)),Math.max(...poly.map(q=>q.x)),Math.max(...poly.map(q=>q.y)),key=>{
+        for(const seg of grid.get(key)||[]) candidates.add(seg);
+      });
+      for(const [a,b] of candidates) {
+        const dx=b.x-a.x,dy=b.y-a.y,ts=[0,1];
+        for(let i=0;i<poly.length;i++) {
+          const p=poly[i],q=poly[(i+1)%poly.length],ex=q.x-p.x,ey=q.y-p.y;
+          const det=cross(dx,dy,ex,ey);
+          if(Math.abs(det)<1e-12) continue;
+          const t=cross(p.x-a.x,p.y-a.y,ex,ey)/det;
+          const u=cross(p.x-a.x,p.y-a.y,dx,dy)/det;
+          if(t>0&&t<1&&u>=-1e-9&&u<=1+1e-9) ts.push(t);
+        }
+        ts.sort((x,y)=>x-y);
+        for(let i=1;i<ts.length;i++) {
+          const t=(ts[i]+ts[i-1])/2;
+          if(interior({x:a.x+t*dx,y:a.y+t*dy},poly)) return false;
+        }
+      }
+      return true;
+    };
+  }
+
+  function makeLocalInterwindingCells(aRaw, bRaw, railGuard = null) {
     const lengthTable = (pts) => {
       const cumulative = [0];
       let total = 0;
@@ -395,7 +476,7 @@ var FillMeshPreparer = (() => {
     knots.sort((a, b) => a - b);
     const ts = [];
     for (const t of knots) if (!ts.length || t - ts[ts.length - 1] > 1e-8) ts.push(t);
-    if (ts.length > 1025) return null;
+    if (ts.length > 8193) return null;
     const sampled = (pts, table) => {
       let i = 0;
       return ts.map((t) => {
@@ -462,13 +543,14 @@ var FillMeshPreparer = (() => {
 
       const poly = [a0, a1, b1, b0];
       if (area < 0) poly.reverse();
+      if (railGuard && !railGuard(poly)) { skipped++; continue; }
       cells.push(poly);
       kept++;
     }
     return { cells, skipped, kept, possible: ts.length - 1, medianGap: median };
   }
 
-  function chooseLocalInterwindingPairs(samples) {
+  function chooseLocalInterwindingPairs(samples, accept = null, maxMedianRatio = 0.35) {
     const lengths = samples.map((pts) => {
       let len = 0;
       for (let i = 1; i < pts.length; i++)
@@ -488,7 +570,7 @@ var FillMeshPreparer = (() => {
         distances.sort((a, b) => a - b);
         const median = distances[Math.floor(distances.length / 2)];
 
-        if (!Number.isFinite(median) || median > Math.max(5, Math.min(lengths[i], lengths[j]) * 0.35))
+        if (!Number.isFinite(median) || median > Math.max(5, Math.min(lengths[i], lengths[j]) * maxMedianRatio))
           continue;
         candidates.push({ i, j, cost: median });
       }
@@ -507,7 +589,7 @@ var FillMeshPreparer = (() => {
       if (degree[c.i] >= 2 || degree[c.j] >= 2) continue;
       const ri = root(c.i),
         rj = root(c.j);
-      if (ri === rj) continue;
+      if (ri === rj || (accept && !accept(c.i, c.j))) continue;
       parent[ri] = rj;
       degree[c.i]++;
       degree[c.j]++;
@@ -525,7 +607,7 @@ var FillMeshPreparer = (() => {
       interwindingRoute.last = { frameId: fid, route: 'line-master', reason, pathCount: count, triangles: 0 };
       return null;
     };
-    const record =
+    const record = Array.isArray(retainedRails) ? null :
       SomataFrameContourService?.current?.(frameCtx) || SomataFrameContourService?.get?.(frameCtx);
     const hasMaster =
       record &&
@@ -546,34 +628,35 @@ var FillMeshPreparer = (() => {
     if (!hasMaster) anchorCyclicSpiralFillBands(paths);
     if (paths.length < 2) return fail('not-enough-visible-branches', paths.length);
     const samples = paths.map(sampleSpiralBranchPath);
-    const candidates = chooseLocalInterwindingPairs(samples.map((a) => (a?.length >= 2 ? a : [])));
+    const railGuard = buildInterwindingRailGuard(samples);
     const cells = [];
-    let pairCount = 0,
-      skippedCells = 0,
-      rejectedPairs = 0,
-      possibleCells = 0,
-      acceptedCells = 0;
-    const acceptedPairIndices = [];
-    for (const [i, j] of candidates) {
-      const a = samples[i],
-        b = samples[j];
-      if (!a || !b || a.length < 2 || b.length < 2) {
-        rejectedPairs++;
-        continue;
-      }
-      const strip = makeLocalInterwindingCells(a, b);
-      if (!strip?.cells?.length) {
-        rejectedPairs++;
-        continue;
-      }
+    let pairCount = 0, skippedCells = 0, rejectedPairs = 0, possibleCells = 0, acceptedCells = 0;
+    const tried = new Map();
+    const accept = (i,j) => {
+      const key = i+':'+j;
+      if (tried.has(key)) return tried.get(key);
+      // Bound rejected geometry probes; large N must not cause a quadratic
+      // number of full rail/strip intersection scans in a single frame.
+      if (tried.size >= Math.max(8, samples.length * 4)) return false;
+      const a=samples[i], b=samples[j];
+      const strip=a?.length>=2 && b?.length>=2 ? makeLocalInterwindingCells(a,b,railGuard) : null;
+      if (!strip?.cells?.length) { rejectedPairs++; tried.set(key,false); return false; }
+      tried.set(key,true);
       cells.push(...strip.cells);
-      pairCount++;
-      acceptedPairIndices.push([i, j]);
-      skippedCells += strip.skipped;
-      possibleCells += strip.possible;
-      acceptedCells += strip.kept;
+      pairCount++; skippedCells+=strip.skipped; possibleCells+=strip.possible; acceptedCells+=strip.kept;
+      return true;
+    };
+    const usable = samples.map(a=>a?.length>=2?a:[]);
+    let acceptedPairIndices = chooseLocalInterwindingPairs(usable, accept);
+    // Short non-overlapping spiral branches may be farther apart than the
+    // nearest-rail heuristic; accept them only through the same rail guard.
+    if (!acceptedPairIndices.length) acceptedPairIndices = chooseLocalInterwindingPairs(usable, accept, 0.85);
+    const candidates = Array.from(tried.keys());
+    if (!cells.length) {
+      const result = fail('no-local-interwinding-cells', paths.length);
+      Object.assign(interwindingRoute.last, { candidatePairs: candidates.length, rejectedPairs });
+      return result;
     }
-    if (!cells.length) return fail('no-local-interwinding-cells', paths.length);
     const mesh = buildFanMeshFromBands(
       frameCtx.layer,
       cells,
@@ -595,7 +678,7 @@ var FillMeshPreparer = (() => {
     else interwindingRoute.fromRetainedRail++;
     interwindingRoute.last = {
       frameId: fid,
-      route: hasMaster ? 'line-master' : 'retained-gpu-rail',
+      route: hasMaster ? 'line-master' : 'current-visible-rails',
       reason: '',
       pathCount: paths.length,
       triangles: mesh.fanTriangleCount,
@@ -709,6 +792,7 @@ var FillMeshPreparer = (() => {
         }).filter(([i, j]) => j < n)
       : chooseLocalInterwindingPairs(rails);
     const bands = [];
+    const railGuard = choppedLegacy ? null : buildInterwindingRailGuard(rails);
     let pairedBands = 0,
       acceptedCells = 0,
       rejectedPairs = 0;
@@ -723,7 +807,7 @@ var FillMeshPreparer = (() => {
         bands.push(pts);
         pairedBands++;
       } else {
-        const local = makeLocalInterwindingCells(a, b);
+        const local = makeLocalInterwindingCells(a, b, railGuard);
         if (!local?.cells?.length) {
           rejectedPairs++;
           continue;
@@ -892,6 +976,286 @@ var FillMeshPreparer = (() => {
     return result;
   }
 
+  function spiralFillRailOrder(paths, side = null) {
+    const field = side ? side + 'BranchIndex' : 'spiralBranchIndex';
+    const presence = side ? side + 'Present' : null;
+    const result = [], seen = new Set();
+    const sorted = paths.map((p,i) => ({p,i,id:p[field] == null ? NaN : Number(p[field])}))
+      .filter(q => !side || (q.p[presence] !== false && Number.isFinite(q.id)))
+      .sort((a,b)=>(Number.isFinite(a.id)?a.id:a.i)-(Number.isFinite(b.id)?b.id:b.i) || a.i-b.i);
+    for(const q of sorted) {
+      if(side && seen.has(q.id)) continue;
+      if(side) seen.add(q.id);
+      result.push(q.p);
+    }
+    return result;
+  }
+  // An open spiral mask is closed to its focus, not by a long chord from
+  // one end of the visible rail to the other. Closed paths keep their contour.
+  function spiralNegativeMask(path, points) {
+    if (!points || points.length < 2) return null;
+    return cleanContourPoints(path.closed === true ? points : [{x:0,y:0}, ...points]);
+  }
+  // Preserve the sampled Line within a subpixel tolerance for ribbon masks.
+  function simplifySpiralFillRail(points,tolerance) {
+    if(points.length<=2||!(tolerance>0))return points;
+    const keep=new Uint8Array(points.length);keep[0]=keep[points.length-1]=1;
+    const stack=[[0,points.length-1]],limit=tolerance*tolerance;
+    while(stack.length){
+      const [lo,hi]=stack.pop(),a=points[lo],b=points[hi],dx=b.x-a.x,dy=b.y-a.y,den=dx*dx+dy*dy;
+      let max=limit,best=-1;
+      for(let i=lo+1;i<hi;i++){
+        const p=points[i],t=den>0?Math.max(0,Math.min(1,((p.x-a.x)*dx+(p.y-a.y)*dy)/den)):0;
+        const ex=p.x-a.x-t*dx,ey=p.y-a.y-t*dy,d=ex*ex+ey*ey;
+        if(d>max){max=d;best=i;}
+      }
+      if(best>=0){keep[best]=1;stack.push([lo,best],[best,hi]);}
+    }
+    return points.filter((_,i)=>keep[i]);
+  }
+  // A ribbon has two real Line boundaries. Reconstruct their continuation
+  // between Corridor periods before making a mask; period endpoints are NOT
+  // boundaries of individual fill sectors. Unmatched seams are left open.
+  function ribbonRailChains(ordered, transforms, tolerance) {
+    if (!transforms) return ordered.map(p => ({ points:p.sampled, closed:p.closed === true }));
+    const copies=transforms.slice().sort((a,b)=>a.sc-b.sc);
+    const n=ordered.length;
+    if (!n) return [];
+    if(ordered.every(p=>p.closed===true)) return copies.flatMap(tr=>ordered.map(p=>({
+      points:p.sampled.map(q=>transformSpiralFillPoint(q,tr)),closed:true
+    })));
+    const periods=copies.map(tr=>ordered.map(p=>{
+      let points=p.sampled.map(q=>transformSpiralFillPoint(q,tr));
+      if(Math.hypot(points[0].x,points[0].y)>Math.hypot(points.at(-1).x,points.at(-1).y)) points=points.slice().reverse();
+      return simplifySpiralFillRail(points,tolerance);
+    }));
+    // Seed branch identities on a fixed physical reference copy whenever
+    // available, not on the first currently visible copy.
+    let ref=0;
+    for(let i=1;i<copies.length;i++) if(Math.abs(copies[i].id)<Math.abs(copies[ref].id)) ref=i;
+    const maps=[];
+    for(let k=0;k+1<periods.length;k++){
+      const a=periods[k],b=periods[k+1],candidates=[];
+      for(let i=0;i<n;i++)for(let j=0;j<n;j++){
+        const p=a[i].at(-1),q=b[j][0];
+        const distance=Math.hypot(p.x-q.x,p.y-q.y);
+        candidates.push({i,j,distance,limit:Math.max(1e-5,tolerance*2,Math.hypot(p.x,p.y)*.0001)});
+      }
+      candidates.sort((a,b)=>a.distance-b.distance||a.i-b.i||a.j-b.j);
+      const forward=Array(n).fill(-1),back=Array(n).fill(-1);
+      for(const c of candidates)if(c.distance<=c.limit&&forward[c.i]<0&&back[c.j]<0){forward[c.i]=c.j;back[c.j]=c.i;}
+      maps.push({forward,back});
+    }
+    // Retain gaps rather than invent a chord between unmatched endpoints.
+    // Both arms of a pair are cut at the same period boundary.
+    const chains=[];
+    const ids=Array.from({length:periods.length},()=>Array(n).fill(-1));
+    const modulo=x=>((x%n)+n)%n;
+    const shifts=new Set();
+    for(let k=0;k<maps.length;k++) if(copies[k+1].id-copies[k].id===1 && maps[k].forward.every(j=>j>=0)){
+      const shift=modulo(maps[k].forward[0]);
+      if(maps[k].forward.every((j,i)=>j===modulo(i+shift)))shifts.add(shift);
+      else shifts.add(NaN);
+    }
+    const shift=shifts.size===1?[...shifts][0]:NaN;
+    const seedOffset=Number.isFinite(shift)?modulo(Math.round(copies[ref].id)*shift):0;
+    for(let i=0;i<n;i++)ids[ref][i]=modulo(i+seedOffset);
+    for(let k=ref;k+1<periods.length;k++){
+      const used=new Set();
+      for(let i=0;i<n;i++){const j=maps[k].forward[ids[k][i]];if(j>=0){ids[k+1][i]=j;used.add(j);}}
+      const remaining=Array.from({length:n},(_,i)=>i).filter(i=>!used.has(i));
+      for(let i=0;i<n;i++)if(ids[k+1][i]<0)ids[k+1][i]=remaining.shift();
+    }
+    for(let k=ref-1;k>=0;k--){
+      const used=new Set();
+      for(let i=0;i<n;i++){const j=maps[k].back[ids[k+1][i]];if(j>=0){ids[k][i]=j;used.add(j);}}
+      const remaining=Array.from({length:n},(_,i)=>i).filter(i=>!used.has(i));
+      for(let i=0;i<n;i++)if(ids[k][i]<0)ids[k][i]=remaining.shift();
+    }
+    for(let i=0;i+1<n;i+=2){
+      let a=[],b=[];
+      const flush=outer=>{if(a.length>=2&&b.length>=2)chains.push({pair:[a,b],closed:false,outer});a=[];b=[];};
+      for(let k=0;k<periods.length;k++){
+        if(k && (maps[k-1].forward[ids[k-1][i]]!==ids[k][i]||maps[k-1].forward[ids[k-1][i+1]]!==ids[k][i+1]))flush();
+        const pa=periods[k][ids[k][i]],pb=periods[k][ids[k][i+1]];
+        a.push(...(a.length&&samePoint(a.at(-1),pa[0])?pa.slice(1):pa));
+        b.push(...(b.length&&samePoint(b.at(-1),pb[0])?pb.slice(1):pb));
+      }
+      flush(true);
+    }
+    return chains;
+  }
+  // Close only at the actual ends of the full ribbon. The outer cap follows
+  // the outer radius: a diameter chord between offscreen ends can cross the
+  // entire visible image (especially N=2).
+  function ribbonEndCap(a,b,outer){
+    const ra=Math.hypot(a.x,a.y),rb=Math.hypot(b.x,b.y),r=Math.max(ra,rb);
+    if(!outer||r<1e-8)return [];
+    const start=Math.atan2(a.y,a.x),end=Math.atan2(b.y,b.x);
+    let d=Math.atan2(Math.sin(end-start),Math.cos(end-start));
+    if(Math.abs(Math.abs(d)-Math.PI)<1e-7)d=Math.PI;
+    const n=Math.max(1,Math.ceil(Math.abs(d)/(.035)));
+    return Array.from({length:n+1},(_,i)=>({x:r*Math.cos(start+d*i/n),y:r*Math.sin(start+d*i/n)}));
+  }
+  const contourArea=pts=>pts.reduce((s,p,i)=>{const q=pts[(i+1)%pts.length];return s+p.x*q.y-p.y*q.x;},0);
+  // Convert one ribbon's closed boundary to positive-winding trapezoids.
+  // A Cartesian sweep does not introduce radial cuts. Intersection events
+  // split a slab before its edges can exchange order. Parity and nonzero
+  // are calculated on the same ribbon boundary, then composed by the GPU.
+  function ribbonCoverageCells(contours,parity,viewportRadius=Infinity){
+    const events=[];let seq=0;
+    for(const pts of contours)for(let i=0;i<pts.length;i++){
+      const a=pts[i],b=pts[(i+1)%pts.length];
+      if(Math.abs(a.y-b.y)<1e-10)continue;
+      const p=a.y<b.y?a:b,q=a.y<b.y?b:a;
+      const e={id:seq++,p,q,slope:(q.x-p.x)/(q.y-p.y),sign:a.y<b.y?1:-1};
+      const lo=Math.max(-viewportRadius,p.y),hi=Math.min(viewportRadius,q.y);
+      if(hi>lo)events.push({y:lo,e,add:true},{y:hi,e,add:false});
+    }
+    if(!events.length)return [];
+    events.sort((a,b)=>a.y-b.y);const active=new Set(),cells=[];
+    const at=(e,y)=>e.p.x+(y-e.p.y)*e.slope;
+    function slab(lo,hi,list){
+      if(!(hi-lo>1e-9)||list.length<2)return;
+      let y=lo,guard=0;
+      while(hi-y>1e-9&&guard++<Math.max(32,list.length*list.length+2)){
+        const probe=Math.min(hi,y+Math.max(1e-10,(hi-y)*1e-8));
+        const sorted=list.slice().sort((a,b)=>at(a,probe)-at(b,probe)||a.slope-b.slope||a.id-b.id);
+        let next=hi;
+        for(let i=1;i<sorted.length;i++){
+          const a=sorted[i-1],b=sorted[i],d=a.slope-b.slope;
+          if(d<=0)continue;
+          const cross=probe+(at(b,probe)-at(a,probe))/d;
+          if(cross>probe+1e-10&&cross<next-1e-10)next=cross;
+        }
+        let w=0;
+        for(let i=0;i+1<sorted.length;i++){
+          const a=sorted[i],b=sorted[i+1];w+=a.sign;
+          if(parity?Math.abs(w)%2===0:w===0)continue;
+          const mid=(y+next)/2;
+          if(at(b,mid)-at(a,mid)<=1e-9)continue;
+          if(Math.max(at(b,y),at(b,next)) < -viewportRadius || Math.min(at(a,y),at(a,next)) > viewportRadius)continue;
+          const poly=[{x:at(a,y),y},{x:at(b,y),y},{x:at(b,next),y:next},{x:at(a,next),y:next}];
+          if(poly.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)))cells.push(poly);
+        }
+        y=next;
+      }
+    }
+    let i=0,prev=events[0].y;
+    while(i<events.length){
+      const y=events[i].y;slab(prev,y,[...active]);
+      while(i<events.length&&events[i].y===y){const v=events[i++];if(v.add)active.add(v.e);else active.delete(v.e);}
+      prev=y;
+    }
+    return cells;
+  }
+  function buildSpiralRibbonBands(ordered,transforms,tolerance,parity,viewportRadius){
+    const chains=ribbonRailChains(ordered,transforms,tolerance),ribbons=[];
+    const add=(a,b,closed,outer)=>{
+      a=simplifySpiralFillRail(a,tolerance);b=simplifySpiralFillRail(b,tolerance);
+      if(a.length<2||b.length<2)return;
+      let contours;
+      if(closed){
+        const aa=contourArea(a)>=0?a:a.slice().reverse(),bb=contourArea(b)<=0?b:b.slice().reverse();
+        contours=[aa,bb];
+      }else{
+        // No artificial outer half disk for an exactly degenerate line pair.
+        const both=a.concat(b),p=both[0];
+        const q=both.reduce((best,v)=>Math.hypot(v.x-p.x,v.y-p.y)>Math.hypot(best.x-p.x,best.y-p.y)?v:best,p);
+        const dx=q.x-p.x,dy=q.y-p.y,len=Math.hypot(dx,dy);
+        if(len<1e-8 || both.every(v=>Math.abs(dx*(v.y-p.y)-dy*(v.x-p.x))<=len*1e-7))return;
+        // Cap only the last, matched period and only beyond the viewport.
+        // Disconnected intermediate pieces use their own endpoints instead.
+        const cap=outer && (!Number.isFinite(viewportRadius)||Math.min(Math.hypot(a.at(-1).x,a.at(-1).y),Math.hypot(b.at(-1).x,b.at(-1).y))>viewportRadius)
+          ?ribbonEndCap(a.at(-1),b.at(-1),true):[];
+        contours=[a.concat(cap,b.slice().reverse())];
+      }
+      const clean=contours.map(cleanContourPoints).filter(Boolean);
+      if(clean.length===contours.length)ribbons.push(clean);
+    };
+    if(chains.some(p=>p.pair)){
+      for(const c of chains)if(c.pair)add(...c.pair,false,c.outer);
+    }else{
+      // Closed rings are paired outside inward. Open standalone branches
+      // retain their authored order; an odd tail remains unfilled.
+      if(chains.every(p=>p.closed)) chains.sort((a,b)=>Math.hypot(b.points[0].x,b.points[0].y)-Math.hypot(a.points[0].x,a.points[0].y));
+      for(let i=0;i+1<chains.length;i+=2)add(chains[i].points,chains[i+1].points,chains[i].closed&&chains[i+1].closed,false);
+    }
+    // XOR is associative and does not need CPU tessellation at all: the
+    // stencil parity of the original ribbon boundaries is exact. One union
+    // ribbon also needs only its nonzero stencil. Several union ribbons
+    // need positive coverage to prevent opposite winding from cancelling.
+    if(parity||ribbons.length<=1)return ribbons.flat();
+    return ribbons.flatMap(contours=>ribbonCoverageCells(contours,false,viewportRadius));
+  }
+  function prepareSpiralMaskFill(frameCtx, rawPaths, corridor = false, mathematical = false) {
+    const layer=frameCtx?.layer;
+    const bandXor=layer?.spiralFillType==='bandXor';
+    if (!layer || layer.spiralFillEnabled !== true || !isSpiralLayer(layer) ||
+        !Array.isArray(rawPaths) || (!mathematical && layer.spiralClosed === false)) return null;
+    const fid=Number(frameCtx.frameId)||0;
+    const cached=frameCtx._spiralMaskMesh;
+    if(cached?.frameId===fid && cached.paths===rawPaths && cached.corridor===corridor &&
+       cached.mathematical===mathematical && cached.bandXor===bandXor && cached.layer===layer && (cached.empty===true || (cached.mesh?.frameId===fid &&
+       cached.mesh.revision===cached.revision))) return cached.mesh;
+    const paths=rawPaths.filter(p=>p?.points?.length>=2).map(p=>({...p, sampled:sampleSpiralBranchPath(p)}))
+      .filter(p=>p.sampled?.length>=2);
+    if(!paths.length) return null;
+    const visible=paths.filter(p=>Number(p.alpha??p._alpha??1)>1e-5);
+    const transforms = corridor ? (frameCtx.visibleInstances?.copies||[]).map((copy,i)=>({copy,i}))
+      .filter(({copy,i})=>Number(copy?.scale)>0 && Number((frameCtx.visibleInstances.fillAlphas||frameCtx.visibleInstances.alphas||[])[i]??1)>0.0005)
+      .map(({copy})=>{const ang=Number(getMotionTunnelLagRadians(copy,layer))||0;return {sc:Number(copy.scale),c:Math.cos(ang),sn:Math.sin(ang),id:Number(copy.copyId)||0};}) : null;
+    if(corridor && !transforms.length) return null;
+    // Guard the local strip against visible rails; then combine all visible
+    // copies in a single stencil field instead of alpha-compositing each copy.
+    const allBands=[], specs=[];
+    const sideBands=ordered=>{
+      const bands=[];
+      if(mathematical) {
+        // Historical Flower: preserve its exact previous masks.
+        const current=transforms ? transforms.flatMap(tr=>ordered.map(p=>({...p,sampled:p.sampled.map(q=>transformSpiralFillPoint(q,tr))}))) : ordered;
+        for(const p of current) {const mask=spiralNegativeMask(p,p.sampled); if(mask) bands.push(mask);}
+      } else {
+        const tolerance=0.20/Math.max(.001,(Number(state.zoom)||1)*Math.abs(Number(frameCtx.combinedScale)||1));
+        const radius=Number(frameCtx.frame?.viewportOuterRadius)/Math.max(.001,Math.abs(Number(frameCtx.combinedScale)||1));
+        const viewport=Number.isFinite(radius)&&radius>0?radius*1.02+2*tolerance:Infinity;
+        for(const band of buildSpiralRibbonBands(ordered,transforms,tolerance,bandXor,viewport))bands.push(band);
+      }
+      return bands;
+    };
+    const add=(ordered,power)=>{
+      if(power<=0) return;
+      const bands=sideBands(ordered).map(cleanContourPoints).filter(Boolean);
+      if(!bands.length) return;
+      for(const band of bands) allBands.push(band); specs.push({count:bands.length,power});
+    };
+    const dynamic=frameCtx.morphFrameActive===true && frameCtx.geometryPlan?.dynamic===true;
+    const progress=frameCtx.blueMorphProvider?.linearProgress ?? frameCtx.blueMorphProvider?.progress;
+    const identified=dynamic && Number.isFinite(progress) && paths.every(p=>
+      (Number.isFinite(Number(p.sourceBranchIndex)) && p.sourceBranchIndex!=null) ||
+      (Number.isFinite(Number(p.targetBranchIndex)) && p.targetBranchIndex!=null));
+    if(identified) {
+      const src=spiralFillRailOrder(paths,'source'), dst=spiralFillRailOrder(paths,'target');
+      const t=spiralFillTransitionProgress(progress,state.morph);
+      // Same physical masks need no fade. Otherwise blend old/new masks with
+      // the shared profile window. Exponents keep shared area at one alpha.
+      if(src.length===dst.length && src.every((p,i)=>p===dst[i])) add(src,1);
+      else {add(src,1-t); add(dst,t);}
+    } else add(spiralFillRailOrder(visible),1);
+    if(!allBands.length) {
+      if(!mathematical){
+        frameCtx._spiralRibbonFillEmpty={frameId:fid,mode:layer.spiralFillType,reason:'no-ribbon-area'};
+        frameCtx._spiralMaskMesh={frameId:fid,paths:rawPaths,corridor,mathematical,bandXor,layer,mesh:null,empty:true};
+      }
+      return null;
+    }
+    const mesh=buildFanMeshFromBands(layer,allBands,frameCtx,
+      mathematical?'spiral negative masks / even-odd (Flower)':bandXor?'spiral continuous ribbons / XOR':'spiral continuous ribbons / union',
+      {spiralChoppedFill:!mathematical&&!bandXor,spiralMathematicalFill:mathematical||bandXor, corridorBaked:corridor,
+        spiralFillPhaseManaged:identified,localCellCount:mathematical?0:allBands.length}, specs);
+    if(mesh) frameCtx._spiralMaskMesh={frameId:fid,paths:rawPaths,corridor,mathematical,bandXor,layer,mesh,revision:mesh.revision};
+    return mesh;
+  }
   function prepareSpiralChopped(frameCtx) {
     const layer = frameCtx?.layer;
     if (
@@ -939,7 +1303,7 @@ var FillMeshPreparer = (() => {
     ...mathematicalStatus,
     last: mathematicalStatus.last && { ...mathematicalStatus.last },
   });
-  function prepareSpiralMathematical(frameCtx, retainedRails = null) {
+  function prepareSpiralMathematical(frameCtx, retainedRails = null, corridor = false) {
     const layer = frameCtx?.layer;
     if (
       !layer ||
@@ -966,7 +1330,7 @@ var FillMeshPreparer = (() => {
         masterFailure: SomataFrameContourService?.status?.()?.lastReason || '',
       };
     };
-    const record =
+    const record = Array.isArray(retainedRails) ? null :
       SomataFrameContourService?.current?.(frameCtx) || SomataFrameContourService?.get?.(frameCtx);
     const hasMaster = record && Number(record.frameId) === fid && Array.isArray(record.paths);
     chosenPaths = hasMaster ? record.paths : Array.isArray(retainedRails) ? retainedRails : null;
@@ -979,53 +1343,17 @@ var FillMeshPreparer = (() => {
     if (hasMaster) mathematicalStatus.fromLineMaster++;
     else mathematicalStatus.fromRetainedRail++;
 
-    const paths = hasMaster
-      ? chosenPaths
-      : chosenPaths.filter(
-          (p) => Array.isArray(p?.points) && p.points.length >= 2 && Number(p?.alpha ?? 1) > 1e-5,
-        );
-    const cached = mathematicalCache.get(layer);
-    if (cached?.frameId === fid && cached.record === (hasMaster ? record : retainedRails)) {
-      note(cached.reason, cached.hit, cached.regions, cached.mesh);
-      return cached.mesh;
-    }
-    const hit = window.SomataSpiralIntersections?.scanFrame?.(paths, fid);
-    const regions = hit && !hit.limited ? window.SomataSpiralIntersections?.loops?.(paths, hit, 256) : [];
-    const mesh = regions?.length
-      ? buildFanMeshFromBands(layer, regions, frameCtx, 'mathematical Spiral crossing faces', {
-          spiralMathematicalFill: true,
-          spiralBandFill: false,
-          crossings: hit.intersections.length,
-        })
-      : null;
-    const reason = hit?.limited
-      ? 'intersection-scan-limit'
-      : !hit?.intersections?.length
-        ? 'no-crossings'
-        : !regions?.length
-          ? 'no-bounded-faces'
-          : !mesh?.nativeComplete
-            ? 'unmeshable-faces'
-            : '';
-    if (reason === 'intersection-scan-limit') mathematicalStatus.limited++;
-    else if (reason === 'no-crossings') mathematicalStatus.noCrossings++;
-    else if (reason === 'no-bounded-faces') mathematicalStatus.noFaces++;
-    else if (!reason) mathematicalStatus.renderable++;
-    note(reason, hit, regions, mesh);
-    mathematicalCache.set(layer, {
-      frameId: fid,
-      record: hasMaster ? record : retainedRails,
-      mesh,
-      hit,
-      regions,
-      reason,
-    });
+    const mesh = prepareSpiralMaskFill(frameCtx,chosenPaths,corridor,true);
+    if(mesh) mathematicalStatus.renderable++;
+    else mathematicalStatus.noFaces++;
+    note(mesh?'':'no-mask-area',null,null,mesh);
     return mesh;
   }
+
   function prepareFrame(frameCtx) {
     const layer = frameCtx?.layer,
       plan = frameCtx?.geometryPlan || {};
-    if (layer?.spiralFillEnabled === true && layer.spiralFillType === 'mathematical') {
+    if (isSpiralLayer(layer)) {
       skippedFrames++;
       return null;
     }
@@ -1058,139 +1386,7 @@ var FillMeshPreparer = (() => {
   }
 
   function prepareSpiralMorphBands(frameCtx, auxPaths) {
-    const layer = frameCtx?.layer;
-    if (
-      (!layer?.fill && !layer?.spiralFillEnabled) ||
-      layer?.spiralFillEnabled !== true ||
-      layer?.spiralClosed === false ||
-      !isSpiralLayer(layer) ||
-      !Array.isArray(auxPaths) ||
-      auxPaths.length < 2
-    )
-      return null;
-
-    const sourceLayer =
-      frameCtx?.spiralEditMorph?.sourceLayer ||
-      frameCtx?.blueMorphProvider?.sourceLayer ||
-      frameCtx?.sourceLayer ||
-      frameCtx?.geometryPlan?.sourceLayer ||
-      null;
-    const targetLayer =
-      frameCtx?.spiralEditMorph?.targetLayer ||
-      frameCtx?.blueMorphProvider?.targetLayer ||
-      frameCtx?.geometryPlan?.targetLayer ||
-      null;
-    const sourceClosed = sourceLayer?.spiralEnabled === true ? sourceLayer.spiralClosed !== false : true;
-    const targetClosed = targetLayer?.spiralEnabled === true ? targetLayer.spiralClosed !== false : true;
-    if (!sourceClosed || !targetClosed) return null;
-    const srcN = Math.max(2, Math.round(Number(sourceLayer?.N) || auxPaths.length));
-    const dstN = Math.max(2, Math.round(Number(targetLayer?.N) || auxPaths.length));
-
-    const paths = auxPaths.filter(
-      (p) => Array.isArray(p?.points) && p.points.length >= 2 && Number(p?.alpha ?? 1) > 0.00001,
-    );
-    if (paths.length < 2) return null;
-    const phaseKey = (p, idx) => {
-      if (Number.isFinite(Number(p?.branchPhase))) return ((Number(p.branchPhase) % 1) + 1) % 1;
-      const a = Number(p?.sourceBranchIndex),
-        b = Number(p?.targetBranchIndex),
-        sn = Math.max(1, Number(p?.sourceBranchCount) || srcN),
-        dn = Math.max(1, Number(p?.targetBranchCount) || dstN);
-      if (Number.isFinite(a) && Number.isFinite(b)) {
-        const sa = (((a / sn) % 1) + 1) % 1,
-          db = (((b / dn) % 1) + 1) % 1;
-        let d = db - sa;
-        d = ((((d + 0.5) % 1) + 1) % 1) - 0.5;
-        return (((sa + d * 0.5) % 1) + 1) % 1;
-      }
-      if (Number.isFinite(a)) return (((a / sn) % 1) + 1) % 1;
-      if (Number.isFinite(b)) return (((b / dn) % 1) + 1) % 1;
-      return idx / Math.max(1, paths.length);
-    };
-    paths.forEach((p, i) => {
-      p.__fillSortKey = phaseKey(p, i);
-    });
-    paths.sort((a, b) => (Number(a.__fillSortKey) || 0) - (Number(b.__fillSortKey) || 0));
-    anchorCyclicSpiralFillBands(paths);
-
-    let totalEdges = 0,
-      totalPoints = 0,
-      minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-    const bands = [];
-    const step = paths.length % 2 === 0 ? 2 : 1;
-    for (let i = 0; i + 1 < paths.length; i += step) {
-      const ap = paths[i].points,
-        bp = paths[i + 1].points,
-        pts = [];
-      for (const q of ap) pts.push(q);
-      for (let j = bp.length - 1; j >= 0; j--) pts.push(bp[j]);
-      const clean = cleanContourPoints(pts);
-      if (!clean || clean.length < 3) return null;
-      bands.push(clean);
-      totalPoints += clean.length;
-      totalEdges += clean.length;
-      for (const q of clean) {
-        const x = Number(q.x),
-          y = Number(q.y);
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
-      }
-    }
-    if (
-      !totalEdges ||
-      !Number.isFinite(minX) ||
-      !Number.isFinite(minY) ||
-      !Number.isFinite(maxX) ||
-      !Number.isFinite(maxY)
-    )
-      return null;
-    let entry = spiralMorphCache.get(layer);
-    if (!entry) {
-      entry = {
-        capacityFloats: 0,
-        storage: null,
-        mesh: {
-          dynamic: true,
-          dynamicScreenSpace: false,
-          spiralBandFill: true,
-          revision: 0,
-          frameId: -1,
-          fanData: null,
-          fanFloatCount: 0,
-          fanTriangleCount: 0,
-          complete: false,
-          nativeComplete: false,
-          records: [],
-          semantic: 'dynamic retained Spiral alternating branch-pair Fill',
-        },
-      };
-      spiralMorphCache.set(layer, entry);
-    }
-    ensureFanFloatStorage(entry, totalEdges * 6, 192);
-    const span = Math.max(1, maxX - minX, maxY - minY),
-      anchorX = minX - span * 2 - 1,
-      anchorY = minY - span * 2 - 1,
-      out = entry.storage;
-    const o = appendFanContours(bands, out, anchorX, anchorY);
-    const mesh = entry.mesh;
-    mesh.fanData = entry.storage;
-    mesh.fanFloatCount = o;
-    mesh.fanTriangleCount = Math.floor(o / 6);
-    mesh.complete = mesh.fanTriangleCount > 0;
-    mesh.nativeComplete = mesh.complete;
-    mesh.frameId = Number(frameCtx?.frameId) || 0;
-    mesh.revision = (mesh.revision + 1) >>> 0 || 1;
-    mesh.anchor = { x: anchorX, y: anchorY };
-    mesh.totalVertices = totalPoints;
-    mesh.totalTriangles = mesh.fanTriangleCount;
-    mesh.spiralBandCount = bands.length;
-    frameCtx._fillMeshShadow = mesh;
-    return mesh;
+    return prepareSpiralMaskFill(frameCtx,auxPaths,false,false);
   }
 
   const LINE_JOIN_EPS = 1e-3;
@@ -1610,6 +1806,7 @@ var FillMeshPreparer = (() => {
     prepareSpiralChopped,
     collectLineCarrierContours,
     prepareSpiralMorphBands,
+    prepareSpiralMaskFill,
     prepareInterwindingCorridor,
     canUseNative,
     hasSpiralBandTopology,

@@ -12,6 +12,7 @@ import {
 import { mainCtx, renderRuntime } from '../core/render-runtime.js';
 import { requestMainCanvasRender } from '../core/scheduler.js';
 import { state } from '../core/state.js';
+import { spiralFillBoundaryAlpha } from '../morph-runtime/blue/fill-lookahead.js';
 import { getTunnelCopyColor } from '../corridor/corridor-appearance.js';
 import { getMotionTunnelLagRadians } from '../effects/motion.js';
 import { WebGPUSpiralBezierMorphRenderer } from './spiral-bezier-morph-renderer.js';
@@ -1025,6 +1026,16 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
       outer: spec.endRadius * screenScale,
     };
   }
+  // Apply the shared phase timing to each spiral fill mode, including
+  // isolated layer scenes and Corridor copies. Static fill and strokes do not fade.
+  function spiralFillPhaseAlpha(frameCtx, mesh) {
+    if (mesh?.spiralFillPhaseManaged === true) return 1;
+    if (!(mesh?.spiralInterwindingFill || mesh?.spiralChoppedFill || mesh?.spiralMathematicalFill || mesh?.spiralBandFill) ||
+        frameCtx?.morphFrameActive !== true || frameCtx?.geometryPlan?.dynamic !== true) return 1;
+    const t = frameCtx?.blueMorphProvider?.linearProgress ?? frameCtx?.blueMorphProvider?.progress;
+    if (!Number.isFinite(t)) return 1;
+    return spiralFillBoundaryAlpha(t, state.morph);
+  }
   function prepareUniformSlot(frameCtx, targetCtx, copyIndex = null, mesh = null, weight = 1, power = 1) {
     const copies = frameCtx.visibleInstances?.copies || [],
       copy = copyIndex == null ? null : copies[copyIndex];
@@ -1045,7 +1056,7 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
         : Math.max(0, Math.min(1, Number(alphaList[copyIndex == null ? 0 : copyIndex] ?? 1)));
     const linear = Math.max(
       0,
-      Math.min(1, rgba[3] * Math.max(0, Number(frameCtx.baseAlpha) || 0) * copyAlpha * weight),
+      Math.min(1, rgba[3] * Math.max(0, Number(frameCtx.baseAlpha) || 0) * copyAlpha * weight * spiralFillPhaseAlpha(frameCtx, mesh)),
     );
     // Доля α для перекрывающихся групп заливки: 1−(1−α)^p (см. fill-plan, лишние контуры морфа).
     const alpha = power === 1 ? linear : 1 - Math.pow(1 - linear, Math.max(0, power));
@@ -1176,8 +1187,10 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
               // overlap counts (Fill appears OFF); winding keeps
               // the covered union with one composite Fill alpha.
               const mathematical =
+                mesh.spiralMathematicalFill === true || (
+                !mesh.spiralChoppedFill && !mesh.spiralInterwindingFill &&
                 !frameCtx.layer?.__morphOrbitFillCompositeColor &&
-                getLayerFillRule(frameCtx.layer) === 'evenodd';
+                getLayerFillRule(frameCtx.layer) === 'evenodd');
               pass.setStencilReference(0);
               pass.setPipeline(mathematical ? parityStencilPipeline : windingStencilPipeline);
               pass.setBindGroup(0, groupPrepared.slot.bindGroup);
@@ -1811,6 +1824,7 @@ fn sharpCore(uv:vec2<f32>,d:vec2<f32>)->f32{
         current = context.getCurrentTexture();
       const rec = encodeMeshPass(encoder, current, frameCtx, mesh, targetCtx);
       if (!rec.handled) return false;
+      if (rec.empty) return true;
       device.queue.submit([encoder.finish()]);
       submissions++;
       renderedTriangles += rec.triangles + rec.windingTriangles;

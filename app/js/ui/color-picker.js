@@ -527,8 +527,11 @@ function closeAppColorPicker(commit = true) {
 function findColorInputForContextTarget(target) {
   if (!(target instanceof Element)) return null;
 
-  if (target.closest?.('#btnBackgroundImage')) return null;
+  // Dedicated context-menu buttons own the right click. The document
+  // capture listener must not steal it by discovering a sibling color input.
+  if (target.closest?.('#btnBackgroundImage,#btnGeometryGuides')) return null;
   if (target.matches('input[type="color"]')) return target;
+  if (target.closest?.('#geometryGuidesMenu')) return null;
   const direct = target.closest(
     'label,.display-color-control,.palette-key-segment,.color-control,.row-inputs,.floating-display-controls',
   );

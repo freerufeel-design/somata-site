@@ -599,8 +599,6 @@ function createMorphUIModule(deps) {
     }
     state.morph.splinePoints = next;
     syncMorphSplinePointButtons();
-    const splinePointText = document.getElementById('profileSplinePointCountText');
-    if (splinePointText) splinePointText.textContent = 'точ.';
     state.layers.forEach((layer) => {
       invalidateLayerGeometry(layer, 'legacy-geometry-control');
     });

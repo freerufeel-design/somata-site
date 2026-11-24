@@ -1,4 +1,5 @@
 // Blue Morph: воспроизведение (фазы, подготовка GPU, смена порядка).
+import { recentManualGeometryIntent, markManualGeometryRebase } from '../../app/geometry-monitor-origin.js';
 import './targets.js'; // initialisation order: this module runs after it
 import { renderProfileEditor } from '../../ui/profile-editor.js';
 import {
@@ -68,7 +69,7 @@ import {
   invalidateMorphFrameInterpolationPlans,
   prepareMorphFrameInterpolationPlans,
 } from '../../geometry/morph-frame.js';
-import { getCircleMorphPlan, getMorphClosureTransitionPlan } from '../../geometry/morph.js';
+import { getCircleMorphPlan, getMorphClosureTransitionPlan, profileModeTransitionProgress } from '../../geometry/morph.js';
 import { WebGPUBezierSweepRenderer } from '../../gpu/bezier-sweep-renderer.js';
 import { WebGPUCanonicalSweepRenderer } from '../../gpu/canonical-sweep-renderer.js';
 import { WebGPUGraffitiMorphRenderer } from '../../gpu/graffiti-morph-renderer.js';
@@ -156,6 +157,7 @@ import {
   getTapTempoIntervalSec,
   isTapMorphSyncActive,
   sampleBlueSpiralOrder,
+  syncGeometryMorphDuration,
 } from '../../audio/tap-tempo.js';
 import {
   refreshPlaylistPaletteHuePreviews,
@@ -518,6 +520,7 @@ function createMorphPlaybackModule(deps) {
     spiralMorphLocksK() ||
     ['continuous', 'phase', 'minimalTurn'].includes(getSpiralMorphType());
 
+  const profileResetFor = (layer) => runtimeState.morph.manualProfileResetIds?.has(layer?.id) === true;
   const prepareMorphCycle = (now) => {
     runtimeState.morph.returnToPhaseStart = null;
     // План следующего цикла берём до любых изменений слоёв и счётчика цикла.
@@ -724,6 +727,7 @@ function createMorphPlaybackModule(deps) {
         orderRt.orderRailMinimumMs = Math.max(orderRt.orderRailMinimumMs, ms);
       });
     orderRt.transitionMs = blueOrderPhaseDurationMs(orderRt.transitionMs);
+    syncGeometryMorphDuration();
     // 13.0.4: Freeze *both* authored Fill endpoint states before any
     // per-frame layer mutation. The next phase starts from the committed
     // target state, not a recycled intermediate Fill flag / alpha.
@@ -813,7 +817,7 @@ function createMorphPlaybackModule(deps) {
       if (shapePct < 100) {
         const affected = window.SomataParameterCoverage.select({ layerPercent: shapePct }, ids);
         for (let i = 0; i < dst.length; i++)
-          if (!affected.has(ids[i])) {
+          if (!affected.has(ids[i]) && !profileResetFor(state.layers[i])) {
             const layer = state.layers[i],
               v = dst[i],
               origin = runtimeState.morph.sourceProfiles?.[i];
@@ -1214,6 +1218,7 @@ function createMorphPlaybackModule(deps) {
         state.morph.options.byVertices ||
         state.morph.options.bySteps ||
         state.morph.options.byShape ||
+        state.layers.some(profileResetFor) ||
         state.morph.monoOrbitTransforms ||
         spiralBezierExtraGeometry,
       );
@@ -1231,6 +1236,7 @@ function createMorphPlaybackModule(deps) {
       (state.morph.options.byVertices ||
         state.morph.options.bySteps ||
         state.morph.options.byShape ||
+        state.layers.some(profileResetFor) ||
         state.morph.monoOrbitTransforms ||
         spiralBezierExtraGeometry);
     const mixedBackendSpiralBezierMode =
@@ -1856,7 +1862,7 @@ function createMorphPlaybackModule(deps) {
     const sourceOn = (endpointSource?.enabled ?? src.fill) ? 1 : 0;
     const targetOn = (endpointTarget?.enabled ?? dst.fill) ? 1 : 0;
 
-    const fillT = Math.max(0, Math.min(1, Number(t) || 0)); // same phase as Line / geometry
+    const fillT = profileModeTransitionProgress(t); // shared profile transition window; Line keeps its own clock
     const sourceAlpha = orbitFill
       ? orbitFill.start
       : sourceOn
@@ -2102,7 +2108,7 @@ function createMorphPlaybackModule(deps) {
           : baseLayer.customSuborbits;
 
       if (
-        lightOptions.byShape &&
+        (lightOptions.byShape || profileResetFor(baseLayer)) &&
         !(runtimeState.morph.manualProfileEditing && baseLayer.id === state.activeLayerId)
       ) {
         const a = srcP.nodes || [];
@@ -2341,10 +2347,19 @@ function createMorphPlaybackModule(deps) {
     if (!runtimeState.morph.active) return;
     const opt = options && typeof options === 'object' && !Array.isArray(options) ? options : {};
 
+    if (opt.resetProfileLayerId) {
+      const pending = (runtimeState.morph.pendingProfileResetIds ??= new Set());
+      const targets = getLayerEditTargets();
+      for (const layer of targets.length ? targets : [{ id: opt.resetProfileLayerId }]) pending.add(layer.id);
+      runtimeState.morph.manualProfileEditing = false;
+      return true;
+    }
     if (morphSidebarRebaseRuntime.active && opt.fromSidebarTransaction !== true) {
       morphSidebarRebaseRuntime.pending = true;
       return;
     }
+    const diagnosticFromPhase = Number(runtimeState.morph.phaseSerial) || 0;
+    const diagnosticOrigin = opt.diagnosticManualEdit ?? recentManualGeometryIntent(performance.now(), diagnosticFromPhase);
     const preservePaths = [
       ...new Set((Array.isArray(opt.preservePaths) ? opt.preservePaths : []).map(String).filter(Boolean)),
     ];
@@ -2376,6 +2391,7 @@ function createMorphPlaybackModule(deps) {
       }
     }
     prepareMorphCycle(performance.now());
+    markManualGeometryRebase(diagnosticOrigin, diagnosticFromPhase, Number(runtimeState.morph.phaseSerial) || 0);
   };
 
   const blueMorphHasExactPolygonEndpoints = (idx) => {
@@ -2490,7 +2506,7 @@ function createMorphPlaybackModule(deps) {
       // it rather than aborting boundary commit for ALL layers.
       if (!target || !visual) return;
       if (
-        state.morph.options.byShape &&
+        (state.morph.options.byShape || profileResetFor(layer)) &&
         !(runtimeState.morph.manualProfileEditing && layer.id === state.activeLayerId)
       ) {
         layer.profileMode = target.mode;
@@ -2737,6 +2753,8 @@ function createMorphPlaybackModule(deps) {
               return;
             }
             commitFullMorphTargetAtBoundary();
+            runtimeState.morph.manualProfileResetIds = runtimeState.morph.pendingProfileResetIds || null;
+            runtimeState.morph.pendingProfileResetIds = null;
             runtimeState.morph.boundaryPaintPending = false;
             prepareMorphCycle(performance.now());
             applyPendingWebSwitchAtMorphBoundary();
@@ -2745,6 +2763,8 @@ function createMorphPlaybackModule(deps) {
         }
       } else {
         commitFullMorphTargetAtBoundary();
+        runtimeState.morph.manualProfileResetIds = runtimeState.morph.pendingProfileResetIds || null;
+        runtimeState.morph.pendingProfileResetIds = null;
         prepareMorphCycle(now);
         applyPendingWebSwitchAtMorphBoundary();
       }
@@ -2838,7 +2858,7 @@ function createMorphPlaybackModule(deps) {
         );
       } else {
         if (
-          morphOptions.byShape &&
+          (morphOptions.byShape || profileResetFor(canonicalLayer)) &&
           !(runtimeState.morph.manualProfileEditing && layer.id === state.activeLayerId)
         ) {
           const srcMode = runtimeState.morph.sourceProfiles[idx]?.mode || layer.profileMode || 'segments';
@@ -2856,7 +2876,7 @@ function createMorphPlaybackModule(deps) {
           // applying it to the rendered Spiral caused visible steps
           // and expensive catch-up rebuilds between Blue frames.
           const spiralProfileRefresh = srcV.spiralEnabled === true || dstV.spiralEnabled === true;
-          if (updateProfileNodes || spiralProfileRefresh) {
+          if (updateProfileNodes || spiralProfileRefresh || profileResetFor(canonicalLayer)) {
             const src =
               runtimeState.morph.sourceProfiles[idx]?.nodes ||
               sampleProfileForMorph(canonicalLayer.profileNodes);
@@ -3072,6 +3092,8 @@ function createMorphPlaybackModule(deps) {
     runtimeState.morph.honestZeroCorridorIntro = null;
     runtimeState.morph.honestZeroCorridorOutro = null;
     runtimeState.morph.active = false;
+    runtimeState.morph.manualProfileResetIds = null;
+    runtimeState.morph.pendingProfileResetIds = null;
     runtimeState.morph.splineCommitBridge = new WeakMap();
 
     animationScheduler.remove('morph');
@@ -4012,7 +4034,7 @@ function createMorphPlaybackModule(deps) {
 
       if (animationScheduler.hasAfterPaint?.('morph-arm') === true) animationScheduler.remove('morph-arm');
       rt.exactStartPending = false;
-      if (!(Number(rt.cycleStart) > 0)) rt.cycleStart = performance.now();
+      if (!Number(rt.cycleStart)) rt.cycleStart = performance.now();
       animationScheduler.add('morph', animateMorph);
       armBlueMorphOwnerGuard();
       requestMainCanvasRender();
@@ -4035,7 +4057,7 @@ function createMorphPlaybackModule(deps) {
       return true;
 
     rt.exactStartPending = false;
-    if (!(Number(rt.cycleStart) > 0)) rt.cycleStart = performance.now();
+    if (!Number(rt.cycleStart)) rt.cycleStart = performance.now();
     animationScheduler.add('morph', animateMorph);
     requestMainCanvasRender();
     try {

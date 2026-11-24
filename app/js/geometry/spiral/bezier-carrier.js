@@ -169,7 +169,9 @@ function sampleSmoothSpiralSplineForVariableWidth(
       Array.isArray(cornerFlags) ? cornerFlags : [],
       [],
     );
-  } else if (splineShape && (!(Number(roundingFrac) > 0) || filletLayer?.roundingCornerType === 'simple')) {
+  } else if (filletLayer?.roundingCornerType === 'simple') {
+    drawSpiralSpaceCentripetalSpline(sampler, src, roundingFrac);
+  } else if (splineShape && !(Number(roundingFrac) > 0)) {
     // Sample the same authored edge-local spline as the visible line;
     // do not substitute Spline+'s zero-rounding straight segments.
     splinePathForDraw(
@@ -304,7 +306,9 @@ function buildSmoothSpiralBezierSegments(
   // Whole-curve spline deliberately softens authored junctions. The
   // default local spline preserves them, just like the static carrier.
   const whole = points?._spiroWholeCurveSpline === true;
-  if (splineShape && (!(Number(roundingFrac) > 0) || filletLayer?.roundingCornerType === 'simple'))
+  if (filletLayer?.roundingCornerType === 'simple')
+    drawSpiralSpaceCentripetalSpline(recorder, src, roundingFrac);
+  else if (splineShape && !(Number(roundingFrac) > 0))
     // Build the *same* unrounded authored spline in the retained GPU
     // cubics as in the static canvas and lamp sampling paths.
     splinePathForDraw(
@@ -401,6 +405,14 @@ function buildSmoothSpiralBezierSegments(
   segments._spiroBezierSpiral = true;
   return segments;
 }
+// Affine cubic representation of a straight segment (also a collapsed point).
+function isLinearSpiralCubic(q) {
+  if (!q?.p0 || !q?.p3 || !q?.c1 || !q?.c2) return false;
+  const dx = q.p3.x - q.p0.x, dy = q.p3.y - q.p0.y;
+  const d1 = Math.hypot(q.c1.x - q.p0.x - dx / 3, q.c1.y - q.p0.y - dy / 3);
+  const d2 = Math.hypot(q.c2.x - q.p0.x - 2 * dx / 3, q.c2.y - q.p0.y - 2 * dy / 3);
+  return Math.max(d1, d2) < 1e-7 * Math.max(1, Math.hypot(dx, dy));
+}
 function finalizePeriodicSpiralBezierCarrier(segments, points) {
   const out = Array.isArray(segments) ? segments : [];
   const src = Array.isArray(points) ? points : [];
@@ -437,11 +449,20 @@ function finalizePeriodicSpiralBezierCarrier(segments, points) {
 
   const tangentPeriodic =
     (src[0]?.__spiralTangential === true && !hasAutoCloseBridge) || hasExplicitSeamFillet;
+  const linear = !tangentPeriodic && isLinearSpiralCubic(last);
+  const shiftX = expectedP3.x - last.p3.x, shiftY = expectedP3.y - last.p3.y;
   last.p3.x = expectedP3.x;
   last.p3.y = expectedP3.y;
-  if (tangentPeriodic) {
+  if (linear && (shiftX !== 0 || shiftY !== 0)) {
+    const dx = expectedP3.x - last.p0.x, dy = expectedP3.y - last.p0.y;
+    last.c1 = { x: last.p0.x + dx / 3, y: last.p0.y + dy / 3 };
+    last.c2 = { x: last.p0.x + 2 * dx / 3, y: last.p0.y + 2 * dy / 3 };
+  } else if (tangentPeriodic) {
     last.c2.x = 2 * expectedP3.x - expectedNextC1.x;
     last.c2.y = 2 * expectedP3.y - expectedNextC1.y;
+  } else if (shiftX !== 0 || shiftY !== 0) {
+    last.c2.x += shiftX;
+    last.c2.y += shiftY;
   }
   if (Number.isFinite(Number(first.widthScale0)))
     last.widthScale1 = Math.max(0.02, Number(first.widthScale0) * scale);
@@ -769,9 +790,12 @@ function buildSpiralBezierSegments(
     (p) => p && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)),
   );
   if (src.length < 2 || state.fourierMode) return [];
-  if (smoothSpline === true)
+  const simple = filletLayer?.roundingCornerType === 'simple';
+  const simpleSmooth = simple && filletLayer.profileMode === 'spline' &&
+    normalizeSplineRenderMode(filletLayer.splineRenderMode) === 'smooth';
+  if (smoothSpline === true && (!simple || simpleSmooth))
     return finalizePeriodicSpiralBezierCarrier(
-      buildSmoothSpiralBezierSegments(src, roundingFrac, cornerFlags, splineShape, filletLayer, true),
+      buildSmoothSpiralBezierSegments(src, roundingFrac, cornerFlags, simpleSmooth || splineShape, filletLayer, true),
       src,
     );
   const segments = [];
@@ -951,6 +975,7 @@ function buildSpiralBezierSegments(
     false,
     Math.max(0, Math.min(2, Number(roundingFrac) || 0)),
     Array.isArray(cornerFlags) ? cornerFlags : [],
+    null, false, null, simple ? filletLayer : null,
   );
   if (!segments.length) return [];
 
@@ -1122,7 +1147,8 @@ function spiralProfileGeometrySignature(layer) {
   mix(layer.closedLoop !== false ? 1 : 0);
   // One continuous canonical branch is automatically eligible when
   // transport is connected; old saved spiralOneLine flags are ignored.
-  mix(Math.round((Number(layer.fourierStrength) || 0) * 1e6));
+  mix(layer.roundingCornerType || 'classic');
+  mix(layer.roundingCornerType === 'fourier' ? Number(layer.rounding) || 0 : 0);
   mix(1);
   const bridge = resolveMorphCommittedSpiralSpline(layer);
   const pts = bridge?.sampled || (Array.isArray(layer.profileNodes) ? layer.profileNodes : []);
@@ -1141,6 +1167,7 @@ window.__spiroSpiralProfileGeometrySignature = spiralProfileGeometrySignature;
 
 export {
   buildSpiralBezierSegments,
+  isLinearSpiralCubic,
   repairRoundedSpiralBezierJoins,
   resolveMorphCommittedSpiralSpline,
   roundJoinedSpiralRails,

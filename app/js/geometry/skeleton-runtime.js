@@ -1,5 +1,6 @@
 import '../morphs/types/coordinatedFromCenter.js'; // initialisation order: this module runs after it
-import { getCachedLayerDrawData, getEffectiveLayerRadius } from '../effects/motion.js';
+import { getCachedLayerDrawData } from '../effects/motion.js';
+import { getMorphReferenceRadius } from './reference-circle.js';
 import { getEffectiveSpiralOrder } from './spiral/order-params.js';
 import { buildOrbitPolylines } from './orbit-builder.js';
 
@@ -94,17 +95,21 @@ window.SomataSkeletonRuntime = (() => {
       // Taper the original edges progressively. A single similarity
       // maps the tapered turn's displacement to the Corridor seam;
       // independent corrections would make opposite sides overshoot.
-      const logStep = Math.log(ratio) / count;
+      const logRatio = Math.log(ratio);
+      // A duplicated vertex slot at the phase endpoint has the same
+      // authored station as its surviving neighbour. Its removal cannot
+      // re-taper all other edges in the turn.
+      const exponent = (i) => logRatio * (Number.isFinite(authored[i].windingU) ? authored[i].windingU : i / count);
       const vectors = base.map((p, i) => {
         const q = base[(i + 1) % count],
-          weight = Math.exp(i * logStep);
+          weight = Math.exp(exponent(i));
         return { x: (q.x - p.x) * weight, y: (q.y - p.y) * weight };
       });
       // Use expm1 to cancel the original closed contour analytically.
       const span = base.reduce(
         (v, p, i) => {
           const q = base[(i + 1) % count],
-            w = Math.expm1(i * logStep);
+            w = Math.expm1(exponent(i));
           return { x: v.x + (q.x - p.x) * w, y: v.y + (q.y - p.y) * w };
         },
         { x: 0, y: 0 },
@@ -538,12 +543,10 @@ window.SomataSkeletonRuntime = (() => {
   function polygon(ctx, vertex, plan) {
     const { a, b, source, target } = ctx;
     if (!a || !b || a.chaosStar || b.chaosStar || !plan) return null;
-    const r0 = getEffectiveLayerRadius(a, 220),
-      r1 = getEffectiveLayerRadius(b, r0);
     const evaluate = (t, lampSlots = false) => {
       if (!lampSlots && t === 0) return source;
       if (!lampSlots && t === 1) return target;
-      const r = lerp(r0, r1, t);
+      const r = getMorphReferenceRadius(a, b, t);
       return plan.pathPlans.flatMap((pp, orbitIndex) => {
         const points = pp.from.map((_, i) => ({
           ...(lampSlots ? pp.lampSlots[i] : {}),
@@ -603,19 +606,30 @@ window.SomataSkeletonRuntime = (() => {
   const helpers = Object.freeze({ cart, anchors, polygon });
   function anchors(layer) {
     const wound = Math.abs(getEffectiveSpiralOrder(layer)) > 1e-8;
+    const closed = wound ? layer.spiralClosed !== false : layer.extendedProfileEnabled === true || layer.closedLoop !== false;
     return buildOrbitPolylines(layer, true).map((g) => ({
       orbitIndex: g.orbitIndex,
-      closed: wound ? layer.spiralClosed !== false : layer.closedLoop !== false,
-      spiralConnected: wound ? layer.spiralClosed !== false : layer.closedLoop !== false,
+      closed,
+      spiralConnected: closed,
       points: g.sourceVertices.map((p, i) => ({ ...p, id: `anchor:${g.orbitIndex}:${i}` })),
     }));
   }
-  function planAnchors(a, b, mode, slide) {
+  function planAnchors(a, b, mode, slide, options = {}) {
     const rule = window.SomataMorphRegistry.get(mode);
     if (!rule) return null;
     const source = anchors(a),
       target = anchors(b);
     if (!source.length || !target.length) return null;
+    // Only the orbit-unfold family consumes rooted polygon orbits. Keep
+    // ordinary morph correspondences and multi-orbit merges unchanged.
+    if (options.rootedOrbit && source.length === 1 && target.length === 1 &&
+        source[0].closed === target[0].closed && source[0].points.length >= 3 && target[0].points.length >= 3) {
+      const rooted = window.SomataCoordinatedSpine?.plan(source, target);
+      if (rooted) {
+        const evaluate = (t, frame) => rooted(t, frame).map(({ coordinatedSpine, ...path }) => ({ ...path, rootedOrbit: true }));
+        return { source, target, evaluate, corridorPhase: true, sampledLayer: true };
+      }
+    }
     const wound = [a, b].some((l) => Math.abs(getEffectiveSpiralOrder(l)) > 1e-8);
     const ctx = { a, b, source, target, slide, spiralMorph: wound, anchorPlan: true };
     const evaluate = rule.prepareAnchors(ctx, helpers);

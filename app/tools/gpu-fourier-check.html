@@ -1,0 +1,41 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><title>Somata GPU Fourier — проверка</title><style>body{font:16px system-ui;max-width:850px;margin:3em auto;padding:0 1em}pre{white-space:pre-wrap;background:#eee;padding:1em}button{font:inherit;padding:.6em}</style>
+<h1>Somata 16.3 — проверка WGSL Fourier</h1><p>Сравнение реального WebGPU compute с сохранённым CPU-эталоном. Чтение GPU → CPU выполняется только в этой диагностике, не при отрисовке Somata.</p><button id="run">Запустить проверку</button><pre id="result">Ожидание</pre>
+<script type="module">
+import {FOURIER_WGSL} from '../js/gpu/fourier-compute.js';
+const run=document.getElementById('run'), result=document.getElementById('result');
+run.onclick=async()=>{run.disabled=true;result.textContent=''; const log=s=>result.textContent+=s+'\n'; let device;
+try{
+ const adapter=await navigator.gpu?.requestAdapter();if(!adapter)throw Error('WebGPU adapter unavailable');device=await adapter.requestDevice();
+ log('Adapter: '+(adapter.info?.description||adapter.info?.device||'unknown'));
+ const module=device.createShaderModule({code:FOURIER_WGSL});const info=await module.getCompilationInfo();
+ for(const m of info.messages) log(`${m.type}: ${m.lineNum}:${m.linePos} ${m.message}`);
+ if(info.messages.some(m=>m.type==='error'))throw Error('WGSL compilation failed');
+ const pipeline=await device.createComputePipelineAsync({layout:'auto',compute:{module,entryPoint:'main'}});
+ const fixtures=await (await fetch('./gpu-fourier-fixture.json')).json();const input=new Float32Array(fixtures.flatMap(c=>c.input));
+ const size=fixtures.length*288*16;
+ const src=device.createBuffer({size:input.byteLength,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_DST});
+ const out=device.createBuffer({size,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC});
+ const read=device.createBuffer({size,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
+ device.pushErrorScope('validation');device.queue.writeBuffer(src,0,input);
+ const bg=device.createBindGroup({layout:pipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:src}},{binding:1,resource:{buffer:out}}]});
+ const e=device.createCommandEncoder(),p=e.beginComputePass();p.setPipeline(pipeline);p.setBindGroup(0,bg);p.dispatchWorkgroups(fixtures.length);p.end();e.copyBufferToBuffer(out,0,read,0,size);device.queue.submit([e.finish()]);
+ const error=await device.popErrorScope();if(error)throw Error(error.message);
+ await read.mapAsync(GPUMapMode.READ);const actual=new Float32Array(read.getMappedRange());let failed=0;
+ for(let i=0;i<fixtures.length;i++){
+   let xy=0,w=0,arc=0,expectedArc=0,previousArc=0;const exp=fixtures[i].expected;
+   for(let j=0;j<288;j++){
+     const k=j*4,o=i*1152+k;
+     xy=Math.max(xy,Math.hypot(actual[o]-exp[k],actual[o+1]-exp[k+1]));
+     w=Math.max(w,Math.abs(actual[o+2]-exp[k+2]));
+     if(j)expectedArc+=Math.hypot(exp[k]-exp[k-4],exp[k+1]-exp[k-3]);
+     arc=Math.max(arc,Math.abs(actual[o+3]-expectedArc));
+     if(actual[o+3]<previousArc)arc=Infinity;
+     previousArc=actual[o+3];
+   }
+   // The polyline arc is approximate, not analytic. Tolerance scales with length.
+   const ok=xy<.05&&w<.0001&&arc<Math.max(.1,expectedArc*.0001);
+   failed+=!ok;log(`${ok?'PASS':'FAIL'} ${fixtures[i].name}: Δxy=${xy.toFixed(6)}, Δwidth=${w.toFixed(7)}, Δarc=${arc.toFixed(6)}`);
+ }
+ read.unmap();src.destroy();out.destroy();read.destroy();log(`${fixtures.length-failed}/${fixtures.length} PASS`);
+}catch(e){log('ERROR: '+e.message);}finally{device?.destroy();run.disabled=false;}};
+</script></html>

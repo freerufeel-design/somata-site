@@ -53,6 +53,7 @@ function getTunnelCopies() {
     item.stepRatio = 1;
     result.length = 1;
     result._corridorOriginPosition = 0;
+    result._corridorContinuousOriginPosition = 0;
     result._phaseSpeedMagnitude = 0;
     result._stepRatio = 1;
     result._logStepRatio = 0;
@@ -138,6 +139,19 @@ function getTunnelCopies() {
   result.length = write;
   const origin = SomataSpiralZeroTransition.corridorOrigin(result);
   result._corridorOriginPosition = origin?.position;
+  // The nearest *physical* copy changes at half a travel step. Orbit
+  // unfolding needs a virtual, continuous unit-scale pivot instead.
+  // Capture it before the entrance animation modifies the copy scales.
+  let continuousOrigin = origin?.position;
+  for (let i = 1; i < result.length; i++) {
+    const a = result[i - 1], b = result[i];
+    if (a.scale <= 1 && b.scale >= 1 && b.scale > a.scale) {
+      const lo = Math.log(a.scale), hi = Math.log(b.scale);
+      continuousOrigin = a.position + (b.position - a.position) * (-lo / (hi - lo));
+      break;
+    }
+  }
+  result._corridorContinuousOriginPosition = continuousOrigin;
   // Animate the copies *from* the figure instead of turning on the
   // entire Corridor at once. A single copy stays fully visible at
   // scale 1. All others grow/shrink outwards with staggered opacity.

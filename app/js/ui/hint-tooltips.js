@@ -1,8 +1,10 @@
 import './desktop-brand-popout.js'; // initialisation order: this module runs after it
 
-// Long explanatory notes in the panels move into hover tooltips (native `title`, shown after a
-// long hover). The note element stays in the DOM (hidden), so code that updates its text keeps
-// working: the tooltip follows it.
+import { installHoverTooltips } from './hover-tooltips.js';
+
+// Explanatory notes become shared stationary-hover tooltips. The hidden note stays
+// in the DOM so dynamic text updates still work. New help uses data-ui-tooltip
+// directly on the control it describes.
 
 const NOTE_SELECTOR = [
   '.hint-text',
@@ -41,7 +43,8 @@ function refreshTarget(target) {
   const text = [base, ...[...notes].map((n) => n.textContent.replace(/\s+/g, ' ').trim())]
     .filter(Boolean)
     .join('\n\n');
-  if (text) target.setAttribute('title', text);
+  if (text) target.dataset.uiTooltip = text;
+  else delete target.dataset.uiTooltip;
 }
 
 const textObserver =
@@ -65,7 +68,10 @@ function convert(note) {
   if (!target) return;
   if (!notesByTarget.has(target)) {
     notesByTarget.set(target, new Set());
-    target.dataset.uiNoteBaseTitle = target.getAttribute('title') || '';
+    target.dataset.uiNoteBaseTitle = [target.dataset.uiTooltip, target.getAttribute('title')]
+      .filter(Boolean).join('\n\n');
+    // Suppress native title on this target; the shared popup includes its text.
+    target.setAttribute('title', '');
   }
   notesByTarget.get(target).add(note);
   note.__uiNoteTarget = target;
@@ -89,6 +95,7 @@ function titleTruncatedValue(e) {
 function start() {
   if (typeof document === 'undefined' || typeof document.querySelectorAll !== 'function') return;
   scan();
+  installHoverTooltips();
   document.addEventListener?.('mouseover', titleTruncatedValue, { passive: true });
   // Panels built later (morph routing rows, dialogs) get the same treatment.
   if (typeof MutationObserver !== 'function' || !document.body) return;

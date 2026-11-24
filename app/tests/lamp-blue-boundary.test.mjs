@@ -9,7 +9,7 @@ test('Blue key lamps hand the same lit IDs and positions to the following phase'
   const { SomataFeatureHost } = await importModule('js/render/feature-host.js');
   await importModule('js/render/lamp-plan.js');
   const runtime = window.SomataMorphRuntime;
-  for (const mode of ['circleSlide','topology']) for (const snap of [true, false]) for (const motion of ['linear','key']) {
+  for (const mode of ['circleSlide','topology']) for (const snap of [true, false]) for (const motion of ['linear','key','stable']) {
     const layer = Object.assign(createLayer(), {id: 'seam-'+mode+snap+motion, N:4, K:1, radius:100, rotation:0,
       rounding:65, spiralOrder:0, spiralEnabled:false, showLamps:true});
     Object.assign(layer.lamps,{positionMode:'key',snapToContour:snap,morphMotionMode:motion});

@@ -100,6 +100,7 @@ window.SomataSpiralOrderBuilder = (() => {
             orbitUnfold: { beta, projection: sy, rotation, seaweed: unfold.seaweed },
           });
           if (!graph) return null;
+          if (path.rootedOrbit) graph.windingStations = path.points.map((p, i) => p.windingU ?? i / path.points.length);
           return {
             ...path,
             order: winding,

@@ -299,6 +299,27 @@ function mapProfileOntoSpiralEdge(
     p0.__spiralBezierC1Y = (2 * ay - by) / 18;
     p0.__spiralBezierC2X = (2 * bx - ax) / 18;
     p0.__spiralBezierC2Y = (2 * by - ay) / 18;
+    // A cubic fitted through the two interior samples can reverse an end
+    // tangent of a mapped straight profile (notably with twist + tangency).
+    // Keep the actual mapped derivative in that case, not the artificial
+    // backtracking handle. Authored profile Béziers are left untouched.
+    if (!hasProfileCubic) {
+      const chord = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+      const repair = (hx, hy, tx, ty) => {
+        const hl = Math.hypot(hx, hy), tl = Math.hypot(tx, ty);
+        if (hl <= 1e-9 || tl <= 1e-9 || hx * tx + hy * ty >= 0) return [hx, hy];
+        const scale = Math.min(1 / 3, chord / tl);
+        return [tx * scale, ty * scale];
+      };
+      const [ox, oy] = repair(p0.__spiralBezierC1X - p0.x, p0.__spiralBezierC1Y - p0.y,
+        p0.__spiralBezierOutTx, p0.__spiralBezierOutTy);
+      const [ix, iy] = repair(p1.x - p0.__spiralBezierC2X, p1.y - p0.__spiralBezierC2Y,
+        p1.__spiralBezierInTx, p1.__spiralBezierInTy);
+      p0.__spiralBezierC1X = p0.x + ox;
+      p0.__spiralBezierC1Y = p0.y + oy;
+      p0.__spiralBezierC2X = p1.x - ix;
+      p0.__spiralBezierC2Y = p1.y - iy;
+    }
   }
 
   return points;
@@ -412,6 +433,8 @@ const spiralSharedProfileCache = new Map(),
 function spiralSharedProfileSignature(layer, points, target, round, sampled) {
   const mode = String(layer?.profileMode || '');
   const parts = [mode, target, round, sampled ? 1 : 0];
+  if (mode === 'spline' && layer?.roundingCornerType === 'simple' && !sampled)
+    parts.push('legacy-simple', layer.splineRenderMode || 'smooth');
   if (mode === 'segments') {
     parts.push(getSpiralAngularVertexCount(layer), getEffectiveSpiralStep(layer));
   }
@@ -434,12 +457,14 @@ function prepareSpiralCarrierProfile(layer, carrierSpec = {}) {
   const baseProfilePts =
     Array.isArray(carrierSpec?.profileNodes) && carrierSpec.profileNodes.length >= 2
       ? carrierSpec.profileNodes.map((p) => ({ x: Number(p?.x) || 0, y: Number(p?.y) || 0 }))
-      : smoothSplineMode && Array.isArray(layer.profileNodes) && layer.profileNodes.length >= 2
+      : smoothSplineMode && !(layer.roundingCornerType === 'simple' && layer.splineRenderMode === 'discrete' && !splineSnapshotAlreadySampled) && Array.isArray(layer.profileNodes) && layer.profileNodes.length >= 2
         ? layer.profileNodes.map((p) => ({ x: Number(p?.x) || 0, y: Number(p?.y) || 0 }))
         : getInterpolatedProfilePoints(layer);
   const spiralRounding = Math.max(
     0,
-    Number.isFinite(Number(carrierSpec?.roundingFrac))
+    layer.roundingCornerType === 'fourier' || state.fourierMode === true
+      ? 0
+      : Number.isFinite(Number(carrierSpec?.roundingFrac))
       ? Number(carrierSpec.roundingFrac)
       : getRoundingStrength(layer.rounding),
   );
@@ -585,14 +610,17 @@ function buildSpiralCarrierPath(layer, anchor, carrierSpec = {}) {
         ? Boolean(lampFlags?.[p.__profileLampAnchorIndex])
         : Boolean(lampFlags[Number.isFinite(Number(p?.ptIdx)) ? Number(p.ptIdx) : idx]),
   );
+  const legacySimple = profileData?.legacySimpleProfile === true;
+  const legacySmooth = legacySimple && layer.splineRenderMode !== 'discrete';
   let retainedCubics =
     state.fourierMode === true
       ? []
       : buildSpiralBezierSegments(
           retainedPoints,
-          0,
+          legacySmooth ? spiralRounding : 0,
           cornerFlags,
-          layer.profileMode === 'spline' && layer.wholeCurveSpline === true,
+          legacySimple ? legacySmooth : layer.profileMode === 'spline' && layer.wholeCurveSpline === true,
+          false, legacySimple ? layer : null,
         );
   if (bakedProfileRound && retainedCubics?.length)
     retainedCubics = repairRoundedSpiralBezierJoins(retainedCubics);

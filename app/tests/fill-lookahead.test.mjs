@@ -6,6 +6,7 @@ import {
   FILL_LOOKAHEAD_WINDOW,
   acceptPlan,
   activeOrbitCount,
+  fillBoundaryWindow,
   fillGhostWeight,
   fillSplitAheadWeight,
   ghostFillLayout,
@@ -146,4 +147,29 @@ test('раскладка групп: снаружи лишних контуро�
       const inM = groups.filter((g) => g.from === 0);
       near(covered(inM), share(gM * (1 - gD) + gM * gD), 1e-12);
     }
+});
+
+
+test('окно слияния и разделения следует части фазы профиля, включая 0 и 100%', () => {
+  for (const mode of ['start', 'end', 'second']) {
+    for (const pct of [10,20,40,80,100]) {
+      const window = fillBoundaryWindow({profileModeTransition:mode,profileModeTransitionPercent:pct});
+      near(window,pct/100);
+      const out=t=>fillGhostWeight(t,{targetPresent:false,window}).g;
+      const inc=t=>fillGhostWeight(t,{sourcePresent:false,window}).g;
+      near(out(1-window),1);near(out(1-window/2),.5);near(out(1),0);
+      near(inc(0),0);near(inc(window/2),.5);near(inc(window),1);
+      near(fillSplitAheadWeight(1-window/2,window),.5);
+    }
+  }
+  const whole=fillBoundaryWindow({profileModeTransition:'phase',profileModeTransitionPercent:20});
+  assert.equal(whole,1);
+  near(fillGhostWeight(.5,{targetPresent:false,window:whole}).g,.5);
+  near(fillSplitAheadWeight(.5,whole),.5);
+  assert.equal(fillBoundaryWindow({profileModeTransition:'end',profileModeTransitionPercent:0}),0);
+  assert.equal(fillGhostWeight(.999,{targetPresent:false,window:0}).g,1);
+  assert.equal(fillGhostWeight(1,{targetPresent:false,window:0}).g,0);
+  assert.equal(fillGhostWeight(0,{sourcePresent:false,window:0}).g,1);
+  assert.equal(fillSplitAheadWeight(.999,0),0);
+  assert.equal(fillSplitAheadWeight(1,0),1);
 });
